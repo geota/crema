@@ -15,6 +15,10 @@ import coffee.crema.persist.saveStore
 import coffee.crema.ui.TelemetrySample
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -153,7 +157,7 @@ class HistoryStore(
     private val series = SeriesFiles(File(context.filesDir, SERIES_DIR), json)
 
     /** `history-index.db` (#310 A1): the hook every write to `shots` goes through, and its full diff. */
-    private val index: HistoryIndex = HistoryIndex(File(context.filesDir, SQLITE_DIR), { tables }, indexVersionCode)
+    private val index: HistoryIndex = HistoryIndex(File(context.filesDir, SQLITE_DIR), { tables }, indexVersionCode) { refreshReads() }
     private val tables = HistoryTables(json, index)
 
     /** Loads, saves and deletes run on IO and may overlap; one at a time. */
@@ -302,7 +306,7 @@ class HistoryStore(
             guarded {
                 openLocked(force = false)
                 loadOpened()
-            }
+            }.also { refreshReads() }
         }
     }
 
@@ -332,7 +336,7 @@ class HistoryStore(
             guarded {
                 openLocked(force = true)
                 loadOpened()
-            }
+            }.also { refreshReads() }
         }
     }
 
@@ -1187,7 +1191,7 @@ class HistoryStore(
                         Mode.LEGACY -> if (openAtCall) legacySaveLocked(rows) else SaveFloor.admit(file, WHAT).let { false }
                         Mode.BLOCKED -> journalLocked(rows)
                         Mode.UNOPENED -> false
-                    }
+                    }.also { refreshReads() }
                 }
             }
         }
@@ -1243,6 +1247,7 @@ class HistoryStore(
                     }
                     deleting.removeAll(ids.toSet())
                     version++
+                    refreshReads()
                 }
             }
         }
@@ -1601,10 +1606,67 @@ class HistoryStore(
      * or the index won't open. Never throws but a [SimulatedCrash].
      */
     suspend fun syncIndex(force: Boolean = false): IndexDiffReport? {
-        val diff = withShots { shots -> shots?.let { index.planDiff(it, force) } } ?: return null
+        val diff = withShots { shots -> shots?.let { index.planDiff(it, force) }.also { refreshReads() } } ?: return null
         while (withShots { shots -> shots != null && index.diffStep(diff, shots) }) afterDiffBatchForTest?.invoke()
-        return withShots { shots -> index.finishDiff(diff, shots) }
+        return withShots { shots -> index.finishDiff(diff, shots).also { refreshReads() } }
     }
+
+    // ── Reading the index (#310 A2) ──────────────────────────────────────────
+
+    private val reads = MutableStateFlow<HistoryIndexReads?>(null)
+
+    /** The live libraries reached the index this session: until then its coffee, tag and method answers may be last session's. */
+    @Volatile private var liveSet = false
+
+    /**
+     * What History reads while the index can answer for the rows (SPEC §3,
+     * §12): null means `index_fallback`, the in-memory rows. It can answer
+     * only when the rows are in `shots.db` and readable, none waits in the
+     * pending journal, the live libraries are in, and the index is fresh
+     * ([HistoryIndex.fresh]). A new value each time it becomes readable again.
+     */
+    val indexReads: StateFlow<HistoryIndexReads?> = reads.asStateFlow()
+
+    /** Why History reads the in-memory rows now, or null when it reads the index: the debug screen's line. */
+    @Volatile var fallbackReason: String? = "not checked yet"
+        private set
+
+    private fun refreshReads() {
+        val reader = index.reader()
+        val why = when {
+            mode != Mode.SQL -> "the rows aren't in shots.db (${mode.name.lowercase()})"
+            health != HistoryHealth.OK -> "the store is ${health.name.lowercase()}"
+            journaled.isNotEmpty() -> "${journaled.size} rows wait in the pending journal"
+            unreadableRows.isNotEmpty() -> "${unreadableRows.size} rows this build can't read"
+            !liveSet -> "the live libraries aren't in the index yet"
+            reader == null -> if (index.lastError != null) "the index failed: ${index.lastError}" else "the index is stale or closed"
+            else -> null
+        }
+        fallbackReason = why
+        val current = reads.value
+        reads.value = when {
+            why != null || reader == null -> null
+            current != null && current.bridge === reader -> current
+            else -> HistoryIndexReads(reader, index.notices, ::decodeIndexRow)
+        }
+    }
+
+    /**
+     * Puts the live bean and method libraries into the index (SPEC §5, §6):
+     * derived data the coffee scope, the effective tags and a custom method's
+     * label read. Under the lock, as every index call. Rows, seqs and
+     * `pending` are left alone.
+     */
+    suspend fun setIndexLive(live: coffee.crema.core.HistoryLive) = withShots { shots ->
+        if (shots != null && index.setLive(live)) liveSet = true
+        refreshReads()
+    }
+
+    /** An index row's `row_json` as the screens show it, as [sqlLoad] reads `shots.db`'s; null when it won't read. */
+    fun decodeIndexRow(rowJson: String): ShotRow? = runCatching {
+        val r = tables.decodeRow(rowJson)
+        r.shot.toRow(r.summary ?: unknownSeriesSummary(r.shot))
+    }.getOrNull()
 
     /** Test seam: close the index as a process death would, so another store (or the test) can open the file. */
     @androidx.annotation.VisibleForTesting

@@ -69,19 +69,14 @@ import coffee.crema.ui.compare.CompareDialog
 import coffee.crema.ui.compare.RowCheck
 import coffee.crema.ui.compare.TabletCompareBar
 import coffee.crema.ui.compare.rememberCompareSelection
-import coffee.crema.history.filterAndSortShots
 import coffee.crema.ui.components.ShotPeopleFields
-import coffee.crema.history.beanFilterOptions
-import coffee.crema.history.liveCoffeeLookup
 import coffee.crema.history.recentNames
-import coffee.crema.history.shotCoffee
 import coffee.crema.beans.roastBand
 import coffee.crema.core.daysOffRoast as coreDaysOffRoast
 import coffee.crema.ui.freshnessColor
 import coffee.crema.brew.methodIcon
 import coffee.crema.brew.methodLabel
 import coffee.crema.history.beanLabel
-import coffee.crema.history.brewHistoryStats
 import coffee.crema.history.effectiveGrindSetting
 import coffee.crema.history.formatShotDuration
 import coffee.crema.history.grindLabel
@@ -97,7 +92,6 @@ import coffee.crema.ui.brewlog.RowMethodMark
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.historyListKey
 import coffee.crema.ui.rememberListBool
-import coffee.crema.ui.rememberListMemoryState
 import coffee.crema.ui.rememberListOptString
 import coffee.crema.ui.rememberListString
 import kotlinx.serialization.json.JsonArray
@@ -193,6 +187,10 @@ fun HistoryScreen(
     // Brew Log method filter (issue #10) — rendered only once a second
     // method exists in history, so espresso-only users never see it.
     var methodFilter by rememberListOptString("history/method")
+    // Tag filter (#310 A2, owner question 2): the shot's own tags, else its bag's.
+    var tagFilter by rememberListOptString("history/tag")
+    // A row to scroll to once (a deep link), through the list's index_of.
+    var reveal by remember { mutableStateOf<String?>(null) }
     // The Log-brew sheet — the Brew Log's manual-entry door. Its draft is
     // VM-held ([MainViewModel.logBrew]) so a rotation across 840dp hands it to
     // the phone's pushed route intact; this tab shows it when it owns it.
@@ -211,6 +209,8 @@ fun HistoryScreen(
             range = "all"
             profileFilter = null // an active profile pill must not hide the deep-linked shot
             beanFilter = null
+            tagFilter = null
+            reveal = it
             vm.consumePendingHistoryShot()
         }
     }
@@ -243,30 +243,27 @@ fun HistoryScreen(
     // current filter / range shows, not all-time.
     // Bean filter: a coffee (every bag of it) or, from the bean detail's deep
     // link, one bag. The coffee resolves through the live library.
-    val liveCoffee = remember(ui.beans, ui.roasters) { liveCoffeeLookup(ui.beans, ui.roasters) }
-    // Memoized: the screen recomposes on every UI-state emission, and
-    // re-filtering + re-sorting the whole log each time is the expensive part.
-    // `now` is minute-bucketed so it doesn't bust the cache, and ticks by
+    // `now` is minute-bucketed so it doesn't bust the queries, and ticks by
     // itself so a range stays right on a screen nothing else recomposes.
     val nowBucket = coffee.crema.ui.rememberMinuteBucket()
-    // Off the main thread (#310 P4a, SPEC §5), the last result kept on screen
-    // meanwhile; a search waits for typing to pause.
-    val shots = coffee.crema.ui.rememberFilteredShots(
-        ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter, liveCoffee, pinnedOnly,
-    ) { q ->
-        filterAndSortShots(
-            ui.history, q, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter,
-            coffeeOf = { shotCoffee(it, liveCoffee)?.key },
-            pinnedOnly = pinnedOnly,
-        )
-    }
+    // The list, its stats and its facets: from the history index, a page at a
+    // time, or from the in-memory rows while it can't answer (#310 A2).
+    val filters = coffee.crema.history.HistoryFilters(query, range, profileFilter, beanFilter, methodFilter, tagFilter, pinnedOnly, sort, sortDesc, nowBucket)
+    val history = coffee.crema.ui.rememberHistoryList(vm, ui, filters, dayEdges = null)
+    val shots = history.list
     // A brew re-dated out of the filtered list, held open until a filter changes.
     var heldShotId by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(query, range, profileFilter, beanFilter, methodFilter, pinnedOnly) { heldShotId = null }
-    // Default the detail to the newest (top) shot until the user picks one.
-    val selected = shots.firstOrNull { it.id == selectedId }
-        ?: heldShotId?.takeIf { it == selectedId }?.let { id -> ui.history.firstOrNull { it.id == id } }
-        ?: shots.firstOrNull()
+    LaunchedEffect(query, range, profileFilter, beanFilter, methodFilter, tagFilter, pinnedOnly) { heldShotId = null }
+    // Default the detail to the top shot until the user picks one. The picked
+    // shot shows from the rows in memory (an edit shows at once) while the
+    // list lists it, or while it's held.
+    val pickedRow = remember(ui.history, selectedId) { selectedId?.let { id -> ui.history.firstOrNull { it.id == id } } }
+    val pickedListed by androidx.compose.runtime.produceState<Boolean?>(null, shots, selectedId, shots.count) {
+        value = selectedId?.let { shots.indexOf(it) != null }
+    }
+    val topId = shots.rowAt(0)?.id
+    val topRow = remember(ui.history, topId) { topId?.let { id -> ui.history.firstOrNull { it.id == id } } } ?: shots.rowAt(0)
+    val selected = pickedRow?.takeIf { pickedListed != false || it.id == heldShotId } ?: topRow
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CremaNavigationRail(
@@ -315,12 +312,16 @@ fun HistoryScreen(
                 val narrowBar = coffee.crema.ui.windowContentDpSize().width.value < 1000 || shortWindow
                 if (ui.history.isNotEmpty()) {
                     Spacer(Modifier.width(12.dp))
-                    CremaSearchPill(
-                        query = query,
-                        onQueryChange = { query = it },
-                        placeholder = "Search profile, bean, notes…",
-                        modifier = if (narrowBar) Modifier.weight(1f) else Modifier.width(260.dp),
-                    )
+                    Column(if (narrowBar) Modifier.weight(1f) else Modifier.width(260.dp)) {
+                        CremaSearchPill(
+                            query = query,
+                            onQueryChange = { query = it },
+                            placeholder = "Search profile, bean, notes…",
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        // Search needs 3 characters (owner question 3); fewer filter nothing.
+                        SearchTooShortHint(query)
+                    }
                 }
                 if (narrowBar) {
                     // 7"/portrait: icon-only actions so the (long) title + search keep
@@ -377,7 +378,7 @@ fun HistoryScreen(
                                 onPrimary = { exportScope.launch { launchSave("crema-history.crema.jsonl", vm.shotsJson(null)) } },
                                 items = listOf(
                                     SplitMenuItem("file-text", "All shots", "Every shot as one Crema file. Re-importable in Crema on web and Android.") { exportScope.launch { launchSave("crema-history.crema.jsonl", vm.shotsJson(null)) } },
-                                    SplitMenuItem("file-code", "Current filter", "Only the ${shots.size} shot(s) matching your search and date range.") { exportScope.launch { launchSave("crema-history-filtered.crema.jsonl", vm.shotsJson(shots.map { it.id })) } },
+                                    SplitMenuItem("file-code", "Current filter", "Only the ${shots.count ?: "…"} shot(s) matching your search and date range.") { exportScope.launch { launchSave("crema-history-filtered.crema.jsonl", vm.shotsJson(shots.ids())) } },
                                 ),
                             )
                             if (!sel.selecting) {
@@ -413,7 +414,7 @@ fun HistoryScreen(
                     )
                 }
             } else {
-                StatsStrip(shots, ui.weightUnit, compact = shortWindow)
+                StatsStrip(history.stats, ui.weightUnit, compact = shortWindow)
                 // Profile pills (left) + bean / method / range / sort controls
                 // (right). The Brew Log's method dropdown made the control
                 // group wide enough to crush the pills into a one-word column
@@ -424,9 +425,8 @@ fun HistoryScreen(
                     Row(m.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         // Per-profile pills (web .hi-filter p: pills) — only profiles
                         // that actually have shots, ordered by shot count.
-                        val byProfile = remember(ui.history) {
-                            ui.history.mapNotNull { it.profileName }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
-                        }
+                        // Facets (#310 A2): each over the filter minus its own dimension.
+                        val byProfile = history.facets.profiles
                         CremaFilterChip(
                             label = "All",
                             selected = profileFilter == null,
@@ -434,7 +434,7 @@ fun HistoryScreen(
                             onClick = { profileFilter = null },
                         )
                         // Pinned shots, once there are any (or while the filter is on).
-                        val pinnedCount = remember(ui.history) { ui.history.count { it.pinned } }
+                        val pinnedCount = history.facets.pinned
                         if (pinnedCount > 0 || pinnedOnly) {
                             CremaFilterChip(
                                 label = "Pinned",
@@ -460,7 +460,7 @@ fun HistoryScreen(
                     // detail's "See all N shots" deep link adds a leading
                     // "This bag" entry, and picking its coffee widens to all bags.
                     run {
-                        val beanOptions = remember(ui.history, liveCoffee, beanFilter) { beanFilterOptions(ui.history, liveCoffee, beanFilter) }
+                        val beanOptions = history.facets.beanOptions
                         if (beanOptions.isNotEmpty()) {
                             CremaFilterDropdown(
                                 icon = "coffee-bean",
@@ -477,18 +477,33 @@ fun HistoryScreen(
                     // once a second method exists, so espresso-only users
                     // never meet it.
                     run {
-                        val byMethod = remember(ui.history) {
-                            ui.history.groupingBy { it.methodOf ?: "espresso" }.eachCount().entries.sortedByDescending { it.value }
-                        }
-                        if (byMethod.size > 1) {
+                        val byMethod = history.facets.methods
+                        if (byMethod.size > 1 || methodFilter != null) {
                             CremaFilterDropdown(
                                 icon = methodIcon(methodFilter),
                                 keys = buildList {
                                     add(SortKey("all", "All methods"))
-                                    byMethod.forEach { (m, _) -> add(SortKey(m, methodLabel(m))) }
+                                    byMethod.forEach { m -> add(SortKey(m, methodLabel(m))) }
+                                    methodFilter?.takeIf { it !in byMethod }?.let { add(SortKey(it, methodLabel(it))) }
                                 },
                                 selectedKey = methodFilter ?: "all",
                                 onKeyChange = { methodFilter = if (it == "all") null else it },
+                            )
+                        }
+                    }
+                    // Tags (#310 A2): the shot's own, else its bag's; once any shot has one.
+                    run {
+                        val tags = history.facets.tags
+                        if (tags.isNotEmpty() || tagFilter != null) {
+                            CremaFilterDropdown(
+                                icon = "tag",
+                                keys = buildList {
+                                    add(SortKey("all", "All tags"))
+                                    tags.forEach { (t, _) -> add(SortKey("t:$t", t)) }
+                                    tagFilter?.takeIf { t -> tags.none { it.first == t } }?.let { add(SortKey("t:$it", it)) }
+                                },
+                                selectedKey = tagFilter?.let { "t:$it" } ?: "all",
+                                onKeyChange = { tagFilter = if (it == "all") null else it.removePrefix("t:") },
                             )
                         }
                     }
@@ -548,12 +563,14 @@ fun HistoryScreen(
                 ) {
                     // Scroll position per filter (issue #123), kept in ListMemory.
                     val lead = if (ui.saveMethodPrompt != null) 1 else 0
-                    // A key-to-index map (SPEC §5), not a scan of the list per lookup.
-                    val indexById = remember(shots) { HashMap<String, Int>(shots.size * 2).apply { shots.forEachIndexed { i, r -> put(r.id, i) } } }
-                    val listState = rememberListMemoryState(
-                        historyListKey(range, profileFilter, beanFilter, methodFilter, sort, sortDesc),
-                        shots.size,
-                    ) { k -> indexById[k]?.plus(lead) }
+                    // A row's place comes from the list (index_of on the index, SPEC §7).
+                    val count = shots.count ?: 0
+                    val listState = coffee.crema.ui.rememberPagedListMemoryState(
+                        historyListKey(range, profileFilter, beanFilter, methodFilter, sort, sortDesc, tagFilter),
+                        count,
+                    ) { k -> shots.indexOf(k)?.plus(lead) }
+                    coffee.crema.ui.TrackVisibleRows(shots, listState) { (it - lead).coerceAtLeast(0) }
+                    coffee.crema.ui.RevealRow(shots, listState, reveal, toItem = { it + lead }) { reveal = null }
                     LazyColumn(
                         state = listState,
                         // Narrow 7" tablet: a slimmer shot list leaves the detail
@@ -570,7 +587,13 @@ fun HistoryScreen(
                                 coffee.crema.ui.brewlog.SaveMethodPromptCard(vm, Modifier.padding(bottom = 6.dp))
                             }
                         }
-                        items(shots, key = { it.id }) { shot ->
+                        items(count, key = { shots.keyAt(it) }) { i ->
+                            val shot = shots.rowAt(i)
+                            if (shot == null) {
+                                // Not loaded yet: a placeholder, never "empty" (SPEC §7, rule 2).
+                                coffee.crema.ui.HistoryRowSkeleton(64.dp)
+                                return@items
+                            }
                             ShotRow(
                                 shot = shot,
                                 selected = if (sel.selecting) sel.isPicked(shot.id) else shot.id == selected?.id,
@@ -684,17 +707,19 @@ fun HistoryScreen(
 // Doubles, so %f is safe. Day/week boundaries are simple millis math off
 // System.currentTimeMillis(); recomputed when `history` changes.
 @Composable
-private fun StatsStrip(history: List<HistoryRow>, weightUnit: String, compact: Boolean = false) {
+private fun StatsStrip(stats: coffee.crema.core.BrewHistoryStats?, weightUnit: String, compact: Boolean = false) {
     // Stats over the passed (filter/range-scoped) list — issue 48, made
     // method-aware by the Brew Log (issue #10): count / beans-used / rating
     // span every row; the weight / ratio / time averages scope to espresso in
     // a mixed set (tagged "esp") or to the single method the set belongs to.
     // "Beans used" (Σ dose) replaces the beverage-weight tile — the inventory
     // number this feature exists for.
-    // Off the main thread (SPEC §5), the last result on screen meanwhile.
-    val s = coffee.crema.ui.rememberOffMain(history, initial = { brewHistoryStats(history) }) { brewHistoryStats(history) }
+    // Worked out off the main thread (#310 A2: a query on the index, else over
+    // the rows in memory), the last result on screen meanwhile; dashes until the first.
+    val s = stats ?: coffee.crema.core.BrewHistoryStats(count = 0u, mixedMethods = false)
     val mixed = s.mixedMethods
-    val nonEsp = history.any { it.methodOf != null && it.methodOf != "espresso" }
+    // A brew log once any row isn't espresso: the strip's scope says so (mixed, or one other method).
+    val nonEsp = mixed || s.scopeMethod != null
     val noun = (if (nonEsp) "brew" else "shot") + if (s.count == 1u) "" else "s"
     // The espresso scope rides as its own tag (issue 02) — never glued into
     // the label, where a narrow tile hard-clipped it to "· ESF".
@@ -705,7 +730,7 @@ private fun StatsStrip(history: List<HistoryRow>, weightUnit: String, compact: B
     val beansUsed = convertWeight(s.beansUsedG?.toFloat(), weightUnit)
     val avgWt = convertWeight(s.avgWeightG?.toFloat(), weightUnit)
     val tiles: List<@Composable (Modifier) -> Unit> = listOf(
-        { m -> StatTile(if (nonEsp) "Brews" else "Shots", "${s.count}", noun, m, compact) },
+        { m -> StatTile(if (nonEsp) "Brews" else "Shots", if (stats == null) "—" else "${s.count}", noun, m, compact) },
         { m -> StatTile("Beans used", beansUsed.value, s.beansUsedG?.let { beansUsed.unit }, m, compact) },
         { m -> StatTile("Avg weight", avgWt.value, s.avgWeightG?.let { avgWt.unit }, m, compact, scope) },
         { m -> StatTile("Avg ratio", s.avgRatio?.let { fmt("1:%.1f", it) } ?: "—", null, m, compact, scope) },
@@ -1497,3 +1522,16 @@ private fun shotRatio(shot: ShotMeta): String? =
 /** The delete confirmation's body: a pinned shot says so (#311). */
 internal fun deleteBody(shot: ShotMeta): String =
     "This shot will be removed from this device." + (if (shot.pinned) " It is pinned." else "") + " This can’t be undone."
+
+/** "Type at least 3 letters" under a search box holding 1 or 2 (#310 SPEC §5, owner question 3). */
+@Composable
+internal fun SearchTooShortHint(query: String, modifier: Modifier = Modifier) {
+    val t = query.trim()
+    if (t.isEmpty() || coffee.crema.history.searchText(t).isNotEmpty()) return
+    Text(
+        "Type at least ${coffee.crema.history.MIN_SEARCH_CHARS} letters",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier.padding(start = 12.dp, top = 2.dp),
+    )
+}

@@ -77,6 +77,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -1175,6 +1176,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun historyIndexHealth(): coffee.crema.history.IndexHealth = library.historyIndexHealth()
 
+    /** History's reads of the index, or null while it reads the in-memory rows (`index_fallback`, #310 A2). */
+    val historyIndexReads: kotlinx.coroutines.flow.StateFlow<coffee.crema.history.HistoryIndexReads?> get() = library.historyIndexReads
+
+    /** Why History reads the in-memory rows now, or null. */
+    val historyIndexFallback: String? get() = library.historyIndexFallback
+
     suspend fun compareHistoryIndex(): coffee.crema.history.IndexComparison? = library.compareHistoryIndex()
 
     suspend fun rebuildHistoryIndex(): coffee.crema.history.IndexDiffReport? = library.syncHistoryIndex(force = true)
@@ -1385,6 +1392,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             historyLoad.join()
             library.syncHistoryIndex()
+        }
+        // The live libraries into the index as they change (#310 A2): its coffee scope,
+        // effective tags and custom method labels read them. History reads the index
+        // only once they're in.
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            historyLoad.join()
+            ui.map { Triple(it.beans, it.roasters, it.customMethods) }
+                .distinctUntilChanged()
+                .collectLatest { (beans, roasters, methods) ->
+                    kotlinx.coroutines.delay(LIVE_SETTLE_MS)
+                    library.mirrorHistoryLive(coffee.crema.history.historyLiveOf(beans, roasters, methods))
+                }
         }
         // The other persisted stores in one coroutine, sequentially.
         startupLoad = viewModelScope.launch {
@@ -3189,6 +3208,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     internal companion object {
+        /** The live libraries reach the history index this long after their last change: a bean edit's burst writes once. */
+        const val LIVE_SETTLE_MS = 250L
+
         /** What Erase all data tells: done, or that some of it stayed, as the web's factory reset does (#428). */
         fun eraseNotice(left: List<String>): String =
             if (left.isEmpty()) {

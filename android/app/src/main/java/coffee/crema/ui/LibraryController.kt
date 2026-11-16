@@ -486,6 +486,15 @@ class LibraryController(
     /** The index's health and a row-by-row check against `shots.db`, for the debug screen. */
     suspend fun historyIndexHealth(): coffee.crema.history.IndexHealth = historyStore.indexHealth()
 
+    /** History's reads of the index while it can answer, else null: the in-memory rows (#310 A2). */
+    val historyIndexReads: kotlinx.coroutines.flow.StateFlow<coffee.crema.history.HistoryIndexReads?> get() = historyStore.indexReads
+
+    /** Why History reads the in-memory rows now, or null (the debug screen). */
+    val historyIndexFallback: String? get() = historyStore.fallbackReason
+
+    /** The live bean and method libraries into the index (#310 A2): derived data its coffee, tag and method answers read. */
+    suspend fun mirrorHistoryLive(live: coffee.crema.core.HistoryLive) = historyStore.setIndexLive(live)
+
     suspend fun compareHistoryIndex(): coffee.crema.history.IndexComparison? = historyStore.compareIndex()
 
     /** The legacy-backend notice is said once per session. */

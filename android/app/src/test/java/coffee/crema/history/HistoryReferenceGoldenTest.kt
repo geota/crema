@@ -16,8 +16,9 @@ import kotlin.test.assertTrue
  * (`core/de1-history/tests/shells.rs`). The fixture is 300 real-shaped rows in
  * the shape `shots.db` keeps in `row_json` (`core/de1-history/tests/fixtures/`,
  * written by its `gen.mjs`); each query runs through [filterAndSortShots] over
- * the rows, with the live coffee lookup over the fixture's bean library. Android
- * has no tag filter, so those queries are left out. Pure JVM.
+ * the rows, with the live coffee and tag lookups over the fixture's bean
+ * library. From #310 A2 Android has the tag filter, and its ties follow the
+ * sort's direction (SPEC §6), so every query compares. Pure JVM.
  *
  * Regenerate with `CREMA_REGEN_HISTORY_GOLDEN=1 ./gradlew :app:testDebugUnitTest
  * --tests coffee.crema.history.HistoryReferenceGoldenTest`.
@@ -46,7 +47,7 @@ class HistoryReferenceGoldenTest {
     private data class Queries(val now: Long, val queries: List<Query>)
 
     @Serializable
-    private data class LiveBean(val beanId: String, val name: String, val roaster: String? = null)
+    private data class LiveBean(val beanId: String, val name: String, val roaster: String? = null, val tags: List<String> = emptyList())
 
     @Serializable
     private data class Live(val beans: List<LiveBean>)
@@ -64,13 +65,14 @@ class HistoryReferenceGoldenTest {
 
         val golden = LinkedHashMap<String, List<Int>>()
         for (q in spec.queries) {
-            if (q.tags.isNotEmpty()) continue
             val listed = filterAndSortShots(
                 rows, q.text, q.range, q.profile, q.sort.key, q.sort.dir == "desc", spec.now,
                 beanFilter = q.bean,
                 methodFilter = q.method,
                 coffeeOf = { shotCoffee(it, live)?.key },
                 pinnedOnly = q.pinnedOnly,
+                tagsAll = q.tags,
+                liveTags = { id -> beans[id]?.tags },
             )
             golden[q.name] = listed.map { index.getValue(it.id) }
         }

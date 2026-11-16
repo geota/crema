@@ -3,10 +3,16 @@ package coffee.crema.history
 import android.database.sqlite.SQLiteDatabase
 import coffee.crema.BuildConfig
 import coffee.crema.core.HistoryAnchor
+import coffee.crema.core.HistoryChangeSet
 import coffee.crema.core.HistoryDbException
 import coffee.crema.core.HistoryIndexWrite
+import coffee.crema.core.HistoryLive
 import coffee.crema.core.HistoryRole
 import coffee.crema.core.HistoryRowIn
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import java.io.File
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
@@ -46,6 +52,15 @@ import java.util.concurrent.atomic.AtomicLong
  *   after the store's marker is written and outside the write.
  * - **Erase** closes the file under the core's lock first ([erasing], S11),
  *   and nothing opens or makes it again until the erase returns.
+ *
+ * - **Reads (#310 A2).** History's list, search, stats, facets and day
+ *   groups read the index through [reader], only while it is **fresh**: the
+ *   boot check passed or a full diff settled this session, and every write
+ *   since reached it. Anything else (an open that failed, a write it missed,
+ *   `pending` raised for a diff, a cleared table, the file closed) makes it
+ *   stale until the next settle, and the screens use the in-memory rows
+ *   (`index_fallback`). Each index write's change set goes out on [notices],
+ *   in order, from under the lock.
  *
  * Rust opens only this file and Kotlin never opens it (decision 11, N3); it
  * lives in `filesDir/history-sqlite/`, outside `databases/`.
@@ -125,10 +140,19 @@ data class IndexComparison(val rows: Int, val missing: List<String>, val extra: 
         if (exact) "equal: $rows rows" else "${missing.size} missing, ${extra.size} extra, ${differ.size} differ (of $rows)"
 }
 
+/**
+ * One index write's notice (#310 A2, SPEC §10): [n] counts every notice this
+ * index sent, so a reader that sees a gap missed one (the buffer dropped it)
+ * and refetches everything. A null [change] says the same outright.
+ */
+class IndexNotice(val n: Long, val change: HistoryChangeSet?)
+
 internal class HistoryIndex(
     private val dir: File,
     private val tables: () -> HistoryTables,
     val versionCode: Long = BuildConfig.VERSION_CODE.toLong(),
+    /** Called whenever [fresh] may have changed, from under the store's lock. */
+    private val onFreshness: () -> Unit = {},
 ) : ShotsHook {
     val file: File get() = File(dir, FILE_NAME)
 
@@ -145,6 +169,33 @@ internal class HistoryIndex(
         private set
 
     private var logged = 0
+
+    /**
+     * The index mirrors `shots.db` exactly, as far as this process knows
+     * (#310 A2): set when the boot check passes or a full diff settles, and
+     * cleared by anything that could leave it behind. Only a fresh index is read.
+     */
+    @Volatile var fresh = false
+        private set
+
+    private fun setFresh(v: Boolean) {
+        if (fresh == v) return
+        fresh = v
+        onFreshness()
+    }
+
+    private var sent = 0L
+    private val noticeFlow = MutableSharedFlow<IndexNotice>(extraBufferCapacity = 256, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /** Every index write's change set, in order (SPEC §10). Sent from under the lock; never waits. */
+    val notices: SharedFlow<IndexNotice> = noticeFlow.asSharedFlow()
+
+    private fun send(change: HistoryChangeSet?) {
+        synchronized(noticeFlow) { noticeFlow.tryEmit(IndexNotice(++sent, change)) }
+    }
+
+    /** The open index while it's [fresh]: what History reads (#310 A2). Null otherwise. */
+    fun reader(): HistoryDbBridge? = bridge?.takeIf { fresh && !it.isClosed }
 
     /** What a write's [begin] raised `pending` on. */
     private class Ticket(val db: HistoryDbBridge, val raised: Boolean)
@@ -163,6 +214,7 @@ internal class HistoryIndex(
             throw e
         } catch (e: Throwable) {
             failure("open", e)
+            setFresh(false)
             null
         }
     }
@@ -194,6 +246,7 @@ internal class HistoryIndex(
 
     /** Close the file under the core's lock. The next write opens it again. */
     fun closeAll() {
+        setFresh(false)
         val mine = bridge
         bridge = null
         openTried = false
@@ -219,7 +272,7 @@ internal class HistoryIndex(
     // ── The hook (M4) ────────────────────────────────────────────────────────
 
     override fun begin(): Any? {
-        val db = opened() ?: return null
+        val db = opened() ?: return null.also { setFresh(false) }
         val raised = try {
             fail(IndexFault.FAIL_RAISE)
             db.now { it.bumpPending() }
@@ -239,14 +292,16 @@ internal class HistoryIndex(
         val t = ticket as? Ticket ?: return
         crash(IndexFault.CRASH_AFTER_SHOTS)
         // A write that cleared the table: `pending` stays up, and the next syncIndex rebuilds (REVIEW-446 note 5).
-        if (write.cleared) return
+        if (write.cleared) return setFresh(false)
         try {
             fail(IndexFault.FAIL_WRITE)
             mirror(t.db, db, write.touched, write.seq, lower = t.raised)
         } catch (e: SimulatedCrash) {
+            setFresh(false)
             throw e
         } catch (e: Throwable) {
             failure("index write", e)
+            setFresh(false)
             return
         }
         crash(IndexFault.CRASH_AFTER_INDEX)
@@ -255,10 +310,12 @@ internal class HistoryIndex(
     override fun failed(ticket: Any?, error: Throwable) {
         // The `shots.db` transaction threw and took its seq with it: `pending` stays up, and the next boot's diff settles it.
         if (ticket != null) HOOK_FAILURES.incrementAndGet()
+        setFresh(false)
     }
 
     override fun replaced() {
         // `shots.db` went aside or was deleted: whatever the index holds may be wrong now, and the new file's seq starts again.
+        setFresh(false)
         val db = opened() ?: return
         runCatching { db.now { it.bumpPending() } }
     }
@@ -281,7 +338,26 @@ internal class HistoryIndex(
                 seenSeqs = if (last) listOf(seq) else emptyList(),
                 lowerPending = lower && last,
             )
-            db.now { it.indexWrite(write) }
+            send(db.now { it.indexWrite(write) }.change)
+        }
+    }
+
+    /**
+     * The live bean and method libraries the coffee scope, the effective tags
+     * and a custom method's label read (SPEC §5, §6): derived data, rewritten
+     * whole when they change (the core skips an unchanged set). Under the lock.
+     * True when the index holds them.
+     */
+    fun setLive(live: HistoryLive): Boolean {
+        val db = opened() ?: return false
+        return try {
+            send(db.now { it.setLive(live) })
+            true
+        } catch (e: SimulatedCrash) {
+            throw e
+        } catch (e: Throwable) {
+            failure("live libraries", e)
+            false
         }
     }
 
@@ -333,10 +409,11 @@ internal class HistoryIndex(
      * the diff settles exactly when each of them reached the index.
      */
     fun planDiff(shots: SQLiteDatabase, force: Boolean): Diff? {
-        val db = opened(retry = true) ?: return null
+        val db = opened(retry = true) ?: return null.also { setFresh(false) }
         return try {
             val reasons = misses(db, shots).let { if (force && it.isEmpty()) listOf("asked for") else it }
-            if (reasons.isEmpty()) return null
+            if (reasons.isEmpty()) return null.also { setFresh(true) }
+            setFresh(false)
             db.now { it.bumpPending() }
             val shotsSeq = tables().indexSeq(shots)
             db.now { it.resetSeqs(shotsSeq) }
@@ -345,6 +422,7 @@ internal class HistoryIndex(
             throw e
         } catch (e: Throwable) {
             failure("boot check", e)
+            setFresh(false)
             null
         }
     }
@@ -362,6 +440,7 @@ internal class HistoryIndex(
             val written = diff.db.now { it.diffBatch(rows.map { HistoryRowIn(it.second) }) }
             diff.rows += rows.size
             diff.upserted += written.change.upserted.size
+            send(written.change)
             diff.after = rows.last().first
             crash(IndexFault.CRASH_IN_DIFF)
             rows.size == BATCH
@@ -389,7 +468,9 @@ internal class HistoryIndex(
         if (diff.outcome == null && (bridge !== diff.db || diff.db.isClosed)) diff.outcome = "stopped: the index was closed (erase)"
         if (diff.outcome == null && shots != null) {
             try {
-                removed = diff.db.now { it.removeAbsent(tables().ids(shots).toList(), diff.since) }.deleted.size
+                val gone = diff.db.now { it.removeAbsent(tables().ids(shots).toList(), diff.since) }
+                removed = gone.deleted.size
+                send(gone)
                 val state = diff.db.now { it.indexState() }
                 val now = tables().indexSeq(shots)
                 if (state.sourceSeq != now || state.seenSeqs.isNotEmpty()) {
@@ -397,6 +478,9 @@ internal class HistoryIndex(
                 } else {
                     diff.db.now { it.finishAndroidDiff(versionCode) }
                     diff.outcome = IndexDiffReport.OK
+                    // Settled: every write up to shots.db's last is in. Readers start over.
+                    send(null)
+                    setFresh(true)
                 }
             } catch (e: SimulatedCrash) {
                 throw e

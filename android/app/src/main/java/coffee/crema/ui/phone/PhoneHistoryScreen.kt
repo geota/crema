@@ -39,16 +39,11 @@ import coffee.crema.ui.freshnessColor
 import coffee.crema.brew.methodIcon
 import coffee.crema.brew.methodLabel
 import coffee.crema.history.beanLabel
-import coffee.crema.history.brewHistoryStats
 import coffee.crema.history.effectiveGrindSetting
 import coffee.crema.history.formatShotDuration
 import coffee.crema.history.grindLabel
-import coffee.crema.history.filterAndSortShots
 import coffee.crema.ui.components.ShotPeopleFields
-import coffee.crema.history.beanFilterOptions
-import coffee.crema.history.liveCoffeeLookup
 import coffee.crema.history.recentNames
-import coffee.crema.history.shotCoffee
 import coffee.crema.history.isManualLog
 import coffee.crema.history.methodOf
 import coffee.crema.history.methodRatioLabel
@@ -61,7 +56,6 @@ import coffee.crema.ui.phone.components.CremaNewFab
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.historyListKey
 import coffee.crema.ui.rememberListBool
-import coffee.crema.ui.rememberListMemoryState
 import coffee.crema.ui.rememberListOptString
 import coffee.crema.ui.rememberListString
 import coffee.crema.ui.convertPressure
@@ -129,6 +123,10 @@ fun PhoneHistoryScreen(
     var exportSheet by remember { mutableStateOf(false) }
     // Brew Log (issue #10): the method filter + the Log-brew form.
     var methodFilter by rememberListOptString("history/method")
+    // Tag filter (#310 A2, owner question 2): the shot's own tags, else its bag's.
+    var tagFilter by rememberListOptString("history/tag")
+    // A row the list scrolls to once it shows (a deep link's shot, after its detail).
+    var reveal by remember { mutableStateOf<String?>(null) }
     // The form itself is the pushed `log-brew` route over a VM-held draft
     // (it survives rotation and the phone↔tablet swap).
     val openLogBrew: (ShotMeta?) -> Unit = { prefill ->
@@ -146,6 +144,8 @@ fun PhoneHistoryScreen(
             range = "all"
             profileFilter = null
             beanFilter = null
+            tagFilter = null
+            reveal = it
             vm.consumePendingHistoryShot()
         }
     }
@@ -177,7 +177,6 @@ fun PhoneHistoryScreen(
 
     // Minute-bucketed (see HistoryScreen), and ticks by itself.
     val nowBucket = coffee.crema.ui.rememberMinuteBucket()
-    val dayMs = 24L * 60L * 60L * 1000L
     val startOfDay = remember(nowBucket) {
         val cal = java.util.Calendar.getInstance()
         cal.timeInMillis = nowBucket
@@ -185,22 +184,12 @@ fun PhoneHistoryScreen(
         cal.set(java.util.Calendar.SECOND, 0); cal.set(java.util.Calendar.MILLISECOND, 0)
         cal.timeInMillis
     }
-    // Bean filter: a coffee (every bag of it) or, from the bean detail's deep
-    // link, one bag. The coffee resolves through the live library.
-    val liveCoffee = remember(ui.beans, ui.roasters) { liveCoffeeLookup(ui.beans, ui.roasters) }
-    // Memoized with the minute-bucketed `now`: re-filtering the whole log on
-    // every UI-state emission is the expensive part.
-    // Off the main thread (#310 P4a, SPEC §5), the last result kept on screen
-    // meanwhile; a search waits for typing to pause.
-    val filtered = coffee.crema.ui.rememberFilteredShots(
-        ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter, liveCoffee, pinnedOnly,
-    ) { q ->
-        filterAndSortShots(
-            ui.history, q, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter,
-            coffeeOf = { shotCoffee(it, liveCoffee)?.key },
-            pinnedOnly = pinnedOnly,
-        )
-    }
+    // The list, its stats, facets and day groups: from the history index, a
+    // page at a time, or from the in-memory rows while it can't answer (#310 A2).
+    val filters = coffee.crema.history.HistoryFilters(query, range, profileFilter, beanFilter, methodFilter, tagFilter, pinnedOnly, sort, sortDesc, nowBucket)
+    val dayEdges = if (sort == "date") coffee.crema.history.DayGroups.edges(startOfDay) else null
+    val history = coffee.crema.ui.rememberHistoryList(vm, ui, filters, dayEdges)
+    val filtered = history.list
 
     val detail = detailId?.let { id -> ui.history.firstOrNull { it.id == id } }
 
@@ -305,17 +294,15 @@ fun PhoneHistoryScreen(
             if (sel.selecting) {
                 PhoneSelectHint(Modifier.fillMaxWidth().padding(horizontal = CremaEdge, vertical = 6.dp))
             } else {
-                PhoneStatsStrip(filtered, ui.weightUnit)
+                PhoneStatsStrip(history.stats, ui.weightUnit)
             }
 
             if (!sel.selecting) {
                 // Filter chips: per-profile pills, then the date dropdown + sort;
                 // a compare entry pins to the right (web parity, same arrows icon).
-                // Once per change of the rows, not per recomposition: at 20,000 rows each pass costs (#310 P6a).
-                val byProfile = remember(ui.history) {
-                    ui.history.mapNotNull { it.profileName }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
-                }
-                val pinnedCount = remember(ui.history) { ui.history.count { it.pinned } }
+                // Facets (#310 A2): each over the filter minus its own dimension.
+                val byProfile = history.facets.profiles
+                val pinnedCount = history.facets.pinned
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     CremaFilterChipRow(
                         modifier = Modifier.weight(1f),
@@ -339,15 +326,14 @@ fun PhoneHistoryScreen(
                         trailing = {
                             // Method — the Brew Log filter (issue #10); only
                             // rendered once a second method exists.
-                            val byMethod = remember(ui.history) {
-                                ui.history.groupingBy { it.methodOf ?: "espresso" }.eachCount().entries.sortedByDescending { it.value }
-                            }
-                            if (byMethod.size > 1) {
+                            val byMethod = history.facets.methods
+                            if (byMethod.size > 1 || methodFilter != null) {
                                 CremaFilterDropdown(
                                     icon = methodIcon(methodFilter),
                                     keys = buildList {
                                         add(SortKey("all", "All methods"))
-                                        byMethod.forEach { (m, _) -> add(SortKey(m, methodLabel(m))) }
+                                        byMethod.forEach { m -> add(SortKey(m, methodLabel(m))) }
+                                        methodFilter?.takeIf { it !in byMethod }?.let { add(SortKey(it, methodLabel(it))) }
                                     },
                                     selectedKey = methodFilter ?: "all",
                                     onKeyChange = { methodFilter = if (it == "all") null else it },
@@ -355,7 +341,7 @@ fun PhoneHistoryScreen(
                             }
                             // Bean — scope the log to one coffee, every bag of it
                             // (tablet parity); a deep-linked single bag leads.
-                            val beanOptions = remember(ui.history, liveCoffee, beanFilter) { beanFilterOptions(ui.history, liveCoffee, beanFilter) }
+                            val beanOptions = history.facets.beanOptions
                             if (beanOptions.isNotEmpty()) {
                                 CremaFilterDropdown(
                                     icon = "coffee-bean",
@@ -365,6 +351,20 @@ fun PhoneHistoryScreen(
                                     },
                                     selectedKey = beanFilter ?: "all",
                                     onKeyChange = { beanFilter = if (it == "all") null else it },
+                                )
+                            }
+                            // Tags (#310 A2): the shot's own, else its bag's; once any shot has one.
+                            val tags = history.facets.tags
+                            if (tags.isNotEmpty() || tagFilter != null) {
+                                CremaFilterDropdown(
+                                    icon = "tag",
+                                    keys = buildList {
+                                        add(SortKey("all", "All tags"))
+                                        tags.forEach { (t, _) -> add(SortKey("t:$t", t)) }
+                                        tagFilter?.takeIf { t -> tags.none { it.first == t } }?.let { add(SortKey("t:$it", it)) }
+                                    },
+                                    selectedKey = tagFilter?.let { "t:$it" } ?: "all",
+                                    onKeyChange = { tagFilter = if (it == "all") null else it.removePrefix("t:") },
                                 )
                             }
                             // Date range as a split dropdown (tablet parity) — the
@@ -402,7 +402,11 @@ fun PhoneHistoryScreen(
 
             AnimatedVisibility(visible = searchOpen && !sel.selecting) {
                 Box(Modifier.padding(horizontal = CremaEdge, vertical = 6.dp)) {
-                    CremaPhoneSearch(query = query, onQueryChange = { query = it }, placeholder = "Search profile, bean, notes")
+                    androidx.compose.foundation.layout.Column {
+                        CremaPhoneSearch(query = query, onQueryChange = { query = it }, placeholder = "Search profile, bean, notes")
+                        // Search needs 3 characters (owner question 3); fewer filter nothing.
+                        coffee.crema.ui.screens.SearchTooShortHint(query)
+                    }
                 }
             }
 
@@ -434,64 +438,77 @@ fun PhoneHistoryScreen(
             // rating/name orders interleave days, so groups would repeat).
             // Its scroll position per filter (issue #123) lives in ListMemory,
             // so the detail / compare swaps above and the Log-brew route come
-            // back to the same shot. The row keys mirror the items below.
-            val rowKeys = remember(filtered, sort, ui.saveMethodPrompt != null, startOfDay) {
-                buildList {
-                    if (ui.saveMethodPrompt != null) add("save-method-prompt")
-                    var day: String? = null
-                    filtered.forEach { shot ->
-                        val d = dayLabel(shot.completedAtMs, startOfDay, dayMs)
-                        if (d != day && sort == "date") { day = d; add("day-$d-${shot.id}") }
-                        add(shot.id)
-                    }
+            // back to the same shot. Headers sit where the group counts put
+            // them (SPEC §7: `group_counts`, arithmetic, no scan of the rows).
+            val lead = if (ui.saveMethodPrompt != null) 1 else 0
+            val count = filtered.count ?: 0
+            val groups = history.groups?.takeIf { sort == "date" && it.sum() == count }
+            // No groups yet, or not by date: one run of rows with no header.
+            val layout = remember(groups, sortDesc, lead, count) {
+                if (groups != null) coffee.crema.history.DayLayout(groups, descending = sortDesc, lead = lead)
+                else coffee.crema.history.DayLayout.rowsOnly(count, lead)
+            }
+            val listState = coffee.crema.ui.rememberPagedListMemoryState(
+                historyListKey(range, profileFilter, beanFilter, methodFilter, sort, sortDesc, tagFilter),
+                count,
+            ) { k ->
+                when {
+                    k == "save-method-prompt" -> 0.takeIf { lead > 0 }
+                    k.startsWith(DAY_KEY) -> coffee.crema.history.DayGroups.LABELS.indexOf(k.removePrefix(DAY_KEY)).takeIf { it >= 0 }?.let(layout::itemOfHeader)
+                    else -> filtered.indexOf(k)?.let(layout::itemOfRow)
                 }
             }
-            // A key-to-index map (SPEC §5), not a scan of the keys per lookup.
-            val rowIndex = remember(rowKeys) { HashMap<String, Int>(rowKeys.size * 2).apply { rowKeys.forEachIndexed { i, k -> put(k, i) } } }
-            val listState = rememberListMemoryState(
-                historyListKey(range, profileFilter, beanFilter, methodFilter, sort, sortDesc),
-                filtered.size,
-            ) { k -> rowIndex[k] }
+            coffee.crema.ui.TrackVisibleRows(filtered, listState) { item ->
+                when (val it = layout.itemAt(item)) {
+                    is coffee.crema.history.DayLayout.Item.Row -> it.index
+                    else -> layout.itemAt((item + 1).coerceAtMost(layout.size - 1)).let { n -> (n as? coffee.crema.history.DayLayout.Item.Row)?.index ?: 0 }
+                }
+            }
+            coffee.crema.ui.RevealRow(filtered, listState, if (detail == null) reveal else null, toItem = layout::itemOfRow) { reveal = null }
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(start = CremaEdge, end = CremaEdge, top = 4.dp, bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                // "Save 'X' as a method?" after an "Other…" log (one time).
-                if (ui.saveMethodPrompt != null) {
-                    item(key = "save-method-prompt") {
-                        coffee.crema.ui.brewlog.SaveMethodPromptCard(vm, Modifier.padding(bottom = 6.dp))
+                items(layout.size, key = { i ->
+                    when (val it = layout.itemAt(i)) {
+                        coffee.crema.history.DayLayout.Item.Lead -> "save-method-prompt"
+                        is coffee.crema.history.DayLayout.Item.Header -> DAY_KEY + coffee.crema.history.DayGroups.LABELS[it.group]
+                        is coffee.crema.history.DayLayout.Item.Row -> filtered.keyAt(it.index)
                     }
-                }
-                var lastDay: String? = null
-                filtered.forEach { shot ->
-                    val day = dayLabel(shot.completedAtMs, startOfDay, dayMs)
-                    if (day != lastDay && sort == "date") {
-                        lastDay = day
-                        item(key = "day-$day-${shot.id}") {
-                            Text(
-                                day.uppercase(),
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, letterSpacing = 0.7.sp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(start = 2.dp, top = 12.dp, bottom = 4.dp),
-                            )
+                }) { i ->
+                    when (val item = layout.itemAt(i)) {
+                        // "Save 'X' as a method?" after an "Other…" log (one time).
+                        coffee.crema.history.DayLayout.Item.Lead ->
+                            coffee.crema.ui.brewlog.SaveMethodPromptCard(vm, Modifier.padding(bottom = 6.dp))
+                        is coffee.crema.history.DayLayout.Item.Header -> Text(
+                            coffee.crema.history.DayGroups.LABELS[item.group].uppercase(),
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, letterSpacing = 0.7.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 2.dp, top = 12.dp, bottom = 4.dp),
+                        )
+                        is coffee.crema.history.DayLayout.Item.Row -> {
+                            val shot = filtered.rowAt(item.index)
+                            if (shot == null) {
+                                // Not loaded yet: a placeholder, never "empty" (SPEC §7, rule 2).
+                                coffee.crema.ui.HistoryRowSkeleton(60.dp)
+                            } else {
+                                PhoneShotRow(
+                                    shot = shot,
+                                    syncing = shot.id in ui.sharing.uploadingShotIds,
+                                    pip = uploadPipFor(ui.sharing.uploadTargets[shot.id].orEmpty()),
+                                    weightUnit = ui.weightUnit,
+                                    selecting = sel.selecting,
+                                    picked = sel.isPicked(shot.id),
+                                    dimmed = sel.atCap(shot.id),
+                                    onOpen = { if (sel.selecting) sel.toggle(shot.id) else detailId = shot.id },
+                                )
+                            }
                         }
                     }
-                    item(key = shot.id) {
-                        PhoneShotRow(
-                            shot = shot,
-                            syncing = shot.id in ui.sharing.uploadingShotIds,
-                            pip = uploadPipFor(ui.sharing.uploadTargets[shot.id].orEmpty()),
-                            weightUnit = ui.weightUnit,
-                            selecting = sel.selecting,
-                            picked = sel.isPicked(shot.id),
-                            dimmed = sel.atCap(shot.id),
-                            onOpen = { if (sel.selecting) sel.toggle(shot.id) else detailId = shot.id },
-                        )
-                    }
                 }
-                if (filtered.isEmpty()) {
+                if (filtered.count == 0) {
                     item {
                         CremaEmptyState("No shots match your filters.", modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp))
                     }
@@ -507,8 +524,8 @@ fun PhoneHistoryScreen(
                 SheetItem("file-text", "All shots", sub = "Every shot as one Crema file. Re-importable in Crema on web and Android.") {
                     exportScope.launch { launchSave("crema-history.crema.jsonl", vm.shotsJson(null)) }
                 },
-                SheetItem("file-code", "Current filter", sub = "Only the ${filtered.size} shot(s) matching your search and filters.") {
-                    exportScope.launch { launchSave("crema-history-filtered.crema.jsonl", vm.shotsJson(filtered.map { it.id })) }
+                SheetItem("file-code", "Current filter", sub = "Only the ${filtered.count ?: "…"} shot(s) matching your search and filters.") {
+                    exportScope.launch { launchSave("crema-history-filtered.crema.jsonl", vm.shotsJson(filtered.ids())) }
                 },
             ),
             onDismiss = { exportSheet = false },
@@ -516,29 +533,27 @@ fun PhoneHistoryScreen(
     }
 }
 
-private fun dayLabel(ms: Long, startOfDay: Long, dayMs: Long): String = when {
-    ms >= startOfDay -> "Today"
-    ms >= startOfDay - dayMs -> "Yesterday"
-    ms >= startOfDay - 6 * dayMs -> "This week"
-    else -> "Earlier"
-}
+/** A day header's list key: the prefix, then its label. */
+private const val DAY_KEY = "day-"
 
 // ── Stats strip (proto .ph-stats — 3-up) ─────────────────────────────────────
 @Composable
-private fun PhoneStatsStrip(history: List<HistoryRow>, weightUnit: String) {
+private fun PhoneStatsStrip(stats: coffee.crema.core.BrewHistoryStats?, weightUnit: String) {
     // Scoped to the filtered set (issue 48), method-aware (issue #10): a mixed
     // set scopes the weight / ratio / time averages to espresso rows — the
     // "esp" tag says so. The Brew Log adds the count and "Beans used" (Σ dose,
     // the inventory number), so six tiles wrap by the width the strip gets:
     // 3×2 under 600dp (every phone), one row from 600dp (7" portrait).
     // Off the main thread (SPEC §5), the last result on screen meanwhile.
-    val s = coffee.crema.ui.rememberOffMain(history, initial = { brewHistoryStats(history) }) { brewHistoryStats(history) }
+    // Worked out off the main thread (#310 A2: a query on the index, else over
+    // the rows in memory); dashes until the first answer.
+    val s = stats ?: coffee.crema.core.BrewHistoryStats(count = 0u, mixedMethods = false)
     fun scoped(label: String) = if (s.mixedMethods) "$label · esp" else label
-    val nonEsp = history.any { it.methodOf != null && it.methodOf != "espresso" }
+    val nonEsp = s.mixedMethods || s.scopeMethod != null
     val beansUsed = convertWeight(s.beansUsedG?.toFloat(), weightUnit)
     val avgWt = convertWeight(s.avgWeightG?.toFloat(), weightUnit)
     val tiles: List<Pair<String, String>> = listOf(
-        (if (nonEsp) "Brews" else "Shots") to "${s.count}",
+        (if (nonEsp) "Brews" else "Shots") to (if (stats == null) "—" else "${s.count}"),
         "Beans used" to (s.beansUsedG?.let { "${beansUsed.value}${beansUsed.unit}" } ?: "—"),
         scoped("Avg weight") to (s.avgWeightG?.let { "${avgWt.value}${avgWt.unit}" } ?: "—"),
         scoped("Avg ratio") to (s.avgRatio?.let { fmt("1:%.1f", it) } ?: "—"),
