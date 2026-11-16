@@ -23,6 +23,7 @@ mod export;
 pub mod faults;
 mod fts;
 mod index;
+mod late;
 mod read;
 mod rewrite;
 mod write;
@@ -34,12 +35,13 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior};
 
-pub use backup::Recovery;
+pub use backup::{FlipInit, Recovery};
 pub use error::{Result, StoreError};
 pub use export::{ExportWalk, RidId};
 pub use faults::Faults;
 pub use fts::{FtsCheck, FtsStatus, Maintained};
 pub use index::{ABSENT_BATCH_ROWS, AbsentError, AbsentStep, IndexState, IndexWrite};
+pub use late::{HeavyOut, LateImport, LateImported};
 pub use read::{CoffeeFacet, Destination, Facets, Page, RidRow, RowOut, SyncPage, SyncRow};
 pub use write::{Applied, Duplicate, Heavy, RowIn, Write, Written};
 

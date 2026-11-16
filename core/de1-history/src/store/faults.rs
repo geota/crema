@@ -30,6 +30,13 @@ pub const POINTS: &[&str] = &[
     "set_live.committed",
     "apply.commit",
     "apply.committed",
+    // Android stage 2 (A5): the flip's heavy copy and step 8's late rows.
+    "heavy.row",
+    "heavy.commit",
+    "heavy.committed",
+    "late.source",
+    "late.commit",
+    "late.committed",
     // Maintenance: each batch, and the swap.
     "derive.batch",
     "derive.commit",
@@ -39,6 +46,12 @@ pub const POINTS: &[&str] = &[
     "fts.build.commit",
     "fts.swap",
     "fts.merge",
+    // The flip (SPEC §11 steps 5 and 7): after the backup copy, both sides
+    // of the promote's commit, and before verify's `done` commits.
+    "flip.copied",
+    "flip.promote.commit",
+    "flip.promote.committed",
+    "flip.done.commit",
 ];
 
 /// The armed faults and a log of the statements the store ran.

@@ -97,7 +97,7 @@ pub struct Facets {
 
 /// The light projection sync's planners read (SPEC §9, S3): every row,
 /// tombstones and held rows included, from the derived columns.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncRow {
     /// The row's `rid`.
@@ -122,10 +122,16 @@ pub struct SyncRow {
     pub profile_name: Option<String>,
     /// Deleted during an export walk and not yet removed: hidden.
     pub held: bool,
+    /// Its final weight (`summary.finalWeight`), the reconcile signature's
+    /// weight (PLAN A3a, A5).
+    pub final_weight: Option<f64>,
+    /// When its Visualizer copy last changed (`visualizerUpdatedAt`), the
+    /// known rows' version (PLAN A3a, A5).
+    pub visualizer_updated_at: Option<i64>,
 }
 
 /// A page of the sync projection, with the `write_seq` it was read at.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncPage {
     /// The rows, by `rid`.
@@ -282,11 +288,17 @@ fn sync_row(r: &Row<'_>) -> rusqlite::Result<SyncRow> {
         sample_count: r.get(8)?,
         profile_name: r.get(9)?,
         held: r.get(10)?,
+        final_weight: r.get(11)?,
+        visualizer_updated_at: r.get(12)?,
     })
 }
 
 const SYNC_COLUMNS: &str = "rid, id, visualizer_id, decent_id, completed_at, sort_time, deleted_at, \
-     is_brew_log, sample_count, profile_name, hold_delete";
+     is_brew_log, sample_count, profile_name, hold_delete, \
+     CASE WHEN json_type(row_json, '$.summary.finalWeight') IN ('integer', 'real') \
+       THEN CAST(json_extract(row_json, '$.summary.finalWeight') AS REAL) END, \
+     CASE WHEN json_type(row_json, '$.visualizerUpdatedAt') IN ('integer', 'real') \
+       THEN CAST(json_extract(row_json, '$.visualizerUpdatedAt') AS INTEGER) END";
 
 impl Store {
     /// Runs a read on the current text path, in one read transaction. When

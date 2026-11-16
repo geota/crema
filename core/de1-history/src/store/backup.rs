@@ -7,6 +7,13 @@
 //!   from an index onto a `history.db` whose `meta.migration` says `done` is
 //!   refused, as is a truth file onto a newer one (a higher `generation`, or
 //!   the same one and a higher `write_seq`), and any destination that isn't ours or doesn't open.
+//! - [`Store::flip_copy_to`] is the flip's copy (SPEC §11 step 5): the same
+//!   copy, then in one transaction on the copy its `role = 'authority'`, its
+//!   generation, `meta.migration = copying`, `migration_source` and both
+//!   late-row baselines (S13). A crash between the copy and that transaction
+//!   leaves `role = 'index'`, which the next try overwrites (M8 step 4).
+//! - [`Store::set_migration_done`] is verify's pass: `copying` becomes
+//!   `done`, then a checkpoint, before the shell writes its done-record.
 //! - [`Store::create_recovery`] makes a new `history-<n>.db` after `lost`,
 //!   with its `migration_source` and late-row baseline from the caller, so
 //!   the next boot's late-row step imports only what an older build writes
@@ -31,6 +38,26 @@ pub struct Recovery {
     /// The late-row baseline at that moment, as the shell records it: web's
     /// `writeSeq`, Android's sizes and mtimes. Opaque to the core.
     pub late_baseline: String,
+}
+
+/// What the flip writes into its copy (SPEC §11 step 5, S9, S13).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FlipInit {
+    /// The file's generation: 0 for `history.db`, `n` for `history-<n>.db`.
+    pub generation: u32,
+    /// The P3 store's write counter read before the full diff's first batch.
+    pub source_seq: u64,
+    /// How many rows the P3 store held then.
+    pub source_count: u64,
+    /// Every id the P3 store holds (`migration_source`).
+    pub migration_source: Vec<String>,
+    /// Step 8's late-row baseline at the copy, as the shell records it
+    /// (web: `{"writeSeq":n}`). Opaque to the core.
+    pub late_baseline: String,
+    /// The P3 store's own late-row bookkeeping, its `meta.migration`
+    /// (`sourceIds`, `sourceHash`, `lateIds`), copied so its pre-P3 late-row
+    /// step can go on in this file (S13). Opaque; `None` when it has none.
+    pub p3_migration: Option<String>,
 }
 
 /// `meta.migration`'s state, when the file has one.
@@ -169,6 +196,90 @@ impl Store {
     pub fn copy_to(&self, dest: &Path, vfs: Option<&str>, journal: JournalMode) -> Result<()> {
         self.usable()?;
         let _claim = Claim::take(file_key(dest, vfs)?)?;
+        self.copy_into(dest, vfs, journal).map(drop)
+    }
+
+    /// The flip's copy (SPEC §11 step 5): [`Store::copy_to`] from this index,
+    /// then, on the copy and in one transaction, `role = 'authority'`, the
+    /// generation, `meta.migration = {state: 'copying', sourceSeq,
+    /// sourceCount}`, `migration_source` and both late-row baselines (S13).
+    /// Only from an `index` file. The copy is closed when this returns, so
+    /// the next open of it reads its new role (REVIEW-442 note 8). A crash
+    /// between the copy and its transaction leaves `role = 'index'`, never
+    /// the truth; the next try overwrites it in place (M8).
+    ///
+    /// # Errors
+    /// As [`Store::copy_to`]; [`StoreError::Refused`] from a file that isn't
+    /// an index.
+    pub fn flip_copy_to(
+        &self,
+        dest: &Path,
+        vfs: Option<&str>,
+        journal: JournalMode,
+        init: &FlipInit,
+    ) -> Result<()> {
+        self.usable()?;
+        if self.info.role != Role::Index {
+            return Err(StoreError::Refused(
+                "the flip copies only from the index".into(),
+            ));
+        }
+        let _claim = Claim::take(file_key(dest, vfs)?)?;
+        let dst = self.copy_into(dest, vfs, journal)?;
+        self.faults.hit("flip.copied")?;
+        let ids = serde_json::to_string(&init.migration_source)
+            .map_err(|e| StoreError::Refused(e.to_string()))?;
+        let migration = serde_json::json!({
+            "state": "copying",
+            "sourceSeq": init.source_seq,
+            "sourceCount": init.source_count,
+        })
+        .to_string();
+        let generation = init.generation.to_string();
+        let run = || -> std::result::Result<(), StoreError> {
+            let sql = |e: rusqlite::Error| error_of(&e, Source::Session);
+            let tx =
+                Transaction::new_unchecked(&dst, TransactionBehavior::Immediate).map_err(sql)?;
+            let put = |k: &str, v: &str| -> std::result::Result<(), StoreError> {
+                tx.execute(
+                    "INSERT INTO meta (key, value) VALUES (?1, ?2) \
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (k, v),
+                )
+                .map(drop)
+                .map_err(sql)
+            };
+            put("role", Role::Authority.as_str())?;
+            put("generation", &generation)?;
+            put("migration", &migration)?;
+            put("late_baseline", &init.late_baseline)?;
+            if let Some(p3) = &init.p3_migration {
+                put("p3_migration", p3)?;
+            }
+            // Never opened as a session yet: its first open needn't check it.
+            put("open", "0")?;
+            tx.execute("DELETE FROM migration_source", [])
+                .map_err(sql)?;
+            tx.execute(
+                "INSERT INTO migration_source (id) SELECT DISTINCT value FROM json_each(?1)",
+                [&ids],
+            )
+            .map_err(sql)?;
+            self.faults.hit("flip.promote.commit")?;
+            tx.commit().map_err(sql)?;
+            self.faults.hit("flip.promote.committed")
+        };
+        run()?;
+        dst.close().map_err(|(_, e)| error_of(&e, Source::Session))
+    }
+
+    /// The backup copy itself; `dest`'s claim is the caller's.
+    fn copy_into(
+        &self,
+        dest: &Path,
+        vfs: Option<&str>,
+        journal: JournalMode,
+    ) -> Result<Connection> {
         let open_err = |e: rusqlite::Error| error_of(&e, Source::Open);
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
             | OpenFlags::SQLITE_OPEN_CREATE
@@ -243,7 +354,113 @@ impl Store {
             }
         }
         drop(backup);
+        Ok(dst)
+    }
+
+    /// Verify's pass (SPEC §11 step 7): `meta.migration`'s state goes from
+    /// `copying` to `done`, in one transaction, then a checkpoint, so the
+    /// shell's done-record and marker, written after, never name a file that
+    /// isn't `done` on disk. Only on an `authority` file whose migration is
+    /// `copying`; on one already `done` it does nothing.
+    ///
+    /// # Errors
+    /// [`StoreError::Refused`] on any other file; a SQLite error class.
+    pub fn set_migration_done(&mut self, done_at_ms: i64) -> Result<()> {
+        self.writable()?;
+        if self.info.role != Role::Authority {
+            return Err(StoreError::Refused(
+                "only the truth file is migrated".into(),
+            ));
+        }
+        let sql = |e: rusqlite::Error| error_of(&e, Source::Session);
+        let raw = meta_text(&self.conn, "migration").map_err(sql)?;
+        let mut m: serde_json::Value = raw
+            .as_deref()
+            .and_then(|r| serde_json::from_str(r).ok())
+            .ok_or_else(|| StoreError::Refused("no migration record".into()))?;
+        match m.get("state").and_then(|s| s.as_str()) {
+            Some("done") => return Ok(()),
+            Some("copying") => {}
+            other => return Err(StoreError::Refused(format!("migration state {other:?}"))),
+        }
+        m["state"] = "done".into();
+        m["doneAtMs"] = done_at_ms.into();
+        let text = m.to_string();
+        let tx =
+            Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate).map_err(sql)?;
+        tx.execute(
+            "UPDATE meta SET value = ?1 WHERE key = 'migration'",
+            [&text],
+        )
+        .map_err(sql)?;
+        self.faults.hit("flip.done.commit")?;
+        tx.commit().map_err(sql)?;
+        // The commit is durable under `synchronous = FULL`; the checkpoint
+        // moves it into the main file too. Best-effort: a rollback-journal
+        // file has nothing to move.
+        let _ = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
         Ok(())
+    }
+
+    /// `PRAGMA integrity_check`, the whole of it (verify, SPEC §11): the
+    /// problems it reports, or none. It reads every page, so the shell calls
+    /// it only at the flip, before anything else uses the file (N4).
+    ///
+    /// # Errors
+    /// A SQLite error class.
+    pub fn integrity_check(&self) -> Result<Vec<String>> {
+        self.usable()?;
+        let run = || -> rusqlite::Result<Vec<String>> {
+            let mut st = self.conn.prepare("PRAGMA integrity_check")?;
+            let rows = st
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(if rows == ["ok"] { Vec::new() } else { rows })
+        };
+        run().map_err(|e| error_of(&e, Source::Session))
+    }
+
+    /// Every id in `migration_source`, sorted (verify, SPEC §11).
+    ///
+    /// # Errors
+    /// A SQLite error class.
+    pub fn migration_source_ids(&self) -> Result<Vec<String>> {
+        self.usable()?;
+        let run = || -> rusqlite::Result<Vec<String>> {
+            self.conn
+                .prepare("SELECT id FROM migration_source ORDER BY id")?
+                .query_map([], |r| r.get(0))?
+                .collect()
+        };
+        run().map_err(|e| error_of(&e, Source::Session))
+    }
+
+    /// The file's size: its page count times its page size (the flip's
+    /// free-space check, SPEC §11 step 3).
+    ///
+    /// # Errors
+    /// A SQLite error class.
+    pub fn size_bytes(&self) -> Result<u64> {
+        self.usable()?;
+        let n = |p: &str| -> rusqlite::Result<i64> { self.conn.query_row(p, [], |r| r.get(0)) };
+        let run = || -> rusqlite::Result<u64> {
+            let pages = n("PRAGMA page_count")?;
+            let size = n("PRAGMA page_size")?;
+            Ok(u64::try_from(pages.saturating_mul(size)).unwrap_or(0))
+        };
+        run().map_err(|e| error_of(&e, Source::Session))
+    }
+
+    /// A `meta` value by key: the late-row baselines (`late_baseline`,
+    /// `p3_migration`) for step 8.
+    ///
+    /// # Errors
+    /// A SQLite error class.
+    pub fn meta_value(&self, key: &str) -> Result<Option<String>> {
+        self.usable()?;
+        meta_text(&self.conn, key).map_err(|e| error_of(&e, Source::Session))
     }
 
     /// Creates the recovery file `path` (`history-<n>.db`) after `lost`
