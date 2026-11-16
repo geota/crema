@@ -62,6 +62,7 @@ import {
 	type ChangeSet,
 	type Drained,
 	type Expect,
+	type Live,
 	type OwnerInfo,
 	type ReadName,
 	type Reply,
@@ -288,6 +289,17 @@ export class HistoryDbClient {
 	read<T = unknown>(name: ReadName, arg?: unknown): Promise<T> {
 		if (this.#stopped) return Promise.reject(new HistoryDbError('stopped', 'the history store is stopped'));
 		return this.#send(this.#header({ op: 'read', name, arg })) as Promise<T>;
+	}
+
+	/**
+	 * Stage 1 (W2): this tab's live libraries, for the index's queries (the
+	 * coffee scope, effective tags, a custom method's label). Not rows, which
+	 * the owner reads from the P3 store itself (M4). Idempotent: resent like a
+	 * read, and the newest call wins.
+	 */
+	live(live: Live): Promise<unknown> {
+		if (this.#stopped) return Promise.reject(new HistoryDbError('stopped', 'the history store is stopped'));
+		return this.#send(this.#header({ op: 'live', live }));
 	}
 
 	/**

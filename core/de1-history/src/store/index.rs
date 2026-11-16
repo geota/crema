@@ -438,6 +438,20 @@ impl Store {
         .map(|_| ())
     }
 
+    /// Every row the index holds, tombstones included: the web boot check
+    /// compares it with the P3 store's row count (SPEC §3).
+    ///
+    /// # Errors
+    /// [`StoreError::Refused`] on an `authority` file; a SQLite error class.
+    pub fn row_count(&self) -> Result<u64> {
+        self.usable()?;
+        self.index_only("row_count")?;
+        self.conn
+            .query_row("SELECT COUNT(*) FROM shot", [], |r| r.get::<_, i64>(0))
+            .map(|n| u64::try_from(n).unwrap_or(0))
+            .map_err(|e| super::error::error_of(&e, super::error::Source::Session))
+    }
+
     /// The index's bookkeeping.
     ///
     /// # Errors

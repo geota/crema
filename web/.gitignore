@@ -15,8 +15,9 @@ src/lib/wasm/
 # core/de1-history-wasm/README.md).
 src/lib/history-db/wasm/
 
-# The test-seeds wasm bundle (`pnpm wasm:test`), only for the relay vitest.
-# Kept outside src/ so no app code can import it.
+# The test wasm bundle (`pnpm wasm:test`): the relay's test seeds and the
+# history dev oracle (#310 W2), for the vitest suite and `pnpm dev`. Kept
+# outside src/ so no app code can import it.
 .wasm-test/
 
 # PWA / Workbox generated assets

@@ -36,12 +36,23 @@
  * - **The drain** (M5, F2) applies a journaled capture as its own write, under
  *   its tab and seq, so a capture that already landed is never inserted again,
  *   even after the user deleted it or while an export holds it.
+ * - **Stage 1's index** (W2): once the index is open, its upkeep
+ *   (`index-sync.ts`) keeps it in step with the P3 store, which it reads
+ *   itself. Until the boot check passes or its full diff is done the index
+ *   is behind, so the owner says `index_fallback` and refuses its reads, and
+ *   every tab lists from its in-memory rows (SPEC §3 "A miss"). An index call
+ *   that fails for good closes the file and opens it again (`create`), so an
+ *   index deleted under the owner is rebuilt. `live` takes a tab's live
+ *   libraries for the index's queries.
+ * - **Every change set** goes out once, in `write_seq` order: a write that
+ *   changed nothing carries a seq already posted, and isn't (S14).
  * - Nothing here deletes a file, a pool or a slot.
  */
 import type { ChannelLike } from './ports.js';
 import type { LockManagerLike } from './ports.js';
 import { engineError, type Engine, type EngineDb, type EngineError } from './engine.js';
 import { CHANGES_CHANNEL, OWNER_LOCK, RPC_CHANNEL, TAB_LOCK_PREFIX } from './names.js';
+import type { IndexSyncLike, SyncDeps } from './index-sync.js';
 import {
 	PROTOCOL_VERSION,
 	READS,
@@ -67,6 +78,15 @@ export const INSTALL_BUDGET_MS = 30_000;
 export const PRUNE_AFTER_MS = 24 * 60 * 60 * 1000;
 /** How often an owner prunes. */
 export const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
+
+/** An index that failed for good is opened again after this. */
+export const REOPEN_WAIT_MS = 1_000;
+
+/** Errors that say the index file itself failed, which a reopen mends (W2). */
+const BROKEN = new Set(['cantOpen', 'corrupt', 'poisoned', 'readOnly']);
+
+/** Calls that answer while the index is behind: its bookkeeping, not its rows. */
+const WHILE_BEHIND = new Set(['indexState', 'info', 'health', 'writeSeq', 'ftsStatus']);
 
 /** Install errors no wait will clear. */
 const PERMANENT = new Set(['pool.invalidHeader', 'pool.configurationMismatch', 'pool.notSupported']);
@@ -104,6 +124,11 @@ export interface OwnerDeps {
 	locks: LockManagerLike;
 	channel(name: string): ChannelLike;
 	now?(): number;
+	/**
+	 * Stage 1's index upkeep over an open index (W2): `index-sync.ts` over the
+	 * P3 store. Without it the index is served as it is (W1's tests).
+	 */
+	indexSync?(deps: Pick<SyncDeps, 'db' | 'queue' | 'notify' | 'state' | 'broken'>): IndexSyncLike;
 }
 
 type Phase = 'idle' | 'waiting' | 'owner' | 'stopped';
@@ -131,6 +156,14 @@ class Owner {
 	/** `acquire` came while letting go: queue again once released. */
 	#again = false;
 	#prune: ReturnType<typeof setInterval> | null = null;
+	/** Stage 1's index upkeep, while the index is open. */
+	#sync: IndexSyncLike | null = null;
+	/** Whether the index can answer: always, without an upkeep. */
+	#indexReady = true;
+	#indexReason = 'ok';
+	/** The last `write_seq` posted (S14). */
+	#posted = 0;
+	#reopen: ReturnType<typeof setTimeout> | null = null;
 
 	constructor(d: OwnerDeps) {
 		this.#d = d;
@@ -139,6 +172,7 @@ class Owner {
 
 	info(): OwnerInfo {
 		const t = this.#target!;
+		const behind = this.#health === 'ok' && !this.#indexReady;
 		return {
 			v: PROTOCOL_VERSION,
 			tab: this.#tab,
@@ -147,8 +181,8 @@ class Owner {
 			role: t.role,
 			file: t.file,
 			generation: t.generation,
-			health: this.#health,
-			reason: this.#reason
+			health: behind ? 'index_fallback' : this.#health,
+			reason: behind ? this.#indexReason : this.#reason
 		};
 	}
 
@@ -172,6 +206,8 @@ class Owner {
 				return;
 			case 'retry':
 				// Never while letting go: the open would land after the lock is gone (F3).
+				// Open and in step: the boot check again, as on resume (W2).
+				if (this.#phase === 'owner' && !this.#releasing && this.#health === 'ok') this.#sync?.resume();
 				if (this.#phase === 'owner' && !this.#releasing && this.#health !== 'ok') {
 					this.#enqueue(async () => {
 						await this.#open();
@@ -242,6 +278,8 @@ class Owner {
 		}
 		if (this.#prune) clearInterval(this.#prune);
 		this.#prune = null;
+		if (this.#reopen) clearTimeout(this.#reopen);
+		this.#reopen = null;
 		this.#close();
 		const gone = this.info();
 		this.#rpc.onmessage = null;
@@ -353,6 +391,13 @@ class Owner {
 			}
 			this.#db = db;
 			this.#fail('ok', 'open');
+			try {
+				this.#posted = Number(await db.call('writeSeq')) || 0;
+			} catch {
+				this.#posted = 0;
+			}
+			if (gone()) return;
+			if (stage1 && t.role === 'index') this.#startSync(db);
 		} catch (e) {
 			const code = engineError(e).code;
 			if (stage1) this.#fail('index_fallback', code);
@@ -362,7 +407,66 @@ class Owner {
 		}
 	}
 
+	/** Stage 1: the index's upkeep over `db` (W2). */
+	#startSync(db: EngineDb): void {
+		const make = this.#d.indexSync;
+		if (!make) return;
+		this.#indexReady = false;
+		this.#indexReason = 'checking';
+		const sync = make({
+			db,
+			queue: (f) => this.#enqueue(f),
+			notify: (c) => this.#notify(c),
+			state: (ready, reason) => {
+				if (this.#sync !== sync) return;
+				this.#indexReady = ready;
+				this.#indexReason = reason;
+				if (!this.#releasing && this.#phase === 'owner') this.#tell();
+			},
+			broken: (code) => {
+				if (this.#sync !== sync) return;
+				this.#broken(code);
+			}
+		});
+		this.#sync = sync;
+		sync.start();
+	}
+
+	/**
+	 * An index call failed for good: close it, say so, and open it again after
+	 * a wait (`create`), so an index lost under the owner is rebuilt (W2). The
+	 * P3 store is the truth, so nothing is lost meanwhile.
+	 */
+	#broken(code: string): void {
+		void this.#enqueue(async () => {
+			if (this.#releasing || this.#phase !== 'owner') return;
+			this.#close();
+			this.#fail('index_fallback', code);
+			this.#tell();
+			if (this.#reopen) return;
+			this.#reopen = setTimeout(() => {
+				this.#reopen = null;
+				if (this.#releasing || this.#phase !== 'owner') return;
+				void this.#enqueue(async () => {
+					await this.#open();
+					if (!this.#releasing) this.#tell();
+				});
+			}, REOPEN_WAIT_MS);
+		});
+	}
+
+	/** Tells every tab, and the page, who answers and how (no drain, no prune). */
+	#tell(): void {
+		const info = this.info();
+		this.#rpc?.postMessage({ t: 'ready', owner: info } satisfies RpcMessage);
+		this.#post({ t: 'state', owner: true, info });
+	}
+
 	#close(): void {
+		this.#sync?.stop();
+		this.#sync = null;
+		this.#indexReady = true;
+		this.#indexReason = 'ok';
 		const db = this.#db;
 		this.#db = null;
 		if (db) {
@@ -437,7 +541,11 @@ class Owner {
 			try {
 				answer(true, await this.#serve(req));
 			} catch (e) {
-				answer(false, engineError(e));
+				const err = engineError(e);
+				answer(false, err);
+				// Stage 1: the index file failed under its connection (gone,
+				// corrupt): reopen it, so it's rebuilt (W2).
+				if (this.#sync && BROKEN.has(err.code)) this.#broken(err.code);
 			}
 		});
 	}
@@ -454,7 +562,18 @@ class Owner {
 				if (!(READS as readonly string[]).includes(req.name)) {
 					throw { code: 'refused', message: `${req.name} isn't a read` };
 				}
+				// Behind the P3 store: its rows would be stale, so the tab lists from memory (W2).
+				if (!this.#indexReady && !WHILE_BEHIND.has(req.name)) {
+					throw { code: 'index_fallback', message: this.#indexReason };
+				}
 				return db.call(req.name, req.arg);
+			case 'live': {
+				if (req.stage !== 1 || this.#stage !== 1) {
+					throw { code: 'otherStage', message: 'the live libraries go through `apply` on stage 2' };
+				}
+				this.#notify((await db.call('setLive', req.live)) as ChangeSet);
+				return null;
+			}
 			case 'write': {
 				// M1: a client of another stage never writes through this owner.
 				if (req.stage !== this.#stage) {
@@ -561,7 +680,10 @@ class Owner {
 		return out;
 	}
 
+	/** Posts `change` once: a write that changed nothing carries a seq already posted (S14). */
 	#notify(change: ChangeSet): void {
+		if (!change || typeof change.seq !== 'number' || change.seq <= this.#posted) return;
+		this.#posted = change.seq;
 		this.#changes?.postMessage({ t: 'change', owner: this.info(), change });
 	}
 }

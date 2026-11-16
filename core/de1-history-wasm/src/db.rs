@@ -48,7 +48,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
 use crate::json::{
-    AppliedJson, ErrorJson, HealthJson, IndexWriteJson, InfoJson, JournalJson, MaintainedJson,
+    AbsentStepJson, AppliedJson, ErrorJson, HealthJson, IndexWriteJson, InfoJson, JournalJson, MaintainedJson,
     PlaceJson, RecoveryJson, RidIdJson, RoleJson, RowJson, WalkJson, WriteJson, WrittenJson,
     rows_in,
 };
@@ -725,6 +725,29 @@ impl HistoryDb {
             Err(e) => return Promise::reject(&e),
         };
         self.slot(move |s| s.remove_absent(&a.ids, a.since_seq).map_err(Into::into))
+    }
+
+    /// `remove_absent_begin({ids, sinceSeq})`: begins a removal by absence
+    /// that [`HistoryDb::remove_absent_next`] steps through, so the shell can
+    /// answer other calls between steps (S15, REVIEW-456 N2).
+    #[wasm_bindgen(js_name = removeAbsentBegin)]
+    pub fn remove_absent_begin(&self, json: &str) -> Result<String, JsValue> {
+        let a: RemoveAbsentArgs = parse(json)?;
+        self.sync(|s| s.remove_absent_begin(&a.ids, a.since_seq))
+    }
+
+    /// `remove_absent_next()` → `{change, done}`: one step, one transaction,
+    /// at most 500 deletes. Refused with no removal under way (a reopen
+    /// forgets it): the shell runs the diff again.
+    #[wasm_bindgen(js_name = removeAbsentNext)]
+    pub fn remove_absent_next(&self) -> Promise {
+        self.slot(|s| s.remove_absent_next().map(AbsentStepJson::from))
+    }
+
+    /// `row_count()`: every row the index holds, tombstones included.
+    #[wasm_bindgen(js_name = rowCount)]
+    pub fn row_count(&self) -> Result<String, JsValue> {
+        self.sync(|s| s.row_count())
     }
 
     /// `set_source_seq(seq)`.

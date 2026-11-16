@@ -44,3 +44,10 @@ export const TAB_LOCK_PREFIX = 'crema-history-tab:';
 export const RPC_CHANNEL = 'crema-history-rpc';
 /** Every write's `ChangeSet`, to every tab (SPEC §10). */
 export const CHANGES_CHANNEL = 'crema-history-changes';
+
+/**
+ * The P3 store's own channel, where it posts the ids and `writeSeq` of each
+ * write (`HISTORY_CHANNEL` in `store.svelte.ts`): the stage-1 index's upkeep
+ * listens on it (W2, M4). Read here so the Worker imports nothing of the store.
+ */
+export const P3_CHANNEL = 'crema-history';
