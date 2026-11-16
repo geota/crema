@@ -401,7 +401,14 @@ jobs:
         working-directory: web
         run: pnpm check
 
-      # Unit tests (vitest). They import the wasm bundle built above.
+      # The test wasm bundle (web/.wasm-test, outside src/): the relay's test
+      # seeds, and the history dev oracle (#310 W2), whose reference rules
+      # every History index answer in the vitest suite is checked against.
+      - name: Build the test wasm bundle (relay seeds, history dev oracle)
+        working-directory: web
+        run: pnpm wasm:test
+
+      # Unit tests (vitest). They import the wasm bundles built above.
       - name: Unit tests (vitest)
         working-directory: web
         run: pnpm test
@@ -423,14 +430,12 @@ jobs:
         run: pnpm test:pwa
 
       # AC-23: the relay wasm bridge reproduces core/de1-relay's seeded vectors
-      # byte for byte. Its deterministic constructors exist only in this separate
-      # test-seeds bundle (web/.wasm-test, outside src/); RELAY_WASM_TEST=1 makes
-      # a missing bundle a failure instead of a skip.
+      # byte for byte. Its deterministic constructors exist only in the separate
+      # test bundle built above (web/.wasm-test, outside src/); RELAY_WASM_TEST=1
+      # makes a missing bundle a failure instead of a skip.
       - name: Relay wasm vectors (test-seeds bundle)
         working-directory: web
-        run: |
-          pnpm wasm:test
-          RELAY_WASM_TEST=1 pnpm vitest run src/lib/relay
+        run: RELAY_WASM_TEST=1 pnpm vitest run src/lib/relay
 
   # ─────────────────────────────────────────────────────────────────────
   # The SQLite history's wasm (#310 PLAN C4): de1-history's store suite on

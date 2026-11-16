@@ -22,11 +22,14 @@ W0_KILLS=20 pnpm test:browser durability --project webkit
 | `connections.spec.ts` | One connection per file (S4); two files in one pool and across two, with the snapshot and flip copies; SQLite ≥ 3.54 and equal to the native pin | Chromium, WebKit |
 | `capacity.spec.ts` | A full `crema-db` adds capacity and the write goes through (S5) | Chromium, WebKit |
 | `w1.spec.ts` | The app's `HistoryDbClient` and Worker (W1): either tab answers, a reload and a closed owner move ownership, in-flight requests retry, the last action wins; a frozen owner leaves the other tab read-only with a journaled shot, which the thawed owner drains; stage 1 never installs `crema-db`; `stop` lets the pool go; no file goes missing | Chromium, WebKit (the frozen owner: Chromium, bare CDP) |
+| `w2.spec.ts` | The stage-1 index (W2): a `crema-history` of 20,000 B1 rows, the app's client and Worker build the index by a full diff and keep it; the History list's reads through the Worker within B1's budgets at 20,000 rows (every line locally; the first page and the rebuild on CI) | Chromium (project `bench`) |
 | `bench.spec.ts` | The wasm under 1 MB gzip; B1's browser bench at 5,000, 20,000 and 100,000 rows, the first-page lines gated | Chromium (project `bench`, alone, after the others) |
 
 ## How it's put together
 
 - `w1/`: a page running the app's own `src/lib/history-db/` client and Worker (W1), driven as `window.h1`.
+  On stage 1 it makes an empty, migrated `crema-history` first: the owner's index follows it (W2).
+- `w2/`: the same client and Worker over a `crema-history` it seeds with B1's rows, timed as `window.h2` (W2).
 - `harness/`: a test page and its Worker. The Worker loads the production wasm and
   forwards calls (`window.w0.call(op, args)`), holds Web Locks, and reads or plants
   raw OPFS files. Throwaway, like the smallest stage-2 client and boot in
