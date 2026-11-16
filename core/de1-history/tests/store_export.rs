@@ -200,6 +200,52 @@ fn holds_left_by_a_closed_walk_are_released_at_the_next_open() {
 }
 
 #[test]
+fn delete_held_removes_only_rows_still_held_and_no_walk_needs() {
+    // REVIEW-468 W5-1: a release that races an upsert of a held row leaves it.
+    let d = dir();
+    let path = file(&d, "history.db");
+    let mut store = create(&path);
+    let rows: Vec<String> = ["a", "b", "c", "d"]
+        .iter()
+        .enumerate()
+        .map(|(i, id)| row(id, i64::try_from(i).unwrap_or(0), json!({})))
+        .collect();
+    store.upsert(&rows_in(&rows)).expect("writes");
+    let one = store.export_begin().expect("begins");
+    store
+        .delete(&["a".into(), "b".into(), "c".into()])
+        .expect("holds");
+    store.export_end(one.token).expect("ends");
+    let held = store.release_holds().expect("holds");
+    assert_eq!(held.len(), 3);
+    // A walk begins (its set skips the held rows), b comes back before the
+    // release deletes it, and d is held for that walk.
+    let two = store.export_begin().expect("begins");
+    store
+        .upsert(&rows_in(&[row("b", 1, json!({ "notes": "back" }))]))
+        .expect("writes");
+    store
+        .delete(&["d".into()])
+        .expect("holds d for the open walk");
+    let mut asked = held.clone();
+    asked.push("d".into());
+    asked.push("nope".into());
+    let mut gone = store.delete_held(&asked).expect("deletes");
+    gone.sort();
+    assert_eq!(gone, vec!["a".to_owned(), "c".to_owned()]);
+    // b is back and live; d stays, held, for the walk that needs it.
+    assert_eq!(ids_of(&store), set(&["b", "d"]));
+    assert_eq!(store.release_holds().expect("holds"), Vec::<String>::new());
+    store.export_end(two.token).expect("ends");
+    assert_eq!(store.release_holds().expect("holds"), vec!["d".to_owned()]);
+    assert_eq!(
+        store.delete_held(&["d".into()]).expect("deletes"),
+        vec!["d".to_owned()]
+    );
+    assert_eq!(ids_of(&store), set(&["b"]));
+}
+
+#[test]
 fn an_unknown_or_ended_token_is_refused() {
     let d = dir();
     let mut store = create(&file(&d, "history.db"));

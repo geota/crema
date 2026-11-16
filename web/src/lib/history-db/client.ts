@@ -64,6 +64,7 @@ import {
 	type Expect,
 	type Live,
 	type OwnerInfo,
+	type OnceName,
 	type ReadName,
 	type Reply,
 	type Request,
@@ -184,6 +185,8 @@ interface Pending {
 	gapped?: boolean;
 	/** A no-op's given-up write, settled from the no-op's answer. */
 	origin?: Pending;
+	/** A once-only call: the owner tab it went to (#310 R1w). */
+	to?: string;
 	/** A capture's journal entry, and the text it was written with (F2). */
 	capture?: { key: string; text: string; rowJson: string };
 	resolve(value: unknown): void;
@@ -300,6 +303,37 @@ export class HistoryDbClient {
 	live(live: Live): Promise<unknown> {
 		if (this.#stopped) return Promise.reject(new HistoryDbError('stopped', 'the history store is stopped'));
 		return this.#send(this.#header({ op: 'live', live }));
+	}
+
+	/**
+	 * A once-only call (#310 R1w): the export walk's and a hold's release,
+	 * whose state lives on the owner's connection. Sent once to the owner
+	 * this tab knows, and never resent; refused (`ownerChanged`) if that owner
+	 * goes, lets go or its Worker restarts before it answers, and
+	 * (`unavailable`) after 30 s without an answer. Stage 2 only.
+	 */
+	once<T = unknown>(name: OnceName, arg?: unknown): Promise<T> {
+		if (this.#stopped) return Promise.reject(new HistoryDbError('stopped', 'the history store is stopped'));
+		if (this.#o.stage !== 2) return Promise.reject(new HistoryDbError('stage1', 'the export walk is stage 2’s'));
+		const owner = this.#status.owner;
+		if (!owner || this.#status.health !== 'ok') {
+			return Promise.reject(new HistoryDbError('unavailable', this.#status.message ?? 'the history store did not answer'));
+		}
+		const req = this.#header({ op: 'once', name, arg });
+		return new Promise<T>((resolve, reject) => {
+			const p: Pending = { req, firstAt: this.#now(), sentAt: 0, to: owner.tab, resolve: resolve as (v: unknown) => void, reject };
+			this.#pending.set(req.id, p);
+			this.#transmit(p);
+		});
+	}
+
+	/** Refuse every once-only call that went to an owner `gone` says is gone. */
+	#dropOnce(gone: (to: string | undefined) => boolean): void {
+		for (const p of [...this.#pending.values()]) {
+			if (p.req.op !== 'once' || !gone(p.to)) continue;
+			this.#settle(p);
+			p.reject(new HistoryDbError('ownerChanged', 'the owner changed while the call was in flight'));
+		}
 	}
 
 	/**
@@ -451,7 +485,8 @@ export class HistoryDbClient {
 
 	/** Resend every read, then the whole outbox in seq order (M11). */
 	#resendAll(): void {
-		for (const p of this.#pending.values()) if (p.req.op !== 'write') this.#transmit(p);
+		// A once-only call is never resent (#310 R1w).
+		for (const p of this.#pending.values()) if (p.req.op !== 'write' && p.req.op !== 'once') this.#transmit(p);
 		for (const p of this.#outbox) this.#transmit(p);
 	}
 
@@ -465,8 +500,10 @@ export class HistoryDbClient {
 			return;
 		}
 		if (!r.ok && r.error.code === 'notOwner') {
-			// That Worker let go: the request goes to whoever owns now.
+			// That Worker let go: the request goes to whoever owns now. A
+			// once-only call doesn't: what it named went with the owner.
 			if (r.owner.tab === this.tab) this.#setStatus({ ownerHere: false });
+			if (p.req.op === 'once') this.#dropOnce((to) => to === p.to);
 			return;
 		}
 		this.#answered(r.owner);
@@ -616,6 +653,8 @@ export class HistoryDbClient {
 					this.#cannotUse('otherBuild', m.owner);
 					return;
 				}
+				// Another owner: the one a once-only call went to has gone.
+				this.#dropOnce((to) => to !== m.owner.tab);
 				this.#answered(m.owner, m.owner.tab === this.tab);
 				this.#resendAll();
 				return;
@@ -627,6 +666,7 @@ export class HistoryDbClient {
 				}
 				return;
 			case 'gone':
+				this.#dropOnce((to) => to === m.owner.tab);
 				if (this.#status.owner?.tab === m.owner.tab) {
 					this.#setStatus({ owner: null, ownerHere: false });
 					this.#since = this.#now();
@@ -719,6 +759,8 @@ export class HistoryDbClient {
 				continue;
 			}
 			if (now - p.sentAt < ANSWER_MS) continue;
+			// A once-only call waits for its answer, or its 30 s, never a resend.
+			if (p.req.op === 'once') continue;
 			// Answered with an error or `gap`, or late at an owner that answers
 			// other calls (busy): this one again, alone. Late with no owner heard
 			// from for 5 s: the owner can't answer.
@@ -761,8 +803,11 @@ export class HistoryDbClient {
 	 */
 	#restartWorker(): void {
 		if (this.#stopped) return;
+		const wasOwner = this.#status.ownerHere;
 		this.#worker?.terminate();
 		this.#worker = null;
+		// The connection a once-only call named went with the Worker.
+		if (wasOwner) this.#dropOnce((to) => to === this.tab);
 		this.#setStatus({ ownerHere: false });
 		this.#resendAll();
 		if (this.#restartTimer) return;
@@ -798,6 +843,7 @@ export class HistoryDbClient {
 					this.#resendAll();
 					if (this.#o.stage === 2) void this.#drain();
 				} else if (this.#status.ownerHere) {
+					this.#dropOnce((to) => to === this.tab);
 					this.#setStatus({ ownerHere: false, owner: null });
 					this.#since = this.#now();
 					this.#hello();

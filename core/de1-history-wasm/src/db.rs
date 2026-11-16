@@ -653,6 +653,13 @@ impl HistoryDb {
         self.sync(|s| s.export_next(token(&a.token)?, a.n))
     }
 
+    /// `export_rewind(token)`: the same set again from its first row, for
+    /// a backup that reads it twice (R1w).
+    #[wasm_bindgen(js_name = exportRewind)]
+    pub fn export_rewind(&self, walk: &str) -> Result<String, JsValue> {
+        self.sync(|s| s.export_rewind(token(walk)?))
+    }
+
     /// `export_end(token)`.
     #[wasm_bindgen(js_name = exportEnd)]
     pub fn export_end(&self, walk: &str) -> Promise {
@@ -664,6 +671,17 @@ impl HistoryDb {
     #[wasm_bindgen(js_name = releaseHolds)]
     pub fn release_holds(&self) -> Result<String, JsValue> {
         self.sync(|s| s.release_holds())
+    }
+
+    /// `delete_held(ids)` → `[id]` it removed: only rows still held and no
+    /// open walk needs (REVIEW-468 W5-1).
+    #[wasm_bindgen(js_name = deleteHeld)]
+    pub fn delete_held(&self, ids: &str) -> Promise {
+        let ids = match parse::<Vec<String>>(ids) {
+            Ok(i) => i,
+            Err(e) => return Promise::reject(&e),
+        };
+        self.slot(move |s| s.delete_held(&ids))
     }
 
     /// `restore_begin()` → `begin_seq`.

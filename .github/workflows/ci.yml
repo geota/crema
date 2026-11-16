@@ -401,12 +401,18 @@ jobs:
         working-directory: web
         run: pnpm check
 
-      # The test wasm bundle (web/.wasm-test, outside src/): the relay's test
-      # seeds, and the history dev oracle (#310 W2), whose reference rules
-      # every History index answer in the vitest suite is checked against.
+      # The test wasm bundles (web/.wasm-test, outside src/; the app never
+      # loads them): de1-wasm's, with the relay's test seeds and the history
+      # dev oracle (#310 W2), whose reference rules every History index answer
+      # in the vitest suite is checked against; and the history store's Node
+      # bundle (#310 R1w), `memory-truth`, for the backup seam's SQLite tests.
       - name: Build the test wasm bundle (relay seeds, history dev oracle)
         working-directory: web
         run: pnpm wasm:test
+
+      - name: Build the history wasm test bundle
+        working-directory: web
+        run: pnpm wasm:history:test
 
       # Unit tests (vitest). They import the wasm bundles built above.
       - name: Unit tests (vitest)

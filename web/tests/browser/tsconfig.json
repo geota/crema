@@ -18,8 +18,9 @@
 		"isolatedModules": true
 	},
 	"include": ["./**/*.ts", "../../bench/**/*.ts", "../../playwright.config.ts", "../../playwright.pwa.config.ts"],
-	// The W2 page bundles P3w's `history-db.ts`, whose types reach the whole
-	// app, which this config can't type: `pnpm check` types that module, and
-	// the spec types `window.h2` itself.
-	"exclude": ["./.build", "./w2/page.ts"]
+	// The R1w and W2 pages bundle app modules (the backup seam's SQLite source,
+	// P3w's `history-db.ts`) whose types reach the whole app, which this config
+	// can't type: `pnpm check` types those modules, and each spec types its
+	// page's `window` handle itself.
+	"exclude": ["./.build", "./r1w/page.ts", "./w2/page.ts"]
 }
