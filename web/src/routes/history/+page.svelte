@@ -117,6 +117,7 @@
 	import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
 	import { uploadPending } from '#lib/history/store.svelte.js';
 	import { p3RowsOf } from '#lib/history/p3-rows.js';
+	import { getHistoryReads, liveRows } from '#lib/history/reads.svelte.js';
 	import { uploadsHeld } from '#lib/visualizer/sync-config.js';
 	import { markShotEdit, type ShotEdit } from '#lib/visualizer/pending-edits.js';
 	import { readQueue } from '#lib/services/queue-store.js';
@@ -135,6 +136,7 @@
 	import { COFFEE_FILTER_PREFIX as COFFEE_PREFIX } from '#lib/history/search.js';
 
 	const store = getHistoryStore();
+	const historyReads = getHistoryReads();
 	const appCtx = getCremaAppContext();
 	const settings = getSettingsStore();
 	const beanLibrary = getBeanStore();
@@ -225,7 +227,8 @@
 	 * empty curves.
 	 */
 	async function exportAllAsV2Jsonl(): Promise<void> {
-		const ids = shots.map((s) => s.id);
+		// Every live row, by a query, whole and from one state (#310 W3).
+		const ids = (await historyReads.answer(liveRows())).map((s) => s.id);
 		const lines: string[] = [];
 		for (let i = 0; i < ids.length; i += 25) {
 			for (const whole of await store.loadMany(ids.slice(i, i + 25))) {
@@ -256,7 +259,8 @@
 		// IndexedDB awaits don't fight the zip's worker.
 		const files: Record<string, Uint8Array> = {};
 		let skipped = 0;
-		for (const shot of shots) {
+		// Every live row, by a query, whole and from one state (#310 W3).
+		for (const shot of await historyReads.answer(liveRows())) {
 			const entries = await captureStore.get(shot.id).catch(() => null);
 			if (!entries || entries.length === 0) {
 				skipped += 1;
