@@ -4,9 +4,11 @@
  * heavy parts in `crema-history`'s `details` ({@link DetailsStore}).
  *
  * **Export: the walk.** A backup reads its shots twice, once to count what it
- * can write and once to write it, so it begins two walks back to back: each
- * fixes its set at `exportBegin`, and the second pass must yield the first's
- * ids in the same order, or the backup stops with {@link ShotsMoved}. A delete
+ * can write and once to write it. One walk fixes its set and order at
+ * `exportBegin` (newest first, ties by id, as the P3 store lists its rows),
+ * and `exportRewind` starts it again for the second pass, which must yield
+ * the first's ids in the same order, or the backup stops with
+ * {@link ShotsMoved}. A delete
  * during a walk only holds the row (`hold_delete`), so every row of the set is
  * still there to write and the header's count is the lines written. At the
  * end, and before the next export, the holds are released: their details are
@@ -45,7 +47,7 @@ import {
 } from './types';
 
 /** The once-only calls: each must run once on the owner it reaches (the walk lives on that connection). */
-export type WalkCall = 'exportBegin' | 'exportNext' | 'exportEnd' | 'releaseHolds';
+export type WalkCall = 'exportBegin' | 'exportNext' | 'exportRewind' | 'exportEnd' | 'releaseHolds';
 
 /** What this source needs of `HistoryDbClient` (a stage-2 client of `history.db`). */
 export interface HistoryDbPort {
@@ -93,9 +95,6 @@ interface RidId {
 	rid: number;
 	id: string;
 }
-
-/** How often two walks begun back to back are tried for the same set before the backup gives up. */
-const BEGIN_TRIES = 3;
 
 /** A stored row as a whole shot: its fields and `details`. A row that isn't a row object is passed on as its text, for the core to omit. */
 function shotOf(rowJson: string, details: DetailsRecord | undefined): StoredShot {
@@ -239,50 +238,30 @@ export class SqliteSource implements HistorySource {
 
 	async exportShots(): Promise<ExportShots> {
 		await this.settleHolds();
-		const [a, b] = await this.#beginTwo();
+		const w = await this.#db.once<Walk>('exportBegin');
 		let passes = 0;
-		let order: string[] | null = null;
+		let order: string[] = [];
 		let closed = false;
 		const close = async (): Promise<void> => {
 			if (closed) return;
 			closed = true;
-			await this.#end(a);
-			await this.#end(b);
+			await this.#end(w);
 			await this.settleHolds().catch(() => {
 				// Released before the next export, or at boot.
 			});
 		};
 		return {
-			total: a.count,
+			total: w.count,
 			pass: () => {
 				const n = passes++;
 				if (n > 1) throw new Error('A backup reads its shots twice, no more.');
-				if (n === 0) {
-					order = [];
-					return this.#walk(a, order, null);
-				}
-				return this.#walk(b, null, order ?? []);
+				if (n === 0) return this.#walk(w, order, null, false);
+				const first = order;
+				order = [];
+				return this.#walk(w, null, first, true);
 			},
 			close
 		};
-	}
-
-	/** Two walks with the same count, or {@link ShotsMoved}. */
-	async #beginTwo(): Promise<[Walk, Walk]> {
-		for (let i = 0; i < BEGIN_TRIES; i++) {
-			const a = await this.#db.once<Walk>('exportBegin');
-			let b: Walk;
-			try {
-				b = await this.#db.once<Walk>('exportBegin');
-			} catch (e) {
-				await this.#end(a);
-				throw e;
-			}
-			if (a.count === b.count) return [a, b];
-			await this.#end(a);
-			await this.#end(b);
-		}
-		throw new ShotsMoved();
 	}
 
 	async #end(w: Walk): Promise<void> {
@@ -298,7 +277,14 @@ export class SqliteSource implements HistorySource {
 	 * notes the ids in `record`; the second checks them against `expect`.
 	 * Either way the pass yields exactly the walk's count.
 	 */
-	async *#walk(w: Walk, record: string[] | null, expect: readonly string[] | null): AsyncGenerator<StoredShot> {
+	async *#walk(
+		w: Walk,
+		record: string[] | null,
+		expect: readonly string[] | null,
+		rewind: boolean
+	): AsyncGenerator<StoredShot> {
+		// The second pass: the same set from its first row, the holds kept.
+		if (rewind) await this.#db.once('exportRewind', w.token);
 		let seen = 0;
 		for (;;) {
 			const rows = await this.#db.once<RowOut[]>('exportNext', { token: w.token, n: this.#batch });

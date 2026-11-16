@@ -143,10 +143,10 @@ describe.runIf(historyWasmBuilt)('the SQLite source across an owner change (#310
 		const ex = await drive(source.exportShots());
 		expect(ex.total).toBe(5);
 		const it = ex.pass()[Symbol.asyncIterator]();
-		expect((await drive(it.next())).value?.id).toBe('s1');
-		// The user deletes s4 during the walk: held.
-		await drive(a.client.write({ kind: 'delete', ids: ['s4'] }));
-		expect(details.map.has('s4')).toBe(true);
+		expect((await drive(it.next())).value?.id).toBe('s5');
+		// The user deletes s2 during the walk: held.
+		await drive(a.client.write({ kind: 'delete', ids: ['s2'] }));
+		expect(details.map.has('s2')).toBe(true);
 		// The owner tab goes: the walk goes with its connection.
 		a.close();
 		await expect(drive((async () => {
@@ -156,8 +156,8 @@ describe.runIf(historyWasmBuilt)('the SQLite source across an owner change (#310
 		// B owns now, and its release finished the hold: details, then the row.
 		expect(b.client.status.ownerHere).toBe(true);
 		const rows = await drive(rowsOf(b.client as unknown as HistoryClientLike));
-		expect([...rows.keys()].sort()).toEqual(['s1', 's2', 's3', 's5']);
-		expect(details.map.has('s4')).toBe(false);
+		expect([...rows.keys()].sort()).toEqual(['s1', 's3', 's4', 's5']);
+		expect(details.map.has('s2')).toBe(false);
 		expect(await drive(b.client.once('releaseHolds'))).toEqual([]);
 	});
 });

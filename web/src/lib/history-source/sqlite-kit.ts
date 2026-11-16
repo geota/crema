@@ -64,7 +64,7 @@ let files = 0;
 export const freshFile = (): string => `r1w-${++files}.db`;
 
 /** Methods whose one argument is plain text, as `wasm-engine.ts` has them. */
-const RAW_TEXT = new Set(['byRemoteId', 'byDecentId', 'appliedSeq', 'exportEnd', 'setSourceSeq']);
+const RAW_TEXT = new Set(['byRemoteId', 'byDecentId', 'appliedSeq', 'exportEnd', 'exportRewind', 'setSourceSeq']);
 
 function parsed(v: unknown): unknown {
 	if (typeof v !== 'string') return v ?? null;

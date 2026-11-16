@@ -1,12 +1,12 @@
 /**
  * #310 R1w, "Done when": backups from both sources of the same history are
  * byte-identical. The same history: `crema-history` as the P3 store keeps it,
- * and `history.db` holding the same rows, in the P3 store's order, with the
- * same `details` (SPEC §2: details stay where P3 put them).
+ * and `history.db` holding the same rows, written in the reverse order, with
+ * the same `details` (SPEC §2: details stay where P3 put them).
  *
- * The walk reads in `rid` order (SPEC §9), so the lines match when the rows
- * went into `history.db` in the P3 list's order, as here. A restore reads by
- * id, so no reader depends on the order.
+ * The walk fixes its order at its start, newest first with ties by id, as
+ * the P3 store lists its rows (#466), so the lines match whatever order the
+ * rows went into `history.db`.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
@@ -61,8 +61,8 @@ describe.runIf(historyWasmBuilt)('backups from both sources (#310 R1w)', () => {
 		setHistorySource(source);
 		const sqlJsonl = (await buildBackupJsonl('test'))!;
 		const sqlFile = await fileBytes();
-		// Both through the walk: two walks a backup.
-		expect(port.calls.get('exportBegin')).toBe(4);
+		// Both through the walk: one walk a backup, rewound for its second pass.
+		expect(port.calls.get('exportBegin')).toBe(2);
 
 		expect(sqlJsonl.jsonl).toBe(p3Jsonl.jsonl);
 		expect(sqlJsonl.contents).toEqual(p3Jsonl.contents);

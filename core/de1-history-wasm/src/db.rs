@@ -653,6 +653,13 @@ impl HistoryDb {
         self.sync(|s| s.export_next(token(&a.token)?, a.n))
     }
 
+    /// `export_rewind(token)`: the same set again from its first row, for
+    /// a backup that reads it twice (R1w).
+    #[wasm_bindgen(js_name = exportRewind)]
+    pub fn export_rewind(&self, walk: &str) -> Result<String, JsValue> {
+        self.sync(|s| s.export_rewind(token(walk)?))
+    }
+
     /// `export_end(token)`.
     #[wasm_bindgen(js_name = exportEnd)]
     pub fn export_end(&self, walk: &str) -> Promise {

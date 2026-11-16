@@ -151,7 +151,7 @@ async function owedDeletes(source: SqliteSource, ids: string[]) {
 describe.runIf(historyWasmBuilt)('the SQLite source (#310 R1w)', () => {
 	// A restore that stops logs why; these stop it on purpose.
 	beforeEach(() => void vi.spyOn(console, 'error').mockImplementation(() => {}));
-	it('exports every live shot whole, in rid order, the same in both passes', async () => {
+	it('exports every live shot whole, newest first, the same in both passes', async () => {
 		const { port, details, source } = await setup();
 		const shots = ['s1', 's2', 's3', 's4', 's5'].map((id) => shot(id));
 		await seed(port, details, [...shots, shot('s6', { deletedAt: 5 } as Partial<StoredShot>)]);
@@ -162,7 +162,7 @@ describe.runIf(historyWasmBuilt)('the SQLite source (#310 R1w)', () => {
 		const one = await all(ex.pass());
 		const two = await all(ex.pass());
 		await ex.close();
-		expect(one.map((s) => s.id)).toEqual(['s1', 's2', 's3', 's4', 's5']);
+		expect(one.map((s) => s.id)).toEqual(['s5', 's4', 's3', 's2', 's1']);
 		expect(two).toEqual(one);
 		// Whole: the details are back on each row.
 		expect(one[2]).toEqual({ ...shots[2], profile: null });
@@ -174,19 +174,19 @@ describe.runIf(historyWasmBuilt)('the SQLite source (#310 R1w)', () => {
 		await seed(port, details, ['s1', 's2', 's3', 's4', 's5'].map((id) => shot(id)));
 		const { bytes } = await backupOf(source, async (pass, at) => {
 			if (pass !== 0 || at !== 1) return;
-			// The user deletes s4, which this walk hasn't reached.
-			await port.write({ kind: 'delete', ids: ['s4'] });
-			expect(await port.read('get', ['s4'])).toEqual([]);
-			expect((await projection(port)).find((r) => r.id === 's4')?.held).toBe(true);
-			expect(details.map.has('s4')).toBe(true);
+			// The user deletes s2, which this walk hasn't reached.
+			await port.write({ kind: 'delete', ids: ['s2'] });
+			expect(await port.read('get', ['s2'])).toEqual([]);
+			expect((await projection(port)).find((r) => r.id === 's2')?.held).toBe(true);
+			expect(details.map.has('s2')).toBe(true);
 		});
 		const { header, shots } = linesOf(bytes);
-		expect(shots.map((s) => s.id)).toEqual(['s1', 's2', 's3', 's4', 's5']);
+		expect(shots.map((s) => s.id)).toEqual(['s5', 's4', 's3', 's2', 's1']);
 		expect(header.shotCount).toBe(5);
-		expect(shots.find((s) => s.id === 's4')!.record.samples).toHaveLength(3);
+		expect(shots.find((s) => s.id === 's2')!.record.samples).toHaveLength(3);
 		// After the walk: gone, details first, then the row.
-		expect((await projection(port)).map((r) => r.id)).toEqual(['s1', 's2', 's3', 's5']);
-		expect(details.map.has('s4')).toBe(false);
+		expect((await projection(port)).map((r) => r.id)).toEqual(['s1', 's3', 's4', 's5']);
+		expect(details.map.has('s2')).toBe(false);
 		const release = log.lastIndexOf('details:delete');
 		expect(release).toBeGreaterThan(-1);
 		expect(log.indexOf('write:delete', release)).toBeGreaterThan(release);
@@ -207,7 +207,7 @@ describe.runIf(historyWasmBuilt)('the SQLite source (#310 R1w)', () => {
 		expect(header.shotCount).toBe(shots.length);
 		expect(built.shotsWritten).toBe(shots.length);
 		// The set fixed at the start; the edit is in its line; the new shot waits for the next backup.
-		expect(shots.map((s) => s.id)).toEqual(['s1', 's2', 's3', 's4', 's5', 's6']);
+		expect(shots.map((s) => s.id)).toEqual(['s6', 's5', 's4', 's3', 's2', 's1']);
 		expect(shots.find((s) => s.id === 's3')!.metadata.rating).toBe(5);
 		expect((await projection(port)).map((r) => r.id)).toEqual(['s3', 's4', 's5', 's7']);
 	});

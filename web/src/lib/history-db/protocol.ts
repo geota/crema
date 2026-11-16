@@ -102,7 +102,7 @@ export type ReadName = (typeof READS)[number];
  * and an owner change ends the walk, so the call is refused, not sent on. A
  * hold's release (`releaseHolds`) goes with them.
  */
-export const ONCE = ['exportBegin', 'exportNext', 'exportEnd', 'releaseHolds'] as const;
+export const ONCE = ['exportBegin', 'exportNext', 'exportRewind', 'exportEnd', 'releaseHolds'] as const;
 export type OnceName = (typeof ONCE)[number];
 
 /** A client's write (C4's `WriteJson`), applied through `apply` in its tab's seq order. */

@@ -1,7 +1,8 @@
 /**
  * The same history in both stores, for the cross-source tests (#310 R1w):
  * `crema-history` as a P3 boot finds it, and `history.db` with its rows in
- * the P3 store's order over the same `details`. Not a test file.
+ * reverse of the P3 store's order (the walk orders them itself) over the same
+ * `details`. Not a test file.
  */
 import { HistoryDb, META_MIGRATION } from '#lib/history/history-db.js';
 import { writeDoneMarker } from '#lib/history/store-marker.js';
@@ -26,13 +27,13 @@ export async function p3History(shots: readonly StoredShot[]): Promise<void> {
 	await getHistoryStore().whenReady();
 }
 
-/** `history.db` with the P3 store's rows, in its order, over its `details`. */
+/** `history.db` with the P3 store's rows, written in reverse, over its `details`. */
 export async function sqliteOfP3(batch = 25): Promise<{ source: SqliteSource; port: ReturnType<typeof directPort> }> {
 	const file = freshFile();
 	await makeTruth(file);
 	const truth = await openTruth(file);
 	const port = directPort(truth);
-	const ids = getHistoryStore().rawAll.map((s) => s.id);
+	const ids = getHistoryStore().rawAll.map((s) => s.id).reverse();
 	const rows = await rawDb().rowsOf(ids);
 	for (let i = 0; i < ids.length; i += 100) {
 		await port.write({

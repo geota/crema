@@ -210,6 +210,24 @@ async fn an_export_walk_takes_its_token_as_text() {
     let rest =
         sync(db.export_next(&json!({ "token": token, "n": 10 }).to_string())).expect("walks");
     assert_eq!(rest.as_array().map(Vec::len), Some(2));
+    // Rewound (R1w): the same five again, the held one too, in the same order.
+    sync(db.export_rewind(&token)).expect("rewinds");
+    let again =
+        sync(db.export_next(&json!({ "token": token, "n": 10 }).to_string())).expect("walks");
+    let ids = |v: &Value| -> Vec<Value> {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| r["id"].clone())
+            .collect()
+    };
+    let mut both = ids(&first);
+    both.extend(ids(&rest));
+    assert_eq!(ids(&again), both);
+    assert_eq!(
+        code(&sync(db.export_rewind("123")).expect_err("unknown")),
+        "unknownWalk"
+    );
     wait(db.export_end(&token)).await.expect("ends");
     assert_eq!(sync(db.release_holds()).expect("holds"), json!(["r0"]));
     let err =
