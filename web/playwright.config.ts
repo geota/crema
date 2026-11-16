@@ -48,12 +48,12 @@ export default defineConfig({
 	projects: android
 		? [{ name: 'android-chrome', use: { browserName: 'chromium' } }]
 		: [
-				{ name: 'chromium', use: { browserName: 'chromium' }, testIgnore: ['bench.spec.ts', 'pwa.spec.ts'] },
-				{ name: 'webkit', use: { browserName: 'webkit' }, testIgnore: ['bench.spec.ts', 'pwa.spec.ts'] },
+				{ name: 'chromium', use: { browserName: 'chromium' }, testIgnore: ['bench.spec.ts', 'w2.spec.ts', 'pwa.spec.ts'] },
+				{ name: 'webkit', use: { browserName: 'webkit' }, testIgnore: ['bench.spec.ts', 'w2.spec.ts', 'pwa.spec.ts'] },
 				{
 					name: 'bench',
 					use: { browserName: 'chromium' },
-					testMatch: 'bench.spec.ts',
+					testMatch: ['bench.spec.ts', 'w2.spec.ts'],
 					fullyParallel: false,
 					dependencies: ['chromium', 'webkit']
 				}

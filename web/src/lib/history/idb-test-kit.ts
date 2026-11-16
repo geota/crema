@@ -3,7 +3,7 @@
  * IndexedDB per test, the old copy written as an older build leaves it, and
  * readers that go to storage rather than to a store's memory.
  */
-import { IDBFactory as FakeIDBFactory } from 'fake-indexeddb';
+import { IDBFactory as FakeIDBFactory, IDBKeyRange as FakeIDBKeyRange } from 'fake-indexeddb';
 import type { TimedSample } from '#lib/core/index.js';
 import { HistoryDb, type DetailsRecord, type MigrationRecord, type RowRecord, META_MIGRATION } from './history-db';
 import { clearLight } from './light-rows';
@@ -20,6 +20,8 @@ export function freshStorage(defaults: HistoryStoreOptions = {}): IDBFactory {
 	localStorage.clear();
 	const idb = new FakeIDBFactory() as unknown as IDBFactory;
 	(globalThis as { indexedDB?: IDBFactory }).indexedDB = idb;
+	// jsdom has no IndexedDB, so no key ranges either.
+	(globalThis as { IDBKeyRange?: unknown }).IDBKeyRange ??= FakeIDBKeyRange;
 	clearLight();
 	setHistoryStoreDefaultsForTest({ locks: null, channel: null, visibility: false, estimate: async () => undefined, ...defaults });
 	return idb;

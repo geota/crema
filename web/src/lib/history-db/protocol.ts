@@ -19,8 +19,13 @@
  * as a structured clone.
  */
 
-/** Bumped when a message's shape changes. A client and an owner of different versions refuse each other. */
-export const PROTOCOL_VERSION = 1;
+/**
+ * Bumped when a message's shape changes. A client and an owner of different
+ * versions refuse each other. 2 (W2): the owner keeps the stage-1 index in
+ * step with the P3 store, which a W1 owner doesn't, so a W2 client must not
+ * read the index through one; and the `live` request.
+ */
+export const PROTOCOL_VERSION = 2;
 
 /** 1: the index beside the P3 store. 2: `history.db` is the truth (SPEC §3). */
 export type Stage = 1 | 2;
@@ -91,7 +96,9 @@ export const READS = [
 	'indexState',
 	// The restore's (#310 R1w, M3): reads, safe to resend.
 	'restoreBegin',
-	'idsCreatedBefore'
+	'idsCreatedBefore',
+	/** Stage 1 (W2): how the owner's index upkeep stands (`SyncStats`), for diagnostics. */
+	'indexSync'
 ] as const;
 export type ReadName = (typeof READS)[number];
 
@@ -125,8 +132,24 @@ interface Header {
 	expect: Expect;
 }
 
+/**
+ * The live libraries a query reads besides the rows (the core's `Live`): the
+ * bean library, resolved, and the custom methods. They live in this tab's
+ * `localStorage`, which the Worker can't read, so each tab sends them.
+ */
+export interface Live {
+	beans: { beanId: string; name: string; roaster: string | null; tags: string[] }[];
+	methods: { method: string; label: string }[];
+}
+
 export type Request =
 	| (Header & { op: 'read'; name: ReadName; arg?: unknown })
+	/**
+	 * Stage 1 (W2): the live libraries for the index's queries. Not rows: the
+	 * index reads those from the P3 store itself (M4). Idempotent, so resent
+	 * like a read.
+	 */
+	| (Header & { op: 'live'; live: Live })
 	| (Header & { op: 'write'; wseq: number; atMs: number; write: Write })
 	/** A walk call (stage 2): sent once, to the owner that has the walk. */
 	| (Header & { op: 'once'; name: OnceName; arg?: unknown })

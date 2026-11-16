@@ -29,6 +29,7 @@ export default defineConfig({
 			input: {
 				harness: path.join(web, 'tests/browser/harness/index.html'),
 				w1: path.join(web, 'tests/browser/w1/index.html'),
+				w2: path.join(web, 'tests/browser/w2/index.html'),
 				r1w: path.join(web, 'tests/browser/r1w/index.html'),
 				bench: path.join(web, 'bench/history-db.html')
 			}

@@ -344,15 +344,28 @@ export class HistoryDb {
 		await txp(tx);
 	}
 
-	/** Empty all three stores, in one transaction. */
-	async clearAll(): Promise<void> {
+	/**
+	 * Empty all three stores, in one transaction, and return the new write
+	 * counter. The counter itself is kept and bumped, never reset (#310 W2):
+	 * the stage-1 index counts every seq it has applied, so a seq used twice
+	 * would pass for one it already has.
+	 */
+	async clearAll(): Promise<number> {
 		const db = await this.open();
 		this.fault('clear');
 		const tx = db.transaction([ROWS, DETAILS, META], 'readwrite', { durability: 'strict' });
-		tx.objectStore(ROWS).clear();
-		tx.objectStore(DETAILS).clear();
-		tx.objectStore(META).clear();
+		const meta = tx.objectStore(META);
+		const seqReq = meta.get(META_WRITE_SEQ) as IDBRequest<number | undefined>;
+		let seq = 0;
+		seqReq.onsuccess = () => {
+			seq = (typeof seqReq.result === 'number' ? seqReq.result : 0) + 1;
+			tx.objectStore(ROWS).clear();
+			tx.objectStore(DETAILS).clear();
+			meta.clear();
+			meta.put(seq, META_WRITE_SEQ);
+		};
 		await txp(tx);
+		return seq;
 	}
 
 	/**
@@ -436,5 +449,32 @@ export class HistoryDb {
 	async writeSeq(): Promise<number> {
 		const v = await this.meta<number>(META_WRITE_SEQ);
 		return typeof v === 'number' ? v : 0;
+	}
+
+	/**
+	 * The stage-1 index's view of the store (#310 W2, SPEC §3), in one read
+	 * transaction: the write counter, how many rows `rows` holds (tombstones
+	 * too), and whether the migration record says the copy is done. Read by
+	 * the owner's Worker, which never creates the database (`expectExisting`).
+	 */
+	async indexView(): Promise<{ writeSeq: number; rows: number; done: boolean }> {
+		const db = await this.open();
+		this.fault('read-meta');
+		const tx = db.transaction([ROWS, META], 'readonly');
+		const meta = tx.objectStore(META);
+		const [seq, rows, migration] = await Promise.all([
+			reqp(meta.get(META_WRITE_SEQ) as IDBRequest<number | undefined>),
+			reqp(tx.objectStore(ROWS).count()),
+			reqp(meta.get(META_MIGRATION) as IDBRequest<MigrationRecord | undefined>)
+		]);
+		return { writeSeq: typeof seq === 'number' ? seq : 0, rows, done: migration?.state === 'done' };
+	}
+
+	/** Up to `limit` rows by id, after `after` (from the first when null): the full diff's batches. */
+	async rowsAfter(after: string | null, limit: number): Promise<RowRecord[]> {
+		const db = await this.open();
+		this.fault('read-rows');
+		const range = after === null ? undefined : IDBKeyRange.lowerBound(after, true);
+		return reqp(db.transaction(ROWS, 'readonly').objectStore(ROWS).getAll(range, limit) as IDBRequest<RowRecord[]>);
 	}
 }

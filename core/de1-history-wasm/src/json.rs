@@ -3,8 +3,8 @@
 //! this module adds the store's write and status types, and the error shape.
 
 use de1_history::store::{
-    Applied, Duplicate, ExportWalk, FileInfo, FtsStatus, Health, Heavy, IndexWrite, JournalMode,
-    Maintained, Recovery, RidId, Role, RowIn, StoreError, Write, Written,
+    AbsentStep, Applied, Duplicate, ExportWalk, FileInfo, FtsStatus, Health, Heavy, IndexWrite,
+    JournalMode, Maintained, Recovery, RidId, Role, RowIn, StoreError, Write, Written,
 };
 use de1_history::{ChangeSet, Live};
 use serde::{Deserialize, Serialize};
@@ -182,6 +182,25 @@ impl From<IndexWriteJson> for IndexWrite {
 }
 
 /// `Recovery`.
+/// One step of a removal by absence (`remove_absent_next`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AbsentStepJson {
+    /// What the step deleted.
+    pub change: ChangeSet,
+    /// Every row has been examined.
+    pub done: bool,
+}
+
+impl From<AbsentStep> for AbsentStepJson {
+    fn from(s: AbsentStep) -> AbsentStepJson {
+        AbsentStepJson {
+            change: s.change,
+            done: s.done,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RecoveryJson {

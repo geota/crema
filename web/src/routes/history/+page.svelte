@@ -124,6 +124,14 @@
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import { recallView } from '#lib/state/view-memory.js';
 	import { persistView, useScrollMemory } from '#lib/state/use-view-memory.svelte.js';
+	import { historyDb } from '#lib/history-db/start.js';
+	import type { ClientStatus } from '#lib/history-db/client.js';
+	import { maySearch, MIN_SEARCH_CHARS } from '#lib/history-db/window.svelte.js';
+	import { DevOracle, loadReference, ORACLE_ON } from '#lib/history-db/oracle.js';
+	import { IndexList } from '#lib/history/index-list.svelte.js';
+	import { dayEdges, historyLive, historyQuery } from '#lib/history/index-query.js';
+	import { getCustomMethodStore } from '#lib/brew/custom-methods.svelte.js';
+	import { COFFEE_FILTER_PREFIX as COFFEE_PREFIX } from '#lib/history/search.js';
 
 	const store = getHistoryStore();
 	const appCtx = getCremaAppContext();
@@ -371,6 +379,9 @@
 		await store.ready.catch(() => {});
 		await tick();
 		await listMemory.settled();
+		// Through the index, the row's place is a query: wait for it (W2).
+		if (indexList) await indexList.indexOf(id);
+		await tick();
 		if (!phoneLayout.current) shotList?.reveal(id);
 	}
 	/**
@@ -849,14 +860,111 @@
 			sortDir
 		}),
 		tagsOf: (s) => effectiveShotTags(s),
-		liveCoffee: (beanId) => liveCoffee(beanId)
+		liveCoffee: (beanId) => liveCoffee(beanId),
+		// Reading the index, the list, facets and stats come from it (#310 W2).
+		active: () => indexList === null
 	});
 	/** Every recorded shot, newest first, as of the last list change. */
 	const shots = $derived(model.shots);
 	/** The current copy of a row the derivations hold: a rating or note may have moved since. */
 	function current(row: Row): Row {
-		return store.get(row.id) ?? row;
+		return (store.loaded ? store.get(row.id) : undefined) ?? row;
 	}
+
+	// ── The stage-1 index (#310 W2, SPEC §3, §7) ──────────────────────────
+	// History's list, search, stats, facets, day groups, scroll memory and
+	// `?shot=` read `history-index.db` through a window, while the store's rows
+	// stay in memory for everything else. While the index can't answer (its
+	// owner is behind, frozen or another build: `index_fallback`, S2) or the
+	// store isn't on `crema-history`, the in-memory path serves, as before.
+	const db = historyDb();
+	let dbStatus = $state.raw<ClientStatus | null>(db?.status ?? null);
+	$effect(() => db?.onStatus((st) => (dbStatus = st)));
+	/** The live libraries the index's queries read, from the bean store and the custom methods. */
+	const live = $derived(
+		historyLive({
+			beans: beanLibrary.beans,
+			roaster: (id) => beanLibrary.getRoaster(id),
+			methods: getCustomMethodStore().everything
+		})
+	);
+	const liveKey = $derived(JSON.stringify(live));
+	/** The live libraries as the index last took them. */
+	let liveSent = $state<string | null>(null);
+	$effect(() => {
+		const key = liveKey;
+		if (!db || dbStatus?.health !== 'ok') return;
+		void db.live(JSON.parse(key)).then(
+			() => (liveSent = key),
+			() => {}
+		);
+	});
+	const indexCan = $derived(
+		!!db && dbStatus?.health === 'ok' && store.loaded && store.health === 'ok' && liveSent !== null
+	);
+	/** The query, as text, so the window is made again only when it changes. */
+	const indexQueryKey = $derived(
+		JSON.stringify(
+			historyQuery({
+				text: model.query,
+				cutoff: rangeCutoff(range, nowBucket),
+				profile: filterProfile,
+				pinnedOnly,
+				bean: filterBean,
+				method: filterMethod,
+				tags: selectedTags,
+				sortField,
+				sortDir
+			})
+		)
+	);
+	/** Day headings at phone width under the date sort, and their edges. */
+	const headings = $derived(phoneLayout.current && sortField === 'completedAt');
+	const edgesKey = $derived(headings ? dayEdges(new Date(nowBucket)).join(',') : '');
+	/** The dev oracle (dev and tests only): each index answer against the core's reference rules. */
+	let oracle = $state.raw<DevOracle<Row> | null>(null);
+	if (ORACLE_ON && db) {
+		void loadReference().then((fns) => {
+			if (!fns) return;
+			oracle = new DevOracle<Row>(fns, {
+				rows: () => store.rawAll,
+				idOf: (r) => r.id,
+				completedAtOf: (r) => r.completedAt,
+				live: () => live,
+				inStep: () => store.inStep,
+				read: (name, arg) => db.read(name, arg),
+				throttleMs: import.meta.env.MODE === 'test' ? 0 : 1_000
+			});
+		});
+	}
+	let indexWindow = $state.raw<IndexList | null>(null);
+	$effect(() => {
+		if (!indexCan || !db) {
+			indexWindow = null;
+			return;
+		}
+		const q = JSON.parse(indexQueryKey);
+		const edges = edgesKey ? edgesKey.split(',').map(Number) : null;
+		const list = untrack(
+			() =>
+				new IndexList({
+					query: q,
+					reads: db,
+					headings: edges !== null,
+					edges,
+					current,
+					onAnswer: (a) => oracle?.check(a)
+				})
+		);
+		indexWindow = list;
+		return () => list.destroy();
+	});
+	/** The window, while it answers: null is the in-memory path. */
+	const indexList = $derived(indexWindow && !indexWindow.window.failed ? indexWindow : null);
+	/** The rows the list shows: the index's count, or the in-memory list's length. */
+	const listCount = $derived(indexList ? indexList.count : model.filtered.length);
+	/** A search under 3 characters does nothing while the index answers (owner question 3). */
+	const searchTooShort = $derived(indexList !== null && q.trim() !== '' && !maySearch(q));
 
 	/**
 	 * Shots a Decent catch-up would actually send — `unsentDecentShots`
@@ -905,9 +1013,16 @@
 	const baristaSuggestions = $derived(recentNames(shots, 'barista'));
 	const drinkerSuggestions = $derived(recentNames(shots, 'drinker'));
 
-	const profilesInUse = $derived(model.profilesInUse);
+	/** The index's facets beside the query (each over it minus its own dimension, SPEC §7). */
+	const facets = $derived(indexList?.window.facets ?? null);
+	const profilesInUse = $derived(facets ? facets.profiles.map(([name]) => name) : model.profilesInUse);
+	const profileCounts = $derived(facets ? new Map(facets.profiles) : model.profileCounts);
 	/** Distinct brew methods, counted, for the Method facet group: rendered only when 2+ exist. */
-	const methodsInUse = $derived(model.methodsInUse);
+	const methodsInUse = $derived(
+		facets
+			? facets.methods.map(([id, count]) => ({ id, count, label: methodLabel(id) }))
+			: model.methodsInUse
+	);
 
 	/**
 	 * A library bag's live name and roaster for {@link shotCoffee}. A roaster
@@ -923,7 +1038,25 @@
 	}
 
 	/** Distinct coffees, counted, for the bean filter pills (see `HistoryListModel.beansInUse`). */
-	const beansInUse = $derived(model.beansInUse);
+	const beansInUse = $derived.by(() => {
+		if (!facets) return model.beansInUse;
+		const names = new Map<string, number>();
+		for (const c of facets.coffees) {
+			const n = (c.name ?? '').toLowerCase();
+			names.set(n, (names.get(n) ?? 0) + 1);
+		}
+		return facets.coffees
+			.map((c) => {
+				const name = c.name ?? 'Unnamed bag';
+				return {
+					id: `${COFFEE_PREFIX}${c.coffeeKey}`,
+					label: (names.get(name.toLowerCase()) ?? 0) > 1 && c.roaster ? `${name} · ${c.roaster}` : name,
+					title: [c.roaster, c.bags > 1 ? `${c.bags} bags` : null].filter(Boolean).join(' · ') || undefined,
+					count: c.count
+				};
+			})
+			.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+	});
 
 	/**
 	 * The single bag the filter is scoped to — set by the bean drawer's
@@ -939,7 +1072,7 @@
 	});
 
 	/** Distinct tags, counted, for the tag pills; read through `effectiveShotTags`. */
-	const tagFacets = $derived(model.tagFacets);
+	const tagFacets = $derived(facets ? facets.tags.map(([tag, count]) => ({ tag, count })) : model.tagFacets);
 
 	/**
 	 * Pill list for the filter rail — wired through the shared
@@ -969,7 +1102,7 @@
 			}
 		];
 		// Pinned shots, once there are any (or while the filter is on).
-		const pinnedCount = model.pinnedCount;
+		const pinnedCount = facets ? facets.pinned : model.pinnedCount;
 		if (pinnedCount > 0 || pinnedOnly) {
 			items.push({
 				id: 'pin:',
@@ -983,7 +1116,7 @@
 			items.push({
 				id: `p:${name}`,
 				label: name,
-				count: model.profileCounts.get(name) ?? 0,
+				count: profileCounts.get(name) ?? 0,
 				selected: filterProfile === name
 			});
 		}
@@ -1058,8 +1191,8 @@
 		}
 	}
 
-	/** The filtered shot list the list pane renders. */
-	const filtered = $derived(model.filtered);
+	/** The filtered shot list the in-memory path renders (never read while the index answers). */
+	const filtered = $derived(indexList ? [] : model.filtered);
 
 	/** The filter inputs as one key: an explicit selection holds while it is unchanged. */
 	const filterScope = $derived(
@@ -1083,13 +1216,32 @@
 	 * still shows it, an explicit pick until a filter changes, else the first
 	 * filtered shot ({@link selectedShot}).
 	 */
-	const selectedRow = $derived(
-		selectedShot(filtered, phoneShot ?? selectedId, {
+	const selectedRow = $derived.by(() => {
+		const explicit = {
 			pin: phoneShot ? { id: phoneShot, scope: filterScope } : pin,
 			scope: filterScope,
-			lookup: (id) => liveShot(store.get(id))
-		})
-	);
+			lookup: (id: string) => liveShot(store.get(id))
+		};
+		const id = phoneShot ?? selectedId;
+		const list = indexList;
+		if (!list) return selectedShot(filtered, id, explicit);
+		// Through the index (W2): the pick while the list holds it, an explicit
+		// pick while its filter stands, else the first row.
+		if (id) {
+			const at = list.locate(id);
+			// Still being looked up: keep showing it rather than flash another.
+			if (at === 'pending' || at !== null) {
+				const row = liveShot(store.get(id));
+				if (row) return row;
+			}
+			const p = explicit.pin;
+			if (p && p.id === id && p.scope === filterScope) {
+				const pinned = explicit.lookup(id);
+				if (pinned) return pinned;
+			}
+		}
+		return list.first ?? undefined;
+	});
 	/** {@link selectedRow} as it is now: the detail shows an edit at once. */
 	const selected = $derived(selectedRow ? current(selectedRow) : undefined);
 	/** Showing the detail screen: false when the entry's shot no longer exists. */
@@ -1112,7 +1264,7 @@
 	// the core (`de1_domain::history_stats`, review #41) so both shells produce
 	// identical numbers; only unit conversion + formatting stay here.
 	// After paint, debounced by 300 ms, over the current ratings.
-	const stats = $derived(model.stats);
+	const stats = $derived(indexList ? indexList.window.stats : model.stats);
 	/** Total dry coffee consumed across the filtered brews, unit-converted
 	 * — the inventory number the Brew Log exists for (issue #10; replaces
 	 * the beverage-weight tile). */
@@ -1135,6 +1287,11 @@
 	const espScoped = $derived(stats?.mixedMethods ?? false);
 	/** Rows are "shots" only while the view is purely espresso. */
 	const rowNoun = $derived.by(() => {
+		if (indexList) {
+			// The method facet is over the query minus its own filter.
+			if (filterMethod !== 'all') return filterMethod === 'espresso' ? 'shot' : 'brew';
+			return (facets?.methods ?? []).some(([m, n]) => m !== 'espresso' && n > 0) ? 'brew' : 'shot';
+		}
 		const nonEsp = filtered.some((s) => {
 			const m = methodOf(s);
 			return m != null && m !== 'espresso';
@@ -1159,7 +1316,7 @@
 		const weight = (m: { value: string | number; unit: string } | null): string =>
 			m ? `${m.value}${m.unit}` : '—';
 		return [
-			{ label: rowNoun === 'brew' ? 'Brews' : 'Shots', value: `${filtered.length}` },
+			{ label: rowNoun === 'brew' ? 'Brews' : 'Shots', value: listCount === null ? '—' : `${listCount}` },
 			{ label: 'Beans used', value: weight(beansUsed) },
 			{ label: scoped('Avg weight'), value: weight(avgYield) },
 			{ label: scoped('Avg ratio'), value: avgRatio != null ? `1:${avgRatio.toFixed(1)}` : '—' },
@@ -1359,13 +1516,14 @@
 	 * third line.
 	 */
 	const listed = $derived.by(() => {
+		if (indexList) return [];
 		void model.versions.text;
 		const rows = filtered;
 		const headings = phoneLayout.current && sortField === 'completedAt';
 		const now = new Date(nowBucket);
 		return untrack(() => listItems(rows, { headings, now, current }));
 	});
-	const listedItems = $derived(arrayItems(listed));
+	const listedItems = $derived(indexList ? indexList.items : arrayItems(listed));
 	/**
 	 * Each item kind's height, measured from hidden samples so the rows grow
 	 * with the text size (#423); the default-size heights until then.
@@ -1395,7 +1553,15 @@
 		<div class="hi-head-r">
 			<div class="hi-search">
 				<MagnifyingGlassIcon aria-hidden="true" />
-				<input bind:value={q} aria-label="Search shots" placeholder="Search profile, notes…" />
+				<input
+					bind:value={q}
+					aria-label="Search shots"
+					aria-describedby={searchTooShort ? 'hi-search-short' : undefined}
+					placeholder="Search profile, notes…"
+				/>
+				{#if searchTooShort}
+					<div class="hi-search-short" id="hi-search-short" role="status">Type at least {MIN_SEARCH_CHARS} letters</div>
+				{/if}
 			</div>
 			<!-- Log brew — the Brew Log's manual-entry door (issue #10). -->
 			<button
@@ -1624,6 +1790,9 @@
 				{#if searchOpen}
 					<div class="hi-psearch">
 						<PhoneSearch bind:value={q} label="Search shots" placeholder="Search profile, bean, notes" />
+						{#if searchTooShort}
+							<div class="hi-search-short" role="status">Type at least {MIN_SEARCH_CHARS} letters</div>
+						{/if}
 					</div>
 				{/if}
 				{#if missingTotal > 0}
@@ -1644,7 +1813,7 @@
 		<div class="hi-stats">
 			<div class="hi-stat">
 				<div class="hi-stat-label">{rowNoun === 'brew' ? 'Brews' : 'Shots'}</div>
-				<div class="hi-stat-val"><span>{filtered.length}</span><em>{rowNoun}s</em></div>
+				<div class="hi-stat-val"><span>{listCount ?? '—'}</span><em>{rowNoun}s</em></div>
 			</div>
 			<div class="hi-stat">
 				<div class="hi-stat-label">Beans used</div>
@@ -1748,13 +1917,18 @@
 					ontextwidth={(w) => (rowsStacked = w < STACK_BELOW)}
 					scroller={() => (phoneLayout.current ? pageEl : listEl)}
 					label={rowNoun === 'brew' ? 'Brews' : 'Shots'}
-					setSize={filtered.length}
-					positionOf={(it) => (it.kind === 'row' ? it.pos : null)}
+					setSize={listCount ?? 0}
+					positionOf={(it) => (it.kind === 'head' ? null : it.pos)}
 					gap={ROW_GAP}
+					locate={indexList ? (key) => indexList!.locate(key) : undefined}
+					onrange={(start, end) => indexList?.visibleItems(start, end)}
 				>
 					{#snippet item(it)}
 						{#if it.kind === 'head'}
 							<h2 class="hi-pday">{it.label}</h2>
+						{:else if it.kind === 'skeleton'}
+							<!-- A row whose page is loading: its height, no content (SPEC §7 rule 2). -->
+							<div class="hi-row-skeleton" aria-hidden="true"></div>
 						{:else}
 							{@const s = current(it.row)}
 							{@const pip = pipFor(s)}
@@ -1784,7 +1958,7 @@
 						{/if}
 					{/snippet}
 				</VirtualShotList>
-				{#if filtered.length === 0}
+				{#if listCount === 0}
 					<div class="hi-empty">No shots match.</div>
 				{/if}
 			</div>
@@ -1920,6 +2094,36 @@
 {/if}
 
 <style>
+	/* A row whose page is loading (#310 W2): the row's box, quietly pulsing. */
+	.hi-row-skeleton {
+		height: 100%;
+		border-radius: 10px;
+		background: rgba(var(--tint-rgb), 0.05);
+		animation: hi-skeleton 1.4s ease-in-out infinite;
+	}
+	@keyframes hi-skeleton {
+		50% {
+			opacity: 0.55;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.hi-row-skeleton {
+			animation: none;
+		}
+	}
+	.hi-search-short {
+		font-family: var(--font-sans);
+		font-size: 12px;
+		color: var(--fg-muted);
+		margin-top: 4px;
+	}
+	/* Under the wide search pill, outside its box. */
+	.hi-search .hi-search-short {
+		position: absolute;
+		top: 100%;
+		left: 12px;
+		white-space: nowrap;
+	}
 	.hi-page {
 		background: var(--bg-page);
 		color: var(--fg-1);

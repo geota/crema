@@ -93,13 +93,6 @@ fn to_query(q: &FixtureQuery, now: i64) -> HistoryQuery {
 enum Expect {
     /// The same ids in the same order.
     Exact,
-    /// The same ids in the same order, except that each run of equal sort
-    /// keys is reversed. The reference's ties follow the sort's direction
-    /// (`change_ties_follow_the_sort_direction`,
-    /// `change_equal_times_order_by_id_the_sorts_way`). Web keeps ties newest
-    /// first both ways, so its ascending sorts differ. Android adopted the
-    /// rule in #310 A2, with the tag filter, so it matches exactly.
-    TiesReversed,
     /// A rule SPEC §5 or §6 changed: the answers differ, and the named test in
     /// `src/reference.rs` pins the new rule.
     Changed(&'static str),
@@ -133,13 +126,10 @@ const ANDROID_CHANGED: &[(&str, &str)] = &[
     ("text-legacy-label", SPAN),
 ];
 
-fn expect_web(q: &HistoryQuery, name: &str) -> Expect {
-    if let Some((_, t)) = WEB_CHANGED.iter().find(|(n, _)| *n == name) {
-        return Expect::Changed(t);
-    }
-    match q.sort.dir {
-        Dir::Desc => Expect::Exact,
-        Dir::Asc => Expect::TiesReversed,
+fn expect_web(name: &str) -> Expect {
+    match WEB_CHANGED.iter().find(|(n, _)| *n == name) {
+        Some((_, t)) => Expect::Changed(t),
+        None => Expect::Exact,
     }
 }
 
@@ -150,47 +140,22 @@ fn expect_android(name: &str) -> Expect {
     }
 }
 
-/// `ids` with each run of equal sort keys reversed.
-fn ties_reversed(ids: &[String], by_id: &BTreeMap<String, Derived>, key: SortKey) -> Vec<String> {
-    let k = |id: &String| {
-        let d = &by_id[id];
-        match key {
-            SortKey::Date => format!("{}", d.completed_at),
-            _ => format!("{:?}", d.sort_value(key)),
-        }
-    };
-    let mut out = Vec::with_capacity(ids.len());
-    let mut i = 0;
-    while i < ids.len() {
-        let mut j = i + 1;
-        while j < ids.len() && k(&ids[j]) == k(&ids[i]) {
-            j += 1;
-        }
-        out.extend(ids[i..j].iter().rev().cloned());
-        i = j;
-    }
-    out
-}
-
 fn live() -> Live {
     serde_json::from_str(&read("live.json")).expect("live.json")
 }
 
 /// Checks the reference against one shell's golden; returns how many queries
-/// matched exactly, with reversed ties, and changed.
-fn check_shell(rows_file: &str, golden_file: &str, android: bool) -> (usize, usize, usize) {
+/// matched exactly and how many changed. Both shells' ties follow the sort
+/// now (Android since #310 A2, web since W2), so every other query is exact.
+fn check_shell(rows_file: &str, golden_file: &str, android: bool) -> (usize, usize) {
     let raw = rows(rows_file);
     let rows: Vec<RefRow> = ref_rows(&raw);
     assert_eq!(rows.len(), 300);
-    let by_id: BTreeMap<String, Derived> = rows
-        .iter()
-        .map(|r| (r.id.clone(), r.derived.clone()))
-        .collect();
     let spec: Queries = serde_json::from_str(&read("queries.json")).expect("queries.json");
     let golden: BTreeMap<String, Vec<usize>> =
         serde_json::from_str(&read(golden_file)).expect("golden");
     let live = live();
-    let mut tally = (0, 0, 0);
+    let mut tally = (0, 0);
     let mut failures = Vec::new();
     for fq in &spec.queries {
         let Some(want) = golden.get(&fq.name) else {
@@ -202,19 +167,15 @@ fn check_shell(rows_file: &str, golden_file: &str, android: bool) -> (usize, usi
         let expect = if android {
             expect_android(&fq.name)
         } else {
-            expect_web(&q, &fq.name)
+            expect_web(&fq.name)
         };
         let ok = match expect {
             Expect::Exact => {
                 tally.0 += 1;
                 got == want
             }
-            Expect::TiesReversed => {
-                tally.1 += 1;
-                ties_reversed(&got, &by_id, q.sort.key) == want
-            }
             Expect::Changed(_) => {
-                tally.2 += 1;
+                tally.1 += 1;
                 got != want
             }
         };
@@ -246,21 +207,15 @@ fn check_shell(rows_file: &str, golden_file: &str, android: bool) -> (usize, usi
 
 #[test]
 fn the_reference_reproduces_the_web_list() {
-    let (exact, ties, changed) = check_shell("rows.web.jsonl", "golden.web.json", false);
+    let (exact, changed) = check_shell("rows.web.jsonl", "golden.web.json", false);
     assert_eq!(changed, WEB_CHANGED.len());
-    assert!(ties > 0, "the ascending sorts compare with reversed ties");
-    assert!(exact >= 25, "{exact} exact");
-    assert!(
-        exact + ties >= 30,
-        "{exact} exact, {ties} with reversed ties"
-    );
+    assert!(exact >= 30, "{exact} exact");
 }
 
 #[test]
 fn the_reference_reproduces_the_android_list() {
-    let (exact, ties, changed) = check_shell("rows.android.jsonl", "golden.android.json", true);
+    let (exact, changed) = check_shell("rows.android.jsonl", "golden.android.json", true);
     assert_eq!(changed, ANDROID_CHANGED.len());
-    assert_eq!(ties, 0, "Android's ties follow the sort (#310 A2)");
     assert!(exact >= 33, "{exact} exact, with the tag queries");
 }
 

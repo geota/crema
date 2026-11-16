@@ -14,9 +14,15 @@
 	 * sits in further down (the phone page).
 	 *
 	 * The input is {@link VirtualItems} (`count` and `at(i)`), so a source
-	 * that pages its rows can stand in for an array.
+	 * that pages its rows can stand in for an array: the History window over
+	 * the index (#310 W2), whose rows not loaded yet are skeletons of a row's
+	 * height. Such a source finds a key by `locate` (an `index_of` query,
+	 * `'pending'` until it answers) and hears which items are on screen by
+	 * `onrange`, to load their pages. When an item's height changes and the
+	 * count doesn't (a page of rows landing in place of its skeletons), the
+	 * first item on screen stays where it was.
 	 */
-	import { tick, type Snippet } from 'svelte';
+	import { tick, untrack, type Snippet } from 'svelte';
 	import {
 		observeHeight,
 		observeSize,
@@ -41,7 +47,9 @@
 		overscan = 480,
 		samples = [],
 		onmeasure,
-		ontextwidth
+		ontextwidth,
+		locate,
+		onrange
 	}: {
 		items: VirtualItems<T>;
 		/** A key unique in the list; it is also the item's `data-vl-key`. */
@@ -74,6 +82,14 @@
 		 * a layout by it, which no `em` query can do under text scaling.
 		 */
 		ontextwidth?: (width: number) => void;
+		/**
+		 * Where the item with `key` is, by index, for a source that doesn't
+		 * hold every item (W2): `null` when it isn't in the list, `'pending'`
+		 * while that's being looked up. Without it, the items are scanned.
+		 */
+		locate?: (key: string) => number | null | 'pending';
+		/** The items in and near the viewport, `[start, end)`, whenever they change. */
+		onrange?: (start: number, end: number) => void;
 	} = $props();
 
 	let el = $state<HTMLElement>();
@@ -84,17 +100,24 @@
 	let focusedKey = $state<string | null>(null);
 
 	const offsets = $derived(offsetsOf(items.count, (i) => heightOf(items.at(i))));
-	/** Each key's index, built when a key has to be found. */
+	/** Each key's index, built when a key has to be found (a source without `locate`). */
 	const keyIndex = $derived.by(() => {
 		const m = new Map<string, number>();
+		if (locate) return m;
 		for (let i = 0; i < items.count; i++) m.set(keyOf(items.at(i)), i);
 		return m;
 	});
+	/** `key`'s index, `undefined` when the list doesn't hold it (or not yet). */
+	function find(key: string): number | undefined {
+		if (!locate) return keyIndex.get(key);
+		const at = locate(key);
+		return typeof at === 'number' && at < items.count ? at : undefined;
+	}
 	const range = $derived(windowOf(offsets, viewTop, viewHeight, overscan));
 	const visible = $derived.by(() => {
 		const out: number[] = [];
 		for (let i = range.start; i < range.end; i++) out.push(i);
-		const kept = focusedKey === null ? undefined : keyIndex.get(focusedKey);
+		const kept = focusedKey === null ? undefined : find(focusedKey);
 		if (kept !== undefined && (kept < range.start || kept >= range.end)) {
 			if (kept < range.start) out.unshift(kept);
 			else out.push(kept);
@@ -152,6 +175,34 @@
 		measure();
 	});
 
+	$effect(() => {
+		onrange?.(range.start, range.end);
+	});
+
+	/**
+	 * The first item on screen, and where its top was: when heights change and
+	 * the count doesn't (skeletons replaced by their rows above the viewport),
+	 * the scroll moves by as much, so what's on screen stays put (W2).
+	 */
+	let held: { count: number; index: number; top: number } | null = null;
+	$effect(() => {
+		const o = offsets;
+		const count = items.count;
+		untrack(() => {
+			const s = scroller();
+			const h = held;
+			if (s && h && h.count === count && h.index < count && o[h.index] !== h.top) {
+				scrollTo(s, Math.max(0, scrollTopOf(s) + o[h.index] - h.top));
+				measure();
+			}
+		});
+	});
+	// After the one above: where the first item on screen is now.
+	$effect(() => {
+		const start = range.start;
+		held = { count: items.count, index: start, top: offsets[start] ?? 0 };
+	});
+
 	function scrollTopOf(s: HTMLElement | Window): number {
 		return isWindow(s) ? s.scrollY : s.scrollTop;
 	}
@@ -163,7 +214,7 @@
 
 	/** The index of the item with `key`, or -1. */
 	export function indexOfKey(key: string): number {
-		return keyIndex.get(key) ?? -1;
+		return find(key) ?? -1;
 	}
 
 	/**
@@ -171,9 +222,10 @@
 	 * `null` when the list doesn't hold it: scroll memory's way to an item
 	 * that isn't rendered.
 	 */
-	export function scrollTopForKey(key: string): number | null {
+	export function scrollTopForKey(key: string): number | null | 'pending' {
 		const s = scroller();
-		const i = keyIndex.get(key);
+		if (locate && locate(key) === 'pending') return 'pending';
+		const i = find(key);
 		if (!s || i === undefined) return null;
 		measure();
 		return scrollTopOf(s) + offsets[i] - viewTop;
@@ -182,7 +234,7 @@
 	/** Scroll `key` into view, centred, unless it is in view already. False when the list doesn't hold it. */
 	export function reveal(key: string): boolean {
 		const s = scroller();
-		const i = keyIndex.get(key);
+		const i = find(key);
 		if (!s || i === undefined) return false;
 		measure();
 		const delta = revealDelta(offsets[i], offsets[i + 1], viewTop, viewHeight);

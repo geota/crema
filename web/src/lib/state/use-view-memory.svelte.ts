@@ -167,7 +167,12 @@ export function useScrollMemory(opts: ScrollMemoryOptions): ScrollMemory {
 				again();
 				return;
 			}
-			const { top } = resolveScroll(s, snap, opts.scrollToKey);
+			const { top, pending } = resolveScroll(s, snap, opts.scrollToKey);
+			// An anchor's place is still being looked up (an index query, W2): wait for it.
+			if (pending && waiting) {
+				again();
+				return;
+			}
 			applyScroll(s, top);
 			const reached = Math.abs(scrollTopOf(s) - top) <= 2;
 			still = reached && Math.abs(top - lastTop) <= 1 ? still + 1 : 0;

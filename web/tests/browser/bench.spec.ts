@@ -11,7 +11,9 @@
  * 300 rows are the fixture's `rows.web.jsonl`.
  *
  * `W0_BENCH_ROWS` picks the sizes (comma-separated); `W0_BENCH_STRICT=1` gates
- * every budgeted line, not just the first page.
+ * every budgeted line, not just the first page. On CI the timings are
+ * report-only (the step summary), as the native benches are (#445): a shared
+ * runner isn't the reference device. `HISTORY_BENCH_STRICT=1` gates them there.
  */
 import fs from 'node:fs';
 import zlib from 'node:zlib';
@@ -57,7 +59,9 @@ for (const n of SIZES) {
 		console.log(`\n${md}\n`);
 		await testInfo.attach(`bench-${n}`, { contentType: 'text/markdown', body: md });
 		if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${md}\n\n`);
-		const strict = process.env.W0_BENCH_STRICT === '1';
+		const strict = process.env.W0_BENCH_STRICT === '1' || process.env.HISTORY_BENCH_STRICT === '1';
+		// On CI, report only, unless asked to gate.
+		if (process.env.CI && process.env.HISTORY_BENCH_STRICT !== '1') return;
 		const over = result.lines.filter(
 			(l) => l.ms !== undefined && l.budgetMs !== undefined && l.ms > l.budgetMs && (strict || GATED.has(String(l.key)))
 		);

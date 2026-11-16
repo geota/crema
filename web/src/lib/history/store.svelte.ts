@@ -519,6 +519,8 @@ export class HistoryStore {
 	private channel: ChannelLike | null = null;
 	/** Ids another tab wrote, waiting for the load or a restore to end. */
 	private heard = new Set<string>();
+	/** Heard rows being read to be taken in (`applyHeard`). */
+	private adopting = 0;
 	private readonly tabId = Math.random().toString(36).slice(2);
 	/** Ids whose next details write only fills: a heavy part the store holds wins (a pulled curve or recipe). */
 	private fills = new Set<string>();
@@ -638,6 +640,26 @@ export class HistoryStore {
 	/** How the storage stands. */
 	get health(): HistoryHealth {
 		return this.healthState;
+	}
+
+	/**
+	 * Where this tab's rows stand against `crema-history`, for the stage-1
+	 * index's dev oracle (#310 W2): the highest `writeSeq` it has written or
+	 * heard of, and whether its rows are exactly what the store holds up to
+	 * it (nothing unwritten here, nothing heard and not taken in yet). Only
+	 * then is an index answer comparable with these rows.
+	 */
+	get inStep(): { seq: number; quiet: boolean } {
+		const quiet =
+			this.mode === 'idb' &&
+			this.loadedFlag &&
+			!this.flushQueued &&
+			this.heard.size === 0 &&
+			this.adopting === 0 &&
+			this.dirtyDetails.size === 0 &&
+			this.writingDetails.size === 0 &&
+			this.dirtyRowIds().length === 0;
+		return { seq: this.lastSeq, quiet };
 	}
 
 	/** Loading has taken over {@link SLOW_LOAD_MS}: the skeleton says so. */
@@ -1509,12 +1531,14 @@ export class HistoryStore {
 		this.heard.clear();
 		if (ids.length === 0 || !this.db) return;
 		const db = this.db;
+		this.adopting += 1;
 		void db
 			.rowsOf(ids)
 			.then((found) => this.adoptRecords(found, ids))
 			.catch(() => {
 				for (const id of ids) this.heard.add(id);
-			});
+			})
+			.finally(() => (this.adopting -= 1));
 	}
 
 	/**

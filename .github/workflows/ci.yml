@@ -401,9 +401,15 @@ jobs:
         working-directory: web
         run: pnpm check
 
-      # The history store's Node test bundle (#310 R1w): `memory-truth`, so
-      # the backup seam's SQLite tests keep a `history.db` in memory. Into
-      # web/.wasm-test/history/, outside src/; the app never loads it.
+      # The test wasm bundles (web/.wasm-test, outside src/; the app never
+      # loads them): de1-wasm's, with the relay's test seeds and the history
+      # dev oracle (#310 W2), whose reference rules every History index answer
+      # in the vitest suite is checked against; and the history store's Node
+      # bundle (#310 R1w), `memory-truth`, for the backup seam's SQLite tests.
+      - name: Build the test wasm bundle (relay seeds, history dev oracle)
+        working-directory: web
+        run: pnpm wasm:test
+
       - name: Build the history wasm test bundle
         working-directory: web
         run: pnpm wasm:history:test
@@ -430,14 +436,12 @@ jobs:
         run: pnpm test:pwa
 
       # AC-23: the relay wasm bridge reproduces core/de1-relay's seeded vectors
-      # byte for byte. Its deterministic constructors exist only in this separate
-      # test-seeds bundle (web/.wasm-test, outside src/); RELAY_WASM_TEST=1 makes
-      # a missing bundle a failure instead of a skip.
+      # byte for byte. Its deterministic constructors exist only in the separate
+      # test bundle built above (web/.wasm-test, outside src/); RELAY_WASM_TEST=1
+      # makes a missing bundle a failure instead of a skip.
       - name: Relay wasm vectors (test-seeds bundle)
         working-directory: web
-        run: |
-          pnpm wasm:test
-          RELAY_WASM_TEST=1 pnpm vitest run src/lib/relay
+        run: RELAY_WASM_TEST=1 pnpm vitest run src/lib/relay
 
   # ─────────────────────────────────────────────────────────────────────
   # The SQLite history's wasm (#310 PLAN C4): de1-history's store suite on

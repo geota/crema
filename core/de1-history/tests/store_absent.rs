@@ -276,3 +276,16 @@ fn a_failed_one_call_removal_reports_what_it_deleted() {
     assert_eq!(left.len(), n - ABSENT_BATCH_ROWS);
     assert_eq!(err.partial.seq, index.write_seq());
 }
+
+#[test]
+fn row_count_counts_every_row_tombstones_too_and_only_on_an_index() {
+    let d = dir();
+    let mut index = index_with(&file(&d, "history-index.db"), 3);
+    let tomb = row("gone", 9, json!({ "deletedAt": 10 }));
+    index.upsert(&rows_in(&[tomb])).expect("writes");
+    // The web boot check compares this with the P3 store's `rows`, which
+    // holds tombstones too.
+    assert_eq!(index.row_count().expect("counts"), 4);
+    let authority = create(&file(&d, "history.db"));
+    refused(authority.row_count());
+}

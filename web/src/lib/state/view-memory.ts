@@ -204,20 +204,23 @@ function findKeyed(root: ParentNode, key: string): HTMLElement | null {
  * Where a windowed list's item is: the scroll offset that puts `key`'s top at
  * the viewport's top, or `null` when the list doesn't hold it (#310 P5w).
  * A windowed list renders only the items near the viewport, so an anchor can
- * be in the list but not in the DOM.
+ * be in the list but not in the DOM. A list over the history index (W2) finds
+ * an item's place with an `index_of` query: `'pending'` until it answers.
  */
-export type KeyLocator = (key: string) => number | null;
+export type KeyLocator = (key: string) => number | null | 'pending';
 
 /**
  * The scroll offset that puts `snap`'s first anchor still in the list back
  * where it was, else the raw `top`. `anchored` says which one it is. An
- * anchor is looked for in the DOM, then through `locate` when given.
+ * anchor is looked for in the DOM, then through `locate` when given. The
+ * first anchor found wins, so one whose place is still being looked up
+ * (`'pending'`) stops the search: `pending`, and the caller tries again.
  */
 export function resolveScroll(
 	scroller: Scroller,
 	snap: ScrollSnapshot,
 	locate?: KeyLocator
-): { top: number; anchored: boolean } {
+): { top: number; anchored: boolean; pending?: boolean } {
 	const view = viewportOf(scroller);
 	const root = rootOf(scroller);
 	const current = scrollTopOf(scroller);
@@ -228,6 +231,7 @@ export function resolveScroll(
 			return { top: Math.max(0, current + (r.top - view.top) - a.offset), anchored: true };
 		}
 		const at = locate?.(a.key) ?? null;
+		if (at === 'pending') return { top: current, anchored: false, pending: true };
 		if (at !== null) return { top: Math.max(0, at - a.offset), anchored: true };
 	}
 	return { top: Math.max(0, snap.top), anchored: false };

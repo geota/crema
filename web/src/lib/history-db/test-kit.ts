@@ -12,7 +12,7 @@ import type { ChannelLike } from './ports.js';
 import type { LockManagerLike } from './ports.js';
 import { HistoryDbClient, type ClientOptions, type PageEvents, type WorkerLike } from './client.js';
 import type { Engine, EngineDb, OpenOptions, PoolInfo } from './engine.js';
-import { serveWorker, type WorkerScope } from './owner.js';
+import { serveWorker, type OwnerDeps, type WorkerScope } from './owner.js';
 import type { Applied, Expect, Pool, Stage, Target, Write } from './protocol.js';
 import type { JournalStorage } from './pending.js';
 
@@ -494,6 +494,13 @@ export interface FakeWorker extends WorkerLike {
 	crash(): void;
 }
 
+export interface EnvOptions {
+	/** Each Worker's engine: the fake disk's by default, or the real store (`node-engine.ts`, W2). */
+	engine?(ctx: string): Engine;
+	/** Each Worker's stage-1 index upkeep (W2), given its Worker's context. */
+	indexSync?(ctx: string, deps: Parameters<NonNullable<OwnerDeps['indexSync']>>[0]): ReturnType<NonNullable<OwnerDeps['indexSync']>>;
+}
+
 export class Env {
 	locks = new FakeLocks();
 	bus = new FakeBus();
@@ -501,6 +508,11 @@ export class Env {
 	storage = new FakeStorage();
 	workers: FakeWorker[] = [];
 	#n = 0;
+	readonly #o: EnvOptions;
+
+	constructor(o: EnvOptions = {}) {
+		this.#o = o;
+	}
 
 	kill(ctx: string): void {
 		this.locks.kill(ctx);
@@ -555,11 +567,13 @@ export class Env {
 				later(() => w.onerror?.({ message: 'crashed' }));
 			}
 		};
+		const sync = this.#o.indexSync;
 		serveWorker({
 			scope,
-			engine: this.disk.engine(ctx),
+			engine: this.#o.engine?.(ctx) ?? this.disk.engine(ctx),
 			locks: this.locks.forCtx(ctx),
-			channel: (name) => this.bus.channel(name, ctx)
+			channel: (name) => this.bus.channel(name, ctx),
+			...(sync ? { indexSync: (d) => sync(ctx, d) } : {})
 		});
 		this.workers.push(w);
 		return w;
