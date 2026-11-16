@@ -840,3 +840,105 @@ fn eco_never_raises_a_steam_target_below_the_eco_temperature() {
 fn eco_lowers_a_steam_target_above_the_eco_temperature() {
     assert_eq!(eco_steam_target(148.0), 136.0);
 }
+
+/// REVIEW-462 B1: the weight leg's lead on a scale that reads, or moves its
+/// value, every 500 ms. A fast pour's steps there are 3 g off any trend that
+/// starts at 0, so a rule that took each one off the lead's window kept its
+/// trend at 0, and the lead with it: the stop came late by the whole lead.
+/// The lead now takes off at most one load, and only between readings under
+/// 300 ms apart, so these stop where main does. The scale shows the cup
+/// 500 ms late, as a Bookoo does, which the lead covers.
+mod lead_at_two_hz {
+    use super::*;
+    use crate::scale_estimate_tests::espresso;
+    use crate::scale_trust_tests::{bookoo, sample, stop_reasons};
+    use de1_domain::stop::StopReason;
+
+    /// A DE1 sample reporting `flow_ml_s`.
+    fn sample_flow(t: u16, flow_ml_s: f32) -> [u8; 19] {
+        let mut s = sample(t);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        {
+            s[4] = (flow_ml_s * 16.0).round() as u8;
+        }
+        s
+    }
+
+    /// A pour at `flow` ml/s from `onset` ms, a DE1 sample every 200 ms, and
+    /// a scale reading every `every` ms whose value moves only every `hold`
+    /// ms, 500 ms behind the cup. The first stop: its reason and the cup.
+    fn drive(
+        core: &mut CremaCore,
+        t0: u64,
+        flow: f32,
+        onset: u64,
+        every: u64,
+        hold: u64,
+    ) -> Option<(StopReason, f32)> {
+        let mut t = t0;
+        let mut poured = 0.0f32;
+        let (mut held, mut held_at) = (0.0f32, 0u64);
+        let mut seen_at = vec![0.0f32; usize::try_from(t0 / 50 + 1).unwrap_or(0)];
+        while t < 120_000 {
+            t += 50;
+            let f = if t >= onset { flow } else { 0.0 };
+            let mut reasons = vec![];
+            if t.is_multiple_of(200) {
+                let packet = sample_flow(u16::try_from(t / 8).unwrap_or(u16::MAX), f.max(0.3));
+                reasons.extend(stop_reasons(&core.on_notification(
+                    Source::De1ShotSample,
+                    &packet,
+                    t,
+                )));
+            }
+            poured += f * 0.05;
+            seen_at.push(poured);
+            let seen = seen_at[usize::try_from(t.saturating_sub(500) / 50).unwrap_or(0)];
+            if t >= held_at + hold || t == t0 + 50 {
+                held = seen;
+                held_at = t / hold * hold;
+            }
+            if t.is_multiple_of(every) {
+                reasons.extend(stop_reasons(&core.on_notification(
+                    Source::ScaleWeight,
+                    &bookoo(held),
+                    t + 1,
+                )));
+            }
+            if t.is_multiple_of(100) {
+                reasons.extend(stop_reasons(&core.on_tick(t + 2)));
+            }
+            if let Some(reason) = reasons.first() {
+                return Some((*reason, poured));
+            }
+        }
+        None
+    }
+
+    /// Hot water at 10 ml/s on a scale reading every 500 ms: main stops it
+    /// at 150.0 g of 150, and REVIEW-462's head at 155.0 g.
+    #[test]
+    fn a_fast_hot_water_pour_on_a_2_hz_scale_keeps_its_lead() {
+        let mut core = connected(ratio(3.0));
+        core.connect_scale("BOOKOO_SC", &[]);
+        let _ = weight(&mut core, 0, 0);
+        core.set_test_profile_yield(Some(50.0));
+        let _ = state(&mut core, 6, 5, 0);
+        let _ = weight(&mut core, 0, 50);
+        assert_eq!(core.hot_water_stop_target_g(), Some(150.0));
+        let (reason, cup) = drive(&mut core, 0, 10.0, 0, 500, 500).expect("a stop");
+        assert_eq!(reason, StopReason::Weight);
+        assert!(cup <= 150.05, "stopped at {cup} g of 150");
+    }
+
+    /// H6a's scale: it notifies at 10 Hz, but its value moves every 0.5 s.
+    /// An espresso at 8 g/s from 6.2 s: main stops it at 37.2 g of 36, and
+    /// REVIEW-462's head at 42.8 g.
+    #[test]
+    fn an_8_g_s_espresso_on_a_scale_whose_value_moves_every_half_second_keeps_its_lead() {
+        let mut core = espresso(36.0);
+        let (reason, cup) = drive(&mut core, 100, 8.0, 6_200, 100, 500).expect("a stop");
+        assert_eq!(reason, StopReason::Weight);
+        assert!(cup <= 37.25, "stopped at {cup} g of 36");
+    }
+}

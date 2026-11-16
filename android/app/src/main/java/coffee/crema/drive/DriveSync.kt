@@ -82,6 +82,8 @@ class BackupZip(
      * these (#310 P6a, REVIEW-440 B1).
      */
     val whole: Set<String>? = null,
+    /** The quick "changed?" mark from before its walk began, or null when the history keeps no write counter (#310 R1a). */
+    val mark: String? = null,
 )
 
 /** A backup that reached Drive, and the shots it holds whole ([BackupZip.whole]). */
@@ -150,6 +152,13 @@ class DriveSync(
      *  empty. Suspends: the build runs off Main (LibraryController). */
     /** Build a backup; [daily] for the automatic one, which has its own cancel and progress. */
     private val backupZip: suspend (daily: Boolean) -> BackupZip?,
+    /**
+     * The quick "changed?" mark of a backup made now (#310 R1a, SQLite SPEC
+     * §9): the history's write counter and a hash of the rest, without the
+     * walk. Null when the history keeps no counter (P3a's store), and then
+     * only the built backup's content hash decides.
+     */
+    private val quickMark: suspend () -> String? = { null },
     /** A suggested backup filename (the VM's `backupFileName()`). */
     private val backupFileName: () -> String,
     /** Apply a downloaded backup's raw bytes (a `.crema.zip` or legacy text).
@@ -346,7 +355,7 @@ class DriveSync(
                         .onSuccess { tokens ->
                             // A new sign-in may be another account: the next
                             // backup uploads whatever it finds (#311).
-                            persist { it.copy(tokens = tokens, needsReconnect = false, health = null, lastAutoBackupHash = null) }
+                            persist { it.copy(tokens = tokens, needsReconnect = false, health = null, lastAutoBackupHash = null, lastAutoBackupMark = null) }
                             notify("Connected to Google Drive")
                         }
                         .onFailure { notify("Google Drive sign-in failed: ${it.message}") }
@@ -390,7 +399,7 @@ class DriveSync(
             val tokens = persisted.tokens
             // Also forgets a stored sign-in the keystore couldn't open this start.
             // The hash goes too: the next account's Drive holds none of it (#311).
-            persist { it.copy(tokens = null, unopened = null, needsReconnect = false, health = null, lastAutoBackupHash = null) }
+            persist { it.copy(tokens = null, unopened = null, needsReconnect = false, health = null, lastAutoBackupHash = null, lastAutoBackupMark = null) }
             _state.update { it.copy(backups = null) }
             if (!quiet) notify("Disconnected from Google Drive")
             tokens?.let { revokeGrant(it) }
@@ -632,6 +641,13 @@ class DriveSync(
             // upload now would push the copy it should keep out of reach.
             if (!pinPreDamageCopy(tokens, autoBackupFileName(backupFileName(), tag, ZERO_COUNTS))) return@launch
             persist { it.copy(lastAutoBackupAtMs = now()) }
+            // Nothing written to the history and nothing else changed since the last upload that
+            // landed: no walk, no hash, no new copy, as long as Drive still holds one of this device's.
+            val mark = runCatchingCancellable { quickMark() }.getOrNull()
+            if (mark != null && mark == persisted.lastAutoBackupMark && persisted.lastAutoBackupHash != null && holdsOwnCopy(tokens, tag)) {
+                log("Automatic Drive backup skipped: nothing changed since the last one")
+                return@launch
+            }
             val built = backupZip(true) ?: return@launch
             // Nothing changed since the last upload that landed: no new copy
             // (#311), as long as Drive still holds one of this device's. The
@@ -651,7 +667,7 @@ class DriveSync(
             try {
                 withToken(tokens) { uploadBackup(it, name, built.file) }
                 // The hash only after it landed, from the data as the build read it.
-                persist { it.copy(lastBackupSuccessAtMs = now(), lastAutoBackupHash = built.contentHash) }
+                persist { it.copy(lastBackupSuccessAtMs = now(), lastAutoBackupHash = built.contentHash, lastAutoBackupMark = built.mark) }
                 finishRun(backedUp())
                 notify("Daily backup saved to Google Drive")
                 settleAutoBackups(tokens, name, backedUpBefore)
