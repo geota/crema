@@ -17,6 +17,6 @@
 		"skipLibCheck": true,
 		"isolatedModules": true
 	},
-	"include": ["./**/*.ts", "../../bench/**/*.ts", "../../playwright.config.ts"],
+	"include": ["./**/*.ts", "../../bench/**/*.ts", "../../playwright.config.ts", "../../playwright.pwa.config.ts"],
 	"exclude": ["./.build"]
 }

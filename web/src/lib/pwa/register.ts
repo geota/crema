@@ -1,10 +1,11 @@
 /**
  * `#lib/pwa/register.js` — register the service worker and offer updates.
  *
- * `vite-plugin-pwa` injects its registration through Vite's HTML hook, which
- * SvelteKit never runs for `app.html`, so the worker it builds (`sw.js`, the
- * precached app shell + wasm core) was never installed. This registers it by
- * hand and drives the `prompt` update strategy:
+ * The PWA plugin (`@vite-pwa/sveltekit`) would inject its registration through
+ * Vite's HTML hook, which SvelteKit never runs for `app.html`, so the worker it
+ * builds (`sw.js`, the precached app shell + wasm cores) would never be
+ * installed. This registers it by hand and drives the `prompt` update strategy
+ * (`web/tests/browser/pwa.spec.ts` runs it against the production build):
  *
  * 1. A new build installs in the background and waits (the worker is built
  *    without `skipWaiting`).
