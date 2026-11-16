@@ -87,9 +87,7 @@ class SyncReadsStoreVmTest {
         val vm = vm()
         val library = VmHarness.library(vm)
         VmHarness.idleUntil("the counts") { vm.ui.value.sharing.noTelemetryShots == 5 }
-        library.dropFromViewForTest(setOf("s3"))
-        VmHarness.idle()
-        assertFalse(vm.ui.value.history.any { it.id == "s3" }, "the view doesn't hold it")
+        // From A3b no view holds any row: the UI state has no list (#310 A3b).
         assertTrue(library.syncRows().any { it.id == "s3" }, "the store does: sync's rows have it")
         assertEquals(5, vm.ui.value.sharing.noTelemetryShots, "Sharing's counts are the store's")
         // An upload came back for it: the stamp lands where no view reaches.
@@ -128,8 +126,6 @@ class SyncReadsStoreVmTest {
         val planted = plant(4)
         val vm = vm()
         val library = VmHarness.library(vm)
-        library.dropFromViewForTest(setOf("s2"))
-        VmHarness.idle()
         val refused = library.insertPulledShots(listOf(planted.first { it.id == "s2" }.copy(notes = "pulled again")))
         VmHarness.idle()
         assertTrue(refused.isEmpty())

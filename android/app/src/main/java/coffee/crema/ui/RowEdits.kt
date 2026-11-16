@@ -9,18 +9,23 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 /*
- * How the history and the bean library change (geota/crema#324). Rows edited
- * from a list read earlier undo whatever landed in between: a rating set while a
- * shot assembled, a bag debit during a bean sync. So a change is a delta on the
- * current rows, inside the update.
+ * How the bean library changes, and the shape the history's list edits take
+ * (geota/crema#324). Rows edited from a list read earlier undo whatever landed
+ * in between: a rating set while a shot assembled, a bag debit during a bean
+ * sync. So a change is a delta on the current rows, inside the update.
  *
  * Two rules hold that up. [UiStore] is the only write to `MainUiState`, and a
  * plain update keeps the current rows whatever its copy says, so
- * `updateUi { it.copy(history = s.history) }`, the bug in its simplest form, has
+ * `updateUi { it.copy(beans = s.beans) }`, the bug in its simplest form, has
  * no effect. And rows come in two types. A [RowView] is what the state hands out,
- * read as a List. A [Rows] is what an edit passes in and takes back, and only
- * [UiStore.edit] holds one, so `editHistory { historyWith(x, s.history) }` doesn't
+ * read as a List. A [Rows] is what an edit passes in and takes back, and only an
+ * edit holds one, so an edit built from a list the state handed out doesn't
  * compile. Keeping `rows` past the lambda stays possible but deliberate.
+ *
+ * The shot history's rows aren't in the UI state (#310 A3b): the history
+ * store's memory holds them, and its edits ([coffee.crema.history.HistoryStore.update],
+ * [coffee.crema.history.HistoryStore.edit]) run one at a time on the rows as
+ * they stand. A list edit of them gets a [Rows] all the same ([rowsForEdit]).
  */
 
 /** Rows as the state hands them out: a read. */
@@ -53,6 +58,9 @@ fun <T> rowViewOf(rows: List<T> = emptyList()): RowView<T> = ViewOf(rows)
 /** Rows for an edit outside [UiStore], in tests of what an edit does. */
 fun <T> rowsForTest(rows: List<T>): Rows<T> = EditOf(rows)
 
+/** [rows], someone else's (the history store's, #310 A3b), as an edit's rows: the shape the list edits take. */
+fun <T> rowsForEdit(rows: List<T>): Rows<T> = EditOf(rows)
+
 /** These rows with [transform] applied to each. */
 fun <T> Rows<T>.mapped(transform: (T) -> T): Rows<T> = EditOf(map(transform))
 
@@ -67,8 +75,8 @@ fun <T> Rows<T>.with(next: List<T>): Rows<T> = EditOf(next)
 @Suppress("UNUSED_PARAMETER")
 fun <T> Rows<T>.with(stale: RowView<T>): Rows<T> = error("unreachable")
 
-/** Everything [UiStore.edit] can change, at once. */
-data class LibraryRows(val history: HistoryRows, val beans: BeanRows, val roasters: RoasterRows)
+/** Everything [UiStore.edit] can change, at once. The shot history isn't here: its rows are the store's (#310 A3b). */
+data class LibraryRows(val beans: BeanRows, val roasters: RoasterRows)
 
 /** Change rows in one atomic write: see [UiStore.edit]. */
 typealias EditRows = (rows: (LibraryRows) -> LibraryRows, rest: (MainUiState) -> MainUiState) -> Unit
@@ -92,9 +100,8 @@ class UiStore(initial: MainUiState) {
      */
     fun edit(rows: (LibraryRows) -> LibraryRows, rest: (MainUiState) -> MainUiState = { it }) {
         flow.update { current ->
-            val edited = rows(LibraryRows(current.history.forEdit(), current.beans.forEdit(), current.roasters.forEdit()))
+            val edited = rows(LibraryRows(current.beans.forEdit(), current.roasters.forEdit()))
             rest(current).copy(
-                history = edited.history.forState(),
                 beans = edited.beans.forState(),
                 roasters = edited.roasters.forState(),
             )
@@ -102,8 +109,8 @@ class UiStore(initial: MainUiState) {
     }
 
     private fun MainUiState.keepingRowsOf(current: MainUiState): MainUiState =
-        if (history === current.history && beans === current.beans && roasters === current.roasters) this
-        else copy(history = current.history, beans = current.beans, roasters = current.roasters)
+        if (beans === current.beans && roasters === current.roasters) this
+        else copy(beans = current.beans, roasters = current.roasters)
 
     private fun <T> RowView<T>.forEdit(): Rows<T> = EditOf((this as ViewOf<T>).rows)
 

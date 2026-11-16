@@ -86,7 +86,7 @@ class EraseAllDataTest {
         assertTrue(captures.listFiles().isNullOrEmpty(), "BLE captures left behind")
         assertEquals(emptyList(), dbFiles.filter { it.exists() }.map { it.name }, "shots.db left behind")
         assertTrue(!File(files, "relay-lost").exists(), "relay-lost/ left behind")
-        assertTrue(vm.ui.value.history.isEmpty())
+        assertTrue(VmHarness.rows(vm).isEmpty())
         assertTrue(vm.ui.value.beans.isEmpty())
 
         store.clear()

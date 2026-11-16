@@ -66,11 +66,11 @@ class RestoreVmTest {
         assertTrue(report.replace)
         assertEquals("Replace everything on this device?", report.title)
         assertTrue("Deletes 1 shot" in report.message, report.message)
-        assertTrue(VmHarness.ownState(vm).history.none { it.id == "shot:android-1" }, "nothing ran yet")
+        assertTrue(VmHarness.rows(vm).none { it.id == "shot:android-1" }, "nothing ran yet")
         vm.dismissRestore()
         VmHarness.idle()
         assertNull(vm.ui.value.restoreReport)
-        assertTrue(VmHarness.ownState(vm).history.none { it.id == "shot:android-1" })
+        assertTrue(VmHarness.rows(vm).none { it.id == "shot:android-1" })
     }
 
     @Test
@@ -81,7 +81,7 @@ class RestoreVmTest {
         VmHarness.idleUntil("the restore") { vm.ui.value.userMessages.size > before }
         assertNull(vm.ui.value.restoreReport)
         assertTrue(vm.ui.value.userMessages.last().startsWith("Restored 1 shot, 1 bean"), vm.ui.value.userMessages.last())
-        assertTrue(VmHarness.ownState(vm).history.any { it.id == "shot:android-1" })
+        assertTrue(VmHarness.rows(vm).any { it.id == "shot:android-1" })
         assertEquals(coffee.crema.restore.RestoreState.IDLE, vm.restoreState())
     }
 
@@ -103,7 +103,7 @@ class RestoreVmTest {
         val before = vm.ui.value.userMessages.size
         vm.startRestore(fixture.readBytes(), "fixture", MainViewModel.RestoreMode.MERGE)
         VmHarness.idleUntil("the restore") { vm.ui.value.userMessages.size > before }
-        val rows = VmHarness.ownState(vm).history
+        val rows = VmHarness.rows(vm)
         assertTrue(rows.any { it.id == "shot:android-1" }, "the backup's shot")
         assertEquals(5, rows.first { it.id == "mine" }.rating)
         assertEquals("edited meanwhile", rows.first { it.id == "mine" }.notes)
@@ -130,7 +130,7 @@ class RestoreVmTest {
             vm.startRestore(damaged(bom), "damaged", MainViewModel.RestoreMode.MERGE)
             VmHarness.idleUntil("the report") { vm.ui.value.restoreReport != null }
             vm.confirmRestore()
-            VmHarness.idleUntil("the merge") { VmHarness.ownState(vm).history.any { it.id == "shot:android-1" } }
+            VmHarness.idleUntil("the merge") { VmHarness.rows(vm).any { it.id == "shot:android-1" } }
         }
     }
 
@@ -152,7 +152,7 @@ class RestoreVmTest {
             vm.confirmRestore()
             VmHarness.idleUntil("the stop") { vm.ui.value.userMessages.size > before }
             assertTrue(vm.ui.value.userMessages.last().startsWith("Restore stopped"), vm.ui.value.userMessages.last())
-            assertTrue(VmHarness.ownState(vm).history.none { it.id == "old" }, "the rows were replaced")
+            assertTrue(VmHarness.rows(vm).none { it.id == "old" }, "the rows were replaced")
             assertEquals(series, File(app.filesDir, "shot-series").listFiles().orEmpty().map { it.name }.filter { it in series }, "no save deleted the removed row's curve")
         } finally {
             HistoryStore.legacyOnlyForTest = false

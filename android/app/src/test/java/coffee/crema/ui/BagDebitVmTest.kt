@@ -93,7 +93,7 @@ class BagDebitVmTest {
 
     private fun MainViewModel.remaining(id: String) = VmHarness.ownState(this).beans.single { it.id == id }.remaining
 
-    private fun MainViewModel.shot(id: String) = VmHarness.ownState(this).history.single { it.id == id }
+    private fun MainViewModel.shot(id: String) = VmHarness.rows(this).single { it.id == id }
 
     private fun MainViewModel.logBrew(beanId: String, doseG: Float, yieldG: Float? = 36f): StoredShot = addManualBrew(
         LibraryController.ManualBrewInput(

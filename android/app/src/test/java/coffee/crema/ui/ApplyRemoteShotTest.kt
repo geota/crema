@@ -42,7 +42,7 @@ class ApplyRemoteShotTest {
             id = "s1", completedAtMs = 1, durationMs = 0, rating = 4, notes = "juicy", tags = listOf("washed"), visualizerId = "v-1",
         )
         library.insertPulledShots(listOf(row))
-        VmHarness.idleUntil("the row") { vm.ui.value.history.any { it.id == "s1" } }
+        VmHarness.idleUntil("the row") { VmHarness.rows(vm).any { it.id == "s1" } }
 
         library.applyRemoteShot(
             "s1",
@@ -50,7 +50,7 @@ class ApplyRemoteShotTest {
             PulledParts(samples = listOf(sample), durationMs = 30_000),
         )
 
-        val after = vm.ui.value.history.single { it.id == "s1" }
+        val after = VmHarness.rows(vm).single { it.id == "s1" }
         assertEquals(listOf("washed", "gesha"), after.tags)
         assertEquals("Ana", after.barista)
         // The row names the backfilled curve, and the shot read whole has it (#310 P4a).
@@ -63,7 +63,7 @@ class ApplyRemoteShotTest {
 
         // A barista set here is never replaced.
         library.applyRemoteShot("s1", ShotPatch(barista = "Bo"), PulledParts())
-        assertEquals("Ana", vm.ui.value.history.single { it.id == "s1" }.barista)
+        assertEquals("Ana", VmHarness.rows(vm).single { it.id == "s1" }.barista)
     }
 
     /** The barista clear's mark is on disk by the time the row's save runs (V3 #6). */
@@ -73,7 +73,7 @@ class ApplyRemoteShotTest {
         VmHarness.awaitStartupLoaded(vm)
         val library = VmHarness.library(vm)
         library.insertPulledShots(listOf(StoredShot(id = "s1", completedAtMs = 1, durationMs = 1, barista = "Ana", visualizerId = "v-1")))
-        VmHarness.idleUntil("the row") { vm.ui.value.history.any { it.id == "s1" } }
+        VmHarness.idleUntil("the row") { VmHarness.rows(vm).any { it.id == "s1" } }
 
         vm.setShotPerson("s1", "barista", null)
         val disk = coffee.crema.visualizer.VisualizerStore(VmHarness.app(), kotlinx.serialization.json.Json { ignoreUnknownKeys = true })

@@ -7,8 +7,8 @@ import coffee.crema.ui.TelemetrySample
 import kotlinx.serialization.json.JsonObject
 
 /*
- * A History row without its telemetry (#310 P4a, SPEC §4). `ui.history` holds
- * these: every field of a [StoredShot] except `samples`, `profile` and
+ * A History row without its telemetry (#310 P4a, SPEC §4). The history store's
+ * memory holds these (#310 A3b; the UI state holds none): every field of a [StoredShot] except `samples`, `profile` and
  * `brewSeries`, plus the row's [ShotSummary] (peaks, sample counts and the row
  * chart's spark). The heavy parts load per shot through
  * `HistoryStore.loadShot`, so no list holds a curve, and the compiler finds

@@ -73,7 +73,7 @@ class HistoryFallbackVmTest {
         assertEquals(ids.distinct().size, ids.size, "$what: no row twice")
         assertEquals(expected.map { it.id }.toSet(), ids.toSet(), what)
         // Each curve, read whole as a screen would (#310 P4a: a row holds none).
-        for (row in vm.ui.value.history) {
+        for (row in VmHarness.rows(vm)) {
             assertEquals(expected.first { it.id == row.id }.samples, VmHarness.whole(vm, row.id).samples, "$what: ${row.id}'s curve")
         }
     }

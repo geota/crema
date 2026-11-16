@@ -126,18 +126,18 @@ class SeriesDeletesVmTest {
         SafeFile.backupOf(rowsFile).delete()
 
         val first = launch()
-        assertTrue(VmHarness.ownState(first).history.isEmpty())
+        assertTrue(VmHarness.rows(first).isEmpty())
         log(first)
-        VmHarness.idleUntil("the first brew saved") { VmHarness.ownState(first).history.first().id in rowsOnDisk() }
+        VmHarness.idleUntil("the first brew saved") { VmHarness.rows(first).first().id in rowsOnDisk() }
 
         val second = relaunch()
-        val kept = VmHarness.ownState(second).history.single().id
+        val kept = VmHarness.rows(second).single().id
         // Twice: a save's deletes follow its write, and the second save can't
         // start until the first has finished them.
         log(second)
         log(second)
         VmHarness.idleUntil("the later brews saved") {
-            VmHarness.ownState(second).history.filter { it.id != kept }.all { it.id in rowsOnDisk() }
+            VmHarness.rows(second).filter { it.id != kept }.all { it.id in rowsOnDisk() }
         }
 
         assertTrue(series("a").exists(), "a's curve survived")
@@ -167,7 +167,7 @@ class SeriesDeletesVmTest {
         vm.deleteShot("restored")
         VmHarness.idleUntil("the restored row's series went") { !series("restored").exists() }
         assertTrue(series("both").exists())
-        assertEquals(listOf("both"), VmHarness.ownState(vm).history.map { it.id })
+        assertEquals(listOf("both"), VmHarness.rows(vm).map { it.id })
         val onDisk = rowsOnDisk()
         assertFalse("\"restored\"" in onDisk && "\"old\"" in onDisk)
     }

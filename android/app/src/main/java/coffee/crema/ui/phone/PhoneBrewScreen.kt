@@ -216,11 +216,13 @@ fun PhoneBrewScreen(
                     connected = connected,
                     scaleConnected = scaleConnected,
                     onOpenLastShot = { id -> vm.openShotInHistory(id); onNav("history") },
-                    onRate = { id, r -> vm.updateShot(id, r, ui.history.firstOrNull { it.id == id }?.notes ?: "") },
+                    onRate = { id, r -> vm.updateShot(id, r, vm.historyRow(id)?.notes ?: "") },
                     onStartFromShot = { id -> vm.startFromShot(id) },
                     onTareScale = vm::tareScale,
                     onConnectThrough = vm::switchToSecondary,
                     loadShot = vm::loadShot,
+                    historyRow = vm::historyRow,
+                    lastMachineShotOf = vm::lastMachineShotOf,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -832,6 +834,10 @@ private fun RestingBody(
     onConnectThrough: (host: String, port: Int) -> Unit = { _, _ -> },
     /** A stored shot whole (#310 P4a): the last-shot card's curve. */
     loadShot: suspend (String) -> coffee.crema.history.StoredShot? = { null },
+    /** A history row by id, from the store (#310 A3b); read with `ui.history.version` as a key. */
+    historyRow: (String) -> coffee.crema.history.ShotRow? = { null },
+    /** A bag's newest machine shot, from the store (#310 A3b). */
+    lastMachineShotOf: (String) -> coffee.crema.history.ShotRow? = { null },
 ) {
     val tel = CremaTheme.telemetry
     Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -946,7 +952,7 @@ private fun RestingBody(
         // stored shot carries the recorded samples (curve) + the editable rating.
         val last = ui.lastShot
         if (last != null) {
-            val stored = ui.history.firstOrNull { it.id == last.id }
+            val stored = remember(ui.history.version, last.id) { last.id?.let(historyRow) }
             // The curve loads with the shot (#310 P4a): the row holds none.
             val storedCurve by androidx.compose.runtime.produceState<List<coffee.crema.ui.TelemetrySample>>(emptyList(), stored?.id, stored?.summary) {
                 value = stored?.id?.let { loadShot(it) }?.samples.orEmpty()
@@ -1054,7 +1060,7 @@ private fun RestingBody(
             val lastBeanShot = ui.activeBeanId?.let { bid ->
                 // Machine shots only (issue #10) — a logged pourover on the
                 // same bag must not seed the DE1 dial-in card.
-                ui.history.firstOrNull { it.bean?.beanId == bid && it.brewMethod == null }
+                remember(ui.history.version, bid) { lastMachineShotOf(bid) }
             }
             if (lastBeanShot != null) {
                 PhoneDialInCard(

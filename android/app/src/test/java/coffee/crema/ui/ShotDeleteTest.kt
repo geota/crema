@@ -41,16 +41,16 @@ class ShotDeleteTest {
         File(VmHarness.app().filesDir, "shots.json")
             .writeText(Json.encodeToString(ListSerializer(StoredShot.serializer()), shots))
         val vm = VmHarness.build(store)
-        VmHarness.idleUntil("the history load", 10_000) { vm.ui.value.history.size == 2 }
+        VmHarness.idleUntil("the history load", 10_000) { VmHarness.rows(vm).size == 2 }
 
         vm.deleteShot("local")
         VmHarness.idle()
-        assertEquals(listOf("synced"), vm.ui.value.history.map { it.id })
+        assertEquals(listOf("synced"), VmHarness.rows(vm).map { it.id })
         assertTrue(vm.visualizer.shotTombstones.isEmpty(), "a never-uploaded shot leaves no tombstone")
 
         vm.deleteShot("synced")
         VmHarness.idleUntil("the tombstone", 10_000) { vm.visualizer.shotTombstones.isNotEmpty() }
-        assertTrue(vm.ui.value.history.isEmpty(), "the tombstone is not in the history")
+        assertTrue(VmHarness.rows(vm).isEmpty(), "the tombstone is not in the history")
         val t = vm.visualizer.shotTombstones.single()
         assertEquals("synced" to "v-1", t.id to t.visualizerId)
         assertEquals(false, t.deleteRemote, "a plain delete keeps the remote copy")
@@ -70,13 +70,13 @@ class ShotDeleteTest {
         coffee.crema.persist.SafeFile.openAllForTest()
         kotlinx.coroutines.runBlocking { coffee.crema.history.HistoryStore(VmHarness.app(), coreJson).save(shots) }
         val vm = VmHarness.build(store)
-        VmHarness.idleUntil("the history load", 10_000) { vm.ui.value.history.size == 2 }
+        VmHarness.idleUntil("the history load", 10_000) { VmHarness.rows(vm).size == 2 }
         assertEquals(2, VmHarness.whole(vm, "gone").samples.size, "read whole before the delete")
 
         vm.deleteShot("gone")
         val gz = coffee.crema.history.SeriesFiles(File(VmHarness.app().filesDir, "shot-series"), coreJson).gzFile("gone")
         VmHarness.idleUntil("the delete", 10_000) { !gz.exists() }
-        assertEquals(listOf("keep"), vm.ui.value.history.map { it.id })
+        assertEquals(listOf("keep"), VmHarness.rows(vm).map { it.id })
         assertEquals(null, VmHarness.wholeOrNull(vm, "gone"), "no shot to read")
         assertEquals(2, VmHarness.whole(vm, "keep").samples.size, "the other keeps its curve")
     }
