@@ -1446,12 +1446,22 @@ impl HistoryDb {
         self.with(Store::export_begin).map(Into::into)
     }
 
-    /// The walk's next `n` rows, by `rid`. Empty at the end.
+    /// The walk's next `n` rows, newest first as the walk began (ties by id
+    /// descending, the P3 stores' order). Empty at the end.
     ///
     /// # Errors
     /// `UnknownWalk`; a store error class.
     pub fn export_next(&self, token: u64, n: u32) -> HResult<Vec<HistoryRow>> {
         self.with(|s| s.export_next(token, n)).map(rows_of)
+    }
+
+    /// Starts the walk's set again from its first row (R1a): the same rows in
+    /// the same order, each as it is now. The holds stay.
+    ///
+    /// # Errors
+    /// `UnknownWalk`; a store error class.
+    pub fn export_rewind(&self, token: u64) -> HResult<()> {
+        self.with(|s| s.export_rewind(token))
     }
 
     /// Ends the walk. Then [`HistoryDb::release_holds`].
