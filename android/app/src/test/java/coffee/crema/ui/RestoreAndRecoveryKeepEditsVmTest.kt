@@ -39,6 +39,8 @@ class RestoreAndRecoveryKeepEditsVmTest {
     private val now = 1_790_000_000_000L
 
     @Before fun reset() {
+        // These read P3a's `shots.db` directly: stage 1, a history that hasn't flipped (#310 A5). Stage2VmTest covers history.db.
+        coffee.crema.history.HistoryStore.stage2Enabled = false
         SafeFile.resetForTest()
         Stores.resetForTest()
         SaveFloor.resetForTest()
@@ -46,6 +48,7 @@ class RestoreAndRecoveryKeepEditsVmTest {
     }
 
     @After fun tearDown() {
+        coffee.crema.history.HistoryStore.stage2Enabled = coffee.crema.history.HistoryStore.STAGE2_IN_BUILD
         store.clear()
         VmHarness.idle()
     }

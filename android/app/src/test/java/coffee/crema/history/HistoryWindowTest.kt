@@ -59,6 +59,8 @@ class HistoryWindowTest {
     private fun store() = HistoryStore(app, coreJson).also { stores += it }
 
     @Before fun clean() {
+        // P3a's `shots.db` (stage 1): a store that hasn't flipped, or an older build (#310 A5).
+        HistoryStore.stage2Enabled = false
         SafeFile.openAllForTest()
         HistoryStore.faults.clear()
         HistoryIndex.FAULTS.clear()
@@ -68,6 +70,7 @@ class HistoryWindowTest {
     }
 
     @After fun tidy() {
+        HistoryStore.stage2Enabled = HistoryStore.STAGE2_IN_BUILD
         scope.cancel()
         main.close()
         HistoryIndex.FAULTS.clear()

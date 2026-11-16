@@ -85,6 +85,8 @@ class HistorySourceTest {
     private val bridges = mutableListOf<HistoryDbBridge>()
 
     @Before fun clean() {
+        // P3a's `shots.db` (stage 1): a store that hasn't flipped, or an older build (#310 A5).
+        HistoryStore.stage2Enabled = false
         SafeFile.openAllForTest()
         HistoryStore.faults.clear()
         runBlocking { HistoryStore(app, json).erase() }
@@ -96,6 +98,7 @@ class HistorySourceTest {
     }
 
     @After fun tidy() {
+        HistoryStore.stage2Enabled = HistoryStore.STAGE2_IN_BUILD
         SqliteHistorySource.faultHook = null
         runBlocking { bridges.forEach { it.closeAll() } }
         root.deleteRecursively()

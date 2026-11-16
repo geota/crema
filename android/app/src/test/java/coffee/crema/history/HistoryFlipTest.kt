@@ -55,7 +55,7 @@ class HistoryFlipTest {
     }
 
     @After fun tidy() {
-        HistoryStore.stage2Enabled = false
+        HistoryStore.stage2Enabled = HistoryStore.STAGE2_IN_BUILD
         HistoryStore.faults.clear()
         HistoryFlip.FAULTS.clear()
         HistoryIndex.FAULTS.clear()

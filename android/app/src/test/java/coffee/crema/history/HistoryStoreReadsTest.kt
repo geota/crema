@@ -45,6 +45,8 @@ class HistoryStoreReadsTest {
     private fun store() = HistoryStore(app, coreJson)
 
     @Before fun clean() {
+        // P3a's `shots.db` (stage 1): a store that hasn't flipped, or an older build (#310 A5).
+        HistoryStore.stage2Enabled = false
         SafeFile.openAllForTest()
         // Every process-wide seam, as another class may have left it.
         HistoryStore.faults.clear()
@@ -59,6 +61,7 @@ class HistoryStoreReadsTest {
     }
 
     @After fun tidy() {
+        HistoryStore.stage2Enabled = HistoryStore.STAGE2_IN_BUILD
         HistoryStore.faults.clear()
         HistoryStore.legacyOnlyForTest = false
         HistoryStore.beforeCacheForTest = null

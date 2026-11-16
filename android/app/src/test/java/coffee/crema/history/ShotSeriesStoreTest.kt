@@ -50,12 +50,15 @@ class ShotSeriesStoreTest {
     private fun store() = HistoryStore(app, coreJson)
 
     @Before fun clean() {
+        // P3a's `shots.db` (stage 1): a store that hasn't flipped, or an older build (#310 A5).
+        HistoryStore.stage2Enabled = false
         runBlocking { store().erase() }
         seriesDir.deleteRecursively()
         KeptAsideNotices.drain()
     }
 
     @After fun tidy() {
+        HistoryStore.stage2Enabled = HistoryStore.STAGE2_IN_BUILD
         SafeFile.resetForTest()
         seriesDir.deleteRecursively()
         File(app.filesDir, "shot-series").takeIf { it.isFile }?.delete()
