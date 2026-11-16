@@ -5,7 +5,9 @@ import coffee.crema.core.backupPrelude
 import coffee.crema.core.backupShotLine
 import coffee.crema.core.backupTail
 import coffee.crema.history.ShotRow
+import coffee.crema.history.ShotWalk
 import coffee.crema.history.StoredShot
+import coffee.crema.history.WalkRow
 import coffee.crema.visualizer.wireShotJson
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -27,8 +29,13 @@ import java.util.zip.ZipOutputStream
  * cache directory, so a large history is never one string or one array.
  *
  * The header counts the shots first, so each shot is read twice: once to
- * learn whether the core can write it, once to write it. The rows are the
- * snapshot's, so a shot saved during the walk is in the next backup.
+ * learn whether the core can write it, once to write it. The shots come
+ * through the history seam (#310 R1a): a [coffee.crema.history.ShotWalk]
+ * whose rows and order are fixed when it opens, read twice in that order.
+ * On P3a's store they're the snapshot's rows; on the SQLite store, its
+ * export walk, which holds a delete until the walk ends (S6). Either way a
+ * shot saved during the walk is in the next backup, and the same history
+ * gives the same bytes.
  */
 
 private const val MiB = 1024L * 1024
@@ -81,6 +88,10 @@ internal class StreamedBackup(
     val omitted: List<OmittedBackupRow>,
     /** Photos that couldn't be read, so went without: bean id and why. */
     val photosSkipped: List<String> = emptyList(),
+    /** Every shot the walk held, in its order, the ones left out too (#310 R1a). */
+    val shotIds: List<String> = emptyList(),
+    /** Auto-backup's quick "changed?" mark, read before the walk began ([backupMark]); null when the store keeps no counter. */
+    val mark: String? = null,
 )
 
 /** Which build a backup is: each has its own cancel and progress (#391 review). */
@@ -163,10 +174,11 @@ private class CountingOut(private val out: OutputStream, private val max: Long) 
 
 /**
  * Build the `.crema.zip` for [snap] into [out], one line at a time, with the
- * bean [photos] (bean id → file) sorted by id. [stop] is checked between
- * batches and throws to stop: [BackupCancelled] for the user's cancel. On any
- * throw [out] is deleted. [shotJson] is the shot's backup JSON (a test can
- * stand in for it).
+ * bean [photos] (bean id → file) sorted by id, and the shots of its history
+ * source ([BackupSnapshot.history]). [stop] is checked between batches and
+ * throws to stop: [BackupCancelled] for the user's cancel. On any throw [out]
+ * is deleted, and the walk ends either way. [shotJson] is the shot's backup
+ * JSON (a test can stand in for it).
  */
 internal fun streamBackupZip(
     snap: BackupSnapshot,
@@ -183,7 +195,13 @@ internal fun streamBackupZip(
     shotJson: (StoredShot) -> String = { wireShotJson(it, forBackup = true).toString() },
 ): StreamedBackup {
     try {
-        return walk(snap, json, createdAtMs, appVersion, deviceLabel, photos, out, limits, batch, stop, onProgress, shotJson)
+        val source = snap.history
+        val envelope = backupEnvelope(snap, json, withShots = false)
+        // Before the walk begins: a write during it moves the store past this mark.
+        val mark = source.writeMark()?.let { backupMark(it, envelope, photos) }
+        return source.openWalk().use { shots ->
+            walk(shots, envelope, mark, json, createdAtMs, appVersion, deviceLabel, photos, out, limits, batch, stop, onProgress, shotJson)
+        }
     } catch (t: Throwable) {
         releaseBackupFile(out)
         throw t
@@ -191,7 +209,9 @@ internal fun streamBackupZip(
 }
 
 private fun walk(
-    snap: BackupSnapshot,
+    shots: ShotWalk,
+    envelope: String,
+    mark: String?,
     json: Json,
     createdAtMs: Long,
     appVersion: String,
@@ -204,27 +224,35 @@ private fun walk(
     onProgress: (BackupProgress) -> Unit,
     shotJson: (StoredShot) -> String,
 ): StreamedBackup {
-    val shots = snap.shots.toList()
-    val lineOf = { shot: ShotRow ->
-        // A read that failed is outside the runCatching: it stops the backup rather than leave the row out.
-        val whole = readWhole(snap, shot)
-        runCatching { json.decodeFromString(ShotLine.serializer(), backupShotLine(shotJson(whole))) }.getOrNull()
+    val lineOf = { shot: WalkRow ->
+        shot.row?.let { row ->
+            // A read that failed is outside the runCatching: it stops the backup rather than leave the row out.
+            val whole = readWhole(shots::full, row)
+            runCatching { json.decodeFromString(ShotLine.serializer(), backupShotLine(shotJson(whole))) }.getOrNull()
+        }
     }
     stop()
     // Pass 1: which shots the core can write, so the header counts them.
-    val readable = BooleanArray(shots.size)
+    val ids = ArrayList<String>(shots.count)
+    val readable = ArrayList<Boolean>(shots.count)
     val omitted = mutableListOf<OmittedBackupRow>()
-    for ((i, shot) in shots.withIndex()) {
-        readable[i] = lineOf(shot) != null
-        if (!readable[i]) omitted += OmittedBackupRow("shot", i, null)
-        if ((i + 1) % batch == 0) stop()
+    while (true) {
+        val rows = shots.next(batch)
+        if (rows.isEmpty()) break
+        for (shot in rows) {
+            val i = ids.size
+            ids += shot.id
+            readable += lineOf(shot) != null
+            // By its place in the walk, as the whole-string path names it: [StreamedBackup.shotIds] holds the id.
+            if (!readable[i]) omitted += OmittedBackupRow("shot", i, null)
+        }
+        stop()
     }
-    val written = shots.size - omitted.size
+    val written = ids.size - omitted.size
     // As the whole-string export: shots of which none could be read are a
     // failed section, not a gap, or the file would look like a good backup of
     // nothing and retention would let it replace the copies that hold them.
-    if (shots.isNotEmpty() && written == 0) error("none of the ${shots.size} shot rows could be read")
-    val envelope = backupEnvelope(snap, json, withShots = false)
+    if (ids.isNotEmpty() && written == 0) error("none of the ${ids.size} shot rows could be read")
     val prelude = json.decodeFromString(
         Prelude.serializer(),
         backupPrelude(envelope, written.toUInt(), omitted.size.toUInt(), createdAtMs, appVersion, deviceLabel),
@@ -266,19 +294,27 @@ private fun walk(
                 zip.write(bytes)
             }
             push(prelude.jsonl)
-            // Pass 2: the lines, in order.
-            for ((i, shot) in shots.withIndex()) {
-                if (!readable[i]) continue
-                val line = lineOf(shot) ?: error("A shot changed while it was being backed up. Try again.")
-                if (line.withoutProfile) degraded += shot.id
-                if (line.hasCurve) curves += 1u
-                push(line.line)
-                shotsWritten += 1
-                if (shotsWritten % batch == 0) {
-                    onProgress(BackupProgress(shotsWritten, written))
-                    stop()
+            // Pass 2: the same rows again, in the same order.
+            shots.rewind()
+            var i = 0
+            while (true) {
+                val rows = shots.next(batch)
+                if (rows.isEmpty()) break
+                for (shot in rows) {
+                    check(i < ids.size && shot.id == ids[i]) { WALK_MOVED }
+                    if (!readable[i++]) continue
+                    val line = lineOf(shot) ?: error("A shot changed while it was being backed up. Try again.")
+                    if (line.withoutProfile) degraded += shot.id
+                    if (line.hasCurve) curves += 1u
+                    push(line.line)
+                    shotsWritten += 1
+                    if (shotsWritten % batch == 0) {
+                        onProgress(BackupProgress(shotsWritten, written))
+                        stop()
+                    }
                 }
             }
+            check(i == ids.size) { WALK_MOVED }
             push(backupTail(envelope))
             zip.closeEntry()
             onProgress(BackupProgress(shotsWritten, written))
@@ -304,7 +340,29 @@ private fun walk(
         degraded = degraded,
         omitted = prelude.omitted + omitted,
         photosSkipped = photosSkipped,
+        shotIds = ids,
+        mark = mark,
     )
+}
+
+/** A walk whose second read differs from its first: never written as a backup. */
+private const val WALK_MOVED = "The shots changed while they were being backed up. Try again."
+
+/**
+ * Auto-backup's quick "changed?" mark (SQLite SPEC §9, #310 R1a): the
+ * store's write mark with a hash of everything else a backup holds, the
+ * envelope without its shots and each photo's id, size and time. The same
+ * mark means no history write and nothing else changed, so the walk and its
+ * hash can be skipped. Whatever it can't see only builds a backup that the
+ * content hash then finds unchanged.
+ */
+internal fun backupMark(writeMark: String, envelope: String, photos: List<Pair<String, File>>): String {
+    val hash = MessageDigest.getInstance("SHA-256")
+    hash.update(envelope.toByteArray(Charsets.UTF_8))
+    for ((beanId, file) in photos.sortedBy { it.first }) {
+        hash.update("\n$beanId:${file.length()}:${file.lastModified()}".toByteArray(Charsets.UTF_8))
+    }
+    return writeMark + "|" + hash.digest().joinToString("") { "%02x".format(it) }
 }
 
 /**
@@ -312,11 +370,14 @@ private fun walk(
  * tried twice more; then the backup stops and says so, as it never reports
  * success for a backup that isn't complete (SPEC §7, #408 S5).
  */
-internal fun readWhole(snap: BackupSnapshot, shot: ShotRow): StoredShot {
+internal fun readWhole(snap: BackupSnapshot, shot: ShotRow): StoredShot = readWhole(snap.full, shot)
+
+/** [shot] whole through [full], as [readWhole]. */
+private fun readWhole(full: (ShotRow) -> StoredShot, shot: ShotRow): StoredShot {
     var last: coffee.crema.history.HistoryReadException? = null
     repeat(BACKUP_READ_TRIES) {
         try {
-            return snap.full(shot)
+            return full(shot)
         } catch (e: coffee.crema.history.HistoryReadException) {
             last = e
         }

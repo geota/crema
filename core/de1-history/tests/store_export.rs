@@ -122,6 +122,56 @@ fn a_walk_writes_exactly_the_rows_it_began_with_and_holds_deletes() {
 }
 
 #[test]
+fn a_walk_runs_newest_first_as_it_began_and_rewinds_to_the_same_set() {
+    let d = dir();
+    let path = file(&d, "history.db");
+    let mut store = create(&path);
+    // Written oldest first, with two rows on one date: the walk's order is
+    // the P3 stores' (newest first, ties by id descending), not the rids'.
+    store
+        .upsert(&rows_in(&[
+            row("a", 10, json!({})),
+            row("c", 30, json!({})),
+            row("b2", 20, json!({})),
+            row("b1", 20, json!({})),
+            row("d", 40, json!({})),
+        ]))
+        .expect("writes");
+    let walk = store.export_begin().expect("begins");
+    assert_eq!(walk.count, 5);
+    let first = store.export_next(walk.token, 2).expect("a step");
+    assert_eq!(
+        first.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        ["d", "c"]
+    );
+    // An edit that moves a row's date doesn't move it in the walk, and a
+    // delete holds the row; both are read as they are now.
+    store
+        .upsert(&rows_in(&[row(
+            "a",
+            50,
+            json!({ "metadata": { "notes": "moved" } }),
+        )]))
+        .expect("writes");
+    store.delete(&["b1".into()]).expect("deletes");
+    let order =
+        |rows: &[(String, String)]| rows.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
+    let rest = walk_all(&mut store, walk.token, 2, |_, _| {});
+    assert_eq!(order(&rest), ["b2", "b1", "a"]);
+    assert!(rest[2].1.contains("moved"));
+    // Rewound: the same set in the same order, with what each row holds now.
+    store.export_rewind(walk.token).expect("rewinds");
+    let again = walk_all(&mut store, walk.token, 3, |_, _| {});
+    assert_eq!(order(&again), ["d", "c", "b2", "b1", "a"]);
+    store.export_end(walk.token).expect("ends");
+    assert!(matches!(
+        store.export_rewind(walk.token),
+        Err(StoreError::UnknownWalk(_))
+    ));
+    assert_eq!(store.release_holds().expect("reads"), ["b1"]);
+}
+
+#[test]
 fn holds_left_by_a_closed_walk_are_released_at_the_next_open() {
     let d = dir();
     let path = file(&d, "history.db");

@@ -60,9 +60,14 @@ internal class BackupSnapshot(
     val full: (ShotRow) -> StoredShot,
     /** Rows [full] found without the curve their summary names (damaged or gone): the report counts them. */
     val missingCurves: Set<String> = emptySet(),
+    /** Where the streamed backup walks the shots (#310 R1a): null for P3a's, these rows. A5 passes the SQLite store. */
+    private val source: coffee.crema.history.HistorySource? = null,
 ) {
     /** Every shot the backup holds, in its order: the view's, then those past its cap. */
     val shots: List<ShotRow> get() = if (hiddenShots.isEmpty()) state.history else state.history + hiddenShots
+
+    /** The history the streamed backup reads ([streamBackupZip]). */
+    val history: coffee.crema.history.HistorySource get() = source ?: coffee.crema.history.ShotsDbSource(shots, full)
 }
 
 /** The notice for a backup that wrote nothing. */

@@ -226,6 +226,8 @@ class DriveRetentionTest {
         onWifi: Boolean = true,
         hash: String? = null,
         lastHash: String? = null,
+        mark: String? = null,
+        lastMark: String? = null,
         seen: (DriveSync) -> Unit = {},
     ): DriveState = runBlocking {
         store.load()
@@ -233,14 +235,15 @@ class DriveRetentionTest {
             DriveState(
                 tokens = tokens, lastAutoBackupAtMs = lastAuto, lastBackupSuccessAtMs = lastSuccess,
                 autoBackupKeep = keep, autoBackupTag = tag, damageSeen = seenByStore, preDamageCopy = preDamage, pinReleased = pinReleased,
-                lastAutoBackupHash = lastHash,
+                lastAutoBackupHash = lastHash, lastAutoBackupMark = lastMark,
             ),
         )
         val sync = DriveSync(
             store, json, scope, "cid",
             notify = { notices += it },
             log = { logged += it },
-            backupZip = { BackupZip(zipFile(), built, hash) },
+            backupZip = { BackupZip(zipFile(), built, hash, mark = mark) },
+            quickMark = { mark },
             backupFileName = { "crema-backup-tablet-20261106-0800.crema.zip" },
             applyRestore = { _, _, _ -> },
             refreshToken = { error("no refresh expected") },
@@ -293,6 +296,24 @@ class DriveRetentionTest {
         val uploaded = dailyBackup(hash = "h2", lastHash = "h1")
         assertEquals(2, drive.size)
         assertEquals("h2", uploaded.lastAutoBackupHash, "stored only once it landed")
+    }
+
+    /** #310 R1a: the history's write mark and the rest unchanged skip the build itself; any change builds, and the mark is stored once it lands. */
+    @Test
+    fun anUnchangedWriteMarkSkipsTheBuild_aMovedOneBuilds() {
+        seed(1)
+        val skipped = dailyBackup(hash = "h1", lastHash = "h1", mark = "m1", lastMark = "m1")
+        assertTrue(zips.isEmpty(), "no backup was built")
+        assertEquals(1, drive.size)
+        assertTrue(skipped.lastAutoBackupAtMs!! > now - day, "the attempt is stamped")
+        val uploaded = dailyBackup(hash = "h2", lastHash = "h1", mark = "m2", lastMark = "m1")
+        assertEquals(1, zips.size)
+        assertEquals(2, drive.size)
+        assertEquals("m2", uploaded.lastAutoBackupMark, "stored only once it landed")
+        // No mark (P3a's store keeps no counter): the hash alone decides, as before.
+        dailyBackup(hash = "h2", lastHash = "h2", mark = null, lastMark = null)
+        assertEquals(2, zips.size, "built, then skipped by its hash")
+        assertEquals(2, drive.size)
     }
 
     /** #311 review: a hash that outlived this device's copies (deleted on
