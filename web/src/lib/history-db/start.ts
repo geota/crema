@@ -26,7 +26,7 @@ import { unavailableClient } from '#lib/history/sqlite-rows.js';
  * history store writes `history.db` on stage 2 (`sqlite-rows.ts`). Turned on
  * in a commit of its own, so it can be reverted alone.
  */
-export const HISTORY_FLIP_ENABLED = false;
+export const HISTORY_FLIP_ENABLED = true;
 
 let client: HistoryDbClient | null = null;
 
