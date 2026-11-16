@@ -416,6 +416,14 @@ pub struct AutoStop {
     /// The flow estimate at the last reading, g/s: the trend a return's
     /// step is checked against.
     last_flow: f32,
+    /// The window the lead's flow comes from: the readings less every step
+    /// off the trend, so a load inside the band never reads as a burst of
+    /// flow (REVIEW-454 Q2).
+    lead_window: FlowEstimator,
+    /// The steps off the trend so far, grams: what `lead_window` takes off.
+    lead_offset_g: f32,
+    /// The lead window's flow at the last reading, g/s: the trend.
+    lead_trend: f32,
 }
 
 /// A return restarts the weight leg's flow window only past this gap
@@ -426,6 +434,18 @@ const RESTART_GAP_INTERVALS: u32 = 3;
 /// How far a long gap's step may stray from the flow before it, grams,
 /// before the slope across it stops counting as flow.
 const RESTART_OFF_TREND_G: f32 = 3.0;
+/// Two readings this close are a live scale's, 5 to 10 Hz, where a step off
+/// the trend between them is no pour: 3 g off it in 300 ms is a change of
+/// flow of 10 g/s. Slower scales keep every step in the lead (`DESIGN.md`
+/// §3.5, REVIEW-462 B1).
+const LEAD_STEP_GAP_MAX: Duration = Duration::from_millis(300);
+/// The most the lead window takes off in all, grams: one load inside the
+/// 10 Hz band (4.2 g), with noise. A touch that lands and lifts nets to 0,
+/// and a load that stays is taken off once. A run of real steps, a pour
+/// that surges, then reaches the window after the first, so its trend
+/// catches up, where taking each off kept the trend at 0 and the lead with
+/// it (REVIEW-462 B1).
+const LEAD_OFFSET_MAX_G: f32 = 4.5;
 
 /// The instant the weight leg fired, captured for post-shot drip learning
 /// (the training sample's inputs — `drip = final − weight_g`,
@@ -457,6 +477,9 @@ impl AutoStop {
             estimate: None,
             lead_g: 0.0,
             last_flow: 0.0,
+            lead_window: FlowEstimator::new(config.flow_algorithm),
+            lead_offset_g: 0.0,
+            lead_trend: 0.0,
         }
     }
 
@@ -527,6 +550,9 @@ impl AutoStop {
         let off_trend = (step - self.last_flow * gap.as_secs_f32()).abs() > RESTART_OFF_TREND_G;
         if jump || (long && off_trend) {
             self.flow.reset();
+            self.lead_window.reset();
+            self.lead_offset_g = 0.0;
+            self.lead_trend = 0.0;
         }
     }
 
@@ -586,8 +612,31 @@ impl AutoStop {
         if self.triggered {
             return None;
         }
+        // A step more than 3 g off the trend, between two readings, is no
+        // pour: a hand, a spoon, a step inside the band. The weight keeps it,
+        // but the lead's flow doesn't, or a step near the band reads as a
+        // burst of flow on a short window, and the lead stops the shot early.
+        // Only at a live scale's pace, and once the window has a trend.
+        if let Some((at, before)) = self.flow.newest()
+            && now.saturating_sub(at) <= LEAD_STEP_GAP_MAX
+            && self.lead_window.median_interval().is_some()
+        {
+            let dt = now.saturating_sub(at).as_secs_f32();
+            let off = grams - before - self.lead_trend * dt;
+            if off.abs() > RESTART_OFF_TREND_G
+                && (self.lead_offset_g + off).abs() <= LEAD_OFFSET_MAX_G
+            {
+                self.lead_offset_g += off;
+            }
+        }
         let estimate = self.flow.update(grams, now);
         self.last_flow = estimate.flow;
+        let lead_flow = self
+            .lead_window
+            .update(grams - self.lead_offset_g, now)
+            .flow;
+        self.lead_trend = lead_flow;
+        let lead_flow = lead_flow.max(0.0);
 
         if let Some(reason) = self.check_max_time(now) {
             return Some(reason);
@@ -602,7 +651,7 @@ impl AutoStop {
             // with the kernel's flow input capped at 12 ml/s (:293). The
             // no-model default inside expected_drip reproduces the legacy
             // lead's intent (`min(flow · (sensor_lag + 0.1), 8)`).
-            let flow = f64::from(estimate.flow.max(0.0)).min(12.0);
+            let flow = f64::from(lead_flow).min(12.0);
             let expected = SawLearningModel::expected_drip(snapshot, flow, self.sensor_lag_s);
             #[allow(clippy::cast_possible_truncation)]
             {
@@ -611,7 +660,7 @@ impl AutoStop {
             self.is_armed(now) && f64::from(estimate.weight) >= f64::from(target) - expected
         } else {
             // Legacy: project the robust weight one look-ahead along the flow.
-            let ahead = estimate.flow.max(0.0) * self.config.weight_lead.as_secs_f32();
+            let ahead = lead_flow * self.config.weight_lead.as_secs_f32();
             self.lead_g = ahead + self.config.weight_offset;
             let projected = estimate.weight + ahead;
             self.is_armed(now) && projected >= target - self.config.weight_offset
@@ -732,6 +781,36 @@ mod tests {
         assert_eq!(stop.on_weight(30.0, ms(1000)), None);
         // +4 g in 1 s -> 4 g/s; projected 34 + 4*1.0 = 38 >= 36 -> stop early.
         assert_eq!(stop.on_weight(34.0, ms(2000)), Some(StopReason::Weight));
+    }
+
+    /// REVIEW-454 Q2: a step near the band between two live readings is no
+    /// pour. The weight keeps it, but the lead's flow doesn't, so a window
+    /// only a few readings long, as after a return, doesn't read it as a burst
+    /// of flow and stop the shot early.
+    #[test]
+    fn a_step_off_the_trend_stays_out_of_the_lead() {
+        let targets = StopTargets {
+            weight: Some(18.0),
+            volume: None,
+            max_time: None,
+        };
+        let config = StopConfig {
+            weight_lead: Duration::from_secs(1),
+            ..immediate_config()
+        };
+        let mut stop = AutoStop::new(targets, config, Duration::ZERO);
+        // The scale back at 10 Hz on a cup filling at 2 g/s.
+        let mut g = 9.2;
+        for t in (100..=700).step_by(100) {
+            assert_eq!(stop.on_weight(g, ms(t)), None);
+            g += 0.2;
+        }
+        // A 4 g hand on the cup: inside the 4.2 g band, so the gate passes it.
+        for t in (800..=1_200).step_by(100) {
+            assert_eq!(stop.on_weight(g + 4.0, ms(t)), None, "at {t} ms");
+            g += 0.2;
+        }
+        assert!(stop.lead_g() < 2.5, "lead {} g", stop.lead_g());
     }
 
     #[test]
