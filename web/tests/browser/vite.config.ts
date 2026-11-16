@@ -31,6 +31,7 @@ export default defineConfig({
 				w1: path.join(web, 'tests/browser/w1/index.html'),
 				w2: path.join(web, 'tests/browser/w2/index.html'),
 				r1w: path.join(web, 'tests/browser/r1w/index.html'),
+				w5: path.join(web, 'tests/browser/w5/index.html'),
 				bench: path.join(web, 'bench/history-db.html')
 			}
 		}

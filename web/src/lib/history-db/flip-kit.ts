@@ -55,6 +55,8 @@ export function flipDisk(): FlipDisk {
 	const open = new Map<string, Set<WasmDb>>();
 	const paused = new Set<Pool>();
 	const calls: string[] = [];
+	/** Killed contexts: their code may still run in this process, but a dead Worker's can't touch a file. */
+	const dead = new Set<string>();
 	const nameOf = (pool: Pool, file: string) => `${prefix}-${pool}-${file}`;
 	const byName = new Map<string, { pool: Pool; file: string }>();
 	const close = (db: WasmDb) => {
@@ -84,6 +86,7 @@ export function flipDisk(): FlipDisk {
 			);
 		},
 		kill(ctx) {
+			dead.add(ctx);
 			for (const db of open.get(ctx) ?? []) close(db);
 			open.delete(ctx);
 		},
@@ -97,6 +100,7 @@ export function flipDisk(): FlipDisk {
 				paused: paused.has(pool)
 			});
 			const hit = (at: string) => {
+				if (dead.has(ctx)) throw { code: 'dead', message: `${ctx} is dead` };
 				calls.push(at);
 				disk.fault?.(at, calls.length);
 			};
@@ -144,6 +148,10 @@ export function flipDisk(): FlipDisk {
 						);
 					} catch (e) {
 						throw typeof e === 'string' ? JSON.parse(e) : e;
+					}
+					if (dead.has(ctx)) {
+						close(db);
+						throw { code: 'dead', message: `${ctx} is dead` };
 					}
 					(db as unknown as { pool: Pool }).pool = o.pool;
 					files[o.pool].add(o.file);

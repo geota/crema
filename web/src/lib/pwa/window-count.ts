@@ -4,8 +4,10 @@
  * SQLite history's flip (#310 SPEC §11, M2): tabs of builds before W1 hold no
  * stage lock, so the flip needs exactly one window, its own.
  *
- * Null when there's no service worker, or it doesn't answer in time (an
- * older one, without `sw-window-count.js`): then there's no flip.
+ * Null when there's no service worker, or it doesn't answer in time (one
+ * without the handler): then there's no flip. The service worker's half, a
+ * message handler that answers `{ count }` on the port, comes with the switch
+ * that turns the flip on (W5b); until then this answers null.
  */
 export const WINDOW_COUNT_TYPE = 'CREMA_WINDOW_COUNT';
 
