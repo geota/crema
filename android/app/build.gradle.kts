@@ -348,7 +348,7 @@ dependencies {
 
     // The de1-app `CoreOutput` JSON is deserialized with kotlinx.serialization.
     // The generated `core/bindings/crema-core.kt` types are @Serializable.
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.13.0")
 
     // Charts are hand-rolled Compose Canvas (CanvasShotChart, ProfileCurveChart) —
     // a faithful port of the web PWA's uPlot design (shared 0–10 scale, temp/weight
