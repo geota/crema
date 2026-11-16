@@ -7,8 +7,11 @@
  *   is empty ({@link keepHeavy}), or only fills ({@link fillHeavy}), as P3's
  *   own writes do.
  * - **Deletes name ids.** Nothing here clears the store.
- * - Every write bumps `meta.writeSeq` in its own transaction, as every P3
- *   write does, so a P3 tab that was frozen sees something changed.
+ * - By default every write bumps `meta.writeSeq` in its own transaction, as
+ *   every P3 write does, so a P3 tab that was frozen sees something changed.
+ *   After the flip (W5) the app's writes pass `bump: false`: `meta` and
+ *   `rows` are the old copy then, and stay as the flip left them (rule 3),
+ *   and a moved `writeSeq` means an older build wrote (step 8).
  */
 import {
 	DETAILS,
@@ -44,14 +47,16 @@ function bumpSeq(tx: IDBTransaction): void {
 }
 
 /** `crema-history`'s `details`, through `db`'s connection (opened with `expectExisting`, so never recreated). */
-export function idbDetails(db: HistoryDb): DetailsStore {
+export function idbDetails(db: HistoryDb, o: { bump?: boolean } = {}): DetailsStore {
+	const bump = o.bump ?? true;
+	const stores = bump ? [DETAILS, META] : [DETAILS];
 	return {
 		get: (ids) => db.detailsOf(ids),
 		async put(details, how) {
 			const out = new Map<string, DetailsRecord>();
 			if (details.length === 0) return out;
 			const idb = await db.open();
-			const tx = idb.transaction([DETAILS, META], 'readwrite', { durability: 'strict' });
+			const tx = idb.transaction(stores, 'readwrite', { durability: 'strict' });
 			const store = tx.objectStore(DETAILS);
 			for (const d of details) {
 				const look = store.get(d.id) as IDBRequest<DetailsRecord | undefined>;
@@ -61,16 +66,16 @@ export function idbDetails(db: HistoryDb): DetailsStore {
 					out.set(d.id, kept);
 				};
 			}
-			bumpSeq(tx);
+			if (bump) bumpSeq(tx);
 			await txp(tx);
 			return out;
 		},
 		async delete(ids) {
 			if (ids.length === 0) return;
 			const idb = await db.open();
-			const tx = idb.transaction([DETAILS, META], 'readwrite', { durability: 'strict' });
+			const tx = idb.transaction(stores, 'readwrite', { durability: 'strict' });
 			for (const id of ids) tx.objectStore(DETAILS).delete(id);
-			bumpSeq(tx);
+			if (bump) bumpSeq(tx);
 			await txp(tx);
 		}
 	};

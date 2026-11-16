@@ -54,6 +54,7 @@ import { engineError, type Engine, type EngineDb, type EngineError } from './eng
 import { CHANGES_CHANNEL, OWNER_LOCK, RPC_CHANNEL, TAB_LOCK_PREFIX } from './names.js';
 import type { IndexSyncLike, P3Source, SyncDeps } from './index-sync.js';
 import { runFlip, type FlipArgs, type FlipCapture, type FlipOutcome } from './flip.js';
+import { lateRows, type LateImport } from './late.js';
 import {
 	PROTOCOL_VERSION,
 	ONCE,
@@ -477,6 +478,22 @@ class Owner {
 			}
 			if (gone()) return;
 			if (stage1 && t.role === 'index') this.#startSync(db);
+			// Stage 2: late rows, before the first answer (SPEC §11 steps 8 and 9, M9).
+			if (!stage1 && t.role === 'authority' && this.#d.flip) {
+				const source = this.#d.flip.source();
+				try {
+					await lateRows({ db, source, notify: (c) => this.#notify(c), log: this.#d.flip.log });
+				} catch (e) {
+					// The P3 store couldn't be read: the rows wait for the next open.
+					this.#d.flip.log?.(`late rows: ${engineError(e).code} ${engineError(e).message}`);
+				} finally {
+					try {
+						source.close();
+					} catch {
+						// Best-effort.
+					}
+				}
+			}
 		} catch (e) {
 			const code = engineError(e).code;
 			if (stage1) this.#fail('index_fallback', code);
@@ -687,6 +704,15 @@ class Owner {
 				}
 				this.#sameFile(req);
 				return this.#drain(db, req.entries);
+			case 'importLate': {
+				if (req.stage !== 2 || this.#stage !== 2) {
+					throw { code: 'otherStage', message: 'late rows are stage 2’s' };
+				}
+				this.#sameFile(req);
+				const out = (await db.call('importLate', { rows: req.rows })) as LateImport;
+				this.#notify(out.change);
+				return { imported: out.imported, known: out.known, duplicates: out.duplicates };
+			}
 		}
 	}
 

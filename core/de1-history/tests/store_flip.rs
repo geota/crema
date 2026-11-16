@@ -212,3 +212,108 @@ fn verify_finds_a_stale_derived_column_and_a_broken_page() {
         vec!["r005".to_owned()]
     );
 }
+
+fn truth_after_flip(d: &common::TestDir, n: usize) -> Store {
+    let index = index_with(&file(d, "history-index.db"), n);
+    let dest = file(d, "history.db");
+    index
+        .flip_copy_to(&dest, None, common::journal(), &init(n))
+        .expect("copies");
+    let mut t = reopen_truth(&dest);
+    t.set_migration_done(1).expect("done");
+    t
+}
+
+fn rowin(json: String) -> de1_history::store::RowIn {
+    rows_in(&[json]).remove(0)
+}
+
+#[test]
+fn late_rows_import_once_never_bring_back_a_deleted_row_and_skip_pulled_duplicates() {
+    let d = dir();
+    let mut t = truth_after_flip(&d, 5);
+    t.upsert(&rows_in(&[row(
+        "here",
+        50,
+        json!({ "visualizerId": "v-held" }),
+    )]))
+    .expect("writes");
+    t.delete(&["r001".to_owned()]).expect("deletes");
+    let late = vec![
+        // An older build's copy of a migrated row: an edit lost at roll-forward.
+        rowin(row(
+            "r000",
+            0,
+            json!({ "metadata": { "notes": "older build's edit" } }),
+        )),
+        // A row deleted here since the flip: never back.
+        rowin(row("r001", 1, json!({}))),
+        // A new shot, with no samples yet.
+        rowin(row("new1", 60, json!({ "summary": { "sampleCount": 0 } }))),
+        // A pulled duplicate of a row here.
+        rowin(row("dup", 61, json!({ "visualizerId": "v-held" }))),
+    ];
+    let out = t
+        .import_late(&late, Some(r#"{"writeSeq":9}"#))
+        .expect("imports");
+    assert_eq!(out.imported, vec!["new1".to_owned()]);
+    assert_eq!(out.duplicates, vec!["dup".to_owned()]);
+    assert_eq!(out.known, vec!["r000".to_owned(), "r001".to_owned()]);
+    assert!(t.existing(&["r001".to_owned()]).expect("reads").is_empty());
+    let r0: String = common::raw_conn(&file(&d, "history.db"))
+        .query_row("SELECT row_json FROM shot WHERE id = 'r000'", [], |r| {
+            r.get(0)
+        })
+        .expect("reads");
+    assert!(!r0.contains("older build"));
+    assert_eq!(t.late_ids().expect("reads"), vec!["new1".to_owned()]);
+    assert_eq!(
+        t.meta_value("late_baseline").expect("reads").as_deref(),
+        Some(r#"{"writeSeq":9}"#)
+    );
+    // Once only: the same rows again import nothing.
+    let again = t.import_late(&late, None).expect("imports");
+    assert!(again.imported.is_empty());
+    // Step 9: the row's series arrived.
+    let filled = rowin(row(
+        "new1",
+        60,
+        json!({ "summary": { "sampleCount": 120 } }),
+    ));
+    t.settle_late(&[filled]).expect("fills");
+    assert!(t.late_ids().expect("reads").is_empty());
+    // An index refuses both.
+    let mut index =
+        Store::open(file(&d, "history-index.db"), OpenOptions::new(Role::Index)).expect("opens");
+    assert!(matches!(
+        index.import_late(&[], None),
+        Err(StoreError::Refused(_))
+    ));
+}
+
+#[test]
+fn p3_migration_is_written_only_into_the_truth() {
+    use de1_history::store::Write;
+    let d = dir();
+    let mut t = truth_after_flip(&d, 1);
+    t.apply(
+        "tab",
+        1,
+        0,
+        &Write::P3Migration(r#"{"state":"done","sourceIds":["a"]}"#.into()),
+    )
+    .expect("applies");
+    assert_eq!(
+        t.meta_value("p3_migration").expect("reads").as_deref(),
+        Some(r#"{"state":"done","sourceIds":["a"]}"#)
+    );
+    let mut index =
+        Store::open(file(&d, "history-index.db"), OpenOptions::new(Role::Index)).expect("opens");
+    let a = index
+        .apply("tab", 1, 0, &Write::P3Migration("{}".into()))
+        .expect("answers");
+    assert!(
+        matches!(a, de1_history::store::Applied::Refused { .. }),
+        "{a:?}"
+    );
+}

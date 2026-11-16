@@ -331,6 +331,14 @@ struct CopyArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct LateArgs {
+    rows: Vec<RowJson>,
+    #[serde(default)]
+    baseline: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct FlipCopyArgs {
     place: PlaceJson,
     file: String,
@@ -902,6 +910,43 @@ impl HistoryDb {
     #[wasm_bindgen(js_name = metaValue)]
     pub fn meta_value(&self, key: &str) -> Result<String, JsValue> {
         self.sync(|s| s.meta_value(key))
+    }
+
+    /// The ids of `[id]` that have a row, held ones too: what a delete's
+    /// details go by (REVIEW-468 W5-2).
+    pub fn existing(&self, ids: &str) -> Result<String, JsValue> {
+        let ids: Vec<String> = parse(ids)?;
+        self.sync(|s| s.existing(&ids))
+    }
+
+    /// Step 8 (SPEC §11): `{rows: [RowJson], baseline?}` → `LateImport`.
+    #[wasm_bindgen(js_name = importLate)]
+    pub fn import_late(&self, json: &str) -> Promise {
+        let a = parse::<LateArgs>(json);
+        self.slot(move |s| {
+            let a = a
+                .as_ref()
+                .map_err(|_| StoreError::Refused("bad late-row args".into()))?;
+            s.import_late(&rows_in(a.rows.clone()), a.baseline.as_deref())
+        })
+    }
+
+    /// `meta.late_ids`.
+    #[wasm_bindgen(js_name = lateIds)]
+    pub fn late_ids(&self) -> Result<String, JsValue> {
+        self.sync(|s| s.late_ids())
+    }
+
+    /// Step 9: `[RowJson]` → `WrittenJson`.
+    #[wasm_bindgen(js_name = settleLate)]
+    pub fn settle_late(&self, rows: &str) -> Promise {
+        let rows = parse::<Vec<RowJson>>(rows);
+        self.slot(move |s| {
+            let rows = rows
+                .as_ref()
+                .map_err(|_| StoreError::Refused("bad rows".into()))?;
+            s.settle_late(&rows_in(rows.clone())).map(WrittenJson::from)
+        })
     }
 
     /// `meta.migration`'s state, or `null`.
