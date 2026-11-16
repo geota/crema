@@ -15,7 +15,7 @@ import { engineError, type Engine, type EngineDb, type OpenOptions, type PoolInf
 import type { Pool } from './protocol.js';
 
 /** Methods whose one argument is plain text, not JSON. */
-const RAW_TEXT = new Set(['byRemoteId', 'byDecentId', 'appliedSeq', 'exportEnd', 'exportRewind', 'setSourceSeq']);
+const RAW_TEXT = new Set(['byRemoteId', 'byDecentId', 'appliedSeq', 'exportEnd', 'exportRewind', 'setSourceSeq', 'setMigrationDone', 'metaValue']);
 
 const REPAIR_DONE = '.repair-done';
 

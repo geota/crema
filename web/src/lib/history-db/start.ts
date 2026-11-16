@@ -13,6 +13,17 @@ import type { ChannelLike } from './ports.js';
 import { HistoryDbClient, type PageEvents, type WorkerLike } from './client.js';
 import { HISTORY_JOURNAL } from './journal.js';
 import { INDEX_FILE } from './names.js';
+import { chooseStage, type StageChoice } from './stage.js';
+import { opfsDoneRecordReader } from './marker.js';
+import { serviceWorkerWindowCount } from '#lib/pwa/window-count.js';
+
+/**
+ * Whether this build may flip to stage 2 and boot on it (#310 W5). Off until
+ * the stage-2 store writes `history.db` (W5b): a flip with the P3 store still
+ * the app's truth would leave edits behind. The flip itself (`stage.ts`,
+ * `flip.ts`) is tested on its own meanwhile.
+ */
+export const HISTORY_FLIP_ENABLED = false;
 
 let client: HistoryDbClient | null = null;
 
@@ -59,28 +70,71 @@ export interface StartOptions {
 	canReload?: () => boolean;
 }
 
-/** Starts this tab's history store, once. Null where the browser can't run it. */
-export function startHistoryDb(opts: StartOptions = {}): HistoryDbClient | null {
-	if (client || !supported()) return client;
-	client = new HistoryDbClient({
+const makeWorker = (): WorkerLike =>
+	new Worker(new URL('./worker.ts', import.meta.url), {
+		type: 'module',
+		name: 'crema-history-db'
+	}) as unknown as WorkerLike;
+
+const channel = (name: string) => new BroadcastChannel(name) as unknown as ChannelLike;
+
+/** A client of `choice`'s stage and file. */
+function clientFor(choice: Pick<StageChoice, 'stage' | 'target' | 'expect'>, opts: StartOptions): HistoryDbClient {
+	return new HistoryDbClient({
 		// A stage-1 tab that hears the flip reloads into the new build's view (N4).
 		onFlipped: () => reloadWhenIdle(opts.canReload ?? (() => true)),
-		stage: 1,
-		expect: { role: 'index', file: INDEX_FILE },
-		target: { pool: 'index', generation: 0, file: INDEX_FILE, role: 'index', create: true, journal: HISTORY_JOURNAL },
+		stage: choice.stage,
+		expect: choice.expect,
+		target: choice.target,
 		build: __APP_VERSION__,
-		makeWorker: () =>
-			new Worker(new URL('./worker.ts', import.meta.url), {
-				type: 'module',
-				name: 'crema-history-db'
-			}) as unknown as WorkerLike,
-		channel: (name) => new BroadcastChannel(name) as unknown as ChannelLike,
+		makeWorker,
+		channel,
 		locks: navigator.locks as unknown as LockManagerLike,
 		storage: localStorage,
 		events: pageEvents()
 	});
+}
+
+/** Starts this tab's history store, once. Null where the browser can't run it. */
+export function startHistoryDb(opts: StartOptions = {}): HistoryDbClient | null {
+	if (client || !supported()) return client;
+	client = clientFor(
+		{
+			stage: 1,
+			expect: { role: 'index', file: INDEX_FILE },
+			target: { pool: 'index', generation: 0, file: INDEX_FILE, role: 'index', create: true, journal: HISTORY_JOURNAL }
+		},
+		opts
+	);
 	client.start();
 	return client;
+}
+
+/**
+ * W5's boot: the stage this tab runs on, flipping first when it may
+ * (`stage.ts`), then the client for it. Only with {@link HISTORY_FLIP_ENABLED}.
+ */
+export async function bootHistoryDb(opts: StartOptions = {}): Promise<{ client: HistoryDbClient | null; choice: StageChoice } | null> {
+	if (client || !supported() || !HISTORY_FLIP_ENABLED) return null;
+	const choice = await chooseStage({
+		storage: localStorage,
+		locks: navigator.locks as unknown as LockManagerLike,
+		doneRecord: opfsDoneRecordReader(),
+		windowCount: () => serviceWorkerWindowCount(),
+		makeWorker,
+		channel,
+		now: () => Date.now(),
+		build: __APP_VERSION__,
+		journal: HISTORY_JOURNAL,
+		allowFlip: true,
+		log: (line) => console.info(`history-stage: ${line}`)
+	});
+	if (client) return null;
+	// The truth couldn't be told this boot: no client, the store is unavailable (REVIEW-473).
+	if (choice.unavailable) return { client: null, choice };
+	client = clientFor(choice, opts);
+	client.start();
+	return { client, choice };
 }
 
 /** This tab's history store, if it started. */

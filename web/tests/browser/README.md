@@ -24,6 +24,7 @@ W0_KILLS=20 pnpm test:browser durability --project webkit
 | `w1.spec.ts` | The app's `HistoryDbClient` and Worker (W1): either tab answers, a reload and a closed owner move ownership, in-flight requests retry, the last action wins; a frozen owner leaves the other tab read-only with a journaled shot, which the thawed owner drains; stage 1 never installs `crema-db`; `stop` lets the pool go; no file goes missing | Chromium, WebKit (the frozen owner: Chromium, bare CDP) |
 | `w2.spec.ts` | The stage-1 index (W2): a `crema-history` of 20,000 B1 rows, the app's client and Worker build the index by a full diff and keep it; the History list's reads through the Worker timed against B1's budgets at 20,000 rows (gated locally; on CI a step-summary table, gated only with `HISTORY_BENCH_STRICT=1`) | Chromium (project `bench`) |
 | `r1w.spec.ts` | The backup seam's SQLite source (R1w, M3): a restore into `history.db` from a tab that doesn't own it, the owner tab killed between batches and a shot captured in a third tab meanwhile, finishes through the next owner; no row of the backup is deleted, the plan's removes and their details are gone, the new shot stays | Chromium, WebKit |
+| `w5.spec.ts` | The flip (W5): a `crema-history` of 20,000 B1 rows becomes `history.db` through the app's boot (`stage.ts`) and Worker, on OPFS: every row equal, deep, the count, a search and the stats as the index gave them; the done-record, then the marker; a reload boots stage 2. The tab killed at each flip step: the next boot is on `history.db` with every row. A second tab open: no flip | Chromium |
 | `bench.spec.ts` | The wasm under 1 MB gzip; B1's browser bench at 5,000, 20,000 and 100,000 rows, the first-page lines gated | Chromium (project `bench`, alone, after the others) |
 
 ## How it's put together
@@ -31,6 +32,7 @@ W0_KILLS=20 pnpm test:browser durability --project webkit
 - `w1/`: a page running the app's own `src/lib/history-db/` client and Worker (W1), driven as `window.h1`.
   On stage 1 it makes an empty, migrated `crema-history` first: the owner's index follows it (W2).
 - `w2/`: the same client and Worker over a `crema-history` it seeds with B1's rows, timed as `window.h2` (W2).
+- `w5/`: the app's boot (`src/lib/history-db/stage.ts`) and its flip in the real Worker, over a seeded `crema-history`, driven as `window.h5` (W5).
 - `r1w/`: the same client and Worker under the backup seam's SQLite source (`src/lib/history-source/`, R1w), driven as `window.r1w`. Its page bundles app modules whose types reach the whole app, so `tsc -p tests/browser` leaves it out and `pnpm check` types those modules.
 - `harness/`: a test page and its Worker. The Worker loads the production wasm and
   forwards calls (`window.w0.call(op, args)`), holds Web Locks, and reads or plants
