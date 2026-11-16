@@ -136,7 +136,7 @@ describe.runIf(historyWasmBuilt)('the SQLite source across an owner change (#310
 		expect([...rows.keys()].sort()).toEqual(['b1', 'b2', 'b3', 'b4', 'b5', 'new1', 's1', 's2']);
 	});
 
-	it('an export whose owner goes fails, and the next owner’s release removes what it held, details first', async () => {
+	it('an export whose owner goes fails, and the next owner’s release removes what it held, row and details', async () => {
 		const { a, b, details, sourceOf, seed } = await setup();
 		await seed(a, ['s1', 's2', 's3', 's4', 's5'].map((id) => shot(id, 1)));
 		const source = sourceOf(b);

@@ -673,6 +673,17 @@ impl HistoryDb {
         self.sync(|s| s.release_holds())
     }
 
+    /// `delete_held(ids)` → `[id]` it removed: only rows still held and no
+    /// open walk needs (REVIEW-468 W5-1).
+    #[wasm_bindgen(js_name = deleteHeld)]
+    pub fn delete_held(&self, ids: &str) -> Promise {
+        let ids = match parse::<Vec<String>>(ids) {
+            Ok(i) => i,
+            Err(e) => return Promise::reject(&e),
+        };
+        self.slot(move |s| s.delete_held(&ids))
+    }
+
     /// `restore_begin()` → `begin_seq`.
     #[wasm_bindgen(js_name = restoreBegin)]
     pub fn restore_begin(&self) -> Result<String, JsValue> {

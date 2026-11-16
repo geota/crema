@@ -1,7 +1,7 @@
 /**
  * #310 R1w: the SQLite side of the backup seam over the real store (the
  * `memory-truth` test bundle on `memvfs`). The walk with its token and delete
- * hold, holds released details first (S6), and the restore's merge, then
+ * hold, holds released rows first, then their details (REVIEW-468 W5-1), and the restore's merge, then
  * remove, with the wipe from `idsCreatedBefore` (M3).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -169,7 +169,7 @@ describe.runIf(historyWasmBuilt)('the SQLite source (#310 R1w)', () => {
 		expect(one[2].record.samples).toHaveLength(3);
 	});
 
-	it('a delete during the export is held: hidden, still written, then removed details first', async () => {
+	it('a delete during the export is held: hidden, still written, then removed, the row before its details', async () => {
 		const { port, details, source, log } = await setup();
 		await seed(port, details, ['s1', 's2', 's3', 's4', 's5'].map((id) => shot(id)));
 		const { bytes } = await backupOf(source, async (pass, at) => {
@@ -184,12 +184,12 @@ describe.runIf(historyWasmBuilt)('the SQLite source (#310 R1w)', () => {
 		expect(shots.map((s) => s.id)).toEqual(['s5', 's4', 's3', 's2', 's1']);
 		expect(header.shotCount).toBe(5);
 		expect(shots.find((s) => s.id === 's2')!.record.samples).toHaveLength(3);
-		// After the walk: gone, details first, then the row.
+		// After the walk: gone, the row (only if still held), then its details.
 		expect((await projection(port)).map((r) => r.id)).toEqual(['s1', 's3', 's4', 's5']);
 		expect(details.map.has('s2')).toBe(false);
-		const release = log.lastIndexOf('details:delete');
+		const release = log.lastIndexOf('deleteHeld');
 		expect(release).toBeGreaterThan(-1);
-		expect(log.indexOf('write:delete', release)).toBeGreaterThan(release);
+		expect(log.indexOf('details:delete', release)).toBeGreaterThan(release);
 	});
 
 	it('the header count equals the lines, whatever is written during the walk', async () => {
@@ -230,8 +230,8 @@ describe.runIf(historyWasmBuilt)('the SQLite source (#310 R1w)', () => {
 		await expect(backupOf(source)).rejects.toBeInstanceOf(ShotsMoved);
 	});
 
-	it('a crash between a hold’s details and its row delete is finished at the next open, with no details left behind', async () => {
-		for (const crashAt of ['details:delete', 'write:delete'] as const) {
+	it('a crash in a hold’s release never leaves a row without its curve; the next open finishes it', async () => {
+		for (const crashAt of ['deleteHeld', 'details:delete'] as const) {
 			let armed = false;
 			const { file, db, port, details, source } = await setup((at) => armed && at === crashAt);
 			await seed(port, details, ['s1', 's2', 's3'].map((id) => shot(id)));
@@ -243,50 +243,72 @@ describe.runIf(historyWasmBuilt)('the SQLite source (#310 R1w)', () => {
 			await ex.close(); // the release crashes
 			armed = false;
 			const after = await projection(port);
-			// Never details without a row: either both stay, or the row stays held and hidden.
-			expect(after.find((r) => r.id === 's2')?.held).toBe(true);
-			expect(await port.read('get', ['s2'])).toEqual([]);
-			if (crashAt === 'details:delete') expect(details.map.has('s2')).toBe(true);
-			else expect(details.map.has('s2')).toBe(false);
-			// The next open (another owner): its first release finishes it.
+			if (crashAt === 'deleteHeld') {
+				// Before the rows: both stay, the row held and hidden.
+				expect(after.find((r) => r.id === 's2')?.held).toBe(true);
+				expect(await port.read('get', ['s2'])).toEqual([]);
+				expect(details.map.has('s2')).toBe(true);
+			} else {
+				// After the row: details with no row, which is harmless (SPEC §2).
+				expect(after.some((r) => r.id === 's2')).toBe(false);
+				expect(details.map.has('s2')).toBe(true);
+			}
+			// The next open (another owner): its first release finishes a held row.
 			db.close();
 			db.free();
 			const again = await openTruth(file);
 			const next = new SqliteSource({ db: directPort(again), details, summarize, batch: 2 });
-			expect(await next.settleHolds()).toBe(1);
+			expect(await next.settleHolds()).toBe(crashAt === 'deleteHeld' ? 1 : 0);
 			expect((await projection(directPort(again))).map((r) => r.id)).toEqual(['s1', 's3']);
-			expect(details.map.has('s2')).toBe(false);
+			if (crashAt === 'deleteHeld') expect(details.map.has('s2')).toBe(false);
 			again.close();
 			again.free();
 		}
 	});
 
-	it('a release deletes only rows still held: one an upsert brought back since stays', async () => {
-		const { db, port, details } = await setup();
-		await seed(port, details, ['s1', 's2', 's3'].map((id) => shot(id)));
-		const other = directPort(db);
-		let armed = false;
-		const racing: HistoryDbPort = {
-			...port,
-			once: async (name, arg) => {
-				const v = await port.once(name, arg);
-				// An upsert of s2 (a restore's, were it not kept apart) lands between the release's reads.
-				if (name === 'releaseHolds' && armed) {
-					armed = false;
-					await seed(other, details, [shot('s2', { metadata: { ...shot('s2').metadata, rating: 5 } })]);
+	it('P1 (REVIEW-468 W5-1): a held row upserted back during its release keeps its row and its curve', async () => {
+		// The upsert (details first, then the row, as every writer does) lands
+		// after each of the release's calls in turn.
+		for (const after of ['releaseHolds', 'deleteHeld', 'syncRows'] as const) {
+			const { db, port, details } = await setup();
+			await seed(port, details, ['s1', 's2', 's3'].map((id) => shot(id)));
+			const other = directPort(db);
+			let armed = false;
+			const back = () => seed(other, details, [shot('s2', { metadata: { ...shot('s2').metadata, rating: 5 } })]);
+			const racing: HistoryDbPort = {
+				...port,
+				once: async (name, arg) => {
+					const v = await port.once(name, arg);
+					if (name === after && armed) {
+						armed = false;
+						await back();
+					}
+					return v as never;
+				},
+				read: async (name, arg) => {
+					const v = await port.read(name, arg);
+					if (name === after && armed) {
+						armed = false;
+						await back();
+					}
+					return v as never;
 				}
-				return v as never;
-			}
-		};
-		const source = new SqliteSource({ db: racing, details, summarize, batch: 2 });
-		const ex = await source.exportShots();
-		await port.write({ kind: 'delete', ids: ['s2'] });
-		await all(ex.pass());
-		await all(ex.pass());
-		armed = true;
-		await ex.close();
-		expect((await rowsOf(port)).get('s2')).toMatchObject({ metadata: { rating: 5 } });
-		expect((await projection(port)).find((r) => r.id === 's2')?.held).toBe(false);
+			};
+			const source = new SqliteSource({ db: racing, details, summarize, batch: 2 });
+			const ex = await source.exportShots();
+			await port.write({ kind: 'delete', ids: ['s2'] });
+			await all(ex.pass());
+			await all(ex.pass());
+			armed = true;
+			await ex.close();
+			expect(armed, after).toBe(false);
+			// The row is back, live, with its curve, and the next backup writes it whole.
+			expect((await rowsOf(port)).get('s2'), after).toMatchObject({ metadata: { rating: 5 } });
+			expect((await projection(port)).find((r) => r.id === 's2')?.held, after).toBe(false);
+			expect(details.map.get('s2')?.samples, after).toHaveLength(3);
+			const { shots } = linesOf((await backupOf(new SqliteSource({ db: port, details, summarize }))).bytes);
+			expect(shots.find((s) => s.id === 's2')?.record.samples, after).toHaveLength(3);
+		}
 	});
 
 	it('a release waits out a restore: under `crema-restore`, or not at all', async () => {
@@ -393,6 +415,42 @@ describe.runIf(historyWasmBuilt)('the SQLite source (#310 R1w)', () => {
 			expect(captured).toBe(true);
 			expect([...(await rowsOf(port)).keys()].sort()).toEqual(['b1', 'b2', 'b3', 'new1', 's1', 's2']);
 			expect(details.map.has('new1')).toBe(true);
+		});
+
+		it('P3 (REVIEW-468 W5-2): an id the wipe removes, made again before its details go, keeps them', async () => {
+			// The new row lands after each of the wipe's later calls in turn.
+			for (const after of ['write:delete', 'syncRows'] as const) {
+				const { db, port, details } = await setup();
+				await seed(port, details, ['l1', 's1'].map((id) => shot(id)));
+				const other = directPort(db);
+				let armed = false;
+				const again = () => seed(other, details, [shot('l1', { metadata: { ...shot('l1').metadata, notes: 'again' } })]);
+				const during: HistoryDbPort = {
+					...port,
+					write: async (w) => {
+						const v = await port.write(w);
+						if (after === 'write:delete' && w.kind === 'delete' && !armed) {
+							armed = true;
+							await again();
+						}
+						return v;
+					},
+					read: async (name, arg) => {
+						const v = await port.read(name, arg);
+						if (after === 'syncRows' && name === 'syncRows' && !armed) {
+							armed = true;
+							await again();
+						}
+						return v as never;
+					}
+				};
+				const source = new SqliteSource({ db: during, details, summarize, batch: 2 });
+				const r = await source.restoreShots({ plan: plan({ overwrite: ['s1'], remove: ['l1'] }), backup: [shot('s1')], backupIds: new Set(['s1']), replace: true });
+				expect(r.stored, after).toBe(true);
+				expect(armed, after).toBe(true);
+				expect((await rowsOf(port)).get('l1'), after).toMatchObject({ metadata: { notes: 'again' } });
+				expect(details.map.get('l1')?.samples, after).toHaveLength(3);
+			}
 		});
 
 		it('never removes a backup row, even one the plan names, nor a row it doesn’t name', async () => {

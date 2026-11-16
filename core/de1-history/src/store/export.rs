@@ -30,7 +30,7 @@ use rusqlite::OptionalExtension;
 use super::Store;
 use super::error::{Result, Source, StoreError, error_of};
 use super::read::RowOut;
-use super::write::{RowIn, Written};
+use super::write::{RowIn, Written, delete_in};
 
 /// The export walks open on this connection.
 #[derive(Debug, Default)]
@@ -244,6 +244,35 @@ impl Store {
             .prepare_cached(sql)
             .and_then(|mut st| st.query_map([], |r| r.get(0))?.collect())
             .map_err(|e| error_of(&e, Source::Session))
+    }
+
+    /// Removes the rows of `ids` that are still held and no open walk needs,
+    /// in one transaction, and returns the ids it removed. A row an upsert
+    /// brought back since [`Store::release_holds`] listed it isn't held any
+    /// more, so it stays (REVIEW-468 W5-1). The shell deletes the details of
+    /// the ids this returns, after it: a crash between leaves details without
+    /// a row, which is harmless (SPEC §2), never a row without its curve.
+    ///
+    /// # Errors
+    /// A SQLite error class, with the transaction rolled back.
+    pub fn delete_held(&mut self, ids: &[String]) -> Result<Vec<String>> {
+        let walking = self.walks.any();
+        let (deleted, _) = self.write("delete.commit", "delete.committed", |tx, st, f| {
+            let mut held = Vec::new();
+            for id in ids {
+                let rid: Option<i64> = tx
+                    .prepare_cached("SELECT rid FROM shot WHERE id = ?1 AND hold_delete = 1")?
+                    .query_row([id], |r| r.get(0))
+                    .optional()?;
+                if rid.is_some() && !held.contains(id) {
+                    held.push(id.clone());
+                }
+            }
+            // A row an open walk still needs stays held: `delete_in` skips it
+            // and doesn't list it as deleted.
+            delete_in(tx, st, f, &held, walking).map(|out| out.deleted)
+        })?;
+        Ok(deleted)
     }
 
     /// Begins a restore: the `write_seq` now. Rows created after this are

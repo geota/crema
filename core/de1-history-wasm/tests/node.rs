@@ -230,6 +230,12 @@ async fn an_export_walk_takes_its_token_as_text() {
     );
     wait(db.export_end(&token)).await.expect("ends");
     assert_eq!(sync(db.release_holds()).expect("holds"), json!(["r0"]));
+    // The release deletes what's still held, and says what it deleted.
+    let gone = wait(db.delete_held(&json!(["r0", "r1"]).to_string()))
+        .await
+        .expect("deletes");
+    assert_eq!(gone, json!(["r0"]));
+    assert_eq!(sync(db.release_holds()).expect("holds"), json!([]));
     let err =
         sync(db.export_next(&json!({ "token": "123", "n": 1 }).to_string())).expect_err("unknown");
     assert_eq!(code(&err), "unknownWalk");

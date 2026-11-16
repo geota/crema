@@ -11,9 +11,12 @@
  * {@link ShotsMoved}. A delete
  * during a walk only holds the row (`hold_delete`), so every row of the set is
  * still there to write and the header's count is the lines written. At the
- * end, and before the next export, the holds are released: their details are
- * deleted first, then the rows (S6). A crash between leaves a held, hidden row
- * that the next release deletes; never details without a row.
+ * end, and before the next export, the holds are released: the rows still
+ * held first (`deleteHeld`, one transaction), then the details of exactly
+ * those, if no row has their id again (REVIEW-468 W5-1). A crash between
+ * leaves details with no row, which is harmless (SPEC §2), never a row
+ * without its curve. This reverses S6's order, which deleted details first
+ * and could take the curve of a row an upsert brought back.
  *
  * **Restore: merge, then remove (M3).** `restoreBegin` gives the store's
  * `write_seq`. The plan's rows go in as upserts, details first, each batch a
@@ -47,7 +50,7 @@ import {
 } from './types';
 
 /** The once-only calls: each must run once on the owner it reaches (the walk lives on that connection). */
-export type WalkCall = 'exportBegin' | 'exportNext' | 'exportRewind' | 'exportEnd' | 'releaseHolds';
+export type WalkCall = 'exportBegin' | 'exportNext' | 'exportRewind' | 'exportEnd' | 'releaseHolds' | 'deleteHeld';
 
 /** What this source needs of `HistoryDbClient` (a stage-2 client of `history.db`). */
 export interface HistoryDbPort {
@@ -215,20 +218,27 @@ export class SqliteSource implements HistorySource {
 
 	/**
 	 * Release the rows deletes held for walks that have ended, here or in a
-	 * tab that's gone: their details first, then the rows. Run after every
-	 * export and before the next; W5 runs it at boot too.
+	 * tab that's gone. Run after every export and before the next; W5 runs it
+	 * at boot too.
+	 *
+	 * The rows first, in one transaction that removes only those still held
+	 * (`deleteHeld`): an upsert that brought a row back since the listing
+	 * ended its hold, so it stays (REVIEW-468 W5-1). Then the details of
+	 * exactly the rows removed, and of those only the ones with no row now: a
+	 * writer puts details first, so one making the id again keeps its curve.
+	 * A crash between leaves details with no row, which is harmless (SPEC
+	 * §2), never a row without its curve.
 	 */
 	async settleHolds(): Promise<number> {
 		const run = async () => {
 			const ids = await this.#db.once<string[]>('releaseHolds');
-			for (const part of chunks(ids, this.#batch)) {
-				await this.#details.delete(part);
-				// Only the rows still held: one an upsert brought back since is the user's again.
-				const still = new Set(await this.#db.once<string[]>('releaseHolds'));
-				const rows = part.filter((id) => still.has(id));
-				if (rows.length > 0) landed(await this.#db.write({ kind: 'delete', ids: rows }));
-			}
-			return ids.length;
+			if (ids.length === 0) return 0;
+			const gone: string[] = [];
+			for (const part of chunks(ids, this.#batch)) gone.push(...(await this.#db.once<string[]>('deleteHeld', part)));
+			// Rows, held ones too, as they are now: only an id with none loses its details.
+			const listed = await this.listedIds();
+			for (const part of chunks(gone.filter((id) => !listed.has(id)), this.#batch)) await this.#details.delete(part);
+			return gone.length;
 		};
 		// A restore runs: it may bring a held row back. The next export, or boot, releases.
 		return this.#apart ? ((await this.#apart(run)) ?? 0) : run();
@@ -395,12 +405,14 @@ export class SqliteSource implements HistorySource {
 		for (const part of chunks(wipe, this.#batch)) {
 			landed(await this.#db.write({ kind: 'delete', ids: part }));
 		}
-		// Their details, once their rows are gone. A row a walk still holds
-		// keeps its details for the backup that writes it; that walk's release
-		// deletes both. A crash before this leaves details with no row, which
-		// is harmless (SPEC §2).
-		const held = new Set((await this.#createdBefore(begin)).filter((id) => named.has(id)));
-		for (const part of chunks(wipe.filter((id) => !held.has(id)), this.#batch)) await this.#details.delete(part);
+		// Their details, only for ids with no row at all now (REVIEW-468 W5-2).
+		// A row a walk still holds keeps its details for the backup that
+		// writes it, and that walk's release deletes both; a row made again
+		// since keeps the details its writer put first. A crash before this
+		// leaves details with no row, which is harmless (SPEC §2), and the
+		// restore marker's owed deletes remove them.
+		const listed = await this.listedIds();
+		for (const part of chunks(wipe.filter((id) => !listed.has(id)), this.#batch)) await this.#details.delete(part);
 	}
 
 	/** Of `ids`, the rows the store shows now, by id. */
