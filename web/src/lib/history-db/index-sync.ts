@@ -48,7 +48,7 @@ export const DIFF_BATCH = 500;
  * and 500 real-shaped rows took about 64 ms in Chrome at 20,000, over B1's
  * 50 ms for the longest single transaction (W2's browser bench).
  */
-export const DIFF_WRITE_ROWS = 125;
+export const DIFF_WRITE_ROWS = 100;
 /** A gap open this long runs a full diff (SPEC §3). */
 export const GAP_MS = 2_000;
 /** The P3 store isn't there yet (a first boot's migration): look again after this, doubling. */

@@ -80,15 +80,19 @@ fn the_built_pools_never_clear_and_hold_their_capacity() {
 #[test]
 async fn a_removal_by_absence_steps_from_the_shell_and_counts_every_row() {
     // #310 W2: the owner yields between the steps, so tabs' reads go between.
-    let db = open(index_file("node-absent.db", true)).await.expect("opens");
-    let rows = json!([row("a", 1_000, ""), row("b", 2_000, ""), row("c", 3_000, "")]);
+    let db = open(index_file("node-absent.db", true))
+        .await
+        .expect("opens");
+    let rows = json!([
+        row("a", 1_000, ""),
+        row("b", 2_000, ""),
+        row("c", 3_000, "")
+    ]);
     wait(db.diff_batch(&rows.to_string())).await.expect("diffs");
     assert_eq!(sync(db.row_count()).expect("counts"), json!(3));
     let since = sync(db.write_seq()).expect("a seq");
-    sync(db.remove_absent_begin(
-        &json!({ "ids": ["a", "c"], "sinceSeq": since }).to_string(),
-    ))
-    .expect("begins");
+    sync(db.remove_absent_begin(&json!({ "ids": ["a", "c"], "sinceSeq": since }).to_string()))
+        .expect("begins");
     let step = wait(db.remove_absent_next()).await.expect("a step");
     assert_eq!(step["change"]["deleted"], json!(["b"]));
     assert_eq!(step["done"], json!(true));
