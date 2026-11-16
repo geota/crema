@@ -162,7 +162,8 @@ test('a frozen owner: the other tab goes read-only and journals a shot; thawed, 
 		await other.eval(`window.h1.until({ health: 'ok' }, 20000)`);
 		await owner.eval(`new Promise((r) => setTimeout(r, 1500))`);
 		expect(await owner.eval(`window.h1.read('get', ['shot:frozen']).then((r) => r.value.length)`)).toBe(1);
-		expect(await other.eval('window.h1.pending()')).toEqual([]);
+		// localStorage reaches another tab's renderer a moment later.
+		await expect.poll(() => other.eval('window.h1.pending()'), { timeout: 5_000 }).toEqual([]);
 	} finally {
 		await browser.close();
 	}
