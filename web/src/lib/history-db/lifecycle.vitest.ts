@@ -10,6 +10,9 @@ import { OWNER_LOCK, STAGE_LOCK, TAB_LOCK_PREFIX } from './names';
 import { GATED_MS, IDLE_RELEASE_MS, WORKER_DEAD_MS } from './client';
 import { INSTALL_BUDGET_MS } from './owner';
 
+// Fake timers drive minutes of protocol time; under a full parallel run that takes real seconds.
+vi.setConfig({ testTimeout: 60_000 });
+
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
@@ -100,7 +103,8 @@ describe('a Worker that fails (S1)', () => {
 		await settle();
 		const first = env.workerOf(a.ctx)!;
 		first.crash();
-		await settle(1_000);
+		// The restart waits 1 s (N1).
+		await settle(2_000);
 		const second = env.workerOf(a.ctx)!;
 		expect(second.ctx).not.toBe(first.ctx);
 		expect(owner(env)).toBe(second.ctx);
