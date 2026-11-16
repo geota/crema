@@ -3,8 +3,9 @@
 //! this module adds the store's write and status types, and the error shape.
 
 use de1_history::store::{
-    AbsentStep, Applied, Duplicate, ExportWalk, FileInfo, FtsStatus, Health, Heavy, IndexWrite,
-    JournalMode, Maintained, Recovery, RidId, Role, RowIn, StoreError, Write, Written,
+    AbsentStep, Applied, Duplicate, ExportWalk, FileInfo, FlipInit, FtsCheck, FtsStatus, Health,
+    Heavy, IndexWrite, JournalMode, Maintained, Recovery, RidId, Role, RowIn, StoreError, Write,
+    Written,
 };
 use de1_history::{ChangeSet, Live};
 use serde::{Deserialize, Serialize};
@@ -215,6 +216,51 @@ impl From<RecoveryJson> for Recovery {
         Recovery {
             migration_source: r.migration_source,
             late_baseline: r.late_baseline,
+        }
+    }
+}
+
+/// The flip's [`FlipInit`] (SPEC §11 step 5).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlipInitJson {
+    pub generation: u32,
+    pub source_seq: u64,
+    pub source_count: u64,
+    pub migration_source: Vec<String>,
+    pub late_baseline: String,
+    #[serde(default)]
+    pub p3_migration: Option<String>,
+}
+
+impl From<FlipInitJson> for FlipInit {
+    fn from(f: FlipInitJson) -> FlipInit {
+        FlipInit {
+            generation: f.generation,
+            source_seq: f.source_seq,
+            source_count: f.source_count,
+            migration_source: f.migration_source,
+            late_baseline: f.late_baseline,
+            p3_migration: f.p3_migration,
+        }
+    }
+}
+
+/// `FtsCheck`.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FtsCheckJson {
+    Ok,
+    Damaged,
+    NotReady,
+}
+
+impl From<FtsCheck> for FtsCheckJson {
+    fn from(c: FtsCheck) -> FtsCheckJson {
+        match c {
+            FtsCheck::Ok => FtsCheckJson::Ok,
+            FtsCheck::Damaged => FtsCheckJson::Damaged,
+            FtsCheck::NotReady => FtsCheckJson::NotReady,
         }
     }
 }

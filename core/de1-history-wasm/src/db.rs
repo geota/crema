@@ -48,9 +48,9 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
 use crate::json::{
-    AbsentStepJson, AppliedJson, ErrorJson, HealthJson, IndexWriteJson, InfoJson, JournalJson,
-    MaintainedJson, PlaceJson, RecoveryJson, RidIdJson, RoleJson, RowJson, WalkJson, WriteJson,
-    WrittenJson, rows_in,
+    AbsentStepJson, AppliedJson, ErrorJson, FlipInitJson, FtsCheckJson, HealthJson, IndexWriteJson,
+    InfoJson, JournalJson, MaintainedJson, PlaceJson, RecoveryJson, RidIdJson, RoleJson, RowJson,
+    WalkJson, WriteJson, WrittenJson, rows_in,
 };
 use crate::pools::{self, PoolError, Which};
 
@@ -327,6 +327,15 @@ struct CopyArgs {
     place: PlaceJson,
     file: String,
     journal: JournalJson,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FlipCopyArgs {
+    place: PlaceJson,
+    file: String,
+    journal: JournalJson,
+    init: FlipInitJson,
 }
 
 #[derive(Deserialize)]
@@ -813,6 +822,86 @@ impl HistoryDb {
             .map_err(throw)?;
             Ok(JsValue::NULL)
         })
+    }
+
+    /// The flip's copy (SPEC §11 step 5): `{place, file, journal, init}`.
+    /// [`HistoryDb::copy_to`] from this index, then the copy becomes an
+    /// `authority` file whose migration is `copying`, with
+    /// `migration_source` and both late-row baselines, in one transaction.
+    /// Only into `crema-db`.
+    #[wasm_bindgen(js_name = flipCopyTo)]
+    pub fn flip_copy_to(&self, json: &str) -> Promise {
+        let parsed = parse::<FlipCopyArgs>(json).and_then(|a| {
+            check_place(a.place, Role::Authority)?;
+            Ok((
+                path_of(&a.file)?,
+                vfs_of(a.place)?,
+                a.place.pool(),
+                a.journal,
+                de1_history::store::FlipInit::from(a.init),
+            ))
+        });
+        let inner = Rc::clone(&self.inner);
+        future_to_promise(async move {
+            let (path, vfs, pool, journal, init) = parsed?;
+            pools::retry_on_no_capacity(pool, || {
+                on(&inner, |s| {
+                    s.flip_copy_to(&path, Some(&vfs), journal.into(), &init)
+                })
+            })
+            .await
+            .map_err(throw)?;
+            Ok(JsValue::NULL)
+        })
+    }
+
+    /// Verify's pass: `meta.migration` `copying` → `done`, then a
+    /// checkpoint. `nowMs` as text.
+    #[wasm_bindgen(js_name = setMigrationDone)]
+    pub fn set_migration_done(&self, now: &str) -> Promise {
+        let at = now.trim().parse::<i64>().unwrap_or_else(|_| now_ms());
+        self.slot(move |s| s.set_migration_done(at))
+    }
+
+    /// `PRAGMA integrity_check`: the problems found, `[]` when none. One
+    /// statement over every page: for the flip's verify only, before
+    /// anything else uses the file.
+    #[wasm_bindgen(js_name = integrityCheck)]
+    pub fn integrity_check(&self) -> Result<String, JsValue> {
+        self.sync(|s| s.integrity_check())
+    }
+
+    /// The search index's integrity check (`ok`, `damaged`, `notReady`):
+    /// one statement over the whole index (S15), so for the flip's verify
+    /// only, which runs before anything else uses the file. `notReady` is
+    /// never a pass (REVIEW-448 note 5).
+    #[wasm_bindgen(js_name = ftsIntegrityCheck)]
+    pub fn fts_integrity_check(&self) -> Result<String, JsValue> {
+        self.sync(|s| s.fts_integrity_check().map(FtsCheckJson::from))
+    }
+
+    /// The ids whose derived columns differ from `derive_row(row_json)`.
+    #[wasm_bindgen(js_name = derivedMismatches)]
+    pub fn derived_mismatches(&self) -> Result<String, JsValue> {
+        self.sync(|s| s.derived_mismatches())
+    }
+
+    /// Every id in `migration_source`, sorted.
+    #[wasm_bindgen(js_name = migrationSourceIds)]
+    pub fn migration_source_ids(&self) -> Result<String, JsValue> {
+        self.sync(|s| s.migration_source_ids())
+    }
+
+    /// The file's size in bytes.
+    #[wasm_bindgen(js_name = sizeBytes)]
+    pub fn size_bytes(&self) -> Result<String, JsValue> {
+        self.sync(|s| s.size_bytes())
+    }
+
+    /// A `meta` value by key (plain text), or `null`.
+    #[wasm_bindgen(js_name = metaValue)]
+    pub fn meta_value(&self, key: &str) -> Result<String, JsValue> {
+        self.sync(|s| s.meta_value(key))
     }
 
     /// `meta.migration`'s state, or `null`.

@@ -39,6 +39,12 @@ pub const POINTS: &[&str] = &[
     "fts.build.commit",
     "fts.swap",
     "fts.merge",
+    // The flip (SPEC §11 steps 5 and 7): after the backup copy, both sides
+    // of the promote's commit, and before verify's `done` commits.
+    "flip.copied",
+    "flip.promote.commit",
+    "flip.promote.committed",
+    "flip.done.commit",
 ];
 
 /// The armed faults and a log of the statements the store ran.

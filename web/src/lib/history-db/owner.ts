@@ -52,7 +52,8 @@ import type { ChannelLike } from './ports.js';
 import type { LockManagerLike } from './ports.js';
 import { engineError, type Engine, type EngineDb, type EngineError } from './engine.js';
 import { CHANGES_CHANNEL, OWNER_LOCK, RPC_CHANNEL, TAB_LOCK_PREFIX } from './names.js';
-import type { IndexSyncLike, SyncDeps } from './index-sync.js';
+import type { IndexSyncLike, P3Source, SyncDeps } from './index-sync.js';
+import { runFlip, type FlipArgs, type FlipCapture, type FlipOutcome } from './flip.js';
 import {
 	PROTOCOL_VERSION,
 	ONCE,
@@ -102,6 +103,13 @@ export type PageToWorker =
 	/** Try the file again if it failed (the page came back to the front). */
 	| { t: 'retry' }
 	| { t: 'ping'; n: number }
+	/**
+	 * The flip (SPEC §11, W5), in a Worker started for it alone: take the owner
+	 * lock, run it, answer `flipDone`, let go. The page holds the stage lock.
+	 */
+	| { t: 'flip'; n: number; args: FlipArgs; lockWaitMs?: number }
+	/** A capture this tab wrote to the P3 store while the flip runs, and its `writeSeq` (M9). */
+	| { t: 'flipCapture'; capture: FlipCapture }
 	| Request;
 
 /** From the Worker to its page. */
@@ -112,6 +120,9 @@ export type WorkerToPage =
 	| { t: 'released'; n: number }
 	/** Drain the pending journal now: the lock arrived, or a client said hello (M5). */
 	| { t: 'drainNow' }
+	| { t: 'flipDone'; n: number; outcome: FlipOutcome }
+	/** The flip reached a step (diagnostics, and the tests' kill point). */
+	| { t: 'flipStep'; n: number; step: string }
 	| Reply;
 
 export interface WorkerScope {
@@ -130,9 +141,19 @@ export interface OwnerDeps {
 	 * P3 store. Without it the index is served as it is (W1's tests).
 	 */
 	indexSync?(deps: Pick<SyncDeps, 'db' | 'queue' | 'notify' | 'state' | 'broken'>): IndexSyncLike;
+	/** The flip's own needs (W5): the P3 store, read only, and the done-record's writer. */
+	flip?: {
+		source(): P3Source;
+		writeDoneRecord(text: string): Promise<void>;
+		estimate?(): Promise<{ quota?: number; usage?: number } | null>;
+		log?(line: string): void;
+	};
 }
 
-type Phase = 'idle' | 'waiting' | 'owner' | 'stopped';
+/** How long a flip waits for the owner lock (a closing tab's Worker letting go) before it skips this boot. */
+export const FLIP_LOCK_WAIT_MS = 10_000;
+
+type Phase = 'idle' | 'waiting' | 'owner' | 'flipping' | 'stopped';
 
 class Owner {
 	readonly #d: OwnerDeps;
@@ -165,6 +186,8 @@ class Owner {
 	/** The last `write_seq` posted (S14). */
 	#posted = 0;
 	#reopen: ReturnType<typeof setTimeout> | null = null;
+	/** The page's captures while the flip runs (M9). */
+	#captures: FlipCapture[] = [];
 
 	constructor(d: OwnerDeps) {
 		this.#d = d;
@@ -220,7 +243,62 @@ class Owner {
 			case 'req':
 				this.#request(m, (r) => this.#post(r));
 				return;
+			case 'flip':
+				void this.#flip(m);
+				return;
+			case 'flipCapture':
+				this.#captures.push(m.capture);
+				return;
 		}
+	}
+
+	/**
+	 * The flip (W5): only in a Worker that owns nothing and waits for nothing,
+	 * under the owner lock, so no other Worker has either pool open. Whatever
+	 * happens, the answer is `flipDone`, and the lock goes when it's sent.
+	 */
+	async #flip(m: { n: number; args: FlipArgs; lockWaitMs?: number }): Promise<void> {
+		const done = (outcome: FlipOutcome) => this.#post({ t: 'flipDone', n: m.n, outcome });
+		const f = this.#d.flip;
+		if (!f) return done({ outcome: 'skipped', reason: 'noFlip' });
+		if (this.#phase !== 'idle') return done({ outcome: 'skipped', reason: `phase:${this.#phase}` });
+		this.#phase = 'flipping';
+		const abort = new AbortController();
+		const timer = setTimeout(() => abort.abort(), m.lockWaitMs ?? FLIP_LOCK_WAIT_MS);
+		let outcome: FlipOutcome = { outcome: 'skipped', reason: 'ownerLock' };
+		try {
+			await this.#d.locks.request(OWNER_LOCK, { mode: 'exclusive', signal: abort.signal }, async () => {
+				clearTimeout(timer);
+				const source = f.source();
+				try {
+					outcome = await runFlip(
+						{
+							engine: this.#d.engine,
+							source,
+							writeDoneRecord: (text) => f.writeDoneRecord(text),
+							estimate: f.estimate,
+							captured: () => this.#captures,
+							now: this.#now,
+							at: (step) => this.#post({ t: 'flipStep', n: m.n, step }),
+							log: f.log
+						},
+						m.args
+					);
+				} finally {
+					try {
+						source.close();
+					} catch {
+						// Best-effort.
+					}
+				}
+			});
+		} catch {
+			// Aborted while waiting: another Worker owns the database, so not this boot.
+		} finally {
+			clearTimeout(timer);
+			this.#phase = 'idle';
+		}
+		done(outcome);
 	}
 
 	#post(m: WorkerToPage): void {

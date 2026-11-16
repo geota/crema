@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior};
 
-pub use backup::Recovery;
+pub use backup::{FlipInit, Recovery};
 pub use error::{Result, StoreError};
 pub use export::{ExportWalk, RidId};
 pub use faults::Faults;
