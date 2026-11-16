@@ -430,3 +430,93 @@ describe.runIf(historyWasmBuilt)('older builds after the flip (SPEC §11 "Downgr
 		expect(mine.filter((c) => c.startsWith('db'))).toEqual([]);
 	});
 });
+
+describe.runIf(historyWasmBuilt)('REVIEW-474: step 9 and the held journal never undo stage 2', () => {
+	it('P1: a stage-2 edit of a late brew log (0 samples forever) survives the next open', async () => {
+		const { t } = await flipped(4);
+		await olderBuild(async (db) => {
+			const brew = { ...realShot(310, []), id: 'older-brew', brewMethod: 'v60' } as StoredShot;
+			await db.putShots([{ shot: brew, details: false, summary: summarize(brew) }], summarize);
+		});
+		const t2 = await reboot(t);
+		// A brew log never has samples: it doesn't wait for any (B1).
+		expect(await t2.client.read('lateIds')).toEqual([]);
+		const store = await storeOn(t2);
+		await store.ready;
+		expect(store.get('older-brew')).toBeDefined();
+		store.setNotes('older-brew', 'my stage-2 note');
+		await store.flushed();
+		expect((await dbRows(t2)).get('older-brew')?.metadata.notes).toBe('my stage-2 note');
+		const t3 = await reboot(t2);
+		expect(await t3.client.read('lateIds')).toEqual([]);
+		expect((await dbRows(t3)).get('older-brew')?.metadata.notes).toBe('my stage-2 note');
+	});
+
+	it('P2: a late 0-sample row deleted on stage 2 stays deleted at the next open', async () => {
+		const { t } = await flipped(4);
+		await olderBuild(async (db) => {
+			const s = { ...realShot(311, []), id: 'older-zero' };
+			await db.putShots([{ shot: s, details: false, summary: summarize(s) }], summarize);
+		});
+		const t2 = await reboot(t);
+		expect(await t2.client.read('lateIds')).toEqual(['older-zero']);
+		const store = await storeOn(t2);
+		await store.ready;
+		store.purgeTombstone('older-zero');
+		await store.flushed();
+		expect((await dbRows(t2)).has('older-zero')).toBe(false);
+		const t3 = await reboot(t2);
+		expect((await dbRows(t3)).has('older-zero')).toBe(false);
+	});
+
+	it('P3: a stage-2 edit of a late row survives step 9 filling its series', async () => {
+		const { t } = await flipped(4);
+		await olderBuild(async (db) => {
+			const s = { ...realShot(312, []), id: 'older-fill' };
+			await db.putShots([{ shot: s, details: false, summary: summarize(s) }], summarize);
+		});
+		const t2 = await reboot(t);
+		const store = await storeOn(t2);
+		await store.ready;
+		store.setNotes('older-fill', 'my stage-2 note');
+		await store.flushed();
+		await olderBuild(async (db) => {
+			await db.putShots([{ shot: { ...realShot(312, realSamples(25, 2)), id: 'older-fill' }, details: true }], summarize);
+		});
+		const t3 = await reboot(t2);
+		const row = (await dbRows(t3)).get('older-fill');
+		expect(row?.summary.sampleCount).toBe(25);
+		expect(row?.metadata.notes).toBe('my stage-2 note');
+	});
+
+	it('P4: a shot captured while the flip runs, then deleted in that session, stays deleted at the next open', async () => {
+		await seedP3(shots(8));
+		let open: () => void = () => {};
+		const gate = new Promise<void>((r) => (open = r));
+		let t: Tab | null = null;
+		const store = new HistoryStore({
+			stage2: async () => {
+				await gate;
+				return t ? stage2Of(t) : null;
+			}
+		});
+		const shot = { ...realShot(77, realSamples(30, 3)), id: 'mid-flip' };
+		expect(store.recordCaptured(shot as unknown as Record<string, unknown>)).not.toBeNull();
+		const choice = await boot();
+		t = tabOn(choice);
+		await indexReady(t.client);
+		open();
+		await store.ready;
+		await store.flushed();
+		expect((await dbRows(t)).has('mid-flip')).toBe(true);
+		store.purgeTombstone('mid-flip');
+		await store.flushed();
+		expect((await dbRows(t)).has('mid-flip')).toBe(false);
+		// P3's key still holds it (never written on stage 2).
+		expect(localStorage.getItem(PENDING_KEY) ?? '').toContain('mid-flip');
+		const again = await storeOn(t);
+		await again.ready;
+		expect(again.get('mid-flip')).toBeUndefined();
+		expect((await dbRows(t)).has('mid-flip')).toBe(false);
+	});
+});
