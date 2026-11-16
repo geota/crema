@@ -110,7 +110,8 @@ test('a frozen owner keeps its lock and handles; the other tab goes read-only an
 		console.log(`W0 frozen page ${JSON.stringify({ ...pageSaw, ticksAtThaw })}`);
 		expect(await ask(other, 1_000)).toEqual(['page', 'worker']);
 		expect(await owner.eval(`window.w0.drain('db')`)).toEqual([shot.id]);
-		expect(await other.eval('window.w0.pending()')).toEqual([]);
+		// localStorage reaches another tab's renderer a moment later.
+		await expect.poll(() => other.eval('window.w0.pending()'), { timeout: 5_000 }).toEqual([]);
 		expect(await call<unknown[]>(owner, 'call', { h: 'db', m: 'get', a: [shot.id] })).toHaveLength(1);
 		// A second drain finds nothing (insert-if-absent, removed after commit).
 		expect(await owner.eval(`window.w0.drain('db')`)).toEqual([]);

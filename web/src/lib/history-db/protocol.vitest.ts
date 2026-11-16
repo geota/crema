@@ -7,6 +7,9 @@ import { Env, openTab, STAGE1, STAGE2, row } from './test-kit';
 import { OTHER_BUILD_MESSAGE, PROTOCOL_VERSION, type OwnerInfo, type Reply, type Request } from './protocol';
 import { RPC_CHANNEL } from './names';
 
+// Fake timers drive minutes of protocol time; under a full parallel run that takes real seconds.
+vi.setConfig({ testTimeout: 60_000 });
+
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 

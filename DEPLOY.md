@@ -17,7 +17,7 @@ scripts/cut-release.sh --tag 0.1.0                           # 2. tags main and 
 The tag push runs `.github/workflows/release.yml`. Its `web (pwa)` job:
 
 1. Stamps the version from the tag into `web/package.json`. The About panel, the backup header and Decent uploads report it, and the committed value isn't bumped reliably.
-2. Builds with `pnpm build` (`pnpm wasm` then `vite build`), with `VITE_VISUALIZER_CLIENT_ID` from the repo secrets.
+2. Builds with `pnpm build`, with `VITE_VISUALIZER_CLIENT_ID` from the repo secrets. `pnpm build` runs `pnpm wasm` (the machine core), then `pnpm wasm:history` (the history Worker's SQLite store, #310), then `vite build`. The history wasm compiles SQLite's C, so it needs a clang with a wasm32 backend; `scripts/history-wasm-build.sh` finds the runner image's.
 3. Runs `wrangler pages deploy web/build --project-name crema --branch main`. The `main` branch is production in the Pages project.
 
 The same tag also builds the signed Android APK/AAB and publishes the GitHub Release.
@@ -38,7 +38,10 @@ Settings → Secrets and variables → Actions:
 
 ## Manual deploy (untagged / hotfix)
 
-To put the current `main` live without cutting a release, build and deploy it yourself from a clean checkout of `origin/main`:
+To put the current `main` live without cutting a release, build and deploy it yourself from a clean checkout of `origin/main`.
+
+You need, besides Node, pnpm and the Rust toolchain with the `wasm32-unknown-unknown` target and `wasm-pack`:
+- **A clang with a wasm32 backend, and its `llvm-ar`**, for the history store's SQLite (`pnpm wasm:history`, run by `pnpm build`). Apple's clang has none. On macOS install LLVM (`zb install llvm`, or `brew install llvm`); `scripts/history-wasm-build.sh` finds Homebrew's or zerobrew's on its own. On Linux it takes the newest `clang-<n>` with its `llvm-ar-<n>`. Anywhere else, set `CC_wasm32_unknown_unknown` and `AR_wasm32_unknown_unknown`. `core/de1-history-wasm/README.md` has the details.
 
 ```bash
 npx wrangler login                      # once; needs Pages access to the account
@@ -47,7 +50,7 @@ git worktree add --detach /tmp/crema-deploy origin/main
 cd /tmp/crema-deploy/web
 npm pkg set version="0.0.9+$(git rev-parse --short=8 HEAD)"   # last release + commit
 pnpm install --frozen-lockfile
-VITE_VISUALIZER_CLIENT_ID=<prod-uid> pnpm build
+VITE_VISUALIZER_CLIENT_ID=<prod-uid> pnpm build   # pnpm wasm, pnpm wasm:history (needs the wasm32 clang), vite build
 cd ..
 npx wrangler pages deploy web/build --project-name crema --branch main \
   --commit-hash "$(git rev-parse HEAD)" --commit-dirty=true
@@ -56,6 +59,7 @@ cd - && git worktree remove --force /tmp/crema-deploy
 
 - **Stamp the version** so the deployed app doesn't report the stale committed one. Use the last release plus the commit (`0.0.9+e0145ede`), and replace `0.0.9` with the latest tag.
 - **Don't build without `VITE_VISUALIZER_CLIENT_ID`**: "Sign in with Visualizer" breaks on production.
+- **`pnpm build` stops if `pnpm wasm:history` finds no wasm32 clang** ("no clang with a wasm32 backend"): install LLVM as above. Don't deploy a build without it: the app's history Worker loads that wasm.
 - Check the result with `npx wrangler pages deployment list --project-name crema --environment production`. Installed copies of the PWA pick up the new service worker the next time they're opened.
 
 ## One-time setup (already done)
