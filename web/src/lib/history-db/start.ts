@@ -114,7 +114,7 @@ export function startHistoryDb(opts: StartOptions = {}): HistoryDbClient | null 
  * W5's boot: the stage this tab runs on, flipping first when it may
  * (`stage.ts`), then the client for it. Only with {@link HISTORY_FLIP_ENABLED}.
  */
-export async function bootHistoryDb(opts: StartOptions = {}): Promise<{ client: HistoryDbClient; choice: StageChoice } | null> {
+export async function bootHistoryDb(opts: StartOptions = {}): Promise<{ client: HistoryDbClient | null; choice: StageChoice } | null> {
 	if (client || !supported() || !HISTORY_FLIP_ENABLED) return null;
 	const choice = await chooseStage({
 		storage: localStorage,
@@ -130,6 +130,8 @@ export async function bootHistoryDb(opts: StartOptions = {}): Promise<{ client: 
 		log: (line) => console.info(`history-stage: ${line}`)
 	});
 	if (client) return null;
+	// The truth couldn't be told this boot: no client, the store is unavailable (REVIEW-473).
+	if (choice.unavailable) return { client: null, choice };
 	client = clientFor(choice, opts);
 	client.start();
 	return { client, choice };

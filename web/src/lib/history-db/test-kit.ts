@@ -400,6 +400,9 @@ function fakeDb(f: FakeFile, ctx: string): EngineDb {
 					return f.rows.size;
 				case 'writeSeq':
 					return f.writeSeq;
+				// The fake's truth files are finished ones (W5's open checks it).
+				case 'migrationState':
+					return 'done';
 				case 'pruneTabs': {
 					let n = 0;
 					for (const t of a.gone as string[]) if (f.applied.delete(t)) n++;

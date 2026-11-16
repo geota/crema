@@ -171,22 +171,31 @@ export function parseDoneRecord(text: string): DoneRecord | null {
 	return { generation, poolGeneration, at: int(v.at) ?? 0 };
 }
 
-/** The done-record as the page finds it. */
-export type DoneRecordRead = { kind: 'absent' } | { kind: 'unreadable' } | { kind: 'done'; record: DoneRecord };
+/**
+ * The done-record as the page finds it. `unreadable`: it's there but doesn't
+ * parse (a write cut short), so some file said `done`. `readFailed`: the read
+ * itself threw (a private mode, a transient OPFS error), which says nothing
+ * about the record, as with no OPFS at all (REVIEW-473 B2).
+ */
+export type DoneRecordRead =
+	| { kind: 'absent' }
+	| { kind: 'unreadable' }
+	| { kind: 'readFailed'; error: string }
+	| { kind: 'done'; record: DoneRecord };
 
 /** Where the page reads the done-record: the OPFS root. */
 export interface DoneRecordReader {
 	read(): Promise<string | null>;
 }
 
-/** Reads the done-record through `reader`. A read that fails, or a record that doesn't parse, is `unreadable`. */
+/** Reads the done-record through `reader`: a read that throws is `readFailed`, a record that doesn't parse `unreadable`. */
 export async function readDoneRecord(reader: DoneRecordReader | null): Promise<DoneRecordRead> {
 	if (!reader) return { kind: 'absent' };
 	let text: string | null;
 	try {
 		text = await reader.read();
-	} catch {
-		return { kind: 'unreadable' };
+	} catch (e) {
+		return { kind: 'readFailed', error: (e as Error)?.name ?? String(e) };
 	}
 	if (text === null) return { kind: 'absent' };
 	const record = parseDoneRecord(text);
