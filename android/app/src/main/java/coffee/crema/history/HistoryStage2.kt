@@ -50,6 +50,9 @@ internal data class DoneRecord(val state: String, val generation: Int, val atMs:
 internal const val STAGE2_DONE = "done"
 internal const val STAGE2_FAILED = "failed"
 
+/** Written before the flip copies anything: a boot that finds it knows a flip ran and stopped part-way (N3, M8). */
+internal const val STAGE2_FLIPPING = "flipping"
+
 /** What the files say at boot (SPEC §11 step 1). */
 internal sealed interface Stage2State {
     /** The truth is generation [generation]. [rebuilt]: the marker was missing or damaged, and is written again. */
@@ -58,8 +61,12 @@ internal sealed interface Stage2State {
     /** Stage 1: no flip has passed. [marker] holds a failed one's backoff, if any. */
     data class NotDone(val marker: Stage2Marker?) : Stage2State
 
-    /** The marker or done-record couldn't be read (an I/O error): it says nothing, so nothing flips or opens. */
-    data class Unreadable(val error: String) : Stage2State
+    /**
+     * Which file is the truth can't be told now (an I/O error, a done-record
+     * that doesn't decode, a file the scan couldn't open): nothing flips,
+     * opens or is written. [tooNew]: the file it couldn't open is a newer build's.
+     */
+    data class Unreadable(val error: String, val tooNew: Boolean = false) : Stage2State
 }
 
 /** What a `history*.db` turned out to be, opened by the core and closed again. */
@@ -72,8 +79,11 @@ internal sealed interface FileProbe {
     /** Ours and not finished: an earlier try's copy, whatever its role. Never the truth; overwritten in place (M8). */
     data object Leftover : FileProbe
 
-    /** It doesn't open (damaged, foreign, newer, locked): left exactly as it is. */
+    /** It doesn't open (damaged, foreign, locked): left exactly as it is. */
     data class Unreadable(val why: String) : FileProbe
+
+    /** A newer build's file (`min_reader_v` above ours): never a leftover, never flipped over. */
+    data class TooNew(val why: String) : FileProbe
 }
 
 internal class Stage2Files(filesDir: File, private val json: Json) {
@@ -120,8 +130,18 @@ internal class Stage2Files(filesDir: File, private val json: Json) {
      * SPEC §11 step 1. The done-record outranks the marker: a marker that
      * doesn't say `done` (missing, damaged, an old `failed`) beside a
      * done-record that does is a lost marker, not a failed flip. With
-     * neither saying `done`, the highest generation that opens as a finished
-     * truth file rebuilds both (S9); none means stage 1.
+     * neither saying `done`, the generations are scanned, highest first
+     * (S9), and when either record is in doubt the answer is "can't tell"
+     * rather than a guess (REVIEW-475 N3):
+     * - a done-record that exists and doesn't decode says nothing: [Stage2State.Unreadable];
+     * - a file that won't open, or is a newer build's, above the highest
+     *   finished one may be the truth: [Stage2State.Unreadable], nothing persisted;
+     * - a marker from its `.bak` or `.tmp` that says `done` is weighed
+     *   against the scan, the higher generation winning (N4);
+     * - with nothing finished, a file that won't open is an earlier try's
+     *   leftover (M8) only when the marker says a flip ran (`failed` or
+     *   `flipping`, written before any copy). With no marker it could be a
+     *   truth whose records were lost: [Stage2State.Unreadable].
      */
     fun state(): Stage2State {
         val m = readMarker()
@@ -130,16 +150,32 @@ internal class Stage2Files(filesDir: File, private val json: Json) {
         if (marker?.state == STAGE2_DONE && m.recoveredFrom == null) return Stage2State.Done(marker.generation)
         when (val d = readDone()) {
             is SafeLoad.Unavailable -> return Stage2State.Unreadable("Couldn't read ${done.name}: ${d.error}")
+            is SafeLoad.Corrupt -> return Stage2State.Unreadable("${done.name} doesn't decode: ${d.error}")
             is SafeLoad.Loaded -> if (d.value.state == STAGE2_DONE) return Stage2State.Done(d.value.generation, rebuilt = true)
-            else -> Unit
+            SafeLoad.Absent -> Unit
         }
-        // A marker read from its .bak or .tmp that says done, with no done-record: still done.
-        if (marker?.state == STAGE2_DONE) return Stage2State.Done(marker.generation, rebuilt = true)
-        val finished = generationsNamed().sortedDescending().firstNotNullOfOrNull { g ->
-            (probe(db(g)) as? FileProbe.Finished)?.takeIf { it.generation == g }
+        var blocked: FileProbe? = null
+        var finished: Int? = null
+        for (g in generationsNamed().sortedDescending()) {
+            when (val p = probe(db(g))) {
+                is FileProbe.Finished -> if (p.generation == g) {
+                    finished = g
+                    break
+                }
+                is FileProbe.Unreadable, is FileProbe.TooNew -> if (blocked == null) blocked = p
+                FileProbe.Absent, FileProbe.Leftover -> Unit
+            }
         }
-        if (finished != null) return Stage2State.Done(finished.generation, rebuilt = true)
-        return Stage2State.NotDone(marker?.takeIf { it.state == STAGE2_FAILED })
+        fun cantTell(): Stage2State.Unreadable = when (val b = blocked) {
+            is FileProbe.TooNew -> Stage2State.Unreadable("The shot history was written by a newer version of Crema: update the app. (${b.why})", tooNew = true)
+            is FileProbe.Unreadable -> Stage2State.Unreadable("A shot history file couldn't be opened to tell which is current: ${b.why}")
+            else -> Stage2State.Unreadable("The shot history's records can't be read")
+        }
+        // A file that won't open above the highest finished one may be a newer truth (a recovery's).
+        if (blocked != null && (finished != null || marker?.state == STAGE2_DONE || marker == null)) return cantTell()
+        if (marker?.state == STAGE2_DONE) return Stage2State.Done(maxOf(marker.generation, finished ?: 0), rebuilt = true)
+        if (finished != null) return Stage2State.Done(finished, rebuilt = true)
+        return Stage2State.NotDone(marker?.takeIf { it.state == STAGE2_FAILED || it.state == STAGE2_FLIPPING })
     }
 
     /**
@@ -154,6 +190,8 @@ internal class Stage2Files(filesDir: File, private val json: Json) {
             HistoryDbBridge.openNow(file, HistoryDbBridge.options(HistoryRole.AUTHORITY))
         } catch (e: HistoryDbException.WrongRole) {
             return FileProbe.Leftover
+        } catch (e: HistoryDbException.TooNew) {
+            return FileProbe.TooNew("${file.name}: ${e.message}")
         } catch (e: HistoryDbException) {
             return FileProbe.Unreadable("${e.javaClass.simpleName}: ${e.message}")
         }

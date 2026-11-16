@@ -251,9 +251,11 @@ class HistoryFlipTest {
         stage1(shots("u", 20))
         val rows = shotsRows()
         sqliteDir.mkdirs()
-        // As a kill during the very first copy can leave it: some pages, not a database that opens.
+        // As a kill during the very first copy can leave it: some pages, not a database that opens,
+        // and the marker the flip writes before it copies anything.
         val junk = ByteArray(8192) { (it * 31).toByte() }
         historyDb.writeBytes(junk)
+        Stage2Files(filesDir, coreJson).writeMarker(Stage2Marker(STAGE2_FLIPPING, atMs = 1))
         assertFlipsTo(rows, "around a leftover")
         assertEquals(1, markerGeneration())
         assertContentEquals(junk, historyDb.readBytes(), "the leftover stays exactly as it was")
@@ -859,6 +861,186 @@ class HistoryFlipTest {
         assertEquals(old, shotsRows(), "the old copy took no write")
         val next = store()
         assertTrue(next.boot().view.any { it.id == "stale-0" })
+        next.closeForTest()
+    }
+
+    // ── REVIEW-475 round 1 ───────────────────────────────────────────────────
+
+    private fun historyNotes(id: String): String? {
+        val b = HistoryDbBridge.openNow(historyDb, HistoryDbBridge.options(HistoryRole.AUTHORITY))
+        try {
+            val r = b.now { it.get(listOf(id)) }.firstOrNull() ?: return null
+            return (coreJson.parseToJsonElement(r.rowJson) as kotlinx.serialization.json.JsonObject)["notes"]?.toString()?.trim('"')
+        } finally {
+            b.now { it.closeAll() }
+        }
+    }
+
+    @Test fun `N1 P1 - P3a's journal's last put of an id wins, and a delete after it keeps it out`() = runBlocking {
+        flipped(shots("p", 4))
+        val x = shots("jx", 1, start = 1_700_000_100_000L).single().copy(samples = emptyList())
+        val y = shots("jy", 1, start = 1_700_000_200_000L).single().copy(samples = emptyList())
+        fun put(s: StoredShot, notes: String) = coreJson.encodeToString(JournalEntry.serializer(), JournalEntry(put = s.copy(notes = notes))) + "\n"
+        fun del(id: String) = coreJson.encodeToString(JournalEntry.serializer(), JournalEntry(delete = id)) + "\n"
+        File(filesDir, HistoryStore.PENDING_NAME).writeText(put(x, "first") + put(y, "made") + put(x, "second") + del(y.id))
+        val s = store()
+        s.boot()
+        s.closeForTest()
+        assertEquals("second", historyNotes(x.id), "the later put wins, as P3a's merge applies it")
+        assertNull(historyNotes(y.id), "deleted after its put: not brought back")
+    }
+
+    @Test fun `N1 - a journal put of a row step 8 just brought from shots-db replaces it`() = runBlocking {
+        flipped(shots("q", 3))
+        val x = shots("both", 1, start = 1_700_000_100_000L).single()
+        olderBuild { old -> assertTrue(old.save(listOf(x))) }
+        val line = coreJson.encodeToString(JournalEntry.serializer(), JournalEntry(put = x.copy(samples = emptyList(), notes = "edited after"))) + "\n"
+        File(filesDir, HistoryStore.PENDING_NAME).writeText(line)
+        val s = store()
+        s.boot()
+        s.closeForTest()
+        assertEquals("edited after", historyNotes(x.id))
+    }
+
+    @Test fun `N1 P2 - with the marker unreadable for a boot, a capture and its edit both last`() = runBlocking {
+        flipped(shots("u", 4))
+        val saved = marker.readBytes()
+        assertTrue(marker.delete())
+        assertTrue(marker.mkdirs(), "a directory: its read fails with an I/O error")
+        val s = store()
+        assertEquals(HistoryHealth.UNAVAILABLE, s.boot().health)
+        val x = shots("ux", 1, start = 1_900_000_000_000L).single()
+        s.save(listOf(x))
+        val edited = assertNotNull(s.update(x.id) { it.copy(notes = "rated later") })
+        s.save(listOf(edited))
+        s.closeForTest()
+        assertTrue(marker.delete())
+        marker.writeBytes(saved)
+        val t = store()
+        t.boot()
+        assertTrue(t.onHistoryDb)
+        t.closeForTest()
+        assertEquals("rated later", historyNotes(x.id))
+    }
+
+    @Test fun `N3 - a done-record that doesn't decode says nothing - unavailable, nothing written`() = runBlocking {
+        flipped(shots("c", 3))
+        SafeFile.erase(marker)
+        val garbage = "{ not json".toByteArray()
+        doneRecord.writeBytes(garbage)
+        val before = historyDb.readBytes()
+        val s = store()
+        assertEquals(HistoryHealth.UNAVAILABLE, s.boot().health)
+        assertFalse(s.onHistoryDb)
+        s.closeForTest()
+        assertFalse(marker.exists(), "no marker guessed")
+        assertContentEquals(garbage, doneRecord.readBytes())
+        assertContentEquals(before, historyDb.readBytes())
+        assertEquals(emptyMap(), shotsRows().filterKeys { it.startsWith("new") })
+    }
+
+    @Test fun `N3 - with the records gone, a file that won't open above the finished one boots unavailable, persisting nothing`() = runBlocking {
+        flipped(shots("h", 3))
+        // A recovery's truth, history-1.db, that won't open now; history.db, finished, below it.
+        val junk = ByteArray(4096) { 7 }
+        File(sqliteDir, "history-1.db").writeBytes(junk)
+        SafeFile.erase(marker)
+        SafeFile.erase(doneRecord)
+        val s = store()
+        assertEquals(HistoryHealth.UNAVAILABLE, s.boot().health)
+        s.closeForTest()
+        assertFalse(marker.exists() || doneRecord.exists(), "nothing rebuilt on the older generation")
+        assertContentEquals(junk, File(sqliteDir, "history-1.db").readBytes())
+    }
+
+    @Test fun `N3 - with the records gone, a newer build's file is too new, never flipped past`() = runBlocking {
+        flipped(shots("tn", 3))
+        SQLiteDatabase.openDatabase(historyDb.path, null, SQLiteDatabase.OPEN_READWRITE).use {
+            it.execSQL("UPDATE meta SET value = '999' WHERE key = 'min_reader_v'")
+        }
+        SafeFile.erase(marker)
+        SafeFile.erase(doneRecord)
+        val s = store()
+        assertEquals(HistoryHealth.UNAVAILABLE, s.boot().health)
+        assertTrue(s.tooNew)
+        s.closeForTest()
+        assertFalse(File(sqliteDir, "history-1.db").exists(), "no new generation")
+        assertFalse(marker.exists())
+    }
+
+    @Test fun `N4 - a marker from its backup weighs against the scan, the higher generation winning`() = runBlocking {
+        val rows = shots("bk4", 4)
+        flipped(rows)
+        // Lost, then recovered into history-1.db: the marker says 1, its .bak still says 0.
+        for (suffix in listOf("", "-wal", "-shm")) File(historyDb.path + suffix).delete()
+        val s = store()
+        s.boot()
+        s.recoverOldCopy()
+        s.closeForTest()
+        assertEquals(1, markerGeneration())
+        // The marker and done-record damaged; the .bak (generation 0) is what a read recovers.
+        val bak = SafeFile.backupOf(marker)
+        bak.writeText(coreJson.encodeToString(Stage2Marker.serializer(), Stage2Marker(STAGE2_DONE, generation = 0, atMs = 1)))
+        marker.writeText("{ damaged")
+        SafeFile.erase(doneRecord)
+        val t = store()
+        assertEquals(HistoryHealth.OK, t.boot().health, t.lastError)
+        assertEquals(rows.map { it.id }.toSet(), t.rows().map { it.id }.toSet(), "generation 1, the truth")
+        t.closeForTest()
+        assertEquals(1, markerGeneration())
+    }
+
+    @Test fun `N2 - a done-record that won't write still leaves the marker`() = runBlocking {
+        val rows = flipped(shots("n2", 3))
+        SafeFile.erase(marker)
+        SafeFile.erase(doneRecord)
+        SafeFile.beforeRename = { if (it.name.startsWith(HistoryStore.SQLITE_DONE_NAME)) throw java.io.IOException("no space (test)") }
+        val s = store()
+        try {
+            assertEquals(HistoryHealth.OK, s.boot().health)
+        } finally {
+            SafeFile.beforeRename = {}
+        }
+        s.closeForTest()
+        assertTrue(markerText()!!.contains("\"done\""), "the marker was written on its own")
+        assertEquals(rows, historyRows())
+    }
+
+    @Test fun `N5 - a pulled duplicate is stored once by the core, and memory keeps one`() = runBlocking {
+        val rows = shots("pl", 4)
+        flipped(rows)
+        val s = store()
+        s.boot()
+        val bound = s.rows().first { it.visualizerId != null }
+        val pulled = shots("pulled", 1, start = 1_700_000_000_000L).single().copy(visualizerId = bound.visualizerId)
+        // Memory's own dedupe missed it (it didn't see the row); the core's N8 rule doesn't.
+        s.markPulled(listOf(pulled.id))
+        s.save(listOf(pulled))
+        assertFalse(s.rows().any { it.id == pulled.id }, "not kept in memory either")
+        s.closeForTest()
+        assertFalse(pulled.id in historyRows())
+        assertEquals(1, historyRows().values.count { it.first.contains("\"visualizerId\":\"${bound.visualizerId}\"") })
+    }
+
+    @Test fun `N5 - a real SQLITE_FULL from the core sends the write to stage 2's journal, and it lands later`() = runBlocking {
+        flipped(shots("fu", 3))
+        coffee.crema.core.testseeds.historyMaxPagesForTest(1u)
+        val s = store()
+        val big = shots("big", 1_500, start = 1_900_000_000_000L, samplesPer = 1)
+        try {
+            s.boot()
+            assertFalse(s.save(big), "the file can't grow")
+            // Rows that fit the free pages land one at a time; the rest wait in the journal.
+            assertTrue(big.any { it.id in s.journaled }, "the journal took the rest")
+            assertTrue(big.all { it.id in s.journaled || s.truthRowJsonForTest(it.id) != null }, "every row is somewhere")
+        } finally {
+            coffee.crema.core.testseeds.historyMaxPagesForTest(0u)
+        }
+        s.closeForTest()
+        val journal = File(sqliteDir, Stage2Files.PENDING_NAME).readText()
+        assertTrue(big.any { "\"${it.id}\"" in journal }, "stage 2's journal holds what didn't fit")
+        val next = store()
+        assertEquals(1_503, next.boot().view.size)
         next.closeForTest()
     }
 }

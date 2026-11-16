@@ -54,6 +54,12 @@ pub const POINTS: &[&str] = &[
     "flip.done.commit",
 ];
 
+/// Every store opened while this is above 0 caps its file at that many
+/// pages (`PRAGMA max_page_count`), so a write that grows it fails with a
+/// real `SQLITE_FULL` (PLAN A5: a full disk through the core). Tests only.
+#[cfg(feature = "faults")]
+pub static MAX_PAGES_FOR_TEST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 /// The armed faults and a log of the statements the store ran.
 #[derive(Debug, Default)]
 pub struct Faults {

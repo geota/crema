@@ -319,12 +319,20 @@ internal class HistoryFlip(
             FileProbe.Absent, FileProbe.Leftover -> Target(0, first)
             // The store checked the done-record and every finished generation before calling this.
             is FileProbe.Finished -> fail("${Stage2Files.DB_NAME} is a finished copy the marker doesn't name")
+            // A newer build's truth: never a leftover to overwrite or go around.
+            is FileProbe.TooNew -> fail("${Stage2Files.DB_NAME} was written by a newer version of Crema: update the app")
             is FileProbe.Unreadable -> {
                 leftover = "${Stage2Files.DB_NAME} doesn't open (${p.why}); left as it is"
                 persist("flip: ${leftover!!}")
                 // The next generation no file names, or a leftover of an earlier try at it.
                 var g = files.nextGeneration()
-                while (files.probe(files.db(g)).let { it !is FileProbe.Absent && it !is FileProbe.Leftover }) g++
+                while (true) {
+                    when (files.probe(files.db(g))) {
+                        FileProbe.Absent, FileProbe.Leftover -> break
+                        is FileProbe.TooNew, is FileProbe.Finished -> fail("history-$g.db is in the way and isn't a leftover")
+                        is FileProbe.Unreadable -> g++
+                    }
+                }
                 Target(g, files.db(g))
             }
         }

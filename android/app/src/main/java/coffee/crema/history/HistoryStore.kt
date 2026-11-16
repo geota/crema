@@ -447,8 +447,10 @@ class HistoryStore(
                     openAuth(s.generation)
                     return
                 }
-                // An I/O error says nothing: neither store is opened, so neither is written.
+                // Which file is the truth can't be told now: neither store is opened, so neither is
+                // written, and nothing is persisted (REVIEW-475 N3).
                 is Stage2State.Unreadable -> {
+                    tooNew = s.tooNew
                     unavailable(s.error)
                     return
                 }
@@ -979,7 +981,15 @@ class HistoryStore(
             flipError = "Rows wait in the pending journal: the move into SQLite waits for them."
             return false
         }
-        val m = stage2Marker
+        var m = stage2Marker
+        if (m?.state == STAGE2_FLIPPING) {
+            // The last try stopped part-way (a kill, an out-of-memory): a failure for the backoff,
+            // so a flip that dies every time doesn't run at every launch.
+            val failures = m.failures + 1
+            m = m.copy(state = STAGE2_FAILED, failures = failures, nextTryAtMs = if (failures < 3) 0L else m.atMs + DAY_MS, lastError = "The last try stopped part-way.")
+            stage2Marker = m
+            runCatching { stage2.writeMarker(m) }
+        }
         return !(m?.state == STAGE2_FAILED && now() < m.nextTryAtMs)
     }
 
@@ -998,6 +1008,17 @@ class HistoryStore(
 
     /** The flip, once, at this store's first open. Never throws but a [SimulatedCrash]. */
     private suspend fun runFlip() {
+        // Before anything is copied: a boot that finds a file that won't open knows it is this
+        // try's leftover, not a truth whose records were lost (M8, REVIEW-475 N3).
+        val prev = stage2Marker
+        val flipping = Stage2Marker(STAGE2_FLIPPING, failures = prev?.failures ?: 0, nextTryAtMs = prev?.nextTryAtMs ?: 0L, lastError = prev?.lastError, atMs = now())
+        try {
+            stage2.writeMarker(flipping)
+        } catch (e: Exception) {
+            flipError = "The move into SQLite couldn't start: ${e.message}"
+            return
+        }
+        stage2Marker = flipping
         val flip = HistoryFlip(flipHost, stage2, tables, index, context.filesDir, dbFile, json)
         when (val out = flip.run()) {
             is FlipOutcome.Done -> {
@@ -1039,6 +1060,11 @@ class HistoryStore(
      * `history.db`. Shots captured during the flip are read from `shots.db`
      * as committed, before its helper closes, and go in at once (M9), then
      * step 8 reads every id once more, whatever the prefilter says.
+     *
+     * The captures' import runs without [SqliteHistorySource.lock]: no
+     * source exists for this file yet, so no walk can be open on it and no
+     * other writer can reach it. [attachAuth] makes the source; every write
+     * after that takes its lock. Keep the import before it (REVIEW-475 N5).
      */
     private fun switchToAuth(o: FlipOutcome.Done) {
         // Read before the helper closes. A read that fails leaves them to step 8, which reads
@@ -1166,8 +1192,11 @@ class HistoryStore(
 
     /** The marker or done-record was missing: both written again from what the files say (S9). */
     private fun rebuildStage2Marker(generation: Int) {
+        // Each on its own: a done-record that won't write still leaves the marker (REVIEW-475 N2).
         runCatching {
             if ((stage2.readDone() as? coffee.crema.persist.SafeLoad.Loaded)?.value?.state != STAGE2_DONE) stage2.writeDone(generation, now())
+        }.onFailure { persistLine("stage 2 done-record rebuild: ${it.message}") }
+        runCatching {
             stage2.writeMarker(Stage2Marker(STAGE2_DONE, generation = generation, atMs = now()))
         }.onFailure { persistLine("stage 2 marker rebuild: ${it.message}") }
     }
@@ -1852,6 +1881,18 @@ class HistoryStore(
         return row.withHeavy(samples, profile, brew)
     }
 
+    /**
+     * Rows a Visualizer pull brought, not yet written (REVIEW-475 N5): on
+     * `history.db` they go in as pulled, so the core stores a pulled
+     * duplicate once (N8) whatever memory's own dedupe saw.
+     */
+    private val pulled: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** [ids] came from a Visualizer pull ([coffee.crema.ui.LibraryController.insertPulledShots]). */
+    fun markPulled(ids: Collection<String>) {
+        pulled += ids
+    }
+
     /** Rows deleted this session: a walk that listed one before its delete takes it light. */
     private val deleted: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
@@ -2130,7 +2171,20 @@ class HistoryStore(
         if (fault(MigrationFault.DISK_FULL) != null) throw android.database.sqlite.SQLiteFullException("disk full (test)")
         if (mode == Mode.AUTH) {
             // history.db: the rows and their heavy parts in one transaction, under the source's lock (M10, #310 A5).
-            checkNotNull(auth) { "the shot history's database is closed" }.write(writes.map { it.shot to it.summary }, profiles)
+            val dups = checkNotNull(auth) { "the shot history's database is closed" }
+                .write(writes.map { it.shot to it.summary }, profiles, pulled = writes.mapNotNullTo(HashSet()) { w -> w.row.id.takeIf { it in pulled } })
+            if (dups.isNotEmpty()) {
+                // Another row already holds its Visualizer id: not stored, so not in memory either (N8).
+                persistLine("${dups.size} pulled shots were already here under another id: kept once")
+                for (id in dups) {
+                    latest.remove(id)
+                    staged.remove(id)
+                    pulled.remove(id)
+                }
+                bumpVersion()
+                writeRowsLanded(writes.filterNot { it.row.id in dups }, curveless, profiles.keys)
+                return
+            }
         } else {
             tables.write(db().writableDatabase) {
                 // A part a row doesn't carry stays as stored: a light row never clears a profile or a brew series.
@@ -2138,6 +2192,11 @@ class HistoryStore(
                 for ((id, profile) in profiles) tables.putProfile(this, id, profile)
             }
         }
+        writeRowsLanded(writes, curveless, profiles.keys)
+    }
+
+    /** [writes] landed: memory says so, after the store has them. */
+    private fun writeRowsLanded(writes: List<Write>, curveless: Set<String>, profiled: Set<String> = emptySet()) {
         for (w in writes) {
             val id = w.row.id
             wrote(id)
@@ -2156,8 +2215,9 @@ class HistoryStore(
             }
             dirtySummary.remove(id)
             journaled = journaled - id
+            pulled.remove(id)
         }
-        withProfile += profiles.keys
+        withProfile += profiled
         bumpVersion()
         // These rows landed: an older journal line for one would undo them at the next launch (M3).
         retireJournal(writes.mapTo(HashSet()) { it.row.id })

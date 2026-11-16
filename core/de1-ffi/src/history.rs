@@ -1903,6 +1903,16 @@ impl HistoryDb {
     }
 }
 
+/// Caps every history file opened from now on at `pages` pages (0: no
+/// cap), so a write that grows it fails with a real `SQLITE_FULL` (feature
+/// `test-seeds`; never in the APK).
+#[cfg(feature = "test-seeds")]
+#[uniffi::export]
+pub fn history_max_pages_for_test(pages: u32) {
+    de1_history::store::faults::MAX_PAGES_FOR_TEST
+        .store(pages, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Whether a change moves `query`'s list: its count or its order.
 #[uniffi::export]
 pub fn history_change_moves_list(kinds: HistoryChangeKinds, query: HistoryQuery) -> bool {

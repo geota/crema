@@ -2064,6 +2064,8 @@ class LibraryController(
         }
         // A pull the full view refused isn't written: its staged parts go too.
         historyStore.unstage(incoming.map { it.id }.filterNot { it in kept })
+        // On history.db the core stores a pulled duplicate once (N8, #310 A5).
+        historyStore.markPulled(kept)
         saveHistory()
         return stubs.mapTo(HashSet()) { it.id } - kept - present
     }

@@ -61,6 +61,7 @@ internal class HistoryLate(
         if (force || baseline.movedFrom(stamps) || TEST_ALWAYS_READ) {
             read = true
             val late = ArrayList<String>()
+            val fromShotsDb = HashSet<String>()
             fun import(rows: List<Pair<String, HistoryRowIn>>) {
                 for (chunk in rows.chunked(BATCH)) {
                     // Under the source's lock, as every writer of history.db (REVIEW-466 note 3).
@@ -80,18 +81,24 @@ internal class HistoryLate(
                     id to HistoryRowIn(rowJson, HistoryHeavy(heavy.profileJson, heavy.brewSeriesJson), pulled = true)
                 }
                 import(ins)
+                fromShotsDb += imported
             }
-            // P3a's journal: its puts, by the same id rule. Never written here.
-            val entries = journalPuts()
+            // P3a's journal, by the same id rule, never written here. Its last action per id wins,
+            // as P3a's own merge applies them in order: the last put, and none after a delete
+            // (REVIEW-475 N1). A put for an id this run just brought from shots.db is the newer
+            // version (an older build's edit it couldn't write there): it replaces it.
+            val entries = journalLast()
             if (entries.isNotEmpty()) {
                 val fresh = db.now { it.notInMigrationSource(entries.map { e -> e.id }) }.toHashSet()
-                val ins = entries.filter { it.id in fresh }.distinctBy { it.id }.map { shot ->
+                fun rowIn(shot: StoredShot): HistoryRowIn {
                     val samples = (series.read(shot.id) as? SeriesRead.Found)?.samples
                     val summary = if (samples != null) summaryOf(shot.copy(samples = samples), json) else unknownSeriesSummary(shot)
                     if (samples == null && shot.brewMethod == null) late += shot.id
-                    shot.id to HistoryRowIn(tables.rowJson(shot, summary), HistoryHeavy(tables.profileJson(shot), tables.brewSeriesJson(shot)), pulled = true)
+                    return HistoryRowIn(tables.rowJson(shot, summary), HistoryHeavy(tables.profileJson(shot), tables.brewSeriesJson(shot)), pulled = true)
                 }
-                import(ins)
+                import(entries.filter { it.id in fresh }.map { it.id to rowIn(it) })
+                val again = entries.filter { it.id in fromShotsDb }.map { rowIn(it).copy(pulled = false) }
+                if (again.isNotEmpty()) a.send(a.source.lock.withLock { db.now { it.upsert(again) } }.change)
             }
             // shots.json's rows since P3a's own baseline (S13): only when its bytes moved.
             var hash = baseline.shotsJsonHash
@@ -128,8 +135,10 @@ internal class HistoryLate(
             }
             val lateIds = (db.now { it.lateIds() } + late).distinct()
             // The stamps as the read left them: a read-only open of a WAL file can make its -wal and
-            // -shm. Only this process could write the P3 files meanwhile, and after the flip it never
-            // does, so nothing written during the read is missed (an older build can't run beside us).
+            // -shm. Nothing writes the P3 files between the read and here: this runs inside the store's
+            // open, under `HistoryStore.lock`; on stage 2 no store in this process writes shots.db
+            // (`STAGE2_IN_PROCESS` turns a stale one to the journal); and an older build can't run
+            // beside us. If any of that changes, take the stamps before the read (REVIEW-475 N5).
             val after = LateBaseline.now(filesDir, shotsDb, baseline.shotsJsonHash)
             // A shots.json row that couldn't come in now is looked at again next boot.
             val next = after.copy(shotsJsonHash = hash, shotsJson = if (incomplete) null else stamps.shotsJson)
@@ -165,12 +174,21 @@ internal class HistoryLate(
         r.summary?.sampleCount == 0u && r.shot.brewMethod == null
     }.getOrDefault(false)
 
-    /** P3a's journal's rows to put, in order; a line that doesn't decode is skipped. */
-    private fun journalPuts(): List<StoredShot> =
-        if (!p3Journal.exists()) emptyList()
-        else p3Journal.readLines().filter { it.isNotBlank() }.mapNotNull { line ->
-            runCatching { json.decodeFromString(JournalEntry.serializer(), line).put }.getOrNull()
+    /** P3a's journal's last put per id, in the order of each id's last line; an id whose last line is a delete has none. */
+    private fun journalLast(): List<StoredShot> {
+        if (!p3Journal.exists()) return emptyList()
+        val last = LinkedHashMap<String, JournalEntry>()
+        for (line in p3Journal.readLines()) {
+            if (line.isBlank()) continue
+            val e = runCatching { json.decodeFromString(JournalEntry.serializer(), line) }.getOrNull() ?: continue
+            val id = e.id ?: continue
+            last.remove(id)
+            last[id] = e
         }
+        return last.values.mapNotNull { e ->
+            e.put?.let { p -> if (p.profile == null && e.fillProfile != null) p.copy(profile = e.fillProfile) else p }
+        }
+    }
 
     companion object {
         /** Rows per import transaction. */

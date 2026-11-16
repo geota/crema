@@ -71,17 +71,23 @@ internal class HistoryAuthority(
         return tables.decodeProfile(h.profileJson) to tables.decodeBrewSeries(h.brewSeriesJson)
     }
 
-    /** One write of rows and their heavy parts, in one transaction. Throws on failure: nothing of it landed. */
-    fun write(rows: List<Pair<StoredShot, ShotSummary>>, profiles: Map<String, JsonObject> = emptyMap()) {
+    /**
+     * One write of rows and their heavy parts, in one transaction. Throws on
+     * failure: nothing of it landed. Rows in [pulled] came from a Visualizer
+     * pull: a new one whose Visualizer id another row holds isn't stored
+     * (N8), and its id comes back.
+     */
+    fun write(rows: List<Pair<StoredShot, ShotSummary>>, profiles: Map<String, JsonObject> = emptyMap(), pulled: Set<String> = emptySet()): Set<String> {
         val ins = rows.map { (shot, summary) ->
             HistoryRowIn(
                 rowJson = tables.rowJson(shot, summary),
                 heavy = HistoryHeavy(tables.profileJson(shot) ?: profiles[shot.id]?.toString(), tables.brewSeriesJson(shot)),
-                pulled = false,
+                pulled = shot.id in pulled,
             )
         }
         val written = source.lock.withLock { db.now { it.upsert(ins) } }
         send(written.change)
+        return written.duplicates.mapTo(HashSet()) { it.id }
     }
 
     /** The live libraries (SPEC §5, §6): derived data the coffee scope, effective tags and method labels read. */
