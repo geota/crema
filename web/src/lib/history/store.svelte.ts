@@ -2813,6 +2813,7 @@ export class HistoryStore {
 		this.oldCopyInfo = null;
 		if (!(await this.openSqlite(db))) return false;
 		await this.loadFromDb({ mine, afterLoss: true });
+		this.recordHeldJournal(db);
 		await this.flushed();
 		this.lastFill = { restored: 0, notRestored: 0 };
 		await this.fillFromArchive();
