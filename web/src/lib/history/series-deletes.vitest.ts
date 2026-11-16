@@ -12,6 +12,7 @@ import { buildBackupJsonl, restoreBackup } from '#lib/backup/index.js';
 import type { StoredShot } from './model';
 import { clearAllSeries, getAllSeries, putSeries } from './series-store';
 import { setHistoryStoreDefaultsForTest, getHistoryStore, HistoryStore } from './store.svelte';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 // The legacy backend: the old copy and its series database, as before #310 P3w.
 setHistoryStoreDefaultsForTest({ backend: 'legacy' });
@@ -98,13 +99,13 @@ describe('a corrupt history (#325)', () => {
 		localStorage.setItem(HISTORY_KEY, '{ not json');
 
 		const first = await boot();
-		expect(first.rawAll).toEqual([]);
+		expect(p3RowsOf(first).raw).toEqual([]);
 		first.insertPulled(row('new'));
 		await settle();
 
 		// A clean load of one row: nothing here shows the damage.
 		const second = await boot();
-		expect(second.rawAll.map((s) => s.id)).toEqual(['new']);
+		expect(p3RowsOf(second).raw.map((s) => s.id)).toEqual(['new']);
 		second.insertPulled(row('newer', 1_700_000_000_001));
 		await settle();
 		await boot();
@@ -144,14 +145,14 @@ describe('deletes by name', () => {
 		const store = await boot();
 		store.insertMany([row('newest', 2_000_000)]);
 		await settle();
-		expect(store.rawAll).toHaveLength(300);
+		expect(p3RowsOf(store).raw).toHaveLength(300);
 		expect(await seriesIds()).toEqual(['newest', 'r0']);
 		expect(await captureIds()).toEqual([]);
 	});
 
 	it('a row a quota eviction drops loses its series, once the retry stored', async () => {
 		const store = await stored('r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7', 'r8', 'r9', 'r10');
-		const oldest = store.rawAll.at(-1)!.id;
+		const oldest = p3RowsOf(store).raw.at(-1)!.id;
 		const realSet = localStorage.setItem.bind(localStorage);
 		let fail = true;
 		vi.spyOn(localStorage, 'setItem').mockImplementation((k: string, v: string) => {
@@ -161,9 +162,9 @@ describe('deletes by name', () => {
 			}
 			realSet(k, v);
 		});
-		store.setRating(store.rawAll[0].id, 3);
+		store.setRating(p3RowsOf(store).raw[0].id, 3);
 		await settle();
-		expect(store.rawAll).toHaveLength(9);
+		expect(p3RowsOf(store).raw).toHaveLength(9);
 		expect(await seriesIds()).not.toContain(oldest);
 	});
 
@@ -208,7 +209,7 @@ describe('deletes by name', () => {
 describe('rebasing', () => {
 	it('adopting rows from another tab deletes nothing', async () => {
 		const store = await stored('a', 'theirs');
-		store.adoptRows(store.rawAll.filter((s) => s.id === 'a'));
+		store.adoptRows(p3RowsOf(store).raw.filter((s) => s.id === 'a'));
 		store.setRating('a', 5);
 		await settle();
 		expect(await seriesIds()).toEqual(['a', 'theirs']);
@@ -263,7 +264,7 @@ describe('rebasing', () => {
 
 		await restoreBackup(backup.jsonl, 'wipe');
 		await settle();
-		expect(history.rawAll.map((s) => s.id)).toEqual(['kept']);
+		expect(p3RowsOf(history).raw.map((s) => s.id)).toEqual(['kept']);
 		// The removed row's curve and capture wait for the marker's hour.
 		expect(await captureIds()).toEqual(['kept', 'later']);
 		expect(await seriesIds()).toEqual(['kept', 'later']);

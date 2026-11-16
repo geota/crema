@@ -16,6 +16,7 @@ import { indexReady, p3Db, seedP3, stage1Tab, w2Env, type W2Env } from './w2-kit
 import { GAP_MS } from './index-sync.js';
 import { P3_CHANNEL } from './names.js';
 import type { ChangeSet } from './protocol.js';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const realIdb = (globalThis as { indexedDB?: unknown }).indexedDB;
 beforeAll(async () => {
@@ -226,7 +227,7 @@ describe('an owner that doesn’t answer (S2)', () => {
 		await vi.waitFor(() => expect(other.client.status.health).toBe('index_fallback'), { timeout: 10_000 });
 		expect(other.client.status.message).toBeNull();
 		// The P3 store takes writes as usual.
-		const id = store.all[0].id;
+		const id = p3RowsOf(store).live[0].id;
 		store.setRating(id, 3);
 		await store.flushed();
 		expect((await p3Db().rowsOf([id])).get(id)?.metadata.rating).toBe(3);
@@ -256,7 +257,7 @@ describe('every P3w write path bumps writeSeq (M4)', () => {
 		const listen = w.p3Channel('listener');
 		listen.onmessage = (e) => heard.push(e.data as { ids: string[]; seq: number });
 		const store = await boot({ channel: () => w.p3Channel('p3tab') });
-		const [a, b] = store.all;
+		const [a, b] = p3RowsOf(store).live;
 		store.setRating(a.id, 4);
 		await store.flushed();
 		store.setNotes(b.id, 'sweet');

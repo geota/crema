@@ -100,6 +100,7 @@ import {
 	type StoredShot
 } from '#lib/history/model.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
+import { liveSyncRows, rowBoundTo, syncRows } from '#lib/history/sync-view.js';
 import { getSettingsStore } from '#lib/settings/index.js';
 import type { components } from '#lib/visualizer/openapi.js';
 import {
@@ -425,7 +426,7 @@ function mergeInputOf(shot: AnyShot, edit: PendingEdit | undefined, hasProfile?:
 function mergeInputsOf(history: HistoryStore): Map<string, ShotMergeInput> {
 	const edits = pendingEdits();
 	const out = new Map<string, ShotMergeInput>();
-	for (const shot of history.rawAll) {
+	for (const shot of syncRows(history)) {
 		if (shot.visualizerId && !isBrewLog(shot)) out.set(shot.id, mergeInputOf(shot, edits.get(shot.id)));
 	}
 	return out;
@@ -919,7 +920,7 @@ export const ShotSyncLive = Layer.effect(
 				// tombstone the planner saw it as new and pulled it back. A bound
 				// one's `update` is skipped below; an unbound one binds by upload key.
 				const parked = parkedTombstones();
-				const local = history.rawAll.filter((s) => !isBrewLog(s) && !parked.has(s.id));
+				const local = syncRows(history).filter((s) => !isBrewLog(s) && !parked.has(s.id));
 				const keptOut = remoteKeptOut();
 				const actions = reconcileShots(
 					local,
@@ -1055,7 +1056,7 @@ export const ShotSyncLive = Layer.effect(
 		const knownRowsOf = (history: HistoryStore, seriesLoaded: boolean): Map<string, KnownRow> => {
 			const keptOut = remoteKeptOut();
 			const out = new Map<string, KnownRow>();
-			for (const shot of history.rawAll) {
+			for (const shot of syncRows(history)) {
 				if (!shot.visualizerId) continue;
 				out.set(shot.visualizerId, {
 					remoteId: shot.visualizerId,
@@ -1072,7 +1073,7 @@ export const ShotSyncLive = Layer.effect(
 
 		/** Unbound rows and unbound tombstones a remote row may be the upload of. */
 		const keyCandidatesOf = (history: HistoryStore): KeyCandidate[] =>
-			history.rawAll
+			syncRows(history)
 				.filter((s) => !s.visualizerId && !isBrewLog(s))
 				.map((s) => ({
 					localId: s.id,
@@ -1093,7 +1094,7 @@ export const ShotSyncLive = Layer.effect(
 			onWaiting?: (waitMs: number) => void
 		): Effect.Effect<RunReply<RowOutcome>> =>
 			Effect.gen(function* () {
-				const bound = history.rawAll.find((s) => s.visualizerId === row.id);
+				const bound = rowBoundTo(history, row.id);
 				// The row holds no profile in memory (#310 P4w): whether the store
 				// holds one decides the recipe fetch and fill. Unknown (a read that
 				// failed) counts as held, so nothing replaces the shot's own.
@@ -1298,7 +1299,7 @@ export const ShotSyncLive = Layer.effect(
 				// The only failing row may be the only one changed: one known-good
 				// detail says whether the server works, for the poison count.
 				if (pullRules.healthProbeDue(tally)) {
-					const good = history.rawAll.find(
+					const good = syncRows(history).find(
 						(s) => s.visualizerId && s.deletedAt == null && s.visualizerUpdatedAt != null
 					);
 					if (good?.visualizerId) {
@@ -1338,7 +1339,7 @@ export const ShotSyncLive = Layer.effect(
 			// Brew Log rows (`isBrewLog`) never sync: Visualizer is a
 			// DE1-telemetry service and brews carry none (issue #10 — the same
 			// local-only posture as `nextPlan`).
-			const backlog = history.all.filter(
+			const backlog = liveSyncRows(history).filter(
 				(s) => !s.visualizerId && !isBrewLog(s) && !excludedFromUpload(s, config)
 			);
 			const list = backlog.filter((s) => !refusedNoSamples(s));

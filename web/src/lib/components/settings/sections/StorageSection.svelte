@@ -29,23 +29,27 @@
 		type CaptureKeepChoice
 	} from '#lib/capture/limit.js';
 	import { capturesOverLimit, pruneCaptures } from '#lib/capture/prune.js';
+	import { getHistoryReads, liveCount, liveRows } from '#lib/history/reads.svelte.js';
 
 	const history = getHistoryStore();
+	const reads = getHistoryReads();
 	// The history stores the choice once its rows load; before that this only
 	// reads it, as a first read decides by whether the history has rows.
-	let keep = $state<CaptureKeepChoice>(history.loaded ? readCaptureKeep(() => history.rawAll.length > 0) : peekCaptureKeep());
+	let keep = $state<CaptureKeepChoice>(history.loaded ? readCaptureKeep(() => history.holdsAnyRow) : peekCaptureKeep());
 	$effect(() => {
-		if (history.loaded) keep = readCaptureKeep(() => history.rawAll.length > 0);
+		if (history.loaded) keep = readCaptureKeep(() => history.holdsAnyRow);
 	});
 	let note = $state<string | null>(null);
 	let used = $state<string | null>(null);
-	// Every live row, past the view too (#310).
-	const pinned = $derived(history.loaded ? history.allLive.filter((s) => s.pinned === true).length : 0);
+	// Every live row, past the view too (#310), counted by a query (W3).
+	const pinnedCount = reads.watch(() => liveCount({ pinnedOnly: true }), 0);
+	const liveTotal = reads.watch(() => liveCount(), 0);
+	const pinned = $derived(history.loaded ? pinnedCount.value : 0);
 	const persisted = $derived(storagePersisted());
 	const historySub = $derived.by(() => {
 		switch (history.health) {
 			case 'ok': {
-				const n = history.loaded ? history.allLive.length : 0;
+				const n = history.loaded ? liveTotal.value : 0;
 				return n > HISTORY_DESIGN_SIZE
 					? `Kept in this browser’s database, every shot: ${n.toLocaleString()}, past the ${HISTORY_DESIGN_SIZE.toLocaleString()} Crema is tuned for, so History may be slower. Nothing is removed on its own.`
 					: 'Kept in this browser’s database, every shot.';
@@ -116,16 +120,26 @@
 			return;
 		}
 		const before = new Date(y, m - 1, d).getTime();
-		const plan = freeUpPlan(history.rawAll, before);
+		freeing = true;
+		// Every live row, whole and from one state (#310 W3): the plan deletes by id.
+		let rows;
+		try {
+			rows = await reads.answer(liveRows());
+		} catch {
+			freeing = false;
+			freeNote = 'The shot history is still loading. Try again in a moment.';
+			return;
+		}
+		const plan = freeUpPlan(rows, before);
 		const day = new Date(before).toLocaleDateString();
 		if (plan.ids.length === 0) {
+			freeing = false;
 			freeNote =
 				plan.pinnedKept > 0
 					? `Every shot older than ${day} is pinned, so there is nothing to delete.`
 					: `No shots are older than ${day}.`;
 			return;
 		}
-		freeing = true;
 		try {
 			const lastAt = lastBackupAt();
 			const backUpFirst = await choiceDialog({

@@ -12,6 +12,7 @@ import { Verdict } from '#lib/core/crema-core.js';
 import { BACKUP_READ_LIMITS, BackupReadError } from '#lib/backup/zip-reader.js';
 import { planNow, prepareBackupFile, readRecords, runRestore, shotsTheRunWrites, type RestoreDeps } from './engine';
 import { resetTabSafetyForTest } from './tab-safety';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 /**
  * The streamed restore (#310 P2w-b) on the real stores: a backup read from a
@@ -155,22 +156,22 @@ describe('a streamed restore', () => {
 		expect(records.shots.length).toBe(capacity);
 		const out = await runRestore(prepared, 'merge', { expected: plan }, deps());
 		expect(out.kind).toBe('done');
-		expect(getHistoryStore().all.length).toBe(capacity);
-		expect(getHistoryStore().all[0].id).toBe('s0');
+		expect(p3RowsOf(getHistoryStore()).live.length).toBe(capacity);
+		expect(p3RowsOf(getHistoryStore()).live[0].id).toBe('s0');
 	}, 60_000);
 
 	it('300 rows here, all newer than the backup: Replace leaves exactly the backup’s rows', async () => {
 		const jsonl = await backupWithShots(20, 1_700_000_000_000);
 		const capacity = getHistoryStore().capacity;
 		for (let i = 0; i < capacity; i++) getHistoryStore().insertPulled(shot(`here${i}`, 1_800_000_000_000 - i * 60_000));
-		expect(getHistoryStore().all.length).toBe(capacity);
+		expect(p3RowsOf(getHistoryStore()).live.length).toBe(capacity);
 		const prepared = await prepareBackupFile(new Blob([zipOf(jsonl) as BlobPart]), 'old.crema.zip');
 		const plan = await planNow(prepared, 'wipe', false, new FakeLocks());
 		expect(plan.verdict).toBe(Verdict.Confirm);
 		expect(await runRestore(prepared, 'wipe', { expected: plan }, deps())).toMatchObject({ kind: 'done' });
 		expect(
-			getHistoryStore()
-				.all.map((s) => s.id)
+			p3RowsOf(getHistoryStore())
+				.live.map((s) => s.id)
 				.sort()
 		).toEqual(Array.from({ length: 20 }, (_, i) => `s${i}`).sort());
 	});
@@ -217,7 +218,7 @@ describe('a streamed restore', () => {
 		for (const bytes of [crc, truncated]) {
 			await expect(prepareBackupFile(new Blob([bytes as BlobPart]), 'bad.crema.zip')).rejects.toBeInstanceOf(BackupReadError);
 		}
-		expect(getHistoryStore().all.map((s) => s.id)).toEqual(['mine']);
+		expect(p3RowsOf(getHistoryStore()).live.map((s) => s.id)).toEqual(['mine']);
 	});
 
 	it('a photo that fails its checksum is refused before the plan, not at step 3', async () => {
@@ -256,7 +257,7 @@ describe('a streamed restore', () => {
 			current = real[1];
 			reads += 1;
 			await expect(runRestore(prepared, 'merge', { expected: plan }, deps())).rejects.toBeInstanceOf(BackupReadError);
-			expect(getHistoryStore().all).toHaveLength(0);
+			expect(p3RowsOf(getHistoryStore()).live).toHaveLength(0);
 			expect(reads).toBe(1);
 		}
 	});
@@ -275,6 +276,6 @@ describe('a streamed restore', () => {
 		expect(JSON.parse(fromText.manifestJson)).toEqual(JSON.parse(fromZip.manifestJson));
 		const plan = await planNow(fromText, 'merge', false, new FakeLocks());
 		expect(await runRestore(fromText, 'merge', { expected: plan }, deps())).toMatchObject({ kind: 'done' });
-		expect(getHistoryStore().all.length).toBe(4);
+		expect(p3RowsOf(getHistoryStore()).live.length).toBe(4);
 	});
 });

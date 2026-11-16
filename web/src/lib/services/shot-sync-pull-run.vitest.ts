@@ -29,6 +29,7 @@ vi.mock('#lib/history/series-store.js', () => ({
 }));
 
 import { HistoryStore } from '#lib/history/store.svelte.js';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const T0 = 1_700_000_000; // unix s
 
@@ -156,7 +157,7 @@ describe('the pull run', () => {
 		const history = new HistoryStore();
 		const out = await pull(v, history);
 		expect(out.outcome).toMatchObject({ kind: 'Complete', details: { applied: 40 } });
-		expect(history.all.filter((s) => s.visualizerId)).toHaveLength(40);
+		expect(p3RowsOf(history).live.filter((s) => s.visualizerId)).toHaveLength(40);
 		expect(v.details()).toHaveLength(40);
 		const newest = T0 + 10_000 + 39;
 		expect(readSyncConfig().shotPullCursor).toBe((newest - 60) * 1000);
@@ -191,7 +192,7 @@ describe('the pull run', () => {
 		const history = new HistoryStore();
 		const out = await pull(v, history);
 		expect(out.outcome).toMatchObject({ kind: 'Partial', details: { reason: 'RateLimited', applied: 100 } });
-		expect(history.all.filter((s) => s.visualizerId)).toHaveLength(100);
+		expect(p3RowsOf(history).live.filter((s) => s.visualizerId)).toHaveLength(100);
 		expect(readSyncConfig().shotPullCursor).toBeNull();
 		// 60 s, then ten minutes (and again), each with up to 20 % added.
 		expect(waits).toHaveLength(3);
@@ -327,7 +328,7 @@ describe('the pull run', () => {
 				: real(req);
 		const history = new HistoryStore();
 		await pull(v, history);
-		expect(history.all.find((s) => s.visualizerId === 'r0')?.visualizerUpdatedAt).toBe(T0 + 10_000);
+		expect(p3RowsOf(history).live.find((s) => s.visualizerId === 'r0')?.visualizerUpdatedAt).toBe(T0 + 10_000);
 		expect(v.details()).toEqual(['GET /api/shots/r0']); // the walk skips it: up to date
 	});
 });

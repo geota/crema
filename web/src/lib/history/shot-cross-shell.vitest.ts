@@ -15,6 +15,7 @@ import { resolve } from 'node:path';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import type { CoreOutput, CremaCore, NotificationSource } from '#lib/core/index.js';
 import { isCremaJsonl, shotHistoryJsonl, shotsFromCremaJsonl } from './crema-jsonl';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const FIXTURES = resolve(process.cwd(), '../core/de1-domain/tests/fixtures/shots');
 const fixture = (name: string) => readFileSync(resolve(FIXTURES, name), 'utf8');
@@ -74,7 +75,7 @@ async function recordedShot() {
 	t.settings.set('baristaName', 'Sam');
 	await t.pour(1_000, 48);
 	const shot = {
-		...(await t.history.loadShot(t.history.all[0].id))!,
+		...(await t.history.loadShot(p3RowsOf(t.history).live[0].id))!,
 		tags: ['dial-in'],
 		bean: { name: 'Gesha', roasterName: 'Onyx', roastedOn: '2026-10-01', roastLevel: 3 }
 	};
@@ -114,7 +115,7 @@ describe('shot history between the shells (F10)', () => {
 		);
 		expect(result.error).toBeNull();
 		expect(result.imported).toBe(1);
-		const shot = (await t.history.loadShot(t.history.all[0].id))!;
+		const shot = (await t.history.loadShot(p3RowsOf(t.history).live[0].id))!;
 		expect(shot.record.samples).toHaveLength(48);
 		// DE1 frames count from 0: the first frame survives the trip.
 		expect(shot.record.samples.slice(0, 4).map((s) => s.sample.frameNumber)).toEqual([0, 2, 2, 3]);
@@ -128,7 +129,7 @@ describe('shot history between the shells (F10)', () => {
 			fileOf(fixture('android-shots.crema.jsonl'), 'android-shots.crema.jsonl')
 		);
 		expect(again.imported).toBe(0);
-		expect(t.history.all).toHaveLength(1);
+		expect(p3RowsOf(t.history).live).toHaveLength(1);
 	});
 
 	it('the committed web shot export imports on web', async () => {
@@ -137,7 +138,7 @@ describe('shot history between the shells (F10)', () => {
 			fileOf(fixture('web-shots.crema.jsonl'), 'web-shots.crema.jsonl')
 		);
 		expect(result.imported).toBe(1);
-		const shot = (await t.history.loadShot(t.history.all[0].id))!;
+		const shot = (await t.history.loadShot(p3RowsOf(t.history).live[0].id))!;
 		expect(shot.record.samples).toHaveLength(48);
 		expect(shot.record.samples.slice(0, 4).map((s) => s.sample.frameNumber)).toEqual([0, 2, 2, 3]);
 		expect(shot.grinderModel).toBe('EK43');

@@ -22,6 +22,7 @@ vi.mock('#lib/history/series-store.js', () => ({
 }));
 
 import { HistoryStore } from '#lib/history/store.svelte.js';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 beforeAll(async () => {
 	await initTestWasm();
@@ -92,12 +93,12 @@ describe('ShotSync.applyShotReconciliation with tombstones', () => {
 		const history = new HistoryStore();
 		history.insertPulled(localShot('shot:deleted', 'vis-1'));
 		history.delete('shot:deleted'); // synced → tombstoned, DELETE pending
-		expect(history.all).toHaveLength(0);
+		expect(p3RowsOf(history).live).toHaveLength(0);
 
 		await reconcile(history, [remoteShot('vis-1')]);
 
-		expect(history.all).toHaveLength(0);
-		expect(history.rawAll.map((s) => s.id)).toEqual(['shot:deleted']);
+		expect(p3RowsOf(history).live).toHaveLength(0);
+		expect(p3RowsOf(history).raw.map((s) => s.id)).toEqual(['shot:deleted']);
 		// The tombstone is left alone: no tag update from the remote.
 		expect(history.get('shot:deleted')?.tags).toEqual([]);
 		expect(history.get('shot:deleted')?.deletedAt).not.toBeNull();
@@ -116,7 +117,7 @@ describe('ShotSync.applyShotReconciliation with tombstones', () => {
 		]);
 
 		expect(history.get('shot:live')?.tags).toEqual(['remote-tag']);
-		expect(history.all.map((s) => s.visualizerId).sort()).toEqual(['vis-2', 'vis-3']);
-		expect(history.rawAll).toHaveLength(3);
+		expect(p3RowsOf(history).live.map((s) => s.visualizerId).sort()).toEqual(['vis-2', 'vis-3']);
+		expect(p3RowsOf(history).raw).toHaveLength(3);
 	});
 });

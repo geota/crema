@@ -44,7 +44,7 @@ describe('buildBackupJsonl', () => {
 			() => new Promise((resolve) => (land = resolve))
 		);
 		// Every live row, past the view too (#310 P3w).
-		const all = vi.spyOn(getHistoryStore(), 'allLive', 'get');
+		const all = vi.spyOn(getHistoryStore() as unknown as { liveRows(): unknown }, 'liveRows');
 
 		const building = buildBackupJsonl('test');
 		await Promise.resolve();

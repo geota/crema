@@ -162,6 +162,7 @@ import { readProfiles, workerProfileReader, type WorkerLike } from './snapshot-p
 import { summarize } from './summary';
 import { CurveArchive, defaultArchiveRoot, holdsCurve, type ArchiveRoot } from './curve-archive';
 import type { LockManagerLike } from '#lib/restore/tab-safety.js';
+import { P3_ROWS, type P3Rows } from './p3-rows';
 
 /** Current persisted-shot schema version — matches Rust's `STORED_SHOT_FORMAT_VERSION`. */
 const STORED_SHOT_FORMAT_VERSION = 3;
@@ -656,6 +657,7 @@ export class HistoryStore {
 			!this.flushQueued &&
 			this.heard.size === 0 &&
 			this.adopting === 0 &&
+			this.removing.size === 0 &&
 			this.dirtyDetails.size === 0 &&
 			this.writingDetails.size === 0 &&
 			this.dirtyRowIds().length === 0;
@@ -1353,29 +1355,58 @@ export class HistoryStore {
 	}
 
 	/**
-	 * The user-visible history, newest first: every live row, as
-	 * {@link ShotRow}s, which carry their summary and no heavy parts.
-	 * Tombstones (`deletedAt` set) are filtered out — they only exist for the
-	 * sync layer to push a remote DELETE. Reactive.
+	 * The rows as this tab holds them: P3w's, in memory (#310 W3). Not on the
+	 * store's public type: every reader asks a query (`#lib/history/reads`),
+	 * and only the store's own seams read the whole list, through
+	 * `p3RowsOf` (`p3-rows.ts`): the dev oracle, the in-memory fallback list, the P3
+	 * backup source and sync's planners (`p3-rows-guard.vitest.ts` holds the
+	 * list). Each is checked before the rows load in dev, as before.
 	 */
-	get all(): ShotRow[] {
+	private liveRows(): ShotRow[] {
 		this.assertLoaded('all');
 		return this.rows().all;
 	}
 
-	/**
-	 * Every stored row, tombstones too. The sync layer,
-	 * imports and restore read this; the UI uses {@link all}.
-	 */
-	get rawAll(): ShotRow[] {
+	private rawRows(): ShotRow[] {
 		this.assertLoaded('rawAll');
 		return this.rows().raw;
 	}
 
-	/** Every live row: what a backup holds. Whole shots come from {@link loadMany}. */
-	get allLive(): ShotRow[] {
-		this.assertLoaded('allLive');
-		return this.rows().raw.filter((s) => s.deletedAt == null);
+	/** The rows, for {@link p3RowsOf}'s callers only. */
+	[P3_ROWS](): P3Rows {
+		// eslint-disable-next-line @typescript-eslint/no-this-alias
+		const self = this;
+		return {
+			get live() {
+				return self.liveRows();
+			},
+			get raw() {
+				return self.rawRows();
+			}
+		};
+	}
+
+	/** Each list of rows this store has held, numbered: {@link rowsVersion} without handing the list out. */
+	private listNumbers = new WeakMap<readonly StoredShot[], number>();
+	private lastListNumber = 0;
+
+	/**
+	 * Moves whenever a row, the set or a summary does: what a reactive query
+	 * follows to ask again (#310 W3). Opaque; reactive.
+	 */
+	get rowsVersion(): string {
+		const rows = this.shots;
+		let n = this.listNumbers.get(rows);
+		if (n === undefined) {
+			n = ++this.lastListNumber;
+			this.listNumbers.set(rows, n);
+		}
+		return `${n}:${this.summaryTick}`;
+	}
+
+	/** Whether this tab holds any row at all, tombstones too: a capture limit's first read (#311). */
+	get holdsAnyRow(): boolean {
+		return this.shots.length > 0;
 	}
 
 	/**
@@ -3191,7 +3222,7 @@ export class HistoryStore {
 	 * storage with `deletedAt` stamped so the next Visualizer sync can
 	 * push a DELETE for `visualizerId` and garbage-collect the
 	 * tombstone after the remote acknowledges. The History UI filters
-	 * tombstones out via {@link all}.
+	 * tombstones out via the live rows.
 	 *
 	 * A row with no `visualizerId` whose upload is under way keeps its
 	 * tombstone too, since a binding can arrive later (#331): from the upload

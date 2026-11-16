@@ -27,6 +27,7 @@ import { summarize } from './summary';
 import { boot, freshStorage } from './idb-test-kit';
 import { HistoryListModel } from './list-model.svelte';
 import type { StoredShot } from './model';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const realIdb = (globalThis as { indexedDB?: unknown }).indexedDB;
 afterAll(() => {
@@ -48,7 +49,7 @@ it('a star tap, a note and a pin through the store move only their own version',
 	let model!: HistoryListModel;
 	const stop = $effect.root(() => {
 		model = new HistoryListModel({
-			rows: () => store.all,
+			rows: () => p3RowsOf(store).live,
 			get: (id) => store.get(id),
 			query: () => '',
 			filters: () => ({

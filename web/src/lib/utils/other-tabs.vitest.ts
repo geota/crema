@@ -25,6 +25,7 @@ setHistoryStoreDefaultsForTest({ backend: 'legacy' });
 import { readStored, resetStorageStateForTest } from './storage';
 import { resetTabSafetyForTest, shotFinished, shotStarted } from '#lib/restore/tab-safety.js';
 import type { CremaProfile } from '#lib/profiles/model.js';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const BEANS = 'crema.beans.v1';
 const HISTORY = 'crema.history.v2';
@@ -417,7 +418,7 @@ describe('history', () => {
 		announce(HISTORY);
 		c.insertPulled(row('z', 1_800_000_000_000));
 		announce(HISTORY);
-		expect(a.all.map((s) => s.id), 'this tab keeps its rows').toEqual(['y', 'x']);
+		expect(p3RowsOf(a).live.map((s) => s.id), 'this tab keeps its rows').toEqual(['y', 'x']);
 		a.setRating('x', 3);
 		const stored = (JSON.parse(localStorage.getItem(HISTORY)!) as StoredShot[]).map((s) => s.id);
 		expect(stored, 'and its next write puts them back').toEqual(['y', 'x']);

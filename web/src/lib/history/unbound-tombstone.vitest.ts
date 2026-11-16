@@ -25,6 +25,7 @@ vi.mock('./series-store', () => ({
 }));
 
 import { HistoryStore, uploadPending } from './store.svelte';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const row = (over: Partial<StoredShot> = {}): StoredShot =>
 	({
@@ -69,13 +70,13 @@ describe('delete_during_upload_stays_deleted', () => {
 		const history = store();
 		markUploadAttempted('s1');
 		history.delete('s1');
-		expect(history.all).toEqual([]);
+		expect(p3RowsOf(history).live).toEqual([]);
 
 		history.bindVisualizerId('s1', 'v-1');
 
 		expect(history.get('s1')).toMatchObject({ visualizerId: 'v-1' });
 		expect(history.get('s1')?.deletedAt).not.toBeNull();
-		expect(history.all).toEqual([]);
+		expect(p3RowsOf(history).live).toEqual([]);
 		expect(readQueue().entries).toEqual([]);
 		expect(uploadAttempted('s1')).toBe(false);
 	});
@@ -93,7 +94,7 @@ describe('delete_during_upload_stays_deleted', () => {
 		markUploadAttempted('s1');
 		history.delete('s1');
 
-		const [action] = reconcileShots(history.rawAll, [remote()]);
+		const [action] = reconcileShots(p3RowsOf(history).raw, [remote()]);
 
 		expect(action).toMatchObject({ kind: 'bind', localId: 's1', visualizerId: 'v-1' });
 	});
@@ -103,7 +104,7 @@ describe('delete_during_upload_stays_deleted', () => {
 		markUploadAttempted('s1');
 		uploadReturned('s1'); // a new tab holds nothing in memory
 		before.delete('s1');
-		expect(reconcileShots(new HistoryStore().rawAll, [remote()])[0]).toMatchObject({ kind: 'bind' });
+		expect(reconcileShots(p3RowsOf(new HistoryStore()).raw, [remote()])[0]).toMatchObject({ kind: 'bind' });
 	});
 
 	it('a parked tombstone carries its parking onto the remote delete', () => {

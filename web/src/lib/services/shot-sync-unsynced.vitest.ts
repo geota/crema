@@ -88,6 +88,7 @@ import type { StoredShot } from '#lib/history/model.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
 import type { TokenSet } from '../visualizer/oauth.ts';
 import { markShotEdit, pendingEdits } from '../visualizer/pending-edits.ts';
+import { P3_ROWS, p3RowsOf, type HoldsP3Rows } from '#lib/history/p3-rows.js';
 
 /** A fake HttpClient driven by `handler`; every reply here is a 2xx. */
 function mkHttp(handler: (req: HttpRequest) => unknown) {
@@ -137,6 +138,7 @@ function mkHistory(initial: StoredShot[]) {
 		get rawAll() {
 			return [...map.values()];
 		},
+		[P3_ROWS]: () => ({ live: [...map.values()], raw: [...map.values()] }),
 		get: (id: string) => map.get(id),
 		loadShot: async (id: string) => map.get(id),
 		loadMany: async (ids: readonly string[]) => ids.map((id) => map.get(id)).filter((s) => s !== undefined),
@@ -415,7 +417,7 @@ describe('ShotSync.uploadUnsyncedShots — the stored series (#330)', () => {
 		let land: ((ready: boolean) => void) | undefined;
 		const waiting = new Promise<boolean>((resolve) => (land = resolve));
 		(history as unknown as { seriesReady: () => Promise<boolean> }).seriesReady = () => waiting;
-		const all = vi.spyOn(history, 'all', 'get');
+		const all = vi.spyOn(history as unknown as HoldsP3Rows, P3_ROWS);
 
 		const running = run(history);
 		await Promise.resolve();
@@ -481,7 +483,7 @@ describe('ShotSync.uploadUnsyncedShots — free-plan daily quota (visualizer 3e9
 		expect(result).toEqual({ uploaded: 0, stopped: { reason: 'quota', limit: 30 } });
 		// Not queued for a timed retry; every shot stays eligible for the next pass.
 		expect(h.enqueueEntry).not.toHaveBeenCalled();
-		expect(history.all.every((s) => !s.visualizerId)).toBe(true);
+		expect(p3RowsOf(history).live.every((s) => !s.visualizerId)).toBe(true);
 		// The user is told why.
 		expect(describeUnsyncedStop(result)).toEqual({
 			kind: 'info',

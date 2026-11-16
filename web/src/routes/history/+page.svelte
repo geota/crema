@@ -116,6 +116,8 @@
 	import { onMount, tick, untrack } from 'svelte';
 	import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
 	import { uploadPending } from '#lib/history/store.svelte.js';
+	import { p3RowsOf } from '#lib/history/p3-rows.js';
+	import { getHistoryReads, liveRows } from '#lib/history/reads.svelte.js';
 	import { uploadsHeld } from '#lib/visualizer/sync-config.js';
 	import { markShotEdit, type ShotEdit } from '#lib/visualizer/pending-edits.js';
 	import { readQueue } from '#lib/services/queue-store.js';
@@ -134,6 +136,7 @@
 	import { COFFEE_FILTER_PREFIX as COFFEE_PREFIX } from '#lib/history/search.js';
 
 	const store = getHistoryStore();
+	const historyReads = getHistoryReads();
 	const appCtx = getCremaAppContext();
 	const settings = getSettingsStore();
 	const beanLibrary = getBeanStore();
@@ -224,7 +227,8 @@
 	 * empty curves.
 	 */
 	async function exportAllAsV2Jsonl(): Promise<void> {
-		const ids = shots.map((s) => s.id);
+		// Every live row, by a query, whole and from one state (#310 W3).
+		const ids = (await historyReads.answer(liveRows())).map((s) => s.id);
 		const lines: string[] = [];
 		for (let i = 0; i < ids.length; i += 25) {
 			for (const whole of await store.loadMany(ids.slice(i, i + 25))) {
@@ -255,7 +259,8 @@
 		// IndexedDB awaits don't fight the zip's worker.
 		const files: Record<string, Uint8Array> = {};
 		let skipped = 0;
-		for (const shot of shots) {
+		// Every live row, by a query, whole and from one state (#310 W3).
+		for (const shot of await historyReads.answer(liveRows())) {
 			const entries = await captureStore.get(shot.id).catch(() => null);
 			if (!entries || entries.length === 0) {
 				skipped += 1;
@@ -426,8 +431,8 @@
 	}
 	function syncEditToVisualizer(id: string): void {
 		if (!canPushShots) return;
-		const shot = store.all.find((s) => s.id === id);
-		if (!shot?.visualizerId) return;
+		const shot = store.get(id);
+		if (!shot?.visualizerId || shot.deletedAt != null) return;
 		const api = appCtx().services;
 		if (!api) return;
 		const name = shot.profileName ?? 'Shot';
@@ -846,7 +851,9 @@
 	// facet field; whatever shows a row reads the current one by id.
 	const model = new HistoryListModel({
 		// Not loaded is not empty (#310): nothing here reads the rows until they're in.
-		rows: () => (store.loaded ? store.all : []),
+		// The in-memory list: `index_fallback`'s, and the derivations the index
+		// doesn't answer yet (#310 W2, W3), over P3w's rows.
+		rows: () => (store.loaded ? p3RowsOf(store).live : []),
 		get: (id) => (store.loaded ? store.get(id) : undefined),
 		query: () => q,
 		filters: () => ({
@@ -927,7 +934,7 @@
 		void loadReference().then((fns) => {
 			if (!fns) return;
 			oracle = new DevOracle<Row>(fns, {
-				rows: () => store.rawAll,
+				rows: () => p3RowsOf(store).raw,
 				idOf: (r) => r.id,
 				completedAtOf: (r) => r.completedAt,
 				live: () => live,

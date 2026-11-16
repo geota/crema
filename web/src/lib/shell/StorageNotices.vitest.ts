@@ -13,6 +13,7 @@ import { realSamples, realShot } from '#lib/testing/real-shots.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
 import { boot, freshStorage, stored, writeOldCopy } from '#lib/history/idb-test-kit.js';
 import { StorageWatch, storageLevelOf } from '#lib/history/storage-watch.svelte.js';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 vi.mock('$app/navigation', () => ({ goto: vi.fn(() => Promise.resolve()) }));
 let current: HistoryStore | null = null;
@@ -118,7 +119,7 @@ describe('the banners', () => {
 		button(target, 'Free up space')!.click();
 		expect(vi.mocked(goto).mock.calls).toEqual([['/settings#sharing'], ['/settings#sharing']]);
 		// Nothing was deleted to make room.
-		expect(store.rawAll).toHaveLength(1);
+		expect(p3RowsOf(store).raw).toHaveLength(1);
 	});
 
 	it('80%: one notice, dismissed for good until use drops below 80% and climbs again', async () => {

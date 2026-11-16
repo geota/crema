@@ -21,6 +21,7 @@ import { sampleCountOf, type AnyShot, type StoredShot } from '#lib/history/index
 import type { CremaProfile } from '#lib/profiles/model.js';
 import type { BrewRecipe, CustomBrewMethod } from '#lib/core/crema-core.js';
 import type { PreparedBackup, RestoreStep, WebMode } from './engine';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const FIXTURES = resolve(process.cwd(), '../core/de1-domain/tests/fixtures');
 const WASM = new WebAssembly.Module(readFileSync(resolve(process.cwd(), 'src/lib/wasm/de1_wasm_bg.wasm')));
@@ -415,7 +416,7 @@ async function readBack(app: App) {
 			meta: { pinned: sorted(profileMeta.pinned), hidden: sorted(profileMeta.hiddenBuiltins) }
 		},
 		shots: {
-			rows: byId(history.rawAll),
+			rows: byId(p3RowsOf(history).raw),
 			series: sorted(await app.storedCurves())
 		},
 		settings: {
@@ -678,7 +679,7 @@ describe(`the shared matrix, on real web stores (${backend})`, () => {
 			const deleted = await later.marker.checkMarkerAtBoot({
 				now: (after.marker!.finishingAt ?? 0) + later.marker.DELETE_AFTER_MS,
 				restoreRunning: async () => false,
-				listedShots: () => new Set(later.history().rawAll.map((s) => s.id)),
+				listedShots: () => new Set(p3RowsOf(later.history()).raw.map((s) => s.id)),
 				shotsHealth: () => later.history().rowsHealth(),
 				listedBeans: () => new Set(later.beans().beans.map((b) => b.id)),
 				deleteSeries: later.series.deleteSeries,

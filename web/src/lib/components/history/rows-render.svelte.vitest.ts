@@ -32,6 +32,7 @@ import { boot, freshStorage } from '#lib/history/idb-test-kit.js';
 import type { StoredShot } from '#lib/history/model.js';
 import ShotRow from './ShotRow.svelte';
 import PhoneShotRow from './PhoneShotRow.svelte';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const realIdb = (globalThis as { indexedDB?: unknown }).indexedDB;
 beforeAll(async () => {
@@ -65,7 +66,7 @@ it('mounting every row, page by page, reads no details and parses no shot', asyn
 		}
 	});
 	wasmCalls.clear();
-	const rows = store.all;
+	const rows = p3RowsOf(store).live;
 	expect(rows).toHaveLength(320);
 	// Page after page, as a scroll down and back up would draw them.
 	const pages = [0, 50, 100, 150, 200, 250, 200, 100, 0];
