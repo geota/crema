@@ -409,3 +409,186 @@ describe('N4: reloading for the flip', () => {
 		expect(reloads).toBe(1);
 	});
 });
+
+/** Every first application of a write takes `ms` (a healthy owner under a heavy batch). */
+function slowApply(env: Env, f: FakeFile, ms: (tab: string) => number) {
+	const orig = env.disk.engine.bind(env.disk);
+	env.disk.engine = (ctx: string): Engine => {
+		const e = orig(ctx);
+		return {
+			...e,
+			open: async (o) => {
+				const db = await e.open(o);
+				const wrapped: EngineDb = {
+					close: () => db.close(),
+					call: async (m, a) => {
+						const x = a as { tab: string; seq: number };
+						if (m === 'apply' && x.seq > (f.applied.get(x.tab) ?? 0)) await new Promise((r) => setTimeout(r, ms(x.tab)));
+						return db.call(m, a);
+					}
+				};
+				return wrapped;
+			}
+		};
+	};
+}
+
+describe('#464 re-check (REVIEW-456, probes-464)', () => {
+	test('B1 (Q1): a 30-write batch at a healthy owner taking 2 s each: none rejected, all land', async () => {
+		const env = new Env();
+		const f = env.disk.plant('db', 0, 'history.db', 'authority');
+		slowApply(env, f, () => 2_000);
+		const a = openTab(env, STAGE2);
+		await settle();
+		const results: string[] = [];
+		const ws = Array.from({ length: 30 }, (_, i) =>
+			a.client.write(rate(`r${i}`, 1)).then(
+				(x) => results.push(`${i}:${x.outcome}`),
+				(e) => results.push(`${i}:rejected:${(e as { code: string }).code}`)
+			)
+		);
+		await settle(120_000);
+		await Promise.all(ws);
+		expect(results.filter((r) => r.includes('rejected'))).toEqual([]);
+		expect(f.rows.size).toBe(30);
+		expect(a.client.status.health).toBe('ok');
+	});
+
+	test('Q2: an edit given up while queued behind another tab’s long work resolves, since it landed', async () => {
+		const env = new Env();
+		const f = env.disk.plant('db', 0, 'history.db', 'authority');
+		let slowTab = '';
+		slowApply(env, f, (tab) => (tab === slowTab ? 9_000 : 0));
+		const a = openTab(env, STAGE2);
+		await settle();
+		const b = openTab(env, STAGE2);
+		await settle(500);
+		slowTab = a.ctx;
+		for (let i = 0; i < 4; i++) void a.client.write(rate(`a${i}`, 1)).catch(() => {});
+		await settle(100);
+		const edit = b.client.write(rate('mine', 5)).then(
+			(x) => x.outcome,
+			(e) => `rejected:${(e as { code: string }).code}`
+		);
+		await settle(60_000);
+		expect(ratingOf(f, 'mine')).toBe(5);
+		// Given up or not, the caller hears what's true: it landed.
+		expect(await edit).not.toMatch(/^rejected/);
+	});
+
+	test('B2 (Q6): behind a write the owner keeps failing, the owner’s calls stay linear', async () => {
+		const env = new Env();
+		const f = env.disk.plant('db', 0, 'history.db', 'authority');
+		const orig = env.disk.engine.bind(env.disk);
+		let calls = 0;
+		let failing = true;
+		env.disk.engine = (ctx: string): Engine => {
+			const e = orig(ctx);
+			return {
+				...e,
+				open: async (o) => {
+					const db = await e.open(o);
+					return {
+						close: () => db.close(),
+						call: async (m, a) => {
+							if (m === 'apply') {
+								calls++;
+								if (failing && (a as { seq: number }).seq === 1) throw { code: 'full', message: 'full' };
+							}
+							return db.call(m, a);
+						}
+					};
+				}
+			};
+		};
+		const a = openTab(env, STAGE2);
+		await settle();
+		const ws = [1, 2, 3, 4, 5].map((n) => a.client.write(rate(`r${n}`, 1)).then(() => 'ok', () => 'rejected'));
+		// 45 s of a full disk: seq 1's write, then its no-op, keep failing.
+		const perTick: number[] = [];
+		for (let t = 0; t < 45; t++) {
+			const before = calls;
+			await vi.advanceTimersByTimeAsync(1_000);
+			perTick.push(calls - before);
+		}
+		// About one try of each waiting write per 5 s, never a storm.
+		expect(Math.max(...perTick)).toBeLessThanOrEqual(12);
+		expect(calls).toBeLessThan(120);
+		// The disk has room again: the no-op ends, the rest land, in order.
+		failing = false;
+		await settle(15_000);
+		expect(await Promise.all(ws)).toEqual(['rejected', 'ok', 'ok', 'ok', 'ok']);
+		expect(f.log.map((l) => l.seq)).toEqual([1, 2, 3, 4, 5]);
+		expect((f.log[0].write as { rows: unknown[] }).rows).toEqual([]);
+	});
+
+	test('B3 (Q3): a full localStorage doesn’t stop a capture the owner can take', async () => {
+		const env = new Env();
+		const f = env.disk.plant('db', 0, 'history.db', 'authority');
+		const a = openTab(env, STAGE2);
+		await settle();
+		env.storage.setItem = () => {
+			throw new DOMException('quota', 'QuotaExceededError');
+		};
+		const c = a.client.capture(row('shotQ', 0)).then(
+			(x) => x,
+			(e) => `threw:${(e as Error).name}`
+		);
+		await settle(5_000);
+		expect(await c).toBe('written');
+		expect(f.rows.has('shotQ')).toBe(true);
+		expect(a.client.diagnostics.some((d) => d.includes('journal refused'))).toBe(true);
+	});
+
+	test('B3: with no journal entry, a capture the owner never takes rejects, so the caller keeps it', async () => {
+		const env = new Env();
+		env.disk.plant('db', 0, 'history.db', 'authority');
+		failingApply(env, () => true);
+		const a = openTab(env, STAGE2);
+		await settle();
+		env.storage.setItem = () => {
+			throw new DOMException('quota', 'QuotaExceededError');
+		};
+		const c = a.client.capture(row('shotZ', 0)).then(
+			(x) => x,
+			(e) => `rejected:${(e as { code: string }).code}`
+		);
+		await settle(GATED_MS + 5_000);
+		expect(await c).toBe('rejected:full');
+	});
+
+	test('a full localStorage while the owner can’t answer still throws to the caller', async () => {
+		const env = new Env();
+		env.disk.plant('db', 0, 'history.db', 'authority');
+		const a = openTab(env, STAGE2);
+		await settle();
+		const b = openTab(env, STAGE2);
+		await settle();
+		a.freeze();
+		void b.client.read('count', {}).catch(() => {});
+		await settle(6_000);
+		expect(b.client.status.health).toBe('unavailable');
+		env.storage.setItem = () => {
+			throw new DOMException('quota', 'QuotaExceededError');
+		};
+		await expect(b.client.capture(row('shotY', 0))).rejects.toMatchObject({ name: 'QuotaExceededError' });
+	});
+
+	test('a retry during release announces nothing: no `ready` after the release began', async () => {
+		const env = new Env();
+		const pool = env.disk.pool('index', 0);
+		pool.holder = 'ghost';
+		const a = openTab(env, STAGE1);
+		await settle(31_000);
+		a.events.show();
+		await settle(150);
+		const readies = env.bus.sent(RPC_CHANNEL, 'ready').length;
+		const gones = env.bus.sent(RPC_CHANNEL, 'gone').length;
+		a.events.fire('pagehide');
+		await settle(10);
+		pool.holder = null;
+		await settle(6_000);
+		expect(env.bus.sent(RPC_CHANNEL, 'gone').length).toBe(gones + 1);
+		expect(env.bus.sent(RPC_CHANNEL, 'ready').length).toBe(readies);
+	});
+});

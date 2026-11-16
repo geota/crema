@@ -175,7 +175,8 @@ class Owner {
 				if (this.#phase === 'owner' && !this.#releasing && this.#health !== 'ok') {
 					this.#enqueue(async () => {
 						await this.#open();
-						this.#announce();
+						// Letting go meanwhile: no `ready` just before `gone`.
+						if (!this.#releasing) this.#announce();
 					});
 				}
 				return;
