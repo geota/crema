@@ -1073,7 +1073,7 @@ class HistoryStore(
         health = HistoryHealth.OK
         lastError = if (tooNew) "The shot history was written by a newer version of Crema: update the app to change it." else null
         lostChoices = null
-        runCatching { late.run(a, force = forceLate) }.onFailure { persistLine("late rows: ${it.message}") }
+        runCatching { lastLate = late.run(a, force = forceLate) }.onFailure { persistLine("late rows: ${it.message}") }
         runCatching { mergePendingAuth(a) }.onFailure { persistLine("pending journal: ${it.message}") }
     }
 
@@ -1312,6 +1312,10 @@ class HistoryStore(
             snapshotSeq = seq
         }.onFailure { persistLine("rows snapshot: ${it.message}") }
     }
+
+    /** This session's late-row step (steps 8 and 9): what it read and brought in. */
+    @Volatile internal var lastLate: HistoryLate.Report? = null
+        private set
 
     /** `history.db`'s `write_seq` at the last snapshot: one with nothing new is skipped. */
     @Volatile private var snapshotSeq: ULong? = null
@@ -1777,8 +1781,30 @@ class HistoryStore(
      */
     fun loadFull(row: ShotRow, missingCurves: MutableSet<String>? = null): StoredShot {
         readShot(row.id, missingCurves)?.let { return row.joined(it) }
-        if (row.id in deleted || row.id in deleting) return row.light()
+        if (row.id in deleted || row.id in deleting) {
+            // On history.db a row deleted during a backup walk is held, its heavy parts and curve
+            // kept until the walk ends (S6): the walk reads it whole (#310 A5).
+            heldWhole(row, missingCurves)?.let { return it }
+            return row.light()
+        }
         throw HistoryReadException("Couldn't read shot ${row.id} just now")
+    }
+
+    /** [row], deleted and still held by an open walk on `history.db`, whole; null when it isn't held. */
+    private fun heldWhole(row: ShotRow, missingCurves: MutableSet<String>?): StoredShot? {
+        val a = auth?.takeIf { mode == Mode.AUTH } ?: return null
+        val (profile, brew) = runCatching { a.heavy(row.id) }.getOrElse { throw HistoryReadException("Couldn't read shot ${row.id}: ${it.message}") }
+        val samples = when (val read = series.read(row.id)) {
+            is SeriesRead.Found -> read.samples
+            is SeriesRead.Unavailable -> throw HistoryReadException("Couldn't read the curve of shot ${row.id}: ${read.error}")
+            SeriesRead.Corrupt -> emptyList<TelemetrySample>().also { missingCurves?.add(row.id) }
+            SeriesRead.Absent -> {
+                // Released already (the walk ended), or never had one.
+                if (row.summarisedCurve) return null
+                emptyList()
+            }
+        }
+        return row.withHeavy(samples, profile, brew)
     }
 
     /** Rows deleted this session: a walk that listed one before its delete takes it light. */

@@ -98,8 +98,14 @@ internal class Stage2Files(filesDir: File, private val json: Json) {
         return out
     }
 
-    /** A generation no file uses yet. */
-    fun nextGeneration(): Int = (generationsNamed().maxOrNull() ?: 0) + 1
+    /** A generation no file uses yet, and above the one the marker or done-record names (a lost file's own). */
+    fun nextGeneration(): Int {
+        val named = listOfNotNull(
+            (readMarker() as? SafeLoad.Loaded)?.value?.generation,
+            (readDone() as? SafeLoad.Loaded)?.value?.generation,
+        )
+        return ((generationsNamed() + named).maxOrNull() ?: 0) + 1
+    }
 
     fun readMarker(): SafeLoad<Stage2Marker> = SafeFile.peek(marker) { json.decodeFromString(Stage2Marker.serializer(), it) }
 

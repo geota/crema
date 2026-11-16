@@ -125,8 +125,12 @@ internal class HistoryLate(
                 }
             }
             val lateIds = (db.now { it.lateIds() } + late).distinct()
+            // The stamps as the read left them: a read-only open of a WAL file can make its -wal and
+            // -shm. Only this process could write the P3 files meanwhile, and after the flip it never
+            // does, so nothing written during the read is missed (an older build can't run beside us).
+            val after = LateBaseline.now(filesDir, shotsDb, baseline.shotsJsonHash)
             // A shots.json row that couldn't come in now is looked at again next boot.
-            val next = stamps.copy(shotsJsonHash = hash, shotsJson = if (incomplete) null else stamps.shotsJson)
+            val next = after.copy(shotsJsonHash = hash, shotsJson = if (incomplete) null else stamps.shotsJson)
             db.now { it.importLate(HistoryLateImport(emptyList(), emptyList(), lateIds, json.encodeToString(LateBaseline.serializer(), next))) }
         }
         return Report(read, imported, fillLate(a))
