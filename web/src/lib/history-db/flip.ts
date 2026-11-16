@@ -76,8 +76,12 @@ export type FlipOutcome =
 	| { outcome: 'done'; generation: number; poolGeneration: number; captured: string[] }
 	/** Not this boot, and not a failure (the P3 store not ready, the lock busy). */
 	| { outcome: 'skipped'; reason: string }
-	/** SPEC §11's Failure: the next try waits (the backoff). */
-	| { outcome: 'failed'; reason: string; rebuildIndex: boolean }
+	/**
+	 * SPEC §11's Failure: the next try waits (the backoff). `afterDone`: the
+	 * Worker died, erred or hung after it reached `done`, so the file may say
+	 * `done` (the page looks before it calls this a failure, REVIEW-473 B1).
+	 */
+	| { outcome: 'failed'; reason: string; rebuildIndex: boolean; afterDone?: boolean }
 	/** `scanOnly`, and no finished file. */
 	| { outcome: 'nothing' };
 
@@ -291,7 +295,12 @@ export async function runFlip(d: FlipDeps, a: FlipArgs): Promise<FlipOutcome> {
 				const err = engineError(e);
 				// The file says it's a finished truth, though step 1 couldn't open
 				// it: it was the truth. Never copy past it (`lost` decides).
-				if (err.code === 'refused') return { outcome: 'found', generation: g, poolGeneration: a.poolGeneration };
+				if (err.code === 'refused') {
+					await d
+						.writeDoneRecord(doneRecordText({ generation: g, poolGeneration: a.poolGeneration, at: d.now() }))
+						.catch(() => {});
+					return { outcome: 'found', generation: g, poolGeneration: a.poolGeneration };
+				}
 				if (!UNUSABLE.has(err.code)) throw e;
 				d.log?.(`flip: ${file} can't take the copy (${err.code}: ${err.message}); left as it is, trying ${dbFileName(g + 1)}`);
 			}
@@ -322,12 +331,32 @@ export async function runFlip(d: FlipDeps, a: FlipArgs): Promise<FlipOutcome> {
 			return { outcome: 'failed', reason: `verify:${e.reason}`, rebuildIndex: e.rebuild || a.rebuildIndex };
 		}
 		await at('done');
-		await copy.call('setMigrationDone', String(d.now()));
+		const passed = (): FlipOutcome => ({
+			outcome: 'done',
+			generation: g,
+			poolGeneration: a.poolGeneration,
+			captured: [...new Set(d.captured().filter((c) => c.seq > sourceSeq).map((c) => c.id))]
+		});
+		try {
+			await copy.call('setMigrationDone', String(d.now()));
+		} catch (e) {
+			// The commit may have landed before the call failed: `done` in the
+			// file is `done`, whatever the call said (REVIEW-473 B1).
+			const state = await copy.call('migrationState').catch(() => null);
+			if (state !== 'done') throw e;
+		}
+		// From here the file is the truth: nothing may turn this into a failure,
+		// or this boot would run on the P3 store and its edits be lost at the
+		// next try (REVIEW-473 B1). The done-record is the backup record; if it
+		// can't be written, the marker still is, and step 1 finds the file again.
 		shut(copy);
-		await at('doneRecord');
-		await d.writeDoneRecord(doneRecordText({ generation: g, poolGeneration: a.poolGeneration, at: d.now() }));
-		const captured = d.captured().filter((c) => c.seq > sourceSeq).map((c) => c.id);
-		return { outcome: 'done', generation: g, poolGeneration: a.poolGeneration, captured: [...new Set(captured)] };
+		try {
+			await at('doneRecord');
+			await d.writeDoneRecord(doneRecordText({ generation: g, poolGeneration: a.poolGeneration, at: d.now() }));
+		} catch (e) {
+			d.log?.(`flip: history.db is done, but the done-record wasn't written (${engineError(e).code}); the marker keeps it`);
+		}
+		return passed();
 	} catch (e) {
 		const err = engineError(e);
 		if (err.code === 'p3NotReady') return { outcome: 'skipped', reason: 'p3NotReady' };

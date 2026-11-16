@@ -19,6 +19,7 @@ import { serviceWorkerWindowCount } from '#lib/pwa/window-count.js';
 import { HistoryDb } from '#lib/history/history-db.js';
 import { idbDetails } from '#lib/history-source/details.js';
 import type { Stage2 } from '#lib/history/store.svelte.js';
+import { unavailableClient } from '#lib/history/sqlite-rows.js';
 
 /**
  * Whether this build may flip to stage 2 and boot on it (#310 W5). On: the
@@ -120,7 +121,7 @@ export function stagedBootActive(): boolean {
 	return HISTORY_FLIP_ENABLED && supported();
 }
 
-let booting: Promise<{ client: HistoryDbClient; choice: StageChoice } | null> | null = null;
+let booting: Promise<{ client: HistoryDbClient | null; choice: StageChoice } | null> | null = null;
 
 /**
  * W5's boot, once per tab: the stage this tab runs on, flipping first when it
@@ -128,7 +129,7 @@ let booting: Promise<{ client: HistoryDbClient; choice: StageChoice } | null> | 
  * shell or the history store; the shell's options are used when it asks
  * first (it always does in the app).
  */
-export function bootHistoryDb(opts: StartOptions = {}): Promise<{ client: HistoryDbClient; choice: StageChoice } | null> {
+export function bootHistoryDb(opts: StartOptions = {}): Promise<{ client: HistoryDbClient | null; choice: StageChoice } | null> {
 	if (!stagedBootActive()) return Promise.resolve(null);
 	booting ??= (async () => {
 		const choice = await chooseStage({
@@ -144,6 +145,8 @@ export function bootHistoryDb(opts: StartOptions = {}): Promise<{ client: Histor
 			allowFlip: true,
 			log: (line) => console.info(`history-stage: ${line}`)
 		});
+		// The truth couldn't be told this boot: no client, the store is unavailable (REVIEW-473).
+		if (choice.unavailable) return { client: null, choice };
 		client = clientFor(choice, opts);
 		client.start();
 		return { client, choice };
@@ -161,7 +164,8 @@ export async function historyStage(): Promise<Stage2 | null> {
 	const booted = await bootHistoryDb();
 	if (!booted || booted.choice.stage !== 2) return null;
 	return {
-		client: booted.client,
+		// Stage 2 with its truth unknown this boot: the store is unavailable, shots to the journal.
+		client: booted.client ?? unavailableClient(booted.choice.unavailable ?? 'unknown'),
 		details: idbDetails(new HistoryDb({ expectExisting: () => true }), { bump: false }),
 		storage: localStorage
 	};

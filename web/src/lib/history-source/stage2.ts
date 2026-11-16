@@ -29,7 +29,7 @@ const SETTLE_WAIT_MS = 30_000;
 /** Switches the seam when this tab is on stage 2; resolves to whether it did. */
 export async function useStage2Seam(): Promise<boolean> {
 	const booted = await bootHistoryDb();
-	if (!booted || booted.choice.stage !== 2) return false;
+	if (!booted || booted.choice.stage !== 2 || !booted.client) return false;
 	const { client } = booted;
 	const locks = typeof navigator !== 'undefined' ? (navigator.locks as unknown as LockManagerLike | undefined) : undefined;
 	const source = new SqliteSource({

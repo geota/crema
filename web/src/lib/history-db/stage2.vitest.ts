@@ -19,7 +19,8 @@ import { summarize } from '#lib/history/summary.js';
 import { freshStorage, writeOldCopy } from '#lib/history/idb-test-kit.js';
 import { HistoryDb, META, ROWS, shotOfRow, type RowRecord } from '#lib/history/history-db.js';
 import { HistoryStore, type Stage2 } from '#lib/history/store.svelte.js';
-import { HistoryDbTooNew, SqliteRows } from '#lib/history/sqlite-rows.js';
+import { HistoryDbTooNew, SqliteRows, unavailableClient } from '#lib/history/sqlite-rows.js';
+import { PENDING_KEY_PREFIX } from './names.js';
 import { PENDING_KEY } from '#lib/history/pending.js';
 import type { StoredShot } from '#lib/history/model.js';
 import { idbDetails } from '#lib/history-source/details.js';
@@ -318,6 +319,20 @@ describe.runIf(historyWasmBuilt)('the store on stage 2', () => {
 		expect(blocked.health).toBe('unavailable');
 		t.thaw();
 	}, 30_000);
+
+	it('a boot that couldn’t tell the truth file: unavailable at once, a new shot journaled for the owner, nothing else written (REVIEW-473)', async () => {
+		await seedP3(shots(3));
+		const before = await oldCopyBytes();
+		const store = new HistoryStore({
+			stage2: async () => ({ client: unavailableClient('scan:ownerLock'), details: idbDetails(new HistoryDb({ expectExisting: () => true }), { bump: false }), storage: journalStorage() })
+		});
+		await expect.poll(() => store.health, { timeout: 2_000 }).toBe('unavailable');
+		await expect(store.whenReady(100)).rejects.toThrow();
+		const shot = { ...realShot(91, realSamples(8, 2)), id: 'while-unknown' };
+		store.recordCaptured(shot as unknown as Record<string, unknown>);
+		expect(env.storage.getItem(PENDING_KEY_PREFIX + 'while-unknown')).toContain('while-unknown');
+		expect(await oldCopyBytes()).toBe(before);
+	});
 
 	it('too new: the store is unavailable with "update the app", never lost', async () => {
 		const fake = {

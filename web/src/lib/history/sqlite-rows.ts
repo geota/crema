@@ -52,6 +52,27 @@ export class HistoryDbTooNew extends Error {
 	}
 }
 
+/** The reason a stage-2 boot whose truth couldn't be told gives (`StageChoice.unavailable`). */
+export const STAGE_UNKNOWN = 'stageUnknown';
+
+/**
+ * The client of a stage-2 boot that couldn't tell which file is the truth
+ * (REVIEW-473): always `unavailable`, every call refused. The store is
+ * `unavailable` at once, new shots go to the pending journal, and the next
+ * boot looks again.
+ */
+export function unavailableClient(why: string): SqliteClient {
+	const refuse = () => Promise.reject(new Error(`Shot history isn't available this time (${why}). Reload to try again.`));
+	return {
+		status: { health: 'unavailable', reason: STAGE_UNKNOWN, message: `Shot history isn't available this time (${why}).`, owner: null, ownerHere: false },
+		onStatus: () => () => {},
+		onChange: () => () => {},
+		read: refuse,
+		write: refuse,
+		importLate: refuse
+	} as SqliteClient;
+}
+
 /** Rows per `get`. */
 const GET_ROWS = 200;
 
@@ -75,6 +96,7 @@ export class SqliteRows {
 			if (s.health === 'ok') return 'ok';
 			if (s.health === 'lost') return new HistoryDbLost();
 			if (s.health === 'too_new') return new HistoryDbTooNew();
+			if (s.health === 'unavailable' && s.reason === STAGE_UNKNOWN) return new Error(s.message ?? 'Shot history is not available.');
 			return null;
 		};
 		const now = check();

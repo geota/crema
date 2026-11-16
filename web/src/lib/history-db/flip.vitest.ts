@@ -452,6 +452,17 @@ describe.runIf(historyWasmBuilt)('crashes and leftovers (M8)', () => {
 			});
 			lastPage = deps.page;
 			const first = await chooseStage(deps);
+			const look = await disk.look('history.db').catch(() => null);
+			const state = look ? await callDb(look, 'migrationState').catch(() => null) : null;
+			look?.close();
+			look?.free();
+			// Never stage 1 with the file done (REVIEW-473 B1): a kill after
+			// `done` committed is found by the page's scan, and booted on.
+			if (state === 'done') {
+				expect(first, step).toMatchObject({ stage: 2, reason: 'found' });
+				expect(marker(), step).toMatchObject({ state: 'done' });
+				continue;
+			}
 			expect(first.stage, step).toBe(1);
 			expect(marker(), step).toMatchObject({ state: 'pending', failures: 1, nextTryAt: 0 });
 			const next = await boot();
@@ -601,6 +612,115 @@ describe.runIf(historyWasmBuilt)('quota (SPEC §11 step 3, Failure)', () => {
 		const t = tabOn(choice);
 		await indexReady(t.client);
 		expect(await t.client.read('count', { sort: { key: 'date', dir: 'desc' } })).toBe(20);
+		const look = await disk.look('history.db');
+		expect(await callDb(look, 'migrationState')).toBe('copying');
+		look.close();
+		look.free();
+	});
+});
+
+describe.runIf(historyWasmBuilt)('REVIEW-473: done is done, and a guess is never persisted', () => {
+	it('B1: the done-record write fails after history.db says done: the flip is still done, stage 2, and edits land in history.db', async () => {
+		const all = shots(6);
+		await seedP3(all);
+		env.storage.setItem(MARKER_KEY, JSON.stringify({ state: 'pending', failures: 2, nextTryAt: 0, lastError: 'quota', rebuildIndex: false }));
+		done.failNext = true;
+		const first = await boot();
+		expect(first).toMatchObject({ stage: 2, reason: 'flipped', flip: { outcome: 'done' } });
+		expect(marker()).toMatchObject({ state: 'done', generation: 0 });
+		expect(done.text).toBeNull();
+		// Every later boot is on history.db: none runs on the P3 store.
+		expect(await boot()).toMatchObject({ stage: 2, reason: 'marker' });
+		expect(await boot({ now: () => Date.now() + FLIP_RETRY_MS + 60_000 })).toMatchObject({ stage: 2 });
+	});
+
+	it('B1: the Worker gone after done (killed, erred, hung): the page scans and boots on the file, never stage 1', async () => {
+		for (const how of ['crash', 'hang'] as const) {
+			freshStorage();
+			lastPage = null;
+			disk = flipDisk();
+			done = { text: null };
+			env = flipEnv(disk, done);
+			await seedP3(shots(5));
+			const deps = stageDeps(env, done, {
+				flipTimeoutMs: 3_000,
+				onFlipStep: (s) => {
+					if (s !== 'doneRecord') return;
+					for (const w of deps.workers()) {
+						if (how === 'crash') w.crash();
+						else w.hang();
+					}
+				}
+			});
+			lastPage = deps.page;
+			const first = await chooseStage(deps);
+			expect(first, how).toMatchObject({ stage: 2, reason: 'found', target: { file: 'history.db' } });
+			expect(marker(), how).toMatchObject({ state: 'done', generation: 0 });
+		}
+	}, 30_000);
+
+	it('B2a: a done-record read that throws, on a profile that never flipped: stage 1, nothing written, never lost', async () => {
+		await seedP3(shots(4));
+		const choice = await boot({ doneRecord: { read: async () => Promise.reject(new DOMException('denied', 'SecurityError')) } });
+		expect(choice).toMatchObject({ stage: 1, reason: 'doneRecordReadFailed:SecurityError' });
+		expect(marker()).toBeNull();
+		expect(disk.files.db.size).toBe(0);
+	});
+
+	it('B2b: an unreadable done-record and a copying leftover: never served as the truth', async () => {
+		await seedP3(shots(5));
+		disk.fault = (at) => {
+			if (at.endsWith(':ftsIntegrityCheck')) throw { code: 'io', message: 'boom' };
+		};
+		expect((await boot()).stage).toBe(1);
+		disk.fault = null;
+		done.text = '';
+		const choice = await boot();
+		const t = tabOn(choice);
+		if (choice.stage === 2) {
+			// The marker can only say done where the done-record did: the file isn't, so it's lost, not ok.
+			await expect.poll(() => t.client.status.health, { timeout: 10_000 }).toBe('lost');
+			expect(t.client.status.reason).toMatch(/notDone/);
+		}
+		const look = await disk.look('history.db');
+		expect(await callDb(look, 'migrationState')).toBe('copying');
+		look.close();
+		look.free();
+	});
+
+	it('B2c: an unreadable done-record while another tab owns: nothing persisted, unavailable, and the next boot finds history-1.db', async () => {
+		await seedP3(shots(4));
+		disk.files.db.add('history.db');
+		disk.unusable.set('db/history.db', 'corrupt');
+		const first = await boot();
+		expect(first).toMatchObject({ stage: 2, target: { file: 'history-1.db' } });
+		const owner = tabOn(first);
+		await indexReady(owner.client);
+		env.storage.removeItem(MARKER_KEY);
+		done.text = '{"v":1,"state":"do';
+		const second = await boot({ keep: true });
+		expect(second.flip).toMatchObject({ outcome: 'skipped', reason: 'ownerLock' });
+		expect(second.unavailable).toBe('scan:ownerLock');
+		expect(marker()).toBeNull();
+		// The owner closes: the next boot's scan finds the truth.
+		await owner.client.stop();
+		owner.close();
+		tabs.splice(tabs.indexOf(owner), 1);
+		const third = await boot();
+		expect(third).toMatchObject({ stage: 2, reason: 'found', target: { file: 'history-1.db' } });
+		expect(marker()).toMatchObject({ state: 'done', generation: 1 });
+	}, 60_000);
+
+	it('a marker that names a copying file: lost, never ok, and the file untouched', async () => {
+		await seedP3(shots(4));
+		disk.fault = (at) => {
+			if (at.endsWith(':ftsIntegrityCheck')) throw { code: 'io', message: 'boom' };
+		};
+		await boot();
+		disk.fault = null;
+		env.storage.setItem(MARKER_KEY, JSON.stringify({ state: 'done', generation: 0, poolGeneration: 0, at: 1 }));
+		const t = tabOn(await boot());
+		await expect.poll(() => t.client.status.health, { timeout: 10_000 }).toBe('lost');
 		const look = await disk.look('history.db');
 		expect(await callDb(look, 'migrationState')).toBe('copying');
 		look.close();

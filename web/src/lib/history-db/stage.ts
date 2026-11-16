@@ -5,9 +5,12 @@
  *
  * 1. **Marker `done`**: stage 2 on the file it names.
  * 2. **No marker, a done-record**: the marker is rebuilt from it, stage 2.
- *    One that doesn't read never allows a flip: it exists only after a file
- *    said `done`, so the Worker looks for that file, and stage 2 opens it,
- *    or `history.db`, which is `lost` if absent (never a re-migration).
+ *    One that doesn't parse never allows a flip: it exists only after a file
+ *    said `done`, so the Worker looks for that file. Found: the marker, stage
+ *    2. None `done` in a pool that listed: `history.db`, which is `lost`
+ *    (never a re-migration). A scan skipped or failed: nothing is persisted,
+ *    and the boot is `unavailable` until the next one looks again. A read
+ *    that throws is no OPFS this boot: stage 1, nothing written (REVIEW-473 B2).
  * 3. **Otherwise, when the flip may run** (a fresh boot, never a handover;
  *    the backoff allows; `crema-history-stage` exclusive with `ifAvailable`;
  *    the service worker's `clients.matchAll` shows one window, this one): a
@@ -15,7 +18,9 @@
  *    `found` or `done` writes the marker (after the done-record, which the
  *    Worker wrote) and broadcasts `flipped`; then stage 2. A failure writes
  *    the backoff into the marker, and the tab stays on stage 1 with the P3
- *    store as the truth. The stage lock is held until the marker is written,
+ *    store as the truth. A Worker that dies, errs or hangs after it reached
+ *    `done` is never a failure on its word: the page scans, and boots on the
+ *    file if it says `done` (REVIEW-473 B1). The stage lock is held until the marker is written,
  *    so a tab opened meanwhile waits, then reads it.
  * 4. **Otherwise** stage 1. A tab that couldn't take the lock exclusive waits
  *    for its shared hold first, so a flip in another tab finishes, and reads
@@ -79,6 +84,13 @@ export interface StageChoice {
 	/** The flip ran this boot: its outcome. */
 	flip?: FlipOutcome;
 	/**
+	 * Stage 2, but which file is the truth couldn't be told this boot (a scan
+	 * that was skipped or failed): no client starts, the store is
+	 * `unavailable` with new shots in the pending journal, nothing is
+	 * persisted, and the next boot looks again (REVIEW-473 B1, B2).
+	 */
+	unavailable?: string;
+	/**
 	 * A flip that ran this boot: report each P3 write a capture makes while it
 	 * runs, with its `writeSeq` (M9). A no-op before and after.
 	 */
@@ -137,13 +149,13 @@ export async function chooseStage(d: StageDeps, captures?: { attach(sink: FlipCa
 		return stage2(d, marker, 'doneRecord', marker);
 	}
 	if (!d.allowFlip) return stage1(d, 'noFlip', marker);
+	// The read itself threw: as with no OPFS, no flip this boot, nothing written (REVIEW-473 B2).
+	if (record.kind === 'readFailed') return stage1(d, `doneRecordReadFailed:${record.error}`, marker);
 	if (record.kind === 'unreadable') {
-		// Some file said `done`: find it, never copy (M8).
-		const out = await runFlipWorker(d, { scanOnly: true, rebuildIndex: false }, captures);
-		const found = out.outcome === 'found' ? out : { generation: 0, poolGeneration: d.poolGeneration ?? 0 };
-		marker = { state: 'done', generation: found.generation, poolGeneration: found.poolGeneration, at: d.now(), rebuilt: 'file' };
-		trySetMarker(d, marker);
-		return stage2(d, marker, 'doneRecordUnreadable', marker, out);
+		// Some file said `done`: find it, never copy (M8), and write the
+		// marker only for what the scan found (REVIEW-473 B2).
+		const m0 = marker;
+		return scanBoot(d, { doneRecordSaysDone: true, marker: m0, onNothing: () => stage1(d, 'scan:nothing', m0) }, captures);
 	}
 	if (!mayTry(marker, d.now())) {
 		await holdShared(d.locks);
@@ -202,6 +214,23 @@ async function underStageLock(
 			return stage2(d, m, out.outcome === 'done' ? 'flipped' : 'found', m, out);
 		}
 		case 'failed': {
+			if (out.afterDone) {
+				// The Worker went after `done`: the file may be the truth. Look,
+				// never boot the P3 store on a guess (REVIEW-473 B1).
+				return scanBoot(
+					d,
+					{
+						doneRecordSaysDone: false,
+						marker,
+						onNothing: () => {
+							const m = afterFailure(marker, out.reason, d.now(), out.rebuildIndex);
+							trySetMarker(d, m);
+							return stage1(d, `failed:${out.reason}`, m, out);
+						}
+					},
+					captures
+				);
+			}
 			const m = afterFailure(marker, out.reason, d.now(), out.rebuildIndex);
 			trySetMarker(d, m);
 			d.log?.(`the flip failed (${out.reason}); staying on the P3 store, next try ${m.nextTryAt ? new Date(m.nextTryAt).toISOString() : 'next boot'}`);
@@ -211,6 +240,38 @@ async function underStageLock(
 		case 'nothing':
 			return stage1(d, `skipped:${out.outcome === 'skipped' ? out.reason : 'nothing'}`, marker, out);
 	}
+}
+
+/** Stage 2 with its truth unknown this boot: nothing written, the next boot scans again. */
+function unavailable(d: StageDeps, reason: string, marker: Marker | null, flip?: FlipOutcome): StageChoice {
+	return { ...stage2(d, { generation: 0, poolGeneration: d.poolGeneration ?? 0 }, `unavailable:${reason}`, marker, flip), unavailable: reason };
+}
+
+/**
+ * A scan for the finished file (step 1 only, never a copy), and the boot it
+ * gives: `found` writes the marker; `nothing` (the pool installed and listed,
+ * no file `done`) writes it for `history.db`, which is `lost` if the
+ * done-record said so, else stage 1; anything else persists nothing and boots
+ * `unavailable` (REVIEW-473 B2).
+ */
+async function scanBoot(
+	d: StageDeps,
+	o: { doneRecordSaysDone: boolean; marker: Marker | null; onNothing: () => StageChoice },
+	captures?: { attach(sink: FlipCaptureSink | null): void }
+): Promise<StageChoice> {
+	const out = await runFlipWorker(d, { scanOnly: true, rebuildIndex: false }, captures);
+	if (out.outcome === 'found') {
+		const m: Marker = { state: 'done', generation: out.generation, poolGeneration: out.poolGeneration, at: d.now(), rebuilt: 'file' };
+		trySetMarker(d, m);
+		return stage2(d, m, 'found', m, out);
+	}
+	if (out.outcome === 'nothing') {
+		if (!o.doneRecordSaysDone) return o.onNothing();
+		const m: Marker = { state: 'done', generation: 0, poolGeneration: d.poolGeneration ?? 0, at: d.now(), rebuilt: 'file' };
+		trySetMarker(d, m);
+		return stage2(d, m, 'doneRecordNoFile', m, out);
+	}
+	return unavailable(d, out.outcome === 'skipped' ? `scan:${out.reason}` : `scan:${out.outcome}`, o.marker, out);
 }
 
 function trySetMarker(d: StageDeps, m: Marker): void {
@@ -263,19 +324,25 @@ async function runFlipWorker(
 ): Promise<FlipOutcome> {
 	const w = d.makeWorker();
 	const n = 1;
+	// Whether the Worker reached `done`: after it, a dying Worker may have left the file `done`.
+	let afterDone = false;
+	const died = (reason: string): FlipOutcome => ({ outcome: 'failed', reason, rebuildIndex: o.rebuildIndex, ...(afterDone ? { afterDone } : {}) });
 	try {
 		return await new Promise<FlipOutcome>((resolve) => {
-			const t = setTimeout(() => resolve({ outcome: 'failed', reason: 'timeout', rebuildIndex: o.rebuildIndex }), d.flipTimeoutMs ?? FLIP_TIMEOUT_MS);
+			const t = setTimeout(() => resolve(died('timeout')), d.flipTimeoutMs ?? FLIP_TIMEOUT_MS);
 			const end = (out: FlipOutcome) => {
 				clearTimeout(t);
 				resolve(out);
 			};
 			w.onmessage = (e) => {
 				const m = e.data as WorkerToPage;
-				if (m.t === 'flipStep' && m.n === n) d.onFlipStep?.(m.step);
+				if (m.t === 'flipStep' && m.n === n) {
+					if (m.step === 'done' || m.step === 'doneRecord') afterDone = true;
+					d.onFlipStep?.(m.step);
+				}
 				if (m.t === 'flipDone' && m.n === n) end(m.outcome);
 			};
-			w.onerror = () => end({ outcome: 'failed', reason: 'workerError', rebuildIndex: o.rebuildIndex });
+			w.onerror = () => end(died('workerError'));
 			captures?.attach((capture) => w.postMessage({ t: 'flipCapture', capture } satisfies PageToWorker));
 			w.postMessage({
 				t: 'flip',

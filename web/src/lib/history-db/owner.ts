@@ -33,6 +33,8 @@
  *   in progress stops at its next step, so nothing opens after the lock is
  *   gone (REVIEW-456 F3); an `acquire` while letting go queues again after.
  * - **A paused pool** lists no files, so it is `unavailable`, never `lost` (N3).
+ * - **A truth file is served only once it says `done`** (W5): a `copying`
+ *   copy that a marker names is `lost`, left as it is, never `ok`.
  * - **The drain** (M5, F2) applies a journaled capture as its own write, under
  *   its tab and seq, so a capture that already landed is never inserted again,
  *   even after the user deleted it or while an export holds it.
@@ -468,6 +470,27 @@ class Owner {
 			if (gone()) {
 				db.close();
 				return;
+			}
+			// A truth file only once it says `done`: a `copying` leftover is
+			// never the truth, whatever named it (SPEC §11, REVIEW-473 B2).
+			if (!stage1 && t.role === 'authority') {
+				let state: unknown;
+				try {
+					state = await db.call('migrationState');
+				} catch (e) {
+					db.close();
+					this.#fail('unavailable', engineError(e).code);
+					return;
+				}
+				if (gone()) {
+					db.close();
+					return;
+				}
+				if (state !== 'done') {
+					db.close();
+					this.#fail('lost', 'notDone');
+					return;
+				}
 			}
 			this.#db = db;
 			this.#fail('ok', 'open');
