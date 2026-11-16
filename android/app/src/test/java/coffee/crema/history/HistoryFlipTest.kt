@@ -823,4 +823,42 @@ class HistoryFlipTest {
         assertTrue(next.onHistoryDb)
         next.closeForTest()
     }
+
+    @Test fun `a second store in the process takes history-db over, and the first one's writes wait in stage 2's journal`() = runBlocking {
+        flipped(shots("two", 4))
+        val first = store()
+        first.boot()
+        val second = store()
+        assertEquals(HistoryHealth.OK, second.boot().health, "not refused: ${second.lastError}")
+        assertTrue(second.onHistoryDb)
+        // The first one's file was closed under it: its write goes to the journal, never lost.
+        assertFalse(first.save(shots("late-first", 1, start = 1_900_000_000_000L)))
+        assertTrue(second.save(shots("from-second", 1, start = 1_900_000_100_000L)))
+        first.closeForTest()
+        second.closeForTest()
+        val next = store()
+        val ids = next.boot().view.map { it.id }
+        assertTrue("late-first-0" in ids && "from-second-0" in ids, ids.toString())
+        next.closeForTest()
+    }
+
+    @Test fun `a store still on shots-db after another in the process flipped writes stage 2's journal, not the old copy`() = runBlocking {
+        stage1(shots("st", 4))
+        HistoryStore.stage2Enabled = true
+        // Opened before the flip: on shots.db.
+        val stale = store()
+        stale.save(shots("pre", 1, start = 1_700_000_000_000L))
+        val fresh = store()
+        fresh.boot()
+        assertTrue(fresh.onHistoryDb, fresh.flipError)
+        val old = shotsRows()
+        assertFalse(stale.save(shots("stale", 1, start = 1_900_000_000_000L)), "journaled")
+        stale.closeForTest()
+        fresh.closeForTest()
+        // Its close checkpoints the WAL it had, so the bytes move; the rows don't.
+        assertEquals(old, shotsRows(), "the old copy took no write")
+        val next = store()
+        assertTrue(next.boot().view.any { it.id == "stale-0" })
+        next.closeForTest()
+    }
 }
