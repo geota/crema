@@ -118,7 +118,7 @@ fun StorageBackupsRows(vm: MainViewModel, ui: MainUiState, ds: DriveSync.UiState
         ValueText(used ?: "—")
     }
     CremaSettingsRow("Pinned shots", "Pin a shot from its detail in History.") {
-        ValueText(ui.history.count { it.pinned }.toString())
+        ValueText(ui.history.pinned.toString())
     }
     // History keeps every shot (#310 P6a); this is the one way to make room, and only when asked.
     CremaSettingsRow(

@@ -80,7 +80,7 @@ class SeriesLoadGateTest {
         VmHarness.idleUntil("the backup") { backup.isCompleted }
         val line = backupJsonl(assertNotNull(runBlocking { backup.await() })).lines().single { "\"s1\"" in it }
         assertEquals(5, Regex("7\\.25").findAll(line).count(), "every sample is in the backup: $line")
-        assertEquals(5u, vm.ui.value.history.single().summary.sampleCount)
+        assertEquals(5u, VmHarness.rows(vm).single().summary.sampleCount)
         assertEquals(5, Regex("7\\.25").findAll(assertNotNull(VmHarness.shotsJson(vm))).count())
     }
 
@@ -95,8 +95,8 @@ class SeriesLoadGateTest {
         VmHarness.idleUntil("the rows") { vm.ui.value.historyLoaded }
         VmHarness.idle()
         assertEquals(before, seriesReadsForTest.get(), "no series file was read")
-        assertEquals(40, vm.ui.value.history.size)
-        assertTrue(vm.ui.value.history.all { it.summary.sampleCount == 5u && it.summary.spark != null }, "each row's chart and count come from its summary")
+        assertEquals(40, VmHarness.rows(vm).size)
+        assertTrue(VmHarness.rows(vm).all { it.summary.sampleCount == 5u && it.summary.spark != null }, "each row's chart and count come from its summary")
         // A shot opened reads its own series, and only it.
         assertEquals(5, VmHarness.whole(vm, "s7").samples.size)
         assertEquals(before + 1, seriesReadsForTest.get())

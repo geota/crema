@@ -197,7 +197,8 @@ class HistorySourceTest {
 
     private fun snapshot(rows: List<ShotRow>, full: (ShotRow) -> StoredShot, source: HistorySource? = null) = BackupSnapshot(
         customs = emptyList(),
-        state = MainUiState(history = rowViewOf(rows)),
+        state = MainUiState(),
+        shots = rows,
         pinned = emptySet(),
         hidden = emptySet(),
         prefs = AppPrefs(),

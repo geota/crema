@@ -44,9 +44,10 @@ class BackupRowGapsTest {
     /** The shots the state's rows stand for, read whole by the snapshot. */
     private var whole: List<StoredShot> = emptyList()
 
-    private fun shots(vararg list: StoredShot): coffee.crema.ui.HistoryView {
+    /** The UI state holds no rows (#310 A3b): these go to the snapshot as the store's. */
+    private fun shots(vararg list: StoredShot): coffee.crema.ui.HistoryState {
         whole = list.toList()
-        return rowViewOf(whole.rows())
+        return coffee.crema.ui.HistoryState(count = whole.size)
     }
 
     private fun snapshot(state: MainUiState, customs: List<String> = emptyList()) = BackupSnapshot(
@@ -58,6 +59,7 @@ class BackupRowGapsTest {
         prefs = AppPrefs(),
         visualizerPrefs = DEFAULT_VISUALIZER_SYNC_PREFS,
         userRecipes = emptyList(),
+        shots = whole.rows(),
     )
 
     private fun state() = MainUiState(maintenance = defaultMaintenanceState(now))

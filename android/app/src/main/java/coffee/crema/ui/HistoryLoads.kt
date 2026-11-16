@@ -24,14 +24,14 @@ import kotlinx.coroutines.withContext
 const val SEARCH_DEBOUNCE_MS = 150L
 
 /**
- * [filter] over the rows, off the main thread, re-run when [history], [query]
- * or any of [keys] changes. The first frame computes it in place, so the list
+ * [filter] over the rows, off the main thread, re-run when [history] (the
+ * rows' version, `ui.history.version`), [query] or any of [keys] changes. The first frame computes it in place, so the list
  * never flashes empty; after that the last result stays until the next is
  * ready. A change of [query] waits [SEARCH_DEBOUNCE_MS] first.
  */
 @Composable
 fun <T> rememberFilteredShots(
-    history: List<ShotRow>,
+    history: Any?,
     query: String,
     vararg keys: Any?,
     filter: (query: String) -> List<T>,

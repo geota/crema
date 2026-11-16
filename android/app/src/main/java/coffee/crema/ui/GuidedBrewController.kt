@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -60,6 +61,8 @@ internal class GuidedBrewController(
     /** Surface a user-facing message (the VM's snackbar channel). */
     private val notify: (String) -> Unit,
     private val log: (String) -> Unit,
+    /** Every history row, newest first: the store's (#310 A3b), never the UI state's. */
+    private val historyRows: () -> List<coffee.crema.history.ShotRow> = { emptyList() },
 ) {
     private fun uiState(): MainUiState = uiFlow.value
 
@@ -182,15 +185,19 @@ internal class GuidedBrewController(
         // Rows saved with a custom method snapshot its label; keep the
         // id → label fallback current for methods this device doesn't know.
         scope.launch {
-            uiFlow.map { it.history }.distinctUntilChanged().collect { rows ->
-                coffee.crema.brew.CustomMethods.snapshotLabels = buildMap {
-                    rows.forEach { r ->
-                        val id = r.brewMethod?.trim()?.lowercase() ?: return@forEach
-                        val label = r.brewMethodLabel ?: return@forEach
-                        if (coffee.crema.brew.isCustomMethodId(id) && id !in this) put(id, label)
+            uiFlow.map { it.history.version }.distinctUntilChanged()
+                // Over every row: off the main thread.
+                .map {
+                    buildMap {
+                        historyRows().forEach { r ->
+                            val id = r.brewMethod?.trim()?.lowercase() ?: return@forEach
+                            val label = r.brewMethodLabel ?: return@forEach
+                            if (coffee.crema.brew.isCustomMethodId(id) && id !in this) put(id, label)
+                        }
                     }
                 }
-            }
+                .flowOn(kotlinx.coroutines.Dispatchers.Default)
+                .collect { coffee.crema.brew.CustomMethods.snapshotLabels = it }
         }
     }
 
@@ -617,7 +624,7 @@ internal class GuidedBrewController(
         val summary = session.summary
         _logBrew.value = coffee.crema.ui.brewlog.BrewLogSeeds.open(
             owner = coffee.crema.ui.brewlog.BrewLogOwner.SCALE,
-            history = s.history,
+            history = historyRows(),
             activeBeanId = s.activeBeanId,
             guidedMethod = summary?.method ?: recipe?.method,
             guidedDoseG = recipe?.doseG,
@@ -794,7 +801,7 @@ internal class GuidedBrewController(
         val s = effectiveState()
         _logBrew.value = coffee.crema.ui.brewlog.BrewLogSeeds.open(
             owner = owner,
-            history = s.history,
+            history = historyRows(),
             activeBeanId = s.activeBeanId,
             prefill = prefill,
             prefillBeanId = beanId,
@@ -813,7 +820,7 @@ internal class GuidedBrewController(
 
     /** A method chip: re-template the draft's seeds for [method]. */
     fun reseedLogBrew(method: String) {
-        val history = uiState().history
+        val history = historyRows()
         _logBrew.update { it?.let { d -> coffee.crema.ui.brewlog.BrewLogSeeds.reseed(d, history, method, ::beanGrinderSetting) } }
     }
 
@@ -834,7 +841,7 @@ internal class GuidedBrewController(
         // Never persist an empty method (blank → null → not saved); the
         // presets are already normalized ids.
         val storedMethod = coffee.crema.core.normalizeBrewMethod(if (d.isCustom) d.customMethod else d.method)
-        if (storedMethod == null || d.doseMissing(bean != null) || d.dateError(uiState().history, nowMs, coffee.crema.history.HistoryStore.capFor(uiState().historyHealth)) != null) {
+        if (storedMethod == null || d.doseMissing(bean != null) || d.dateError(historyRows(), nowMs, coffee.crema.history.HistoryStore.capFor(uiState().historyHealth)) != null) {
             _logBrew.value = flagged
             return false
         }

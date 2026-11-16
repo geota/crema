@@ -276,7 +276,7 @@ fun BrewScreen(
                             // Machine shots only (issue #10): a logged pourover
                             // on the same bag must not seed the DE1 dial-in
                             // card — its grind belongs to another instrument.
-                            ui.history.firstOrNull { it.bean?.beanId == bid && it.brewMethod == null }
+                            remember(ui.history.version, bid) { vm.lastMachineShotOf(bid) }
                         }
                     } else null
                     if (mode != null) {

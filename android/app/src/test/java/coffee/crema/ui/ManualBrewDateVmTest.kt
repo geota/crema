@@ -41,7 +41,7 @@ class ManualBrewDateVmTest {
         VmHarness.awaitStartupLoaded(it)
     }
 
-    private fun history(vm: MainViewModel) = VmHarness.ownState(vm).history
+    private fun history(vm: MainViewModel) = VmHarness.rows(vm)
 
     /** Log a brew through the form, dated [at] (null = now). */
     private fun log(vm: MainViewModel, at: Long?, dose: Double = 15.0, nowMs: Long = now): coffee.crema.history.ShotRow {

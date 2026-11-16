@@ -70,8 +70,8 @@ class CoreShotAssemblyTest {
     }
 
     private fun recorded(vm: MainViewModel, before: Int): StoredShot {
-        VmHarness.idleUntil("the shot to be recorded", 5_000) { vm.ui.value.history.size > before }
-        return VmHarness.whole(vm, vm.ui.value.history.first().id)
+        VmHarness.idleUntil("the shot to be recorded", 5_000) { VmHarness.rows(vm).size > before }
+        return VmHarness.whole(vm, VmHarness.rows(vm).first().id)
     }
 
     @Test
@@ -81,7 +81,7 @@ class CoreShotAssemblyTest {
         vm.setGrinderModel("EK43")
         vm.setBaristaName("Sam")
         VmHarness.idle()
-        val before = vm.ui.value.history.size
+        val before = VmHarness.rows(vm).size
         pour(vm, 48) // 12 s: a shot, not an aborted pull
         val shot = recorded(vm, before)
         assertEquals(listOf(0, 2, 2, 3), shot.samples.take(4).map { it.frameNumber })
@@ -95,7 +95,7 @@ class CoreShotAssemblyTest {
     fun `the stored series is the full record`() {
         val vm = VmHarness.build(store)
         VmHarness.awaitPrefsLoaded(vm)
-        val before = vm.ui.value.history.size
+        val before = VmHarness.rows(vm).size
         pour(vm, 260) // 65 s of samples: past the old 200-point cut
         val shot = recorded(vm, before)
         assertEquals(260, shot.samples.size, "no 200-point cut on capture")
@@ -114,10 +114,10 @@ class CoreShotAssemblyTest {
         VmHarness.library(vm).assembling = { vm.updateShot(first.id, 5, "lovely") }
         pour(vm, 48)
         recorded(vm, 1)
-        val edited = vm.ui.value.history.single { it.id == first.id }
+        val edited = VmHarness.rows(vm).single { it.id == first.id }
         assertEquals(5, edited.rating)
         assertEquals("lovely", edited.notes)
-        assertEquals(2, vm.ui.value.history.size)
+        assertEquals(2, VmHarness.rows(vm).size)
     }
 
     /** The debit reads what the bag holds as it lands, not what it held at the shot's end. */
@@ -144,12 +144,12 @@ class CoreShotAssemblyTest {
         VmHarness.awaitPrefsLoaded(vm)
         vm.setGrinderModel("EK43")
         VmHarness.idle()
-        val before = vm.ui.value.history.size
+        val before = VmHarness.rows(vm).size
         pour(vm, 48)
         val shot = recorded(vm, before)
         vm.setGrinderModel("Niche Zero")
         VmHarness.idle()
-        assertEquals("EK43", vm.ui.value.history.first().grinderModel)
+        assertEquals("EK43", VmHarness.rows(vm).first().grinderModel)
         // The upload / export uses the frozen one, not today's Settings.
         assertEquals("EK43", (wireShotJson(shot, "Niche Zero")["grinderModel"] as kotlinx.serialization.json.JsonPrimitive).content)
     }
@@ -158,7 +158,7 @@ class CoreShotAssemblyTest {
     fun `a shot export re-imports`() {
         val vm = VmHarness.build(store)
         VmHarness.awaitPrefsLoaded(vm)
-        val before = vm.ui.value.history.size
+        val before = VmHarness.rows(vm).size
         pour(vm, 48)
         val recorded = recorded(vm, before)
         // The History screen's export: the core's crema/v1 JSONL, read back by the core.
@@ -185,7 +185,7 @@ class CoreShotAssemblyTest {
         vm.setGrinderModel("EK43")
         vm.setBaristaName("Sam")
         VmHarness.idle()
-        val before = vm.ui.value.history.size
+        val before = VmHarness.rows(vm).size
         pour(vm, 48)
         return recorded(vm, before).copy(
             tags = listOf("dial-in"),
@@ -241,7 +241,7 @@ class CoreShotAssemblyTest {
         VmHarness.awaitPrefsLoaded(vm)
         val text = File(fixtures, "web-shots.crema.jsonl").readText()
         assertEquals("Imported 1 shot(s)", pickAndImport(vm, "web-shots.crema.jsonl", text))
-        val shot = VmHarness.whole(vm, vm.ui.value.history.first().id)
+        val shot = VmHarness.whole(vm, VmHarness.rows(vm).first().id)
         assertEquals(48, shot.samples.size)
         assertEquals(listOf(0, 2, 2, 3), shot.samples.take(4).map { it.frameNumber }, "DE1 frames count from 0")
         assertEquals("EK43", shot.grinderModel)
@@ -260,7 +260,7 @@ class CoreShotAssemblyTest {
         val text = File(fixtures, "android-shots.crema.jsonl").readText()
         assertTrue(text.lines().first().contains("crema/v1"))
         assertEquals("Imported 1 shot(s)", pickAndImport(vm, "android-shots.crema.jsonl", text))
-        val shot = VmHarness.whole(vm, vm.ui.value.history.first().id)
+        val shot = VmHarness.whole(vm, VmHarness.rows(vm).first().id)
         assertEquals(48, shot.samples.size)
         assertEquals(listOf(0, 2, 2, 3), shot.samples.take(4).map { it.frameNumber })
         assertEquals("EK43", shot.grinderModel)

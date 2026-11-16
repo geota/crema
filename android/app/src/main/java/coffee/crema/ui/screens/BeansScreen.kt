@@ -500,7 +500,10 @@ fun BeansScreen(
         if (bean == null) {
             detailBeanId = null
         } else {
-            val shots = ui.history.filter { it.bean?.beanId == bean.id }
+            // The bag's shots, from the history store's rows (#310 A3b), re-read as they change.
+            val shots = coffee.crema.ui.rememberOffMain(ui.history.version to bean.id, { vm.historyRows().filter { it.bean?.beanId == bean.id } }) {
+                vm.historyRows().filter { it.bean?.beanId == bean.id }
+            }
             BeanDetailSheet(
                 bean = bean,
                 roasterName = ui.roasters.firstOrNull { it.id == bean.roasterId }?.name,

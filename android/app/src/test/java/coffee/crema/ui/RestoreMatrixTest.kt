@@ -507,7 +507,7 @@ class RestoreMatrixTest(private val name: String) {
             after.shots.filter { it.deleted == true }.map { it.id }.sorted(),
             "$name: shots deleted here",
         )
-        val history = VmHarness.ownState(vm).history.associateBy { it.id }
+        val history = VmHarness.rows(vm).associateBy { it.id }
         val theirs = records.parsed.shots.associateBy { it.id }
         for (id in s.add + s.revive) {
             val want = if (id in s.zeroDebit) 0f else theirs.getValue(id).bagDebitG

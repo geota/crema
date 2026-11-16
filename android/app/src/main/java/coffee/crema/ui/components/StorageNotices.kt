@@ -139,7 +139,7 @@ fun FreeUpSpaceDialog(
     val today = remember { LocalDate.now() }
     val beforeMs = remember(months, today) { freeUpCutoff(months, today) }
     // Counted again as the rows change, so the preview is what a confirm deletes.
-    val state by produceState<Pair<Boolean, FreeUpPlan?>>(true to null, beforeMs, ui.history, ui.historyLoaded) {
+    val state by produceState<Pair<Boolean, FreeUpPlan?>>(true to null, beforeMs, ui.history.version, ui.historyLoaded) {
         value = true to null
         value = false to vm.planFreeUp(beforeMs)
     }

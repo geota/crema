@@ -131,15 +131,15 @@ class HistoryNoCapVmTest {
         // Row 301, the oldest: what the cap would have cut.
         val made = vm.logBrewAt(now - 400 * 60_000L, notes = "row 301")
         VmHarness.idleUntil("the save") { made.id in dbIds() }
-        assertEquals(301, vm.ui.value.history.size)
-        assertEquals(made.id, vm.ui.value.history.last().id)
+        assertEquals(301, VmHarness.rows(vm).size)
+        assertEquals(made.id, VmHarness.rows(vm).last().id)
         assertTrue(vm.ui.value.userMessages.none { it.startsWith("History keeps") }, "${vm.ui.value.userMessages}")
         // A star tap on another row: the save is a diff, and row 301 stays.
         vm.updateShot("r0", 5, "tapped")
         VmHarness.idleUntil("the tap") { dbIds().size == 301 }
         val next = relaunch()
-        assertEquals(301, next.ui.value.history.size, "every row in view after a reload")
-        assertEquals("row 301", next.ui.value.history.last().notes)
+        assertEquals(301, VmHarness.rows(next).size, "every row in view after a reload")
+        assertEquals("row 301", VmHarness.rows(next).last().notes)
     }
 
     @Test
@@ -147,23 +147,23 @@ class HistoryNoCapVmTest {
         val rows = light(5_000, step = 3_600_000L)
         plant(rows)
         val vm = vm()
-        assertEquals(5_000, vm.ui.value.history.size)
+        assertEquals(5_000, VmHarness.rows(vm).size)
         // Older than rank 300 and than every row: #309 refused this; now it lands.
         val oldest = rows.last().completedAtMs
         vm.openLogBrew(coffee.crema.ui.brewlog.BrewLogOwner.HISTORY)
         vm.updateLogBrew { it.copy(method = "pourover", dose = 15.0, completedAtMs = oldest - day) }
-        assertNull(vm.logBrew.value?.dateError(vm.ui.value.history, now, HistoryStore.capFor(vm.ui.value.historyHealth)))
+        assertNull(vm.logBrew.value?.dateError(VmHarness.rows(vm), now, HistoryStore.capFor(vm.ui.value.historyHealth)))
         assertTrue(vm.saveLogBrew(now), "a date older than all 5,000 rows is fine")
         // And one into the middle.
         val mid = vm.logBrewAt(rows[2_500].completedAtMs - 1_800_000L, notes = "mid")
         VmHarness.idleUntil("the saves") { dbIds().size == 5_002 }
-        val history = vm.ui.value.history
+        val history = VmHarness.rows(vm)
         assertEquals(5_002, history.size)
         assertEquals(oldest - day, history.last().completedAtMs, "the backdated brew is last")
         assertEquals(2_501, history.indexOfFirst { it.id == mid.id }, "between rank 2,500 and 2,501")
         assertEquals(history.sortedWith(HistoryStore.ORDER).map { it.id }, history.map { it.id })
         val next = relaunch()
-        assertEquals(history.map { it.id }, next.ui.value.history.map { it.id }, "the same order after a reload")
+        assertEquals(history.map { it.id }, VmHarness.rows(next).map { it.id }, "the same order after a reload")
     }
 
     // ── A full disk ──────────────────────────────────────────────────────────
@@ -175,7 +175,7 @@ class HistoryNoCapVmTest {
         HistoryStore.faults += MigrationFault.DISK_FULL
         val made = vm.logBrewAt(now + 60_000L, notes = "on a full disk")
         VmHarness.idleUntil("the journal") { made.id in vm.ui.value.historyUnsaved }
-        assertEquals(401, vm.ui.value.history.size, "the row stays in view")
+        assertEquals(401, VmHarness.rows(vm).size, "the row stays in view")
         val text = assertNotNull(historyBannerText(vm.ui.value.historyHealth, vm.ui.value.historyLost, vm.ui.value.historyError, vm.ui.value.historyUnsaved.size))
         assertTrue("couldn't be fully saved" in text, text)
         assertFalse(made.id in dbIds())
@@ -183,7 +183,7 @@ class HistoryNoCapVmTest {
         HistoryStore.faults.clear()
         // The journal merges at the next launch: the row is there, and nothing else moved.
         val next = relaunch()
-        assertEquals(401, next.ui.value.history.size)
+        assertEquals(401, VmHarness.rows(next).size)
         assertTrue(made.id in dbIds())
         assertTrue(next.ui.value.historyUnsaved.isEmpty())
     }
@@ -206,7 +206,7 @@ class HistoryNoCapVmTest {
         vm.logBrewAt(now + 120_000L)
         VmHarness.idleUntil("the retry") { vm.ui.value.historyUnsaved.isEmpty() }
         val next = relaunch()
-        assertEquals(322, next.ui.value.history.size)
+        assertEquals(322, VmHarness.rows(next).size)
         assertEquals(pulled.samples, VmHarness.whole(next, "curve").samples, "the curve reached the disk")
     }
 
@@ -243,7 +243,7 @@ class HistoryNoCapVmTest {
         library.checkStorage()
         assertNotNull(storageBannerText(vm.ui.value.storageLevel, vm.ui.value.storageNoticeDismissed))
         VmHarness.idleUntil("the saves") { dbIds().size == 52 }
-        assertEquals(52, vm.ui.value.history.size, "low space deletes nothing")
+        assertEquals(52, VmHarness.rows(vm).size, "low space deletes nothing")
     }
 
     // ── Free up space ────────────────────────────────────────────────────────
@@ -279,7 +279,7 @@ class HistoryNoCapVmTest {
         VmHarness.idleUntil("the delete") { dbIds().size == 8 && vm.ui.value.userMessages.any { it.startsWith("Deleted") } }
         val kept = setOf("old0", "old3", "old7") + recent.map { it.id }
         assertEquals(kept, dbIds())
-        assertEquals(kept, vm.ui.value.history.map { it.id }.toSet())
+        assertEquals(kept, VmHarness.rows(vm).map { it.id }.toSet())
         assertEquals(remaining, vm.ui.value.beans.single().remaining, "no history removal credits the bag")
         assertTrue(vm.ui.value.userMessages.any { it.startsWith("Deleted 7 shots") }, "${vm.ui.value.userMessages}")
         val gone = SeriesFiles(File(app.filesDir, "shot-series"), coreJson)
@@ -287,7 +287,7 @@ class HistoryNoCapVmTest {
         assertTrue(gone.gzFile("old3").exists(), "a pinned shot keeps its curve")
 
         val next = relaunch()
-        assertEquals(kept, next.ui.value.history.map { it.id }.toSet())
+        assertEquals(kept, VmHarness.rows(next).map { it.id }.toSet())
         assertEquals(remaining, next.ui.value.beans.single().remaining)
     }
 
@@ -360,7 +360,7 @@ class HistoryNoCapVmTest {
         vm.freeUpSpace(plan, FreeUpBackup.NONE)
         val told = awaitMessage(vm, "Free up space waits")
         assertTrue("a backup is being made" in told && "no shots were deleted" in told, told)
-        assertEquals(13, vm.ui.value.history.size)
+        assertEquals(13, VmHarness.rows(vm).size)
         // And the store refuses too, should anything call it straight.
         assertEquals("a backup is being made", onMain(vm, "the store's refusal") { library.freeUpSpace(plan) }.refused)
         release.countDown()
@@ -557,7 +557,7 @@ class HistoryNoCapVmTest {
     fun noAutomaticDeletionAt20000RowsSaving100More() {
         plant(light(20_000, start = now, step = 600_000L))
         val vm = vm()
-        assertEquals(20_000, vm.ui.value.history.size)
+        assertEquals(20_000, VmHarness.rows(vm).size)
         assertEquals(HistoryHealth.OK, vm.ui.value.historyHealth)
         // 100 more: half newer than everything, half older than everything.
         repeat(100) { i ->
@@ -565,10 +565,10 @@ class HistoryNoCapVmTest {
             vm.logBrewAt(at)
         }
         VmHarness.idleUntil("the saves", 240_000) { dbIds().size == 20_100 }
-        assertEquals(20_100, vm.ui.value.history.size)
+        assertEquals(20_100, VmHarness.rows(vm).size)
         assertTrue(vm.ui.value.userMessages.none { "dropped" in it || "wasn’t kept" in it }, "${vm.ui.value.userMessages}")
         val next = relaunch()
-        assertEquals(20_100, next.ui.value.history.size)
+        assertEquals(20_100, VmHarness.rows(next).size)
         assertEquals(20_100, dbIds().size)
         assertTrue(dbIds().containsAll(light(20_000, start = now, step = 600_000L).map { it.id }), "every seeded row is still there")
     }
@@ -622,7 +622,7 @@ class HistoryNoCapVmTest {
         VmHarness.idleUntil("the restore", 240_000) { vm.ui.value.userMessages.size > before && vm.ui.value.restoreReport == null }
         assertTrue(vm.ui.value.userMessages.any { it.startsWith("Restored 5000 shots") }, "${vm.ui.value.userMessages}")
         fun check(v: MainViewModel, what: String) {
-            val history = v.ui.value.history
+            val history = VmHarness.rows(v)
             assertEquals(5_000, history.size, "$what: every row in view")
             assertEquals(counts.keys, dbIds(), "$what: every row in the store")
             for (row in history) assertEquals(counts[row.id]!!.toUInt(), row.summary.sampleCount, "$what: ${row.id}'s sample count")

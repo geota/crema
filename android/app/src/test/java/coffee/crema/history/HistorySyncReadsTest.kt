@@ -63,7 +63,6 @@ class HistorySyncReadsTest {
         if (shots.isNotEmpty()) assertTrue(store().save(shots.toList()))
         val s = store()
         val view = s.loadAll().view
-        assertTrue(s.holdsRows)
         return s to view
     }
 
@@ -185,15 +184,15 @@ class HistorySyncReadsTest {
     }
 
     @Test
-    fun `the legacy backend doesn't answer, its rows are the view's list`() = runBlocking {
+    fun `the legacy backend answers from its list, edits included`() = runBlocking {
+        // #310 A3b: its rows are the list, in memory as on `shots.db`.
         HistoryStore.legacyOnlyForTest = true
         val s = store()
         val load = s.loadAll()
         assertEquals(HistoryHealth.LEGACY, load.health)
-        assertFalse(s.holdsRows)
-        assertNull(s.syncRows())
-        assertFalse(s.accept(listOf(s.rowFor(shot("x", 1)))))
-        assertNull(s.syncRows(), "nothing is held for it")
+        assertEquals(emptyList(), s.syncRows())
+        assertTrue(s.accept(listOf(s.rowFor(shot("x", 1)))))
+        assertEquals(listOf("x"), s.syncRows().map { it.id })
     }
 
     @Test
@@ -204,7 +203,6 @@ class HistorySyncReadsTest {
         val stamped = store().also { it.loadAll() }.syncRow("a")!!.copy(visualizerId = "vis-a")
         assertTrue(s.accept(listOf(stamped)), "taken note of, open or not")
         s.loadAll()
-        assertTrue(s.holdsRows)
         assertEquals("vis-a", s.syncRow("a")?.visualizerId, "the stamp handed in, not the older stored row")
         assertTrue(s.save(listOf(stamped), accepted = true))
         assertEquals("vis-a", store().load().single().visualizerId)
@@ -222,7 +220,6 @@ class HistorySyncReadsTest {
             marker.delete()
             marker.mkdirs(); File(marker, "x").writeText("x")
             assertEquals(HistoryHealth.UNAVAILABLE, s.retry().health)
-            assertTrue(s.holdsRows, "out of reach, it answers for its rows")
             s.delete(listOf("a"))
             assertNull(s.syncRow("a"), "a deleted row is gone for sync")
             assertEquals(listOf("b"), s.syncRows()?.map { it.id })
@@ -232,9 +229,84 @@ class HistorySyncReadsTest {
     }
 
     @Test
-    fun `before the store opens it doesn't answer`() {
+    fun `before the store opens it answers with the rows made since launch`() {
         val s = store()
-        assertFalse(s.holdsRows)
-        assertNull(s.syncRows())
+        assertEquals(emptyList(), s.syncRows())
+        s.put(listOf(s.rowFor(shot("early", 1))))
+        assertEquals(listOf("early"), s.syncRows().map { it.id })
+    }
+
+    // ── #310 A3b: the store's memory is where edits land ─────────────────────
+
+    @Test
+    fun `an edit lands on the row as it stands and is read at once, then written by a flush`() = runBlocking {
+        val (s, _) = loaded(shot("a", 1), shot("b", 2))
+        assertEquals(3, s.update("a") { it.copy(rating = 3) }?.rating)
+        // A second edit starts from the first, not from what was stored.
+        assertEquals("kept", s.update("a") { it.copy(notes = "kept") }?.notes)
+        assertEquals(3, s.row("a")?.rating, "the first edit stands")
+        assertNull(s.update("gone") { it.copy(rating = 1) }, "no such row: nothing made up")
+        assertTrue(s.flush())
+        val back = store().load().single { it.id == "a" }
+        assertEquals(3, back.rating)
+        assertEquals("kept", back.notes)
+    }
+
+    @Test
+    fun `a flush writes the newest version, whichever flush runs first`() = runBlocking {
+        val (s, _) = loaded(shot("a", 1))
+        s.update("a") { it.copy(rating = 1) }
+        s.update("a") { it.copy(rating = 5) }
+        // Two flushes, as two launched saves would: each takes memory as it runs.
+        assertTrue(s.flush())
+        assertTrue(s.flush())
+        assertEquals(5, store().load().single().rating)
+        assertEquals(5, s.row("a")?.rating)
+    }
+
+    @Test
+    fun `a list edit that leaves a written row out keeps it on shots db`() = runBlocking {
+        val (s, _) = loaded(shot("a", 1), shot("b", 2))
+        s.edit { rows -> rows.filter { it.id != "a" } }
+        assertNotNull(s.row("a"), "only a named delete removes a row (rule 1)")
+        assertEquals(listOf("b", "a"), s.rows().map { it.id })
+        // One not yet written is simply let go.
+        s.put(listOf(s.rowFor(shot("new", 3))))
+        s.edit { rows -> rows.filter { it.id != "new" } }
+        assertNull(s.row("new"))
+    }
+
+    @Test
+    fun `on the legacy backend the list is the file, so a row it lets go is gone`() = runBlocking {
+        HistoryStore.legacyOnlyForTest = true
+        val s = store()
+        s.loadAll()
+        s.put(listOf(s.rowFor(shot("a", 1)), s.rowFor(shot("b", 2))))
+        assertTrue(s.flush())
+        s.edit { rows -> rows.filter { it.id != "a" } }
+        assertEquals(listOf("b"), s.rows().map { it.id })
+        assertTrue(s.flush())
+        val again = store()
+        assertEquals(listOf("b"), again.loadAll().view.map { it.id })
+    }
+
+    @Test
+    fun `the rows stay newest first as edits move them, at the design size`() = runBlocking {
+        val shots = (1..5_000).map { shot("s$it", it.toLong() * 1_000) }
+        assertTrue(store().save(shots))
+        val s = store()
+        s.loadAll()
+        val before = s.rows()
+        assertEquals("s5000", before.first().id)
+        // One row moves to the front, one changes in place.
+        s.update("s1") { it.copy(completedAtMs = 10_000_000) }
+        s.update("s2500") { it.copy(notes = "edited") }
+        val after = s.rows()
+        assertEquals(5_000, after.size)
+        assertEquals("s1", after.first().id)
+        assertEquals(after.sortedWith(HistoryStore.ORDER), after, "newest first, every row")
+        assertEquals("edited", after.single { it.id == "s2500" }.notes)
+        assertTrue(after.single { it.id == "s3" } === before.single { it.id == "s3" }, "untouched rows are the same objects")
+        assertTrue(s.rows() === after, "no change: the same answer")
     }
 }

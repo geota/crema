@@ -524,6 +524,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         retagBrewMethod = { id, method, label -> library.retagBrewMethod(id, method, label) },
         notify = { notifyUser(it) },
         log = { appendLog(it) },
+        historyRows = { library.historyRows() },
     )
 
     /** The running session's weight curve + stage marks, for the live chart. */
@@ -783,7 +784,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val bleRecorder = BleSessionRecorder(app).also { rec ->
         rec.sessionsKeepOf = { _ui.value.bleSessionsKeep }
-        rec.pinnedShotTimes = { _ui.value.history.filter { it.pinned }.map { it.completedAtMs } }
+        rec.pinnedShotTimes = { library.historyRows().filter { it.pinned }.map { it.completedAtMs } }
         rec.historySettled = { library.historySettled }
     }
 
@@ -2019,10 +2020,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * retried on each sync until it lands. A shot never uploaded just goes.
      */
     fun deleteShot(id: String, alsoOnVisualizer: Boolean = false) {
-        val shot = _ui.value.history.firstOrNull { it.id == id } ?: return
+        val shot = library.findShot(id) ?: return
         library.deleteShot(id)
         visualizer.tombstoneDeleted(shot, deleteRemote = alsoOnVisualizer)
     }
+
+    /** Every history row, newest first: the store's (#310 A3b). Over every row: read it off the main thread. */
+    fun historyRows(): List<ShotRow> = library.historyRows()
+
+    /** The history row [id] as the store holds it now, or null. Read with `ui.history.version` as a key. */
+    fun historyRow(id: String): ShotRow? = library.findShot(id)
+
+    /** [beanId]'s newest machine shot (no brew method: issue #10), the dial-in card's; over every row, so keyed by `ui.history.version`. */
+    fun lastMachineShotOf(beanId: String): ShotRow? = library.historyRows().firstOrNull { it.bean?.beanId == beanId && it.brewMethod == null }
 
     /** Whether a shot's delete can also remove its Visualizer copy: it was uploaded,
      *  or its upload is under way, and a session is open (shot deletes aren't
@@ -2189,7 +2199,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun startFromShot(id: String) {
         // What's on screen: on a remote, the hub's bean and profile.
         val st = effectiveState()
-        val shot = st.history.firstOrNull { it.id == id } ?: return
+        // History isn't relayed: the row is this device's, from its store (#310 A3b).
+        val shot = library.findShot(id) ?: return
         // 1. The bag.
         shot.bean?.beanId?.let { bid ->
             val bean = st.beans.firstOrNull { it.id == bid }

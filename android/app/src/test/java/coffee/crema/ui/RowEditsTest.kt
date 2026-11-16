@@ -11,8 +11,11 @@ import org.junit.Test
 
 /**
  * A plain update can't change the rows, and an edit works on the current ones
- * (geota/crema#324). That `editHistory { historyWith(x, s.history) }` doesn't
- * compile is the type's job: [HistoryRows] is not a [HistoryView].
+ * (geota/crema#324). That an edit built from a list the state handed out
+ * doesn't compile is the type's job: [BeanRows] is not a [BeanView]. The shot
+ * history's rows aren't in the UI state at all from #310 A3b: the store's
+ * memory holds them, and its edits work on the rows as they stand
+ * (`HistorySyncReadsTest`).
  */
 class RowEditsTest {
     private fun shot(id: String, rating: Int? = null) =
@@ -22,18 +25,18 @@ class RowEditsTest {
     private val roaster = newRoaster("Onyx", 1)
 
     private fun store() = UiStore(
-        MainUiState(history = rowViewOf(listOf(shot("a"))), beans = rowViewOf(listOf(bean)), roasters = rowViewOf(listOf(roaster))),
+        MainUiState(beans = rowViewOf(listOf(bean)), roasters = rowViewOf(listOf(roaster))),
     )
 
     @Test
-    fun `stale_history_copy_has_no_effect`() {
+    fun `stale_beans_copy_has_no_effect`() {
         val ui = store()
         val s = ui.value
-        ui.edit({ it.copy(history = it.history.mapped { row -> row.copy(rating = 5) }) })
+        ui.edit({ it.copy(beans = it.beans.mapped { row -> row.copy(name = "Edited") }) })
 
-        ui.update { it.copy(history = s.history, status = "kept") }
+        ui.update { it.copy(beans = s.beans, status = "kept") }
 
-        assertEquals("the edit stands", 5, ui.value.history.single().rating)
+        assertEquals("the edit stands", "Edited", ui.value.beans.single().name)
         assertEquals("the rest of the copy lands", "kept", ui.value.status)
     }
 
@@ -50,12 +53,13 @@ class RowEditsTest {
     @Test
     fun `an edit starts from the rows as they stand, and lands the rest in one write`() {
         val ui = store()
-        ui.edit({ it.copy(history = it.history.with(it.history + shot("b"))) })
+        val other = bean.copy(id = "b")
+        ui.edit({ it.copy(beans = it.beans.with(it.beans + other)) })
         ui.edit(
-            { it.copy(history = it.history.filtered { row -> row.id != "a" }) },
+            { it.copy(beans = it.beans.filtered { row -> row.id != bean.id }) },
             { it.copy(status = "both") },
         )
-        assertEquals(listOf("b"), ui.value.history.map { it.id })
+        assertEquals(listOf("b"), ui.value.beans.map { it.id })
         assertEquals("both", ui.value.status)
     }
 
