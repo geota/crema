@@ -22,10 +22,11 @@ import type { Stage2 } from '#lib/history/store.svelte.js';
 import { unavailableClient } from '#lib/history/sqlite-rows.js';
 
 /**
- * Whether this build may flip to stage 2 and boot on it (#310 W5). On: the
- * history store writes `history.db` on stage 2 (`sqlite-rows.ts`).
+ * Whether this build may flip to stage 2 and boot on it (#310 W5): the
+ * history store writes `history.db` on stage 2 (`sqlite-rows.ts`). Turned on
+ * in a commit of its own, so it can be reverted alone.
  */
-export const HISTORY_FLIP_ENABLED = true;
+export const HISTORY_FLIP_ENABLED = false;
 
 let client: HistoryDbClient | null = null;
 
