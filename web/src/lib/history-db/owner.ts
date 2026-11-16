@@ -44,6 +44,7 @@ import { engineError, type Engine, type EngineDb, type EngineError } from './eng
 import { CHANGES_CHANNEL, OWNER_LOCK, RPC_CHANNEL, TAB_LOCK_PREFIX } from './names.js';
 import {
 	PROTOCOL_VERSION,
+	ONCE,
 	READS,
 	acceptsOwner,
 	type Applied,
@@ -471,6 +472,16 @@ class Owner {
 				if (applied.outcome === 'done') this.#notify(applied.written.change);
 				return applied;
 			}
+			case 'once':
+				// The walk and its holds are stage 2's, on the truth file (#310 R1w): never the index's.
+				if (!(ONCE as readonly string[]).includes(req.name)) {
+					throw { code: 'refused', message: `${req.name} isn't a once-only call` };
+				}
+				if (req.stage !== 2 || this.#stage !== 2) {
+					throw { code: 'otherStage', message: 'the export walk is stage 2’s' };
+				}
+				this.#sameFile(req);
+				return db.call(req.name, req.arg);
 			case 'drain':
 				if (req.stage !== 2 || this.#stage !== 2) {
 					throw { code: 'otherStage', message: 'the pending journal is stage 2’s' };

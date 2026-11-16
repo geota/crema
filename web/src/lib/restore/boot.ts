@@ -3,8 +3,7 @@
  * an interrupted restore says so, with Dismiss; a finished one runs the
  * deletes it owes once they're safe (see `marker.ts`).
  */
-import { getHistoryStore } from '#lib/history/index.js';
-import { deleteSeries } from '#lib/history/series-store.js';
+import { getHistorySource } from '#lib/history-source/source.js';
 import { getCaptureStore } from '#lib/capture/store.js';
 import { getBeanStore } from '#lib/bean/index.js';
 import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
@@ -30,18 +29,24 @@ async function restoreLockHeld(): Promise<boolean> {
 
 /** Run once a boot knows it isn't frozen. */
 export async function checkRestoreMarker(): Promise<MarkerBoot> {
-	const history = getHistoryStore();
+	const history = getHistorySource();
 	// The deletes go by "not listed", which only means something once the rows load.
 	if (!(await history.readyWithin())) return { kind: 'waiting' };
-	await history.seriesReady();
+	// Listed after the check that no restore runs, as the deletes read it.
+	let listed: ReadonlySet<string> = new Set();
 	const found = await checkMarkerAtBoot({
-		restoreRunning: restoreLockHeld,
-		listedShots: () => new Set(history.rawAll.map((s) => s.id)),
+		restoreRunning: async () => {
+			if (await restoreLockHeld()) return true;
+			listed = await history.listedIds();
+			return false;
+		},
+		listedShots: () => listed,
 		listedBeans: () => new Set(getBeanStore().beans.map((b) => b.id)),
 		shotsHealth: () => history.rowsHealth(),
-		// On `crema-history` a row's details went with its explicit delete, and
-		// the old copy is never touched (SPEC §6): only the legacy backend's series go.
-		deleteSeries: (id) => (history.keepsEveryRow ? Promise.resolve() : deleteSeries(id)),
+		// The P3 store: a row's details went with its explicit delete, so only
+		// the legacy backend's series go. `history.db`: the details a crash
+		// left after a wipe's row delete (#310 R1w).
+		deleteSeries: (id) => history.deleteOwed(id),
 		deleteCapture: (id) => getCaptureStore().delete(id),
 		deletePhoto: (beanId) => getBeanImageStore().delete(refForBean(beanId))
 	});

@@ -9,6 +9,7 @@
     "wasm": "wasm-pack build ../core/de1-wasm --target web --out-dir ../../web/src/lib/wasm --out-name de1_wasm",
     "wasm:test": "wasm-pack build ../core/de1-wasm --target web --out-dir ../../web/.wasm-test --out-name de1_wasm -- --features test-seeds",
     "wasm:history": "../scripts/history-wasm-build.sh",
+    "wasm:history:test": "../scripts/history-wasm-build.sh --test",
     "dev": "vite dev",
     "build": "pnpm wasm && pnpm wasm:history && vite build",
     "preview": "vite preview",
