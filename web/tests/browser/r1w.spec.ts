@@ -72,6 +72,7 @@ test('a restore across an owner change deletes no row of the backup (M3)', async
 	const g = gen();
 	const h = await tab();
 	await makeTruth(h, g);
+	const before = await listFiles(h, dbDir(g));
 	await h.page.close();
 
 	const a = await r1w(profile, g);
@@ -110,6 +111,8 @@ test('a restore across an owner change deletes no row of the backup (M3)', async
 
 	await on(b, (r) => r.stop());
 	await on(c, (r) => r.stop());
+	// No OPFS file went missing.
 	const h2 = await tab();
-	expect((await listFiles(h2, dbDir(g))).some((f) => f.path.endsWith('/history.db'))).toBe(true);
+	const after = new Set((await listFiles(h2, dbDir(g))).map((e) => e.path));
+	for (const e of before) expect(after, e.path).toContain(e.path);
 });
