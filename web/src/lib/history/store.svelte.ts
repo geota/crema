@@ -1385,13 +1385,22 @@ export class HistoryStore {
 		};
 	}
 
+	/** Each list of rows this store has held, numbered: {@link rowsVersion} without handing the list out. */
+	private listNumbers = new WeakMap<readonly StoredShot[], number>();
+	private lastListNumber = 0;
+
 	/**
 	 * Moves whenever a row, the set or a summary does: what a reactive query
 	 * follows to ask again (#310 W3). Opaque; reactive.
 	 */
-	get rowsVersion(): unknown {
-		void this.summaryTick;
-		return this.shots;
+	get rowsVersion(): string {
+		const rows = this.shots;
+		let n = this.listNumbers.get(rows);
+		if (n === undefined) {
+			n = ++this.lastListNumber;
+			this.listNumbers.set(rows, n);
+		}
+		return `${n}:${this.summaryTick}`;
 	}
 
 	/** Whether this tab holds any row at all, tombstones too: a capture limit's first read (#311). */
