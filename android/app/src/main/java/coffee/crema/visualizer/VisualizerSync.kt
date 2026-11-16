@@ -107,7 +107,11 @@ class VisualizerSync(
     private val paceDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
     /** Sign-in just completed — the moment to offer a catch-up of existing shots. */
     private val onSignedIn: () -> Unit = {},
-    /** The row as history holds it now (null = deleted) — re-read before a backlog POST. */
+    /**
+     * The row as the history's store holds it now (null = deleted), never the
+     * view (#310 A3a, #354 review): re-read before a backlog POST, and after
+     * one to tell whether the row is still here and bound.
+     */
     private val currentShot: (localId: String) -> ShotRow? = { null },
     /**
      * The shot whole, its curve and recipe, read just before it is sent
@@ -169,9 +173,13 @@ class VisualizerSync(
         ::callbackOutcome,
     /** How long a run waits for the rows before it skips (tests shrink it). */
     private val rowsWaitMs: Long = ROWS_WAIT_MS,
-    /** Every shot as history holds it now: the backlog a different account is asked about. */
+    /**
+     * Every shot as the history's store holds it now, read in one go (#310
+     * A3a, SPEC S3): what a pull's planners match against, and the backlog a
+     * different account is asked about. Never the view.
+     */
     private val allShots: () -> List<ShotRow> = { emptyList() },
-    /** The rows in view: an upload pass's backlog. */
+    /** The rows an upload pass's backlog is taken from: the store's too, in the app. */
     private val viewShots: () -> List<ShotRow> = allShots,
     /** Whether a local row has its curve: no row holds one in memory, so the store says (#310 P4a). */
     private val hasSeries: (ShotRow) -> Boolean = { (it.summary.sampleCount ?: 0u) > 0u },
@@ -2204,6 +2212,9 @@ class VisualizerSync(
         }
     }
 
+    /** [syncNow] over every row the history's store holds ([allShots]), as Settings' Sync now runs it (#310 A3a). */
+    fun syncNow(includeBeans: Boolean = true, fromStart: Boolean = false) = syncNow(allShots(), includeBeans, fromStart)
+
     /**
      * "Sync now" (web BeanSyncSection order): beans + roasters first when
      * either direction is on (one bidirectional run, as on the web), then the
@@ -2339,6 +2350,9 @@ class VisualizerSync(
         val entry = SyncLogEntry(direction = "pull", entity = "bean", id = "", name = "Bean sync", at = now(), error = error ?: "failed")
         persist { it.copy(log = (listOf(entry) + it.log).take(20)) }
     }
+
+    /** [resyncAllShots] over every row the history's store holds ([allShots]) (#310 A3a). */
+    fun resyncAllShots() = resyncAllShots(allShots())
 
     /**
      * Re-pull the entire Visualizer history from the beginning (web "Re-sync

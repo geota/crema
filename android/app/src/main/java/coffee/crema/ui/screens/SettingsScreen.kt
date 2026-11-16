@@ -817,7 +817,7 @@ fun SettingsScreen(
                                 CremaSettingsRow("Upload finished shots", "Push each shot to Visualizer as it finishes (needs a pushing direction).") {
                                     CremaSwitch(vz.autoSync, vm::setVisualizerAutoSync, enabled = vz.shotsDirection == "backup" || vz.shotsDirection == "two-way")
                                 }
-                                VisualizerAccountRows(vz, vm.visualizer.unsent(ui.history).size, vm.visualizer::answerAccountChange)
+                                VisualizerAccountRows(vz, ui.sharing.visualizerUnsent, vm.visualizer::answerAccountChange)
                                 ui.sharing.catchUpOffer?.takeIf { it.destination == UploadTargetId.Visualizer }?.let { offer ->
                                     CatchUpRow(offer, busy = ui.sharing.catchUpBusy, onUpload = vm::runCatchUp, onDismiss = vm::dismissCatchUp)
                                 }
@@ -829,7 +829,7 @@ fun SettingsScreen(
                                             else " $unsyncedCount local shot(s) not uploaded yet.")),
                                 ) {
                                     CremaButton(
-                                        onClick = { vm.visualizer.syncNow(ui.history) },
+                                        onClick = { vm.visualizer.syncNow() },
                                         variant = CremaButtonVariant.Outlined,
                                         icon = "arrows-clockwise",
                                         enabled = (vz.shotsDirection != "off" || vz.beansDirection != "off" || vz.roastersDirection != "off") && !vz.busy && !vz.syncing,

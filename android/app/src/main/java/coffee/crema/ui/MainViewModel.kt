@@ -333,8 +333,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         liveMachine = { sharing.liveMachine() },
         knownSerial = UniffiDecentCore::knownSerial,
         liveSerialUnreadable = { sharing.liveSerialUnreadable() },
-        // A row past the view's cap is still here (#310 P3a); every upload reads its shot whole (P4a).
-        currentShot = { id -> library.findShot(id) },
+        // The row as the store holds it, in view or not (#310 A3a); every upload reads its shot whole (P4a).
+        currentShot = { id -> library.syncShot(id) },
         loadShot = { id -> library.loadShot(id) },
         onLinked = { sharing.offerCatchUp(UploadTargetId.Decent) },
     )
@@ -363,10 +363,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onPulledShots = { stubs -> library.insertPulledShots(stubs) },
         onApplyRemote = { localId, patch, pulled -> library.applyRemoteShot(localId, patch, pulled) },
         onSignedIn = { sharing.offerCatchUp(UploadTargetId.Visualizer) },
-        currentShot = { id -> library.findShot(id) },
+        // What sync reads is the store's, never the view (#310 A3a): the row by id,
+        // and every row for the pull's planners and the upload backlog.
+        currentShot = { id -> library.syncShot(id) },
         loadShot = { id -> library.loadShot(id) },
-        allShots = { library.allShots() },
-        viewShots = { _ui.value.history },
+        allShots = { library.syncRows() },
+        viewShots = { library.syncRows() },
         hasSeries = { shot -> library.hasCurve(shot) },
         hasProfile = { id -> library.shotHasProfile(id) },
         historyCap = { library.historyCap },
@@ -393,6 +395,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         uiFlow = _ui.state,
         updateUi = { transform -> _ui.update(transform) },
         notify = { notifyUser(it) },
+        syncRows = { library.syncRows() },
+        syncRowsVersion = { library.syncRowsVersion },
     )
 
     /** Visualizer's auto-upload toggle; turning it on offers the backlog once. */

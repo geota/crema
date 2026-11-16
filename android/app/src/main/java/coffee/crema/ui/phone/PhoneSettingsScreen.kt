@@ -924,7 +924,7 @@ private fun SharingSection(
             CremaSettingsRow("Upload finished shots", "Push each shot to Visualizer as it finishes (needs a pushing direction).") {
                 CremaSwitch(vz.autoSync, vm::setVisualizerAutoSync, enabled = vz.shotsDirection == "backup" || vz.shotsDirection == "two-way")
             }
-            coffee.crema.ui.components.VisualizerAccountRows(vz, vm.visualizer.unsent(ui.history).size, vm.visualizer::answerAccountChange)
+            coffee.crema.ui.components.VisualizerAccountRows(vz, ui.sharing.visualizerUnsent, vm.visualizer::answerAccountChange)
             ui.sharing.catchUpOffer?.takeIf { it.destination == coffee.crema.ui.UploadTargetId.Visualizer }?.let { offer ->
                 CatchUpRow(offer, busy = ui.sharing.catchUpBusy, onUpload = vm::runCatchUp, onDismiss = vm::dismissCatchUp)
             }
@@ -934,7 +934,7 @@ private fun SharingSection(
                     ?: ("Beans, roasters, then shots." + (if (unsyncedCount == 0) " All ${ui.history.size} local shots are on Visualizer." else " $unsyncedCount local shot(s) not uploaded yet.")),
             ) {
                 CremaButton(
-                    onClick = { vm.visualizer.syncNow(ui.history) },
+                    onClick = { vm.visualizer.syncNow() },
                     variant = CremaButtonVariant.Outlined,
                     icon = "arrows-clockwise",
                     enabled = (vz.shotsDirection != "off" || vz.beansDirection != "off" || vz.roastersDirection != "off") && !vz.busy && !vz.syncing,

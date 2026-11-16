@@ -368,9 +368,9 @@ class LibraryController(
     /** What to say of rows the view's cap let go: dropped on the legacy backend, kept (hidden) on `shots.db`. */
     private fun droppedNotice(dropped: Int): String = if (historyStore.usesSql) "" else historyDroppedNotice(dropped)
 
-    /** Save [rows] (upserts only, from P3a), then show what couldn't be saved. */
-    private suspend fun persistHistory(rows: List<ShotRow>): Boolean {
-        val ok = historyStore.save(rows)
+    /** Save [rows] (upserts only, from P3a), then show what couldn't be saved. [accepted]: the store took note of them at the launch. */
+    private suspend fun persistHistory(rows: List<ShotRow>, accepted: Boolean = false): Boolean {
+        val ok = historyStore.save(rows, accepted)
         noteUnsaved()
         return ok
     }
@@ -405,9 +405,16 @@ class LibraryController(
     fun dismissStorageNotice() = updateUi { it.copy(storageNoticeDismissed = true) }
 
     /** Save the history as it stands. */
-    private fun saveHistory() {
-        val snapshot = uiState().history
-        scope.launch { persistHistory(snapshot) }
+    private fun saveHistory() = launchSave(uiState().history)
+
+    /**
+     * Save [snapshot] in the background. The store takes note of its rows now
+     * ([HistoryStore.accept]), so what sync reads from the store has the edit
+     * at once, not when the write lands (#310 A3a).
+     */
+    private fun launchSave(snapshot: List<ShotRow>) {
+        val accepted = historyStore.accept(snapshot)
+        scope.launch { persistHistory(snapshot, accepted) }
     }
 
     /** Load the persisted bean library into the UI snapshot at startup. */
@@ -590,6 +597,32 @@ class LibraryController(
     /** The row [id], in view or past the cap. */
     fun findShot(id: String): ShotRow? = uiState().history.firstOrNull { it.id == id } ?: historyStore.storedRow(id)
 
+    // ── What sync and upload read (#310 A3a) ────────────────────────────────
+
+    /**
+     * Every row, newest first, for sync's planners (a pull's reconcile, its
+     * known rows and candidates) and the upload backlogs: the store's
+     * ([HistoryStore.syncRows]), with every save handed to it so far, read in
+     * one go (SPEC S3). Never the view. On the legacy backend, and before the
+     * store opens, the view's list: that backend's rows are the list.
+     */
+    fun syncRows(): List<ShotRow> = historyStore.syncRows() ?: allShots()
+
+    /**
+     * The row [id] as the store holds it now ([HistoryStore.syncRow]): what
+     * an upload re-reads before it goes, and what "is it gone, is it bound"
+     * reads after (P3 spec, #354 review). A row the view doesn't hold is
+     * still here. Null = deleted. On the legacy backend, [findShot].
+     */
+    fun syncShot(id: String): ShotRow? = if (historyStore.holdsRows) historyStore.syncRow(id) else findShot(id)
+
+    /** Bumped whenever the rows [syncRows] reads change: Sharing's counts follow it. */
+    val syncRowsVersion: kotlinx.coroutines.flow.StateFlow<Long> get() = historyStore.rowsVersion
+
+    /** Test seam: take [ids] out of the view and nothing else, as a windowed view (#310 A3b) would leave them. */
+    @androidx.annotation.VisibleForTesting
+    internal fun dropFromViewForTest(ids: Set<String>) = editHistory { rows -> rows.filtered { it.id !in ids } }
+
     /** Whether [shot] has a curve: staged, or (its summary says so) on disk. */
     fun hasCurve(shot: ShotRow): Boolean = historyStore.hasCurve(shot)
 
@@ -606,7 +639,8 @@ class LibraryController(
     suspend fun loadShot(id: String): StoredShot? {
         awaitRows()
         val full = historyStore.loadShot(id) ?: return null
-        val row = findShot(id) ?: return null
+        // The row as the store holds it (#310 A3a): an upload builds its payload from this.
+        val row = syncShot(id) ?: findShot(id) ?: return null
         return row.joined(full)
     }
 
@@ -1098,7 +1132,8 @@ class LibraryController(
     suspend fun shotsJson(ids: List<String>?): String? {
         // Until the rows have loaded, say so rather than export none.
         if (!rowsReady) { notify("Shot data is still loading — try again in a moment"); return null }
-        val history = uiState().history
+        // The store's rows, not the view's (#310 A3a): every shot it holds.
+        val history = syncRows()
         val rows = if (ids == null) history else { val w = ids.toHashSet(); history.filter { it.id in w } }
         if (rows.isEmpty()) { notify("Export — no shots"); return null }
         // Each shot whole, read one at a time (#310 P4a). A read that fails
@@ -1532,6 +1567,9 @@ class LibraryController(
     /** Test seam: runs between step 7's series writes and its rows. */
     @Volatile internal var afterRestoreSeries: (suspend () -> Unit)? = null
 
+    /** Test seam: runs between step 7's change to the view (and to what sync reads) and its row saves. */
+    @Volatile internal var beforeRestoreRows: (suspend () -> Unit)? = null
+
     /** Test seam: runs between step 7's merge into `shots.db` and its removes (a kill there leaves the union). */
     @Volatile internal var beforeRestoreRemove: (suspend () -> Unit)? = null
 
@@ -1559,7 +1597,13 @@ class LibraryController(
                 },
                 { it },
             )
-            return checkNotNull(out)
+            val settled = checkNotNull(out)
+            // Every restored row is what sync reads from now, not batch by batch as
+            // the merges land: uploads aren't paused by a restore, and a Replace's
+            // bound row must never read as unbound (REVIEW-467 N3).
+            historyStore.accept(settled.next)
+            beforeRestoreRows?.invoke()
+            return settled
         }
 
         override fun stage(shot: coffee.crema.history.StoredShot) {
@@ -1969,21 +2013,21 @@ class LibraryController(
         if (stubs.isEmpty()) return emptySet()
         var kept = emptySet<String>()
         var present = emptySet<String>()
-        // A row past the view's cap is still here: a pull of it adds no copy.
-        val hiddenIds = historyStore.storedIds()
-        val inView = uiState().history.mapTo(HashSet()) { it.id }
+        // Every row the store holds, in view or not, saves handed to it included (#310 A3a):
+        // a pull of one of them adds no copy.
+        val held = syncRows().mapTo(HashSet()) { it.id }
         // A pulled shot comes whole (its curve and recipe): they wait for the save.
-        val incoming = stubs.filterNot { it.id in hiddenIds || it.id in inView }.distinctBy { it.id }.map(::staged)
+        val incoming = stubs.filterNot { it.id in held }.distinctBy { it.id }.map(::staged)
         editHistory { rows ->
             val merge = mergePulled(incoming, rows, cap = viewCap)
             kept = merge.kept.mapTo(HashSet()) { it.id }
-            present = rows.mapTo(HashSet()) { it.id } + hiddenIds
+            present = rows.mapTo(HashSet()) { it.id } + held
             rows.with(merge.rows)
         }
         // A pull the full view refused isn't written: its staged parts go too.
         historyStore.unstage(incoming.map { it.id }.filterNot { it in kept })
         val snapshot = uiState().history
-        scope.launch { persistHistory(snapshot) }
+        launchSave(snapshot)
         return stubs.mapTo(HashSet()) { it.id } - kept - present
     }
 
@@ -2003,7 +2047,7 @@ class LibraryController(
         val fillProfile = patch.fillProfile == true && pulled.profile != null && !historyStore.hasProfile(localId)
         // The curve and recipe wait for the save; the row takes the summary they give.
         val filled = if (backfill || fillProfile) {
-            findShot(localId)?.let { row ->
+            syncShot(localId)?.let { row ->
                 historyStore.stage(
                     row.withHeavy(
                         // The whole pulled series (F10).
@@ -2045,7 +2089,7 @@ class LibraryController(
         }
         if (!changed && filled == null) return
         val snapshot = uiState().history
-        scope.launch { persistHistory(snapshot) }
+        launchSave(snapshot)
     }
 
     /** Stamp a successful Decent shot-history upload onto the local shot (#84). Persisted. */
@@ -3063,7 +3107,7 @@ class LibraryController(
         )
         if (bagMoved) persistLibrary()
         val snapshot = uiState().history
-        scope.launch { persistHistory(snapshot) }
+        launchSave(snapshot)
     }
 
     /** Apply a user rating / tasting-notes edit to a logged shot. Persisted.
@@ -3093,7 +3137,7 @@ class LibraryController(
             }
         }
         val snapshot = uiState().history
-        scope.launch { persistHistory(snapshot) }
+        launchSave(snapshot)
     }
 
     /**
@@ -3104,7 +3148,7 @@ class LibraryController(
     fun setShotPinned(id: String, pinned: Boolean) {
         editHistory { rows -> rows.mapped { if (it.id == id) it.copy(pinned = pinned) else it } }
         val snapshot = uiState().history
-        scope.launch { persistHistory(snapshot) }
+        launchSave(snapshot)
     }
 
     /**
@@ -3231,9 +3275,11 @@ class LibraryController(
     private fun saveMarkedEdit(marked: Boolean) {
         if (!marked) {
             val snapshot = uiState().history
-            scope.launch { persistHistory(snapshot) }
+            launchSave(snapshot)
             return
         }
+        // The store has the edit now; its write waits for the marks.
+        historyStore.accept(uiState().history)
         scope.launch {
             visualizer.storeMarks()
             persistHistory(uiState().history)
