@@ -251,3 +251,34 @@ test('a new deploy is offered, waits for the user, and applies on Reload', async
 		await site.close();
 	}
 });
+
+test('the service worker counts the open windows for the history flip (#310 M2)', async ({ context, page }) => {
+	const site = await serveCopy();
+	const count = (p: Page) =>
+		p.evaluate(
+			() =>
+				new Promise<number | null>((resolve) => {
+					void navigator.serviceWorker.getRegistration().then((reg) => {
+						const sw = reg?.active;
+						if (!sw) return resolve(null);
+						const ch = new MessageChannel();
+						ch.port1.onmessage = (e) => resolve((e.data as { count: number | null }).count);
+						sw.postMessage({ type: 'CREMA_WINDOW_COUNT' }, [ch.port2]);
+					});
+				})
+		);
+	try {
+		await page.goto(site.url);
+		await expectShell(page);
+		await waitForController(page);
+		expect(await count(page)).toBe(1);
+		const second = await context.newPage();
+		await second.goto(site.url);
+		await expectShell(second);
+		expect(await count(page)).toBe(2);
+		await second.close();
+		expect(await count(page)).toBe(1);
+	} finally {
+		await site.close();
+	}
+});

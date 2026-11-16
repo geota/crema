@@ -23,6 +23,7 @@ mod export;
 pub mod faults;
 mod fts;
 mod index;
+mod late;
 mod read;
 mod rewrite;
 mod write;
@@ -40,6 +41,7 @@ pub use export::{ExportWalk, RidId};
 pub use faults::Faults;
 pub use fts::{FtsCheck, FtsStatus, Maintained};
 pub use index::{ABSENT_BATCH_ROWS, AbsentError, AbsentStep, IndexState, IndexWrite};
+pub use late::LateImport;
 pub use read::{CoffeeFacet, Destination, Facets, Page, RidRow, RowOut, SyncPage, SyncRow};
 pub use write::{Applied, Duplicate, Heavy, RowIn, Write, Written};
 

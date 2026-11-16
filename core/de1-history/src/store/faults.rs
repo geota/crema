@@ -45,6 +45,9 @@ pub const POINTS: &[&str] = &[
     "flip.promote.commit",
     "flip.promote.committed",
     "flip.done.commit",
+    // Late rows (SPEC §11 steps 8 and 9).
+    "late.commit",
+    "late.committed",
 ];
 
 /// The armed faults and a log of the statements the store ran.
