@@ -338,8 +338,9 @@
 	/** Export the local shot history as the core's Crema `crema/v1` JSONL —
 	 *  the file Android's shot import reads too (F10). */
 	async function exportHistory(): Promise<void> {
-		// Not loaded is not empty: an export now would hold no shots.
-		if (!history.loaded) return;
+		// Not loaded is not empty: an export now would hold no shots. Say so (REVIEW-472 N4).
+		const stillLoading = (): void => void toast.info('The shot history is still loading, so nothing was exported. Try again in a moment.');
+		if (!history.loaded) return stillLoading();
 		// The rows carry no samples (#310 P4w): each shot goes whole, loaded a
 		// batch at a time. A read that fails stops the export, so no file goes
 		// out with empty curves. Every live row, from one state (#310 W3).
@@ -347,7 +348,7 @@
 		try {
 			ids = (await getHistoryReads().answer(liveRows())).map((s) => s.id);
 		} catch {
-			return;
+			return stillLoading();
 		}
 		const whole = [];
 		try {

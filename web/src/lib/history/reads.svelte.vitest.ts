@@ -153,6 +153,44 @@ describe('when the index isn’t fresh, P3w answers', () => {
 		expect(reads.compared).toBe(before + 1);
 	}, 60_000);
 
+	it('a hard delete in flight: not quiet, so P3w answers, without the row (REVIEW-472 N1)', async () => {
+		const { store, client } = await setup();
+		const seen: string[] = [];
+		const reads = new HistoryReads({
+			store: () => store,
+			db: () => client,
+			waitMs: 10_000,
+			throwMismatch: false,
+			onMismatch: (m) => seen.push(`${m.query}: ${m.detail}`)
+		});
+		// Hold the store's delete, as a slow IndexedDB or a long write ahead would.
+		const db = (store as unknown as { db: { delete(ids: readonly string[]): Promise<number> } }).db;
+		const realDelete = db.delete.bind(db);
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		db.delete = async (ids) => {
+			await gate;
+			return realDelete(ids);
+		};
+		const id = realShot(1).id;
+		store.delete(id);
+		expect(p3RowsOf(store).raw.some((s) => s.id === id)).toBe(false);
+		// The W2 oracle and these queries both go by `inStep`: a removal in flight isn't quiet.
+		expect(store.inStep.quiet).toBe(false);
+		const live = await reads.answer(liveRows());
+		const named = await reads.answer(rowsNamed([id]));
+		release();
+		await store.flushed();
+		expect(reads.compared).toBe(0);
+		expect(live.some((s) => s.id === id)).toBe(false);
+		expect(named).toEqual([]);
+		expect(seen).toEqual([]);
+		// Once it lands and the index takes it, the index answers again, without the row.
+		await fresh(store, client);
+		expect((await reads.answer(liveRows())).some((s) => s.id === id)).toBe(false);
+		expect(reads.compared).toBe(1);
+	}, 60_000);
+
 	it('an index behind this tab’s seq: P3w answers', async () => {
 		const { store, client } = await setup();
 		const behind = wrapped(client, async (name, _arg, next) => {

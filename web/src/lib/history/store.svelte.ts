@@ -657,6 +657,7 @@ export class HistoryStore {
 			!this.flushQueued &&
 			this.heard.size === 0 &&
 			this.adopting === 0 &&
+			this.removing.size === 0 &&
 			this.dirtyDetails.size === 0 &&
 			this.writingDetails.size === 0 &&
 			this.dirtyRowIds().length === 0;

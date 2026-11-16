@@ -423,6 +423,15 @@ export function getHistoryReads(): HistoryReads {
 	return reads;
 }
 
+/**
+ * Reads that never ask the index: P3w's answer, once the rows are in. For a
+ * reader that deletes on a rule the index could only get wrong while it
+ * trails (capture prune, REVIEW-472 N2).
+ */
+export function p3OnlyReads(): HistoryReads {
+	return new HistoryReads({ store: getHistoryStore, db: () => null });
+}
+
 /** Test seam. */
 export function setHistoryReadsForTest(r: HistoryReads | null): void {
 	reads = r;

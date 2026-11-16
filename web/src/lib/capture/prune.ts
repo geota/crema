@@ -10,7 +10,7 @@
 import type { CapturedShot } from '#lib/core/crema-core.js';
 import { capturesToDrop as wasmCapturesToDrop } from '#lib/wasm/de1_wasm.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
-import { getHistoryReads, rowsNamed, type HistoryReads } from '#lib/history/reads.svelte.js';
+import { p3OnlyReads, rowsNamed, type HistoryReads } from '#lib/history/reads.svelte.js';
 import { coreCaptureKeep, readCaptureKeep, type CaptureKeepChoice } from './limit.ts';
 import { getCaptureStore } from './store.ts';
 
@@ -21,16 +21,16 @@ import { getCaptureStore } from './store.ts';
 export async function capturesOverLimit(
 	history: HistoryStore,
 	choice: CaptureKeepChoice,
-	reads: HistoryReads = getHistoryReads()
+	reads: HistoryReads = p3OnlyReads()
 ): Promise<string[]> {
 	if (typeof indexedDB === 'undefined') return [];
 	// Not loaded is not empty: with no rows, every capture would look unclaimed.
 	if (!(await history.readyWithin())) return [];
 	if (history.rowsHealth() !== 'ok') return [];
 	const keys = await getCaptureStore().keys();
-	// The rows the captures belong to, tombstones too: from the index while
-	// it holds exactly P3w's rows (a pin it hadn't taken yet would read as
-	// unpinned), else from P3w (#310 W3).
+	// The rows the captures belong to, tombstones too, from P3w only (#310 W3,
+	// REVIEW-472 N2): it deletes user bytes on a rule about pins, and on stage 1
+	// the index only follows P3w, so asking it adds a wait and nothing else.
 	const rows = await reads.answer(rowsNamed(keys), history);
 	// The health again: the rows may have gone while the question was out.
 	if (history.rowsHealth() !== 'ok') return [];
