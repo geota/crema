@@ -492,27 +492,6 @@ class Owner {
 					return;
 				}
 			}
-			// A truth file only once it says `done`: a `copying` leftover is
-			// never the truth, whatever named it (SPEC §11, REVIEW-473 B2).
-			if (!stage1 && t.role === 'authority') {
-				let state: unknown;
-				try {
-					state = await db.call('migrationState');
-				} catch (e) {
-					db.close();
-					this.#fail('unavailable', engineError(e).code);
-					return;
-				}
-				if (gone()) {
-					db.close();
-					return;
-				}
-				if (state !== 'done') {
-					db.close();
-					this.#fail('lost', 'notDone');
-					return;
-				}
-			}
 			this.#db = db;
 			this.#fail('ok', 'open');
 			try {
