@@ -35,9 +35,12 @@ export class HistoryOracleMismatch extends Error {
 	}
 }
 
-const env = (import.meta as { env?: { DEV?: boolean; MODE?: string } }).env;
-/** Dev or tests: the only builds the oracle runs in. */
-export const ORACLE_ON = env?.DEV === true || env?.MODE === 'test';
+/**
+ * Dev or tests: the only builds the oracle runs in. Read straight off
+ * `import.meta.env`, which the build replaces with constants, so a production
+ * bundle drops the oracle and never references the test bundle.
+ */
+export const ORACLE_ON = import.meta.env.DEV || import.meta.env.MODE === 'test';
 
 let loading: Promise<ReferenceFns | null> | null = null;
 
@@ -47,10 +50,10 @@ let loading: Promise<ReferenceFns | null> | null = null;
  * always in production.
  */
 export function loadReference(): Promise<ReferenceFns | null> {
-	if (!ORACLE_ON) return Promise.resolve(null);
+	if (!(import.meta.env.DEV || import.meta.env.MODE === 'test')) return Promise.resolve(null);
 	loading ??= (async () => {
 		try {
-			if (env?.MODE === 'test') {
+			if (import.meta.env.MODE === 'test') {
 				const { readFile } = await import('node:fs/promises');
 				const { resolve } = await import('node:path');
 				const bytes = await readFile(resolve(process.cwd(), '.wasm-test/de1_wasm_bg.wasm'));

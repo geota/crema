@@ -14,6 +14,34 @@ const q = new URLSearchParams(location.search);
 const stage = Number(q.get('stage') ?? 2) as Stage;
 const g = Number(q.get('g') ?? 0);
 
+// Stage 1's owner keeps the index in step with the P3 store, and answers only
+// once it has read it (W2): an empty, migrated `crema-history`, as a fresh
+// install's P3w leaves it.
+if (stage === 1) {
+	await new Promise<void>((resolve, reject) => {
+		const req = indexedDB.open('crema-history', 1);
+		req.onupgradeneeded = () => {
+			for (const name of ['rows', 'details']) req.result.createObjectStore(name, { keyPath: 'id' });
+			req.result.createObjectStore('meta');
+		};
+		req.onerror = () => reject(req.error);
+		req.onsuccess = () => {
+			const db = req.result;
+			const tx = db.transaction('meta', 'readwrite');
+			const meta = tx.objectStore('meta');
+			const got = meta.get('migration');
+			got.onsuccess = () => {
+				if (got.result === undefined) meta.put({ state: 'done', sourceHash: '0:0', sourceIds: [], doneAt: 1 }, 'migration');
+			};
+			tx.oncomplete = () => {
+				db.close();
+				resolve();
+			};
+			tx.onerror = () => reject(tx.error);
+		};
+	});
+}
+
 const client = new HistoryDbClient({
 	stage,
 	expect: stage === 2 ? { role: 'authority', file: 'history.db', generation: g } : { role: 'index', file: 'history-index.db' },

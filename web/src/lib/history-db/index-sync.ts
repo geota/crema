@@ -30,8 +30,9 @@
  *   that follows it run in this module's own order, so a row read earlier is
  *   never written over one read later. Each index call goes through the
  *   owner's queue, one at a time, so tabs' reads go between them, and each
- *   is short: a batch of 500 rows, a removal step of at most 500 deletes,
- *   well under the page's `WORKER_DEAD_MS` (REVIEW-456 N2).
+ *   is short: {@link DIFF_WRITE_ROWS} rows of a batch, a removal step of at
+ *   most 500 deletes, under B1's 50 ms for the longest transaction and far
+ *   under the page's `WORKER_DEAD_MS` (REVIEW-456 N2).
  * - The P3 store is only read here, and the database is never created (its
  *   source opens with `expectExisting`). Nothing here deletes a file.
  */
@@ -42,6 +43,12 @@ import type { ChangeSet } from './protocol.js';
 
 /** Rows per full-diff batch, as the P3 store reads them (SPEC §11). */
 export const DIFF_BATCH = 500;
+/**
+ * Rows per index call of a batch: a call holds the owner's one connection,
+ * and 500 real-shaped rows took about 64 ms in Chrome at 20,000, over B1's
+ * 50 ms for the longest single transaction (W2's browser bench).
+ */
+export const DIFF_WRITE_ROWS = 125;
 /** A gap open this long runs a full diff (SPEC §3). */
 export const GAP_MS = 2_000;
 /** The P3 store isn't there yet (a first boot's migration): look again after this, doubling. */
@@ -90,6 +97,19 @@ export interface SyncDeps {
 	log?(line: string): void;
 }
 
+/** How the upkeep stands, for diagnostics and B1's browser bench (`indexSync`). */
+export interface SyncStats {
+	ready: boolean;
+	reason: string;
+	/** Full diffs run, and the last one's length, ms. */
+	diffs: number;
+	lastDiffMs: number | null;
+	/** The longest single index call the upkeep made, ms: B1's longest transaction. */
+	longestCallMs: number;
+	/** Gaps that ran a diff. */
+	gaps: number;
+}
+
 /** The owner's view of an index sync. */
 export interface IndexSyncLike {
 	start(): void;
@@ -97,6 +117,7 @@ export interface IndexSyncLike {
 	resume(): void;
 	stop(): void;
 	readonly ready: boolean;
+	readonly stats?: SyncStats;
 }
 
 interface IndexState {
@@ -141,6 +162,10 @@ export class IndexSync implements IndexSyncLike {
 	#retryWait = SOURCE_RETRY_FIRST_MS;
 	#ready = false;
 	#reason = 'checking';
+	#diffs = 0;
+	#lastDiffMs: number | null = null;
+	#longest = 0;
+	#gaps = 0;
 	#refusedRuns = 0;
 
 	constructor(d: SyncDeps) {
@@ -155,6 +180,17 @@ export class IndexSync implements IndexSyncLike {
 	/** Why it can't answer, or `ok`. */
 	get reason(): string {
 		return this.#reason;
+	}
+
+	get stats(): SyncStats {
+		return {
+			ready: this.#ready,
+			reason: this.#reason,
+			diffs: this.#diffs,
+			lastDiffMs: this.#lastDiffMs,
+			longestCallMs: this.#longest,
+			gaps: this.#gaps
+		};
 	}
 
 	start(): void {
@@ -204,7 +240,12 @@ export class IndexSync implements IndexSyncLike {
 	#call<T>(method: string, arg?: unknown): Promise<T> {
 		return this.#d.queue(async () => {
 			if (this.#stopped) throw new Superseded();
-			return (await this.#d.db.call(method, arg)) as T;
+			const t0 = performance.now();
+			try {
+				return (await this.#d.db.call(method, arg)) as T;
+			} finally {
+				this.#longest = Math.max(this.#longest, performance.now() - t0);
+			}
 		});
 	}
 
@@ -339,6 +380,7 @@ export class IndexSync implements IndexSyncLike {
 				const misses = await this.#misses();
 				if (misses === null || misses.length === 0) return;
 				this.#d.log?.(`index gap open ${GAP_MS} ms: ${misses.join('; ')}; a full diff`);
+				this.#gaps++;
 				// The index is behind, not wrong: it keeps answering while the diff runs.
 				this.#diff('gap');
 			}).catch((e) => this.#failed(e, 'gap check'));
@@ -355,12 +397,15 @@ export class IndexSync implements IndexSyncLike {
 		}
 		this.#diffing = true;
 		const gen = ++this.#diffGen;
+		const began = performance.now();
 		const live = () => {
 			if (this.#stopped || gen !== this.#diffGen) throw new Superseded();
 		};
 		void this.#runDiff(live)
 			.then(
 				() => {
+					this.#diffs++;
+					this.#lastDiffMs = performance.now() - began;
 					this.#refusedRuns = 0;
 					this.#retryWait = SOURCE_RETRY_FIRST_MS;
 					this.#setState(true, 'ok');
@@ -418,9 +463,13 @@ export class IndexSync implements IndexSyncLike {
 				live();
 				const rows = await p3(() => this.#d.source.rowsAfter(after, DIFF_BATCH));
 				if (rows.length === 0) return false;
-				live();
-				const w = await this.#call<Written>('diffBatch', rows.map((r) => ({ rowJson: r.rowJson })));
-				this.#d.notify(w.change);
+				// In calls of a few rows each, so the tabs' reads go between them.
+				for (let i = 0; i < rows.length; i += DIFF_WRITE_ROWS) {
+					live();
+					const part = rows.slice(i, i + DIFF_WRITE_ROWS).map((r) => ({ rowJson: r.rowJson }));
+					const w = await this.#call<Written>('diffBatch', part);
+					this.#d.notify(w.change);
+				}
 				after = rows[rows.length - 1].id;
 				return rows.length === DIFF_BATCH;
 			});

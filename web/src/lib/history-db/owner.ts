@@ -86,7 +86,7 @@ export const REOPEN_WAIT_MS = 1_000;
 const BROKEN = new Set(['cantOpen', 'corrupt', 'poisoned', 'readOnly']);
 
 /** Calls that answer while the index is behind: its bookkeeping, not its rows. */
-const WHILE_BEHIND = new Set(['indexState', 'info', 'health', 'writeSeq', 'ftsStatus']);
+const WHILE_BEHIND = new Set(['indexState', 'info', 'health', 'writeSeq', 'ftsStatus', 'indexSync']);
 
 /** Install errors no wait will clear. */
 const PERMANENT = new Set(['pool.invalidHeader', 'pool.configurationMismatch', 'pool.notSupported']);
@@ -562,6 +562,8 @@ class Owner {
 				if (!(READS as readonly string[]).includes(req.name)) {
 					throw { code: 'refused', message: `${req.name} isn't a read` };
 				}
+				// The upkeep's own state, not the file's.
+				if (req.name === 'indexSync') return this.#sync?.stats ?? null;
 				// Behind the P3 store: its rows would be stale, so the tab lists from memory (W2).
 				if (!this.#indexReady && !WHILE_BEHIND.has(req.name)) {
 					throw { code: 'index_fallback', message: this.#indexReason };

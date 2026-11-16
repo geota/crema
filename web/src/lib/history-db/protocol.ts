@@ -93,7 +93,9 @@ export const READS = [
 	'info',
 	'health',
 	'ftsStatus',
-	'indexState'
+	'indexState',
+	/** Stage 1 (W2): how the owner's index upkeep stands (`SyncStats`), for diagnostics. */
+	'indexSync'
 ] as const;
 export type ReadName = (typeof READS)[number];
 
