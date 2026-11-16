@@ -213,6 +213,13 @@ internal class ShotsWrite(val db: SQLiteDatabase) {
 internal class HistoryTables(private val json: Json, private val hook: ShotsHook = ShotsHook.None) {
 
     /**
+     * Told of every committed write to `shots`, under `HistoryStore.lock`,
+     * after the hook: the flip's count of what landed in `shots.db` while it
+     * ran (#310 A5, M2, M9). Null when nothing is listening.
+     */
+    @Volatile var observer: ((ShotsWrite) -> Unit)? = null
+
+    /**
      * Write `shots` in one transaction through [block], with the hook around
      * it (#310 A1, M4): `pending` up, the transaction, then the index and
      * `pending` down. Every writer of `shots` takes a [ShotsWrite], so there
@@ -246,6 +253,7 @@ internal class HistoryTables(private val json: Json, private val hook: ShotsHook
             throw e
         }
         hook.committed(ticket, db, w)
+        observer?.invoke(w)
         return out
     }
 
@@ -392,6 +400,18 @@ internal class HistoryTables(private val json: Json, private val hook: ShotsHook
             val marks = chunk.joinToString(",") { "?" }
             db.rawQuery("SELECT id, row_json FROM shots WHERE id IN ($marks)", chunk.toTypedArray()).use { c ->
                 while (c.moveToNext()) out[c.getString(0)] = c.getString(1)
+            }
+        }
+        return out
+    }
+
+    /** [ids]' `row_json` and heavy columns as stored, by id (#310 A5: the flip's captures). An id the table lacks is absent. */
+    fun rawFull(db: SQLiteDatabase, ids: Collection<String>): Map<String, Triple<String, String?, String?>> {
+        val out = HashMap<String, Triple<String, String?, String?>>()
+        for (chunk in ids.chunked(500)) {
+            val marks = chunk.joinToString(",") { "?" }
+            db.rawQuery("SELECT id, row_json, profile_json, brew_series_json FROM shots WHERE id IN ($marks)", chunk.toTypedArray()).use { c ->
+                while (c.moveToNext()) out[c.getString(0)] = Triple(c.getString(1), c.getStringOrNull(2), c.getStringOrNull(3))
             }
         }
         return out

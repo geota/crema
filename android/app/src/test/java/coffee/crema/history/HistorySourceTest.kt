@@ -258,7 +258,7 @@ class HistorySourceTest {
     }
 
     @Test
-    fun `a delete during the walk is held, written whole, then released details first`() = runBlocking<Unit> {
+    fun `a delete during the walk is held, written whole, then released rows first`() = runBlocking<Unit> {
         val details = FileDetails(File(root, "series"), json)
         val db = bridge("walk.db")
         val rows = shots(40, "s")
@@ -285,7 +285,7 @@ class HistorySourceTest {
             val line = lines.single { it["id"]!!.jsonPrimitive.content == id }
             assertEquals(4, line["record"]!!.jsonObject["samples"]!!.jsonArray.size, "$id is written whole")
         }
-        // The walk ended: the held rows went, details first, and nothing else.
+        // The walk ended: the held rows went, then their details, and nothing else.
         val left = source.allRows().map { it.id }.toSet()
         assertEquals(rows.map { it.id }.toSet() - walked - ahead + late.id, left)
         assertFalse(details.series.gzFile(walked).exists())
@@ -309,7 +309,7 @@ class HistorySourceTest {
     }
 
     @Test
-    fun `a kill between a hold's details and its row is released again at the next open, with nothing left`() = runBlocking<Unit> {
+    fun `a kill between a hold's row and its details leaves only details with no row, and takes nothing more`() = runBlocking<Unit> {
         val details = FileDetails(File(root, "series"), json)
         val name = "crash.db"
         val db = bridge(name)
@@ -320,18 +320,37 @@ class HistorySourceTest {
         val x = rows[4].id
         source.delete(listOf(x))
         assertTrue(details.series.gzFile(x).exists(), "held: its details wait")
-        SqliteHistorySource.faultHook = { if (it == SourceFault.RELEASE_AFTER_DETAILS) throw SimulatedCrash(it.name) }
+        SqliteHistorySource.faultHook = { if (it == SourceFault.RELEASE_AFTER_ROWS) throw SimulatedCrash(it.name) }
         assertFailsWith<SimulatedCrash> { walk.close() }
         SqliteHistorySource.faultHook = null
-        assertFalse(details.series.gzFile(x).exists(), "details go first")
-        assertTrue(db.idsCreatedBefore(ULong.MAX_VALUE, Long.MIN_VALUE, 100u).any { it.id == x }, "the row is still there, held")
-        assertEquals(emptyList(), db.get(listOf(x)), "and hidden")
+        // Rows first (SPEC "From R1w"): the row is gone, its curve stays, which is harmless (SPEC §2).
+        assertFalse(db.idsCreatedBefore(ULong.MAX_VALUE, Long.MIN_VALUE, 100u).any { it.id == x }, "the row went first")
+        assertTrue(details.series.gzFile(x).exists(), "its details wait, with no row: never a row without its curve")
         db.closeAll()
         val again = bridge(name)
         val reopened = SqliteHistorySource.open(again, json, details)
-        assertFalse(again.idsCreatedBefore(ULong.MAX_VALUE, Long.MIN_VALUE, 100u).any { it.id == x }, "released at the open")
         assertEquals(rows.map { it.id }.toSet() - x, reopened.allRows().map { it.id }.toSet())
-        assertEquals(9, details.series.dir.listFiles().orEmpty().count { it.name.endsWith(SeriesFiles.GZ) }, "no details left behind, none taken")
+        assertEquals(10, details.series.dir.listFiles().orEmpty().count { it.name.endsWith(SeriesFiles.GZ) }, "nothing else was taken")
+        // The id made again: its details are written before its row, over the old ones.
+        fill(again, details, listOf(rows[4]))
+        assertEquals(rows.map { it.id }.toSet(), reopened.allRows().map { it.id }.toSet())
+    }
+
+    @Test
+    fun `a held row an upsert brings back before its release keeps its curve`() = runBlocking<Unit> {
+        val details = FileDetails(File(root, "series"), json)
+        val db = bridge("back.db")
+        val rows = shots(6, "b")
+        fill(db, details, rows)
+        val source = SqliteHistorySource.open(db, json, details)
+        val walk = source.openWalk()
+        val x = rows[2].id
+        source.delete(listOf(x))
+        // A restore or a pull writes it again while the walk is still open.
+        fill(db, details, listOf(rows[2]))
+        walk.close()
+        assertTrue(x in source.allRows().map { it.id }, "the row stays")
+        assertTrue(details.series.gzFile(x).exists(), "and so does its curve (REVIEW-468 W5-1)")
     }
 
     @Test

@@ -1879,6 +1879,15 @@ impl HistoryDb {
         self.with(|s| s.late_ids())
     }
 
+    /// Series written with no row write: `write_seq` moves, so the backup
+    /// mark does (REVIEW-466 note 1). Returns the new `write_seq`.
+    ///
+    /// # Errors
+    /// A store error class.
+    pub fn note_details_written(&self, at_ms: i64) -> HResult<u64> {
+        self.with(|s| s.note_details_written(at_ms))
+    }
+
     /// Step 8's import into a truth file, in one transaction.
     ///
     /// # Errors

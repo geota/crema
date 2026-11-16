@@ -85,6 +85,10 @@ class HistoryDbBridge private constructor(
         internal fun openNow(file: File, options: HistoryOpenOptions, io: CoroutineDispatcher = Dispatchers.IO): HistoryDbBridge =
             HistoryDbBridge(CoreHistoryDb.open(file.path, options), io)
 
+        /** [createRecovery] on the calling thread, for a caller on IO inside the store's lock (#310 A5). */
+        internal fun createRecoveryNow(file: File, options: HistoryOpenOptions, recovery: HistoryRecovery, io: CoroutineDispatcher = Dispatchers.IO): HistoryDbBridge =
+            HistoryDbBridge(CoreHistoryDb.createRecovery(file.path, options, recovery), io)
+
         /** Creates the recovery file [file] after `lost` (S9) and opens it. */
         suspend fun createRecovery(
             file: File,

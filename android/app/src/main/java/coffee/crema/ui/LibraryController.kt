@@ -1422,11 +1422,15 @@ class LibraryController(
         }
         // Hidden rows the walk finds without the curve their summary names: counted for the report (#408 S5).
         val missingCurves = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        val full: (ShotRow) -> coffee.crema.history.StoredShot = { historyStore.loadFull(it, missingCurves) }
         return BackupSnapshot(
             customs, s, pinnedIds, hiddenIds, currentPrefs(), visualizer.backupPrefs(), userRecipes,
             shots = shots,
-            full = { historyStore.loadFull(it, missingCurves) },
+            full = full,
             missingCurves = missingCurves,
+            // On history.db (#310 A5) the backup walks the store's export walk, which holds a
+            // delete made during it (S6), each row read whole here, its missing curves counted.
+            source = historyStore.backupSource(full),
         )
     }
 
@@ -1619,7 +1623,10 @@ class LibraryController(
     @Volatile var restoreHeldSharing: List<String> = emptyList()
         private set
 
-    /** Step 7 on P3a's `shots.db` (#310 R1a): the store, and the view over it. */
+    /** `history.db`'s `write_seq` when this restore's step 7 began (M3), or null on `shots.db`. */
+    @Volatile private var restoreSeq: ULong? = null
+
+    /** Step 7 on P3a's `shots.db` (#310 R1a), or on `history.db` (A5): the store's memory, and the store under it. */
     private val shotsDbRestore = object : coffee.crema.history.ShotsRestore {
         override suspend fun rows(): List<ShotRow> = allShots()
 
@@ -1648,8 +1655,9 @@ class LibraryController(
 
         override suspend fun merge(rows: List<ShotRow>): Boolean = persistHistoryAll(rows)
 
-        // The plan named them, less the rows still listed: the backup's ids are already out.
-        override suspend fun remove(named: List<String>, backupIds: Set<String>) = historyStore.delete(named)
+        // The plan named them, less the rows still listed: the backup's ids are already out. On
+        // history.db only rows made before the run began go (M3, #310 A5).
+        override suspend fun remove(named: List<String>, backupIds: Set<String>) = historyStore.restoreRemove(named, backupIds, restoreSeq)
     }
 
     /** The stores a restore writes, through the library's state. */
@@ -1795,12 +1803,15 @@ class LibraryController(
          * instead keeps the union for good (its `runDeletes` skips ids still
          * listed), which loses nothing. The view takes the newest rows.
          */
-        private suspend fun applyShotsToStore(plan: coffee.crema.core.RestorePlan, records: coffee.crema.restore.RestoreRecords, replace: Boolean): Int? =
-            coffee.crema.restore.restoreShots(
+        private suspend fun applyShotsToStore(plan: coffee.crema.core.RestorePlan, records: coffee.crema.restore.RestoreRecords, replace: Boolean): Int? {
+            // Step 0 (M3): a row written after this is never in the wipe.
+            restoreSeq = historyStore.restoreBegin()
+            return coffee.crema.restore.restoreShots(
                 shotsDbRestore, plan, records, replace,
                 afterSeries = { afterRestoreSeries?.invoke() },
                 beforeRemove = { beforeRestoreRemove?.invoke() },
             )
+        }
 
         override suspend fun applySingletons(plan: coffee.crema.core.RestorePlan, records: coffee.crema.restore.RestoreRecords): Boolean {
             val p = records.parsed

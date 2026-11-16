@@ -207,6 +207,22 @@ impl Store {
             .unwrap_or_default())
     }
 
+    /// Series files were written with no row write (a restore filling a
+    /// curve its row already named): `meta.details_at` moves, and with it
+    /// `write_seq`, so auto-backup's "changed?" mark moves too (REVIEW-466
+    /// note 1).
+    ///
+    /// # Errors
+    /// A SQLite error class.
+    pub fn note_details_written(&mut self, at_ms: i64) -> Result<u64> {
+        self.write("late.commit", "late.committed", |tx, st, _| {
+            st.next();
+            tx.execute(META_UPSERT, ("details_at", at_ms.to_string()))?;
+            Ok(())
+        })?;
+        Ok(self.write_seq())
+    }
+
     /// Step 8 on a truth file (SPEC §11, S13), in one transaction: see the
     /// module docs.
     ///
