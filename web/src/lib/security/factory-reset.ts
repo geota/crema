@@ -32,9 +32,11 @@
  *     (preferences, library, history summaries, the wrapped Visualizer and
  *     Decent tokens, the Drive session token, the OAuth handshake).
  *
- * Between steps 1 and 2 the caller's `beforeWipe` runs — the shell freezes
- * every Crema write there (`#lib/security/reset-coordinator`), so nothing the
- * live app does can recreate a database or a key mid-wipe. The caller reloads
+ * Between steps 1 and 2 the caller's `beforeWipe` runs, and is waited for —
+ * the shell freezes every Crema write there (`#lib/security/reset-coordinator`),
+ * so nothing the live app does can recreate a database or a key mid-wipe, and
+ * stops the history store, whose owner closes, pauses and lets its pools go
+ * first (`#lib/history-db/start`, S10). The caller reloads
  * the page straight afterwards, with no dialog in between. The DE1 itself is
  * not touched.
  */
@@ -86,8 +88,12 @@ export interface FactoryResetDeps {
 	revokeTimeoutMs?: number;
 	/** Give up on one database delete after this long (e.g. blocked by another tab). */
 	deleteTimeoutMs?: number;
-	/** Runs after the revocations and before the first delete (freeze writers here). */
-	beforeWipe?: () => void;
+	/**
+	 * Runs after the revocations and before the first delete, and is waited
+	 * for: freeze writers here, and let the history store's owner close, pause
+	 * and release its pools (S10).
+	 */
+	beforeWipe?: () => void | Promise<void>;
 	/** The origin private file system's root, or undefined where there is none. */
 	privateFiles?: () => Promise<FileSystemDirectoryHandle | undefined>;
 }
@@ -279,7 +285,7 @@ export async function factoryResetLocalData(deps: FactoryResetDeps = {}): Promis
 	);
 	for (const r of revocations) if (r.status === 'rejected') revokeFailures++;
 
-	deps.beforeWipe?.();
+	await deps.beforeWipe?.();
 
 	const databasesDeleted: string[] = [];
 	const databasesFailed: string[] = [];

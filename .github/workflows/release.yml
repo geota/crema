@@ -151,8 +151,10 @@ jobs:
         working-directory: web
         run: pnpm install --frozen-lockfile
 
-      # `pnpm build` runs `pnpm wasm` (wasm-pack) then `vite build` — the Rust
-      # core's WebAssembly bundle is produced and bundled in one shot.
+      # `pnpm build` runs `pnpm wasm` (wasm-pack), then `pnpm wasm:history` (the
+      # history Worker's store, #310 W1; scripts/history-wasm-build.sh finds the
+      # runner's clang for SQLite's C), then `vite build` — the Rust core's
+      # WebAssembly bundles are produced and bundled in one shot.
       # Stamp the release version into package.json before building. The About
       # panel imports `package.json` and vite bakes `__APP_VERSION__` from it,
       # so without this the deployed PWA reports whatever is committed — which

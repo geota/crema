@@ -47,6 +47,7 @@
 	import { onMount } from 'svelte';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import { factoryResetLocalData } from '#lib/security/factory-reset.js';
+	import { stopHistoryDb } from '#lib/history-db/start.js';
 	import { isAllowedWebhookUrl } from '#lib/services/webhook-url.js';
 	import { revokeVisualizerToken } from '#lib/bean/index.js';
 	import {
@@ -302,7 +303,12 @@
 						},
 						() => drive.signOut()
 					],
-					beforeWipe: () => freezeCremaWrites()
+					// Freeze, then the history store's owner closes, pauses and lets go
+					// before any removal, so its pools can be removed (S10).
+					beforeWipe: async () => {
+						freezeCremaWrites();
+						await stopHistoryDb();
+					}
 				})
 			);
 		} finally {

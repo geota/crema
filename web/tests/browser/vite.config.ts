@@ -28,6 +28,7 @@ export default defineConfig({
 		rollupOptions: {
 			input: {
 				harness: path.join(web, 'tests/browser/harness/index.html'),
+				w1: path.join(web, 'tests/browser/w1/index.html'),
 				bench: path.join(web, 'bench/history-db.html')
 			}
 		}

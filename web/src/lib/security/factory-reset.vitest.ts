@@ -172,4 +172,24 @@ describe('factoryResetLocalData', () => {
 		expect(order.slice(0, 2)).toEqual(['revoke', 'freeze']);
 		expect(order).toContain('dbs:crema-keys');
 	});
+
+	// #310 W1, S10: the history store's owner closes, pauses and lets its pools
+	// go inside beforeWipe, so the reset waits for it before removing anything.
+	it('waits for an async beforeWipe before any database or private file goes', async () => {
+		await createDb('crema-keys');
+		const order: string[] = [];
+		await factoryResetLocalData({
+			beforeWipe: async () => {
+				await new Promise((r) => setTimeout(r, 20));
+				order.push('released');
+			},
+			privateFiles: async () => {
+				order.push('files');
+				return undefined;
+			}
+		});
+		expect(order[0]).toBe('released');
+		expect(order).toContain('files');
+		expect(await cremaDatabases()).not.toContain('crema-keys');
+	});
 });
