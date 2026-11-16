@@ -401,7 +401,14 @@ jobs:
         working-directory: web
         run: pnpm check
 
-      # Unit tests (vitest). They import the wasm bundle built above.
+      # The history store's Node test bundle (#310 R1w): `memory-truth`, so
+      # the backup seam's SQLite tests keep a `history.db` in memory. Into
+      # web/.wasm-test/history/, outside src/; the app never loads it.
+      - name: Build the history wasm test bundle
+        working-directory: web
+        run: pnpm wasm:history:test
+
+      # Unit tests (vitest). They import the wasm bundles built above.
       - name: Unit tests (vitest)
         working-directory: web
         run: pnpm test

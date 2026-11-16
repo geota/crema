@@ -1356,6 +1356,18 @@ export class HistoryStore {
 		return this.rows().raw.filter((s) => s.deletedAt == null);
 	}
 
+	/**
+	 * `crema-history`'s write counter as stored, or null on the legacy backend
+	 * (which has none) or when it can't be read: for a backup's "changed?"
+	 * (#310 R1w). Reads only.
+	 */
+	async writeSeqNow(): Promise<number | null> {
+		await this.whenReady().catch(() => {});
+		const db = this.db;
+		if (this.mode !== 'idb' || !db) return null;
+		return db.writeSeq().catch(() => null);
+	}
+
 	/** Look up one row by id, tombstone or not, or `undefined` if it is not in the history. */
 	get(id: string): ShotRow | undefined {
 		this.assertLoaded('get');

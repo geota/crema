@@ -21,8 +21,8 @@
 
 import { exportBackupBundle, guardRestoredVisualizerPrefs } from '#lib/wasm/de1_wasm.js';
 import { getBeanStore } from '#lib/bean/index.js';
-import { getHistoryStore } from '#lib/history/index.js';
 import { refusedNoSamples } from '#lib/history/model.js';
+import { ShotsMoved, getHistorySource, type ExportShots } from '#lib/history-source/source.js';
 import {
 	getSettingsStore,
 	settingsToCommon,
@@ -174,7 +174,7 @@ export function driveBackupFailure(err: unknown, uploading: boolean): string {
  * so a copy that lost its curves to a failed read must not land there.
  */
 export function driveBackupRefusal(c: BackupContents): string | null {
-	if (!getHistoryStore().seriesFailed || !c.noCurves) return null;
+	if (!getHistorySource().seriesFailed || !c.noCurves) return null;
 	return `Shot curves couldn’t be read, so ${c.noCurves} shot${c.noCurves === 1 ? '' : 's'} would go without ${c.noCurves === 1 ? 'its curve' : 'their curves'}. Nothing was uploaded. Reload the app and try again.`;
 }
 
@@ -192,14 +192,13 @@ function storedCustomProfiles(): unknown[] {
  *  summary without building the bundle. */
 export function backupContents(): BackupContents {
 	const beanStore = getBeanStore();
-	const history = getHistoryStore();
 	const customProfiles = storedCustomProfiles();
 	return {
 		profiles: customProfiles.length,
 		beans: beanStore.beans.length,
 		roasters: beanStore.roasters.length,
 		// Every live row, past the view too (#310). None counted until they load.
-		shots: history.loaded ? history.allLive.length : 0
+		shots: getHistorySource().liveCount()
 	};
 }
 
@@ -255,7 +254,16 @@ function rowStrings(rows: readonly unknown[]): (string | null)[] {
 export async function buildBackupJsonl(cremaVersion = __APP_VERSION__): Promise<BuiltBackup | null> {
 	const parts = await backupParts();
 	if (!parts) return null;
-	const { envelope, shots, customProfiles, beans, roasters } = parts;
+	const { envelope, customProfiles, beans, roasters } = parts;
+	// Whole, in memory, as this string always was: one pass of the source's.
+	let shots: StoredShot[];
+	try {
+		shots = [];
+		for await (const s of parts.shots.pass()) shots.push(s);
+		if (shots.length !== parts.shots.total) throw new ShotsMoved();
+	} finally {
+		await parts.shots.close();
+	}
 	const built = JSON.parse(
 		exportBackupBundle(
 			JSON.stringify({ ...envelope, shots: rowStrings(shots) }),
@@ -293,7 +301,8 @@ export async function buildBackupJsonl(cremaVersion = __APP_VERSION__): Promise<
 interface BackupParts {
 	/** The export envelope, rows as JSON strings, without `shots`. */
 	envelope: Record<string, unknown>;
-	shots: readonly StoredShot[];
+	/** The source's shots for this backup: the caller closes them. */
+	shots: ExportShots;
 	customProfiles: readonly unknown[];
 	beans: readonly Bean[];
 	roasters: readonly Roaster[];
@@ -305,7 +314,7 @@ interface BackupParts {
  * throws when they don't arrive.
  */
 async function backupParts(): Promise<BackupParts | null> {
-	const history = getHistoryStore();
+	const history = getHistorySource();
 	// Not loaded is not empty: false until the rows and their curves are in,
 	// and a backup now would hold no shots.
 	if (!(await history.seriesReady())) {
@@ -316,8 +325,26 @@ async function backupParts(): Promise<BackupParts | null> {
 	const customProfiles = storedCustomProfiles();
 	const beans = beanStore.beans;
 	const roasters = beanStore.roasters;
-	// Every live row, the ones past the view too, each whole (#310 P3w).
-	const shots = await history.loadMany(history.allLive.map((s) => s.id));
+	// Every live shot, the ones past the view too, each whole (#310 P3w), as
+	// the source reads them: a snapshot, or the walk (R1w).
+	const shots = await history.exportShots();
+	try {
+		return await backupPartsAround(shots, customProfiles, beans, roasters, settings);
+	} catch (e) {
+		// Nothing of a walk outlives the backup that began it.
+		await shots.close();
+		throw e;
+	}
+}
+
+/** The rest of {@link backupParts}, around the shots it took. */
+async function backupPartsAround(
+	shots: ExportShots,
+	customProfiles: readonly unknown[],
+	beans: readonly Bean[],
+	roasters: readonly Roaster[],
+	settings: ReturnType<typeof getSettingsStore>
+): Promise<BackupParts | null> {
 	const meta = getProfileStore().backupMeta();
 	// User brew recipes (copies + own) — built-ins ship with the app and are
 	// never written (the core drops any that slip through).
@@ -335,7 +362,7 @@ async function backupParts(): Promise<BackupParts | null> {
 		customProfiles.length === 0 &&
 		beans.length === 0 &&
 		roasters.length === 0 &&
-		shots.length === 0 &&
+		shots.total === 0 &&
 		recipes.length === 0 &&
 		customMethods.length === 0;
 	const noProfileOrg =
@@ -344,6 +371,7 @@ async function backupParts(): Promise<BackupParts | null> {
 		Object.keys(recipeMeta.defaults).length === 0 &&
 		recipeMeta.hiddenBuiltins.length === 0;
 	if (noData && noProfileOrg && settingsAreDefault(settings.current)) {
+		await shots.close();
 		return null;
 	}
 
@@ -378,7 +406,7 @@ async function backupParts(): Promise<BackupParts | null> {
 		visualizerPrefs: visualizerSyncPrefs()
 	};
 	// A snapshot: a shot saved during a long walk is in the next backup.
-	return { envelope, shots: [...shots], customProfiles, beans: [...beans], roasters: [...roasters] };
+	return { envelope, shots, customProfiles, beans: [...beans], roasters: [...roasters] };
 }
 
 /** A backup built as a file, and what's in it. */
@@ -400,39 +428,50 @@ export async function buildBackupFile(
 ): Promise<BuiltBackupFile | null> {
 	const parts = await backupParts();
 	if (!parts) return null;
-	await sweepBackupTemp();
 	const { envelope, shots, customProfiles, beans, roasters } = parts;
 	const imageStore = getBeanImageStore();
 	const withPhotos = beans.filter((b) => b.imageRef);
-	const built = await streamBackup(
-		{
-			envelope: JSON.stringify(envelope),
-			shots,
-			createdAt: Date.now(),
-			appVersion: cremaVersion,
-			deviceLabel: WEB_DEVICE_LABEL,
-			photos: async function* () {
-				for (const bean of withPhotos) {
-					try {
-						const blob = await imageStore.get(bean.imageRef!);
-						if (blob) yield [bean.id, new Uint8Array(await blob.arrayBuffer())];
-					} catch {
-						// IDB miss / read error — skip this bean's photo, don't fail the backup.
+	// The shots written without a curve, as they go by: no list of every shot is kept.
+	const flat: string[] = [];
+	let built: Awaited<ReturnType<typeof streamBackup>>;
+	try {
+		await sweepBackupTemp();
+		built = await streamBackup(
+			{
+				envelope: JSON.stringify(envelope),
+				shots,
+				createdAt: Date.now(),
+				appVersion: cremaVersion,
+				deviceLabel: WEB_DEVICE_LABEL,
+				photos: async function* () {
+					for (const bean of withPhotos) {
+						try {
+							const blob = await imageStore.get(bean.imageRef!);
+							if (blob) yield [bean.id, new Uint8Array(await blob.arrayBuffer())];
+						} catch {
+							// IDB miss / read error — skip this bean's photo, don't fail the backup.
+						}
 					}
 				}
+			},
+			{
+				...opts,
+				onShot(row) {
+					const s = row as StoredShot;
+					if (refusedNoSamples(s, s.record?.samples?.length ?? 0)) flat.push(s.id);
+					opts.onShot?.(row);
+				}
 			}
-		},
-		opts
-	);
+		);
+	} finally {
+		await shots.close();
+	}
 	const omitted: OmittedBackupRow[] = [
 		...built.omitted,
 		...built.shotsOmitted.map((o) => ({ kind: 'shot', index: o.index, id: o.id }))
 	];
 	const written = (kind: string, rows: number) => rows - omitted.filter((o) => o.kind === kind).length;
-	const left = new Set(built.shotsOmitted.map((o) => o.id));
-	const noCurveIds = shots
-		.filter((s) => !left.has(s.id) && refusedNoSamples(s, s.record?.samples?.length ?? 0))
-		.map((s) => s.id);
+	const noCurveIds = flat;
 	const noCurves = noCurveIds.length;
 	return {
 		file: built.file,

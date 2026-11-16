@@ -39,9 +39,9 @@ import {
 import { getBeanStore } from '#lib/bean/index.js';
 import { coerceBean, coerceRoaster, type Bean, type Roaster } from '#lib/bean/model.js';
 import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
-import { getHistoryStore, type StoredShot } from '#lib/history/index.js';
+import type { StoredShot } from '#lib/history/index.js';
 import { coerceStoredShot } from '#lib/history/store.svelte.js';
-import { sampleCountOf, type AnyShot } from '#lib/history/model.js';
+import { getHistorySource } from '#lib/history-source/source.js';
 import { getProfileStore } from '#lib/profiles/index.js';
 import type { CremaProfile } from '#lib/profiles/model.js';
 import { getRecipeStore } from '#lib/brew/recipes.svelte.js';
@@ -52,7 +52,6 @@ import { getMaintenanceStore } from '#lib/maintenance/index.js';
 import { visualizerSyncPrefs } from '#lib/visualizer/sync-config.js';
 import { dequeueEntry } from '#lib/services/queue-store.js';
 import { cancelUnboundTombstone, releaseRemoteOut } from '#lib/visualizer/upload-marks.js';
-import { newestFirst } from '#lib/history/brew-date.js';
 import { storeHealth } from '#lib/utils/storage.js';
 import { assertImportSize, unzipImportSync } from '#lib/utils/import-limits.js';
 import {
@@ -82,6 +81,8 @@ import {
 	type LockManagerLike
 } from './tab-safety';
 import { beginMarker, dropMarker, finishMarker, isRunOf, readMarker } from './marker';
+
+export { localShotsOf, nextShots, type LocalShot } from './shots';
 
 /** The most time between two `progress` posts (rule 4: under 10 s). */
 export const PROGRESS_MS = 5_000;
@@ -361,7 +362,7 @@ async function storedPhotoBeans(beans: readonly Bean[]): Promise<{ have: string[
  * that every row looks curveless, and Merge would offer to fill them all.
  */
 export async function buildLocalState(locks: LockManagerLike | undefined = defaultLocks()): Promise<LocalState> {
-	const history = getHistoryStore();
+	const history = getHistorySource();
 	// Not loaded is not empty: a plan over no rows would add every shot again.
 	await history.whenReady();
 	await history.seriesReady();
@@ -402,7 +403,7 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 		profiles: profiles.customProfiles.map((p) => p.id),
 		recipes: recipes.ownRecipes.map((r) => r.id),
 		customMethods: methods.everything.map((m) => m.id),
-		shots: localShotsOf(history.rawAll),
+		shots: await history.localShots(),
 		photos: photos.have,
 		beansMissingPhoto: photos.missing,
 		profileMeta: { pinned: profileMeta.pinned, hiddenBuiltins: profileMeta.hiddenBuiltins },
@@ -562,6 +563,12 @@ export async function readRecords(prepared: PreparedBackup, shots?: ReadonlySet<
 	return out;
 }
 
+/** Every shot id in the backup, from the scan that read every line before any write (M3). */
+export function backupShotIds(prepared: PreparedBackup): Set<string> {
+	const m = JSON.parse(prepared.manifestJson) as { shots?: { id?: unknown }[] };
+	return new Set((m.shots ?? []).map((s) => s.id).filter((id): id is string => typeof id === 'string'));
+}
+
 /** The backup shots a plan's step 7 can write. */
 export function shotsTheRunWrites(plan: RestorePlan): Set<string> {
 	const s = plan.shots;
@@ -599,86 +606,6 @@ export function nextRows<T extends { id: string }>(
 		.map((r) => (overwrite.has(r.id) ? (theirs.get(r.id) ?? r) : r));
 	const added = plan.add.map((id) => theirs.get(id)).filter((r): r is T => r !== undefined);
 	return [...added, ...kept];
-}
-
-/**
- * The rows as the planner reads them. A row's count is its summary's (#310
- * P4w); an unknown one (`null`, Android's rule for a series it couldn't read)
- * counts as a curve, which a fill must never replace.
- */
-export function localShotsOf(rows: readonly AnyShot[]): { id: string; hasSamples: boolean; pinned: boolean; deleted: boolean }[] {
-	return rows.map((s) => ({
-		id: s.id,
-		hasSamples: (sampleCountOf(s) ?? 1) > 0,
-		pinned: s.pinned === true,
-		deleted: s.deletedAt != null
-	}));
-}
-
-/** The history a plan leaves, and the rows whose curve to write first. */
-export function nextShots(
-	local: readonly AnyShot[],
-	backup: readonly StoredShot[],
-	plan: RestorePlan['shots'],
-	replace = false
-): { next: AnyShot[]; series: StoredShot[] } {
-	const theirs = new Map<string, StoredShot>();
-	for (const s of backup) if (!theirs.has(s.id)) theirs.set(s.id, s);
-	const remove = new Set(plan.remove);
-	const here = new Set(local.map((s) => s.id));
-	// A row the plan adds that has turned up here since (a pull's stub landing
-	// during step 7) gets what the plan would have given it, had it been here:
-	// Replace overwrites it; Merge keeps it, and fills its curve.
-	const arrived = plan.add.filter((id) => here.has(id));
-	const replaced = new Set([...plan.overwrite, ...plan.revive, ...(replace ? arrived : [])]);
-	const fill = new Set([...plan.fill, ...(replace ? [] : arrived)]);
-	const zero = new Set(plan.zeroDebit);
-	const series: StoredShot[] = [];
-	const kept = local
-		.filter((s) => !remove.has(s.id))
-		.map((s): AnyShot => {
-			const b = theirs.get(s.id);
-			if (!b) return s;
-			if (replaced.has(s.id)) {
-				// The backup's row. With no curve of its own it keeps the one here,
-				// as the same shot's curve: the store merges a heavy part the
-				// backup lacks from the row it holds (`keepHeavy`, and the legacy
-				// backend's merge on write), so memory matches what a reload shows.
-				series.push(b);
-				return b;
-			}
-			// The backfill rule: the curve only, never over a curve here. A row
-			// whose count is unknown (`null`) is never filled.
-			if (fill.has(s.id) && sampleCountOf(s) === 0 && b.record.samples.length > 0) {
-				const filled = withCurveOf(s, b);
-				series.push(filled);
-				return filled;
-			}
-			return s;
-		});
-	const added = plan.add
-		.filter((id) => !here.has(id))
-		.map((id) => theirs.get(id))
-		.filter((s): s is StoredShot => s !== undefined)
-		// A bean already here never paid for a shot from elsewhere.
-		.map((s) => (zero.has(s.id) ? { ...s, bagDebit: 0 } : s));
-	series.push(...added);
-	return { next: newestFirst([...added, ...kept]), series };
-}
-
-/**
- * `row` with `backup`'s curve, as a whole shot for the store to fill: the
- * row's fields, the backup's samples, and no profile or brew series, which the
- * store keeps from what it holds.
- */
-function withCurveOf(row: AnyShot, backup: StoredShot): StoredShot {
-	const { summary: _s, ...fields } = row as AnyShot & { summary?: unknown };
-	const { brewSeries: _b, profile: _p, ...rest } = fields as StoredShot;
-	return {
-		...rest,
-		profile: null,
-		record: { duration: backup.record.duration || row.record.duration, samples: [...backup.record.samples] }
-	};
 }
 
 // ── Applying ────────────────────────────────────────────────────────────────
@@ -878,7 +805,7 @@ async function holdingRestore(
 		};
 	}
 	const heartbeat = setInterval(() => announceRestore('progress'), deps.progressMs ?? PROGRESS_MS);
-	const resumeDeletes = getHistoryStore().pauseDeletes();
+	const resumeDeletes = getHistorySource().pauseDeletes();
 	try {
 		return await applyPlan(prepared, plan, records, deps, locks);
 	} finally {
@@ -1006,13 +933,18 @@ async function applyPlan(
 	let curvesFailed = 0;
 	if (
 		!(await step('shots', async () => {
-			// Computed again after the series land, over whatever this tab
-			// recorded or edited meanwhile: the restore's own rows only change
-			// the ids the plan names.
-			const r = await getHistoryStore().restoreRows(
-				(rows) => ({ ...nextShots(rows, records.shots, plan.shots, replace), remove: plan.shots.remove }),
-				deps.writeSeries
-			);
+			// The P3 store computes it again after the series land, over
+			// whatever this tab recorded or edited meanwhile; the SQLite store
+			// merges, then removes only what it held when the restore began
+			// (M3). Either way the restore's own rows change only the ids the
+			// plan names, and no id the backup holds is ever removed.
+			const r = await getHistorySource().restoreShots({
+				plan: plan.shots,
+				backup: records.shots,
+				backupIds: backupShotIds(prepared),
+				replace,
+				writeSeries: deps.writeSeries
+			});
 			curvesFailed = r.curvesFailed;
 			if (r.stored) {
 				// A shot Free up space removed is back: pulls may take it again (#437 N5).
