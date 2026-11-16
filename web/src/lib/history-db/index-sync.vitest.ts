@@ -171,6 +171,19 @@ describe('the index follows the P3 store', () => {
 		expect(await t.client.read('count', ALL)).toBe(5);
 	});
 
+	it('on resume, a write it missed runs a diff while the index keeps answering', async () => {
+		await seedP3(shots(5));
+		const t = open();
+		await indexReady(t.client);
+		const healths: string[] = [];
+		t.client.onStatus((s) => healths.push(s.health));
+		await write(realShot(400)); // while the page was away: never announced
+		t.client.acquire(); // the page back in front
+		await vi.waitFor(async () => expect(await t.client.read('count', ALL)).toBe(6), { timeout: 10_000 });
+		expect(healths).not.toContain('index_fallback');
+		expect(w.log.some((l) => l.includes('resume check'))).toBe(true);
+	});
+
 	it('a notice with no seq is a gap too', async () => {
 		const rows = shots(2);
 		await seedP3(rows);

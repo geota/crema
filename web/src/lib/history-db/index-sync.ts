@@ -18,9 +18,10 @@
  *   and its post, a frozen owner, a notice with no seq. One open for
  *   {@link GAP_MS} runs a full diff.
  * - **The boot check** passes when `source_seq` is the P3 store's `writeSeq`,
- *   `seen_seqs` is empty and the row counts match. Otherwise a full diff runs,
- *   at boot and on resume, and the index can't answer until it's done, so
- *   the list uses the in-memory path (SPEC §3 "A miss").
+ *   `seen_seqs` is empty and the row counts match. Otherwise a full diff runs.
+ *   At boot the index can't answer until it's done, so the list uses the
+ *   in-memory path (SPEC §3 "A miss"); on resume (the owner's page back in
+ *   front) an index that was answering keeps answering while it catches up.
  * - **The full diff** (§11 stage 1 step 3): the P3 rows in batches of
  *   {@link DIFF_BATCH}, upserted where they differ; then the ids the P3 store
  *   doesn't hold, read in one transaction, removed in steps, keeping any row
@@ -288,9 +289,12 @@ export class IndexSync implements IndexSyncLike {
 	#check(why: 'boot' | 'resume'): void {
 		void this.#step(async () => {
 			const misses = await this.#misses();
+			// On resume, an index that was answering is behind at worst, not
+			// wrong: it keeps answering while its diff runs, as after a gap.
+			const keep = why === 'resume' && this.#ready;
 			if (misses === null) {
 				// The P3 store isn't there, or not migrated yet: look again later.
-				this.#setState(false, 'p3NotReady');
+				if (!keep) this.#setState(false, 'p3NotReady');
 				this.#retryLater(() => this.#check(why));
 				return;
 			}
@@ -300,7 +304,7 @@ export class IndexSync implements IndexSyncLike {
 				return;
 			}
 			this.#d.log?.(`index ${why} check: ${misses.join('; ')}; a full diff`);
-			this.#setState(false, `diff:${why}`);
+			if (!keep) this.#setState(false, `diff:${why}`);
 			this.#diff(why);
 		}).catch((e) => this.#failed(e, 'check'));
 	}
