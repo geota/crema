@@ -102,17 +102,24 @@ async function sha256(buf: ArrayBuffer): Promise<string> {
 
 type Entry = { path: string; size: number; sha: string };
 
-/** Every file under the root entries whose names start with `prefix`, with its size and hash. */
-async function opfsList(prefix: string): Promise<Entry[]> {
-	const root = await navigator.storage.getDirectory();
+/**
+ * Every file under the root directories `dirs`, with its size and hash; a
+ * directory that doesn't exist adds nothing.
+ *
+ * Only those directories, never the whole root: WebKit keeps one OPFS for
+ * every profile, so the root holds the directories of every test running at
+ * once, and a test that writes a file between this walk's `getFile()` and
+ * its read makes WebKit fail the read with `NotFoundError` (#310).
+ */
+async function opfsList(dirs: string[]): Promise<Entry[]> {
+	if (dirs.length === 0) throw { code: 'harness', message: 'opfsList needs the directories to list' };
 	const out: Entry[] = [];
 	const walk = async (d: FileSystemDirectoryHandle, at: string) => {
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		for await (const [name, h] of (d as any).entries() as AsyncIterable<
 			[string, FileSystemHandle]
 		>) {
-			const path = at ? `${at}/${name}` : name;
-			if (!at && !name.startsWith(prefix)) continue;
+			const path = `${at}/${name}`;
 			if (h.kind === 'directory') await walk(h as FileSystemDirectoryHandle, path);
 			else {
 				const f = await (h as FileSystemFileHandle).getFile();
@@ -120,7 +127,11 @@ async function opfsList(prefix: string): Promise<Entry[]> {
 			}
 		}
 	};
-	await walk(root, '');
+	for (const dir of new Set(dirs)) {
+		if (!dir || dir.includes('/')) throw { code: 'harness', message: `not a root directory: ${dir}` };
+		const d = await dirAt(dir);
+		if (d) await walk(d, dir);
+	}
 	out.sort((a, b) => (a.path < b.path ? -1 : 1));
 	return out;
 }
@@ -324,7 +335,7 @@ const ops: Record<string, (a: Args) => Promise<unknown> | unknown> = {
 		const q = await navigator.locks.query();
 		return { held: (q.held ?? []).map((l) => l.name), pending: (q.pending ?? []).map((l) => l.name) };
 	},
-	opfsList: (a) => opfsList(String(a.prefix ?? '.crema-history-')),
+	opfsList: (a) => opfsList(Array.isArray(a.dirs) ? a.dirs.map(String) : []),
 	slots: (a) => slots(String(a.dir)),
 	plant: (a) => plant(String(a.path), Number(a.size), Number(a.fill ?? 0x41)),
 	/** Writes `text` to a new file at `path` (a repair generation's `.repair-done`, W1). */

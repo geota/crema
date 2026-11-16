@@ -154,14 +154,18 @@ export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export type Listed = { path: string; size: number; sha: string };
 
 /**
- * Every OPFS file the history keeps (`.crema-history-*`), with sizes and
- * hashes; with `dirs`, only those under them. Tests that run at once may
- * share an OPFS (Android; WebKit, which keeps OPFS outside the profile
- * directory), so a test lists its own generations' directories.
+ * Every OPFS file under the test's own pool directories (`dbDir(g)`,
+ * `indexDir(g)`), with sizes and hashes; a directory that doesn't exist lists
+ * nothing.
+ *
+ * The Worker walks only these. Tests that run at once may share an OPFS
+ * (Android; WebKit, which keeps one OPFS for every profile on the machine),
+ * and WebKit fails a read with `NotFoundError` when the file is written after
+ * `getFile()`: a walk of the whole root reads other tests' files while they
+ * write them, and failed now and then (#310).
  */
-export async function listFiles(t: Tab, ...dirs: string[]): Promise<Listed[]> {
-	const all = await t.call<Listed[]>('opfsList', { prefix: '.crema-history-' });
-	return dirs.length ? all.filter((e) => dirs.some((d) => e.path.startsWith(`${d}/`))) : all;
+export async function listFiles(t: Tab, dir: string, ...more: string[]): Promise<Listed[]> {
+	return t.call<Listed[]>('opfsList', { dirs: [dir, ...more] });
 }
 
 /** Every file in `before` is in `after`, byte for byte. */
