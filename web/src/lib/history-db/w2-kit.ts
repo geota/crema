@@ -5,7 +5,7 @@
  * which the P3 store writes. Tests only.
  */
 import { vi } from 'vitest';
-import { HistoryDb, META_MIGRATION, type MigrationRecord } from '#lib/history/history-db.js';
+import { HistoryDb, META_MIGRATION, shotOfRow, type MigrationRecord, type RowRecord } from '#lib/history/history-db.js';
 import { summarize } from '#lib/history/summary.js';
 import type { StoredShot } from '#lib/history/model.js';
 import { writeDoneMarker } from '#lib/history/store-marker.js';
@@ -85,6 +85,28 @@ export async function seedP3(shots: readonly StoredShot[]): Promise<void> {
 	} satisfies MigrationRecord);
 	db.close();
 	writeDoneMarker(1, shots.length);
+}
+
+/** A device on `crema-history` holding `rows` as stored (with their summaries), as a migration leaves it. */
+export async function seedRows(rows: readonly RowRecord[]): Promise<void> {
+	const db = new HistoryDb({ expectExisting: () => false });
+	for (let i = 0; i < rows.length; i += 1_000) {
+		await db.putShots(
+			rows.slice(i, i + 1_000).map((r) => {
+				const { shot, summary } = shotOfRow(r);
+				return { shot, details: false, summary };
+			}),
+			summarize
+		);
+	}
+	await db.setMeta(META_MIGRATION, {
+		state: 'done',
+		sourceHash: '0:0',
+		sourceIds: rows.map((r) => r.id),
+		doneAt: 1
+	} satisfies MigrationRecord);
+	db.close();
+	writeDoneMarker(1, rows.length);
 }
 
 /** A connection of the test's own to `crema-history`, never creating it. */
