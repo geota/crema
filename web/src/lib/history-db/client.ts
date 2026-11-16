@@ -340,12 +340,16 @@ export class HistoryDbClient {
 	 * knows, whatever its file's health, and never resent: a resend could make
 	 * a second file. Resolves to the new file's generation.
 	 */
-	recover(kind: RecoverKind, from?: string): Promise<{ generation: number }> {
+	recover(kind: RecoverKind, from?: string, known?: string[]): Promise<{ generation: number }> {
 		if (this.#stopped) return Promise.reject(new HistoryDbError('stopped', 'the history store is stopped'));
 		if (this.#o.stage !== 2) return Promise.reject(new HistoryDbError('stage1', 'recovery files are stage 2’s'));
 		const owner = this.#status.owner;
 		if (!owner) return Promise.reject(new HistoryDbError('unavailable', this.#status.message ?? 'the history store did not answer'));
-		const req = this.#header({ op: 'recover', kind, ...(from ? { from } : {}) });
+		// Never to an owner this tab refuses: it has another file (REVIEW-476 B1).
+		if (!acceptsOwner(this.#o.stage, this.#o.expect, owner)) {
+			return Promise.reject(new HistoryDbError('otherFile', `the owner has ${owner.file} open`));
+		}
+		const req = this.#header({ op: 'recover', kind, ...(from ? { from } : {}), ...(known?.length ? { known } : {}) });
 		return new Promise((resolve, reject) => {
 			const p: Pending = { req, firstAt: this.#now(), sentAt: 0, to: owner.tab, resolve: resolve as (v: unknown) => void, reject };
 			this.#pending.set(req.id, p);
@@ -544,6 +548,13 @@ export class HistoryDbClient {
 		if (r.to !== this.tab) return;
 		const p = this.#pending.get(r.id);
 		if (!p) return;
+		// A recovery's answer comes from an owner that has moved to the new file.
+		if (p.req.op === 'recover' && r.owner.tab === p.to) {
+			this.#settle(p);
+			if (r.ok) p.resolve(r.value);
+			else p.reject(new HistoryDbError(r.error.code, r.error.message));
+			return;
+		}
 		if (!acceptsOwner(this.#o.stage, this.#o.expect, r.owner)) {
 			// M1: never use an owner of another build or stage; keep waiting for one we can.
 			this.#cannotUse('otherBuild', r.owner);

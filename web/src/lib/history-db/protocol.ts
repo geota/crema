@@ -174,7 +174,7 @@ export type Request =
 	 * Stage 2 (W5c, SPEC §11, S9): the `lost` banner's choice, into a new
 	 * `history-<n>.db`, whatever the open file's health. Sent once, never resent.
 	 */
-	| (Header & { op: 'recover'; kind: RecoverKind; from?: string })
+	| (Header & { op: 'recover'; kind: RecoverKind; from?: string; known?: string[] })
 	/** Stage 2 (W5c): the daily rows snapshot, `history-snapshot.db`, keeping one previous copy. */
 	| (Header & { op: 'snapshot' })
 	/** Stage 2 (W5c): the rows snapshots there are, for the `lost` banner. */

@@ -30,7 +30,7 @@ import { flipDisk, flipEnv, stageDeps, type DoneRecordBox, type FlipDisk } from 
 import { seedP3, p3Db, indexReady } from './w2-kit.js';
 import { chooseStage, type StageChoice } from './stage.js';
 import { canonical } from './flip.js';
-import { dbFileName } from './marker.js';
+import { dbFileName, parseDoneRecord } from './marker.js';
 import { MARKER_KEY } from './names.js';
 
 const realIdb = (globalThis as { indexedDB?: unknown }).indexedDB;
@@ -88,8 +88,8 @@ const journalStorage = () => ({
 	removeItem: (k: string) => env.storage.removeItem(k)
 });
 
-function stage2Of(t: Tab): Stage2 {
-	return { client: t.client, details: idbDetails(new HistoryDb({ expectExisting: () => true }), { bump: false }), storage: journalStorage() };
+function stage2Of(t: Tab, file = 'history.db'): Stage2 {
+	return { client: t.client, details: idbDetails(new HistoryDb({ expectExisting: () => true }), { bump: false }), storage: journalStorage(), file };
 }
 
 /** A store on stage 2 over `t`'s client. */
@@ -445,11 +445,13 @@ describe.runIf(historyWasmBuilt)('W5c: recovery files, the rows snapshot, pulled
 	/** As `start.ts`'s `restageHistoryDb`: the marker, then a client of the new file. */
 	function restageFrom(old: Tab): (g: number) => Promise<Stage2> {
 		return async (g) => {
+			const m = JSON.parse(env.storage.getItem(MARKER_KEY) ?? 'null');
+			if (m?.generation > g) throw new Error('the marker names a newer file');
 			env.storage.setItem(MARKER_KEY, JSON.stringify({ state: 'done', generation: g, poolGeneration: 0, at: Date.now() }));
 			await old.client.stop();
 			const t = openTab(env, STAGE2_OF(g));
 			tabs.push(t);
-			return { ...stage2Of(t), restage: restageFrom(t) };
+			return { ...stage2Of(t, dbFileName(g)), restage: restageFrom(t) };
 		};
 	}
 	/** Flipped, then `history.db` gone: a stage-2 store that is `lost`. */
@@ -521,6 +523,125 @@ describe.runIf(historyWasmBuilt)('W5c: recovery files, the rows snapshot, pulled
 		const now = currentTab();
 		expect((await dbRows(now)).has('after-snap')).toBe(true);
 		expect(((await now.client.read('info')) as { generation: number }).generation).toBe(1);
+	}, 60_000);
+
+	/** Two tabs, both `lost` on `history.db`. */
+	async function twoLost(n = 5): Promise<{ A: HistoryStore; B: HistoryStore }> {
+		const { t } = await flipped(n);
+		await t.client.snapshot();
+		disk.files.db.delete('history.db');
+		await t.client.stop();
+		t.close();
+		tabs.splice(tabs.indexOf(t), 1);
+		const tA = tabOn(await boot());
+		const tB = tabOn(STAGE2_OF(0));
+		const A = new HistoryStore({ stage2: async () => ({ ...stage2Of(tA), restage: restageFrom(tA) }) });
+		const B = new HistoryStore({ stage2: async () => ({ ...stage2Of(tB), restage: restageFrom(tB) }) });
+		await expect.poll(() => A.health, { timeout: 20_000 }).toBe('lost');
+		await expect.poll(() => B.health, { timeout: 20_000 }).toBe('lost');
+		return { A, B };
+	}
+	const recoveryFiles = () => [...disk.files.db].filter((f) => /^history-\d+\.db$/.test(f)).sort();
+
+	/** Both tabs on `history-1.db`, each with a shot of its own, both there after a reboot, with the marker and without. */
+	async function bothSurvive(A: HistoryStore, B: HistoryStore): Promise<void> {
+		await expect.poll(() => [A.health, B.health], { timeout: 20_000 }).toEqual(['ok', 'ok']);
+		expect(recoveryFiles()).toEqual(['history-1.db']);
+		expect(JSON.parse(env.storage.getItem(MARKER_KEY)!)).toMatchObject({ generation: 1 });
+		expect(parseDoneRecord(done.text ?? '')).toMatchObject({ generation: 1 });
+		A.recordCaptured({ ...realShot(701, realSamples(9, 1)), id: 'shot-A' } as unknown as Record<string, unknown>);
+		B.recordCaptured({ ...realShot(702, realSamples(9, 2)), id: 'shot-B' } as unknown as Record<string, unknown>);
+		await A.flushed();
+		await B.flushed();
+		for (const x of tabs.splice(0)) {
+			await x.client.stop().catch(() => {});
+			x.close();
+		}
+		const t2 = tabOn(await boot());
+		await indexReady(t2.client);
+		expect(t2.client.status.owner?.file).toBe('history-1.db');
+		const rows = await dbRows(t2);
+		expect(rows.has('shot-A')).toBe(true);
+		expect(rows.has('shot-B')).toBe(true);
+		// The marker lost too: the done-record names the same file.
+		await t2.client.stop();
+		t2.close();
+		tabs.splice(tabs.indexOf(t2), 1);
+		env.storage.removeItem(MARKER_KEY);
+		expect((await boot()).target.file).toBe('history-1.db');
+	}
+
+	it('two lost tabs choosing in turn: one recovery file, the other tab follows it, and both tabs’ shots survive (REVIEW-476 B1)', async () => {
+		const { A, B } = await twoLost();
+		expect(await A.startEmpty()).toBe(true);
+		// B follows the marker to history-1.db; a choice there makes no second file.
+		await expect.poll(() => B.health, { timeout: 20_000 }).toBe('ok');
+		expect(await B.recoverOldCopy()).toBe('reopened');
+		await bothSurvive(A, B);
+	}, 120_000);
+
+	it('two lost tabs choosing at once: one recovery file, both on it, both tabs’ shots survive (REVIEW-476 B1)', async () => {
+		const { A, B } = await twoLost();
+		const [ra, rb] = await Promise.allSettled([A.startEmpty(), B.recoverOldCopy()]);
+		expect([ra.status, rb.status]).toEqual(['fulfilled', 'fulfilled']);
+		await bothSurvive(A, B);
+	}, 120_000);
+
+	it('the lost generation’s last daily copy is kept through later snapshots (REVIEW-476 N4)', async () => {
+		const { t } = await flipped(6);
+		expect(await t.client.snapshot()).toEqual({ copied: true });
+		disk.files.db.delete('history.db');
+		await t.client.stop();
+		t.close();
+		tabs.splice(tabs.indexOf(t), 1);
+		const t2 = tabOn(await boot());
+		const S = new HistoryStore({ stage2: async () => ({ ...stage2Of(t2), restage: restageFrom(t2) }) });
+		await expect.poll(() => S.health, { timeout: 20_000 }).toBe('lost');
+		expect(await S.startEmpty()).toBe(true);
+		const now = tabs[tabs.length - 1];
+		for (let day = 0; day < 3; day++) {
+			S.recordCaptured({ ...realShot(800 + day, realSamples(9, 1)), id: `d${day}` } as unknown as Record<string, unknown>);
+			await S.flushed();
+			await now.client.snapshot();
+		}
+		const info = await now.client.snapshotInfo();
+		expect(info.find((x) => x.name === 'history-snapshot-prev.db')?.rows).toBe(6);
+		expect(info.find((x) => x.name === 'history-snapshot.db')?.rows).toBe(3);
+	}, 60_000);
+
+	it('start empty stays empty with an entry in P3’s journal key that stage 2 deleted (REVIEW-476 N1)', async () => {
+		const { t } = await flipped(4);
+		const p1 = { ...realShot(900), id: 'p3-journal-1' };
+		localStorage.setItem(PENDING_KEY, JSON.stringify([{ ...p1, record: { duration: p1.record.duration, samples: [] } }]));
+		const s0 = await storeOn(t);
+		await s0.ready;
+		s0.purgeTombstone('p3-journal-1');
+		await s0.flushed();
+		await t.client.stop();
+		t.close();
+		tabs.splice(tabs.indexOf(t), 1);
+		disk.files.db.delete('history.db');
+		const t2 = tabOn(await boot());
+		const S = new HistoryStore({ stage2: async () => ({ ...stage2Of(t2), restage: restageFrom(t2) }) });
+		await expect.poll(() => S.health, { timeout: 20_000 }).toBe('lost');
+		expect(await S.startEmpty()).toBe(true);
+		expect((await dbRows(tabs[tabs.length - 1])).size).toBe(0);
+	}, 60_000);
+
+	it('N8: an edit to a pulled copy before its first write keeps it as this tab’s own (REVIEW-476 N5)', async () => {
+		const { t } = await flipped(3);
+		const t2 = tabOn(STAGE2_OF(0));
+		await indexReady(t2.client);
+		const a = await storeOn(t);
+		const b = await storeOn(t2);
+		await Promise.all([a.ready, b.ready]);
+		expect(b.insertPulled({ ...realShot(902, realSamples(6, 4)), id: 'pulled-10b', visualizerId: 'viz-10' } as StoredShot)).toBe(true);
+		await b.flushed();
+		expect(a.insertPulled({ ...realShot(902, realSamples(6, 4)), id: 'pulled-10', visualizerId: 'viz-10' } as StoredShot)).toBe(true);
+		a.setNotes('pulled-10', 'my notes on the pulled shot');
+		await a.flushed();
+		const rows = await dbRows(t);
+		expect(rows.get('pulled-10')?.metadata.notes).toBe('my notes on the pulled shot');
 	}, 60_000);
 
 	it('N8: two tabs pulling one Visualizer shot store it once, and the other tab drops its copy', async () => {

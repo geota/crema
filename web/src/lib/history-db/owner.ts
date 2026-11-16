@@ -57,7 +57,7 @@ import { CHANGES_CHANNEL, OWNER_LOCK, RPC_CHANNEL, TAB_LOCK_PREFIX } from './nam
 import type { IndexSyncLike, P3Source, SyncDeps } from './index-sync.js';
 import { runFlip, type FlipArgs, type FlipCapture, type FlipOutcome } from './flip.js';
 import { lateRows, type LateImport } from './late.js';
-import { dbFileName, doneRecordText, generationOf } from './marker.js';
+import { dbFileName, doneRecordText, generationOf, parseDoneRecord } from './marker.js';
 import { SNAPSHOT_FILE, SNAPSHOT_PREV_FILE } from './names.js';
 import {
 	PROTOCOL_VERSION,
@@ -152,6 +152,8 @@ export interface OwnerDeps {
 	flip?: {
 		source(): P3Source;
 		writeDoneRecord(text: string): Promise<void>;
+		/** The done-record's text, or null when there's none (W5c's recovery checks it). */
+		readDoneRecord?(): Promise<string | null>;
 		estimate?(): Promise<{ quota?: number; usage?: number } | null>;
 		log?(line: string): void;
 	};
@@ -193,6 +195,8 @@ class Owner {
 	/** The last `write_seq` posted (S14). */
 	#posted = 0;
 	#reopen: ReturnType<typeof setTimeout> | null = null;
+	/** The recovery this owner made (W5c): from the lost file, into generation `n`. */
+	#recovered: { from: string; generation: number } | null = null;
 	/** The page's captures while the flip runs (M9). */
 	#captures: FlipCapture[] = [];
 
@@ -681,7 +685,7 @@ class Owner {
 		// The `lost` banner's choices work on the pool, not on the file that went (S9).
 		if (req.op === 'recover' || req.op === 'snapshotInfo') {
 			if (req.stage !== 2 || this.#stage !== 2) throw { code: 'otherStage', message: 'recovery files are stage 2’s' };
-			return req.op === 'recover' ? this.#recover(req.kind, req.from) : this.#snapshotInfo();
+			return req.op === 'recover' ? this.#recover(req) : this.#snapshotInfo();
 		}
 		const db = this.#db;
 		if (!db || this.#health !== 'ok') throw { code: this.#health, message: this.#reason };
@@ -778,8 +782,27 @@ class Owner {
 			try {
 				const snapInfo = (await snap.call('info')) as { generation?: number };
 				const snapSeq = Number(await snap.call('writeSeq')) || 0;
-				if (snapSeq === seq && (snapInfo.generation ?? 0) === (info.generation ?? 0)) return { copied: false };
-				await snap.call('copyTo', { ...place(SNAPSHOT_PREV_FILE), journal: t.journal });
+				const gen = info.generation ?? 0;
+				const snapGen = snapInfo.generation ?? 0;
+				if (snapSeq === seq && snapGen === gen) return { copied: false };
+				// The previous copy keeps the newest copy of an older generation (a
+				// file that went `lost`, kept for a later attempt, REVIEW-476 N4):
+				// the snapshot moves into it when it is that copy, or when both are
+				// this generation's; a previous copy of an older generation stays.
+				let prevGen: number | null = null;
+				if (files.includes(SNAPSHOT_PREV_FILE)) {
+					const prev = await engine.open({ pool: 'db', file: SNAPSHOT_PREV_FILE, role: 'authority', create: false, generation: t.generation, journal: t.journal });
+					try {
+						prevGen = ((await prev.call('info')) as { generation?: number }).generation ?? 0;
+					} catch {
+						prevGen = null;
+					} finally {
+						prev.close();
+					}
+				}
+				if (snapGen < gen || prevGen === null || prevGen >= gen) {
+					await snap.call('copyTo', { ...place(SNAPSHOT_PREV_FILE), journal: t.journal });
+				}
 			} finally {
 				snap.close();
 			}
@@ -818,19 +841,37 @@ class Owner {
 	 * "start empty" stays empty. Then the done-record; the page writes the
 	 * marker. Nothing here deletes a file.
 	 */
-	async #recover(kind: RecoverKind, from?: string): Promise<{ generation: number }> {
+	async #recover(req: Request & { op: 'recover' }): Promise<{ generation: number }> {
+		const { kind, from } = req;
 		const f = this.#d.flip;
 		const { engine } = this.#d;
 		const t = this.#target!;
 		if (!f || !engine.createRecovery) throw { code: 'refused', message: 'this build makes no recovery files' };
+		// Once only, across tabs (REVIEW-476 B1): a recovery already made for
+		// the file this tab saw lost is the answer, never a second file.
+		const asked = generationOf(req.expect?.file ?? '') ?? -1;
+		if (this.#recovered && this.#recovered.from === req.expect?.file) return { generation: this.#recovered.generation };
 		const files = this.#dbFiles();
+		const doneText = await f.readDoneRecord?.().catch(() => null);
+		const doneGen = doneText ? (parseDoneRecord(doneText)?.generation ?? null) : null;
+		if (doneGen !== null && doneGen > asked && files.includes(dbFileName(doneGen))) return { generation: doneGen };
+		// Only for the lost file the tab saw, on the owner that has it.
+		if (this.#health !== 'lost' || !req.expect || !acceptsOwner(req.stage, req.expect, this.info())) {
+			throw { code: 'refused', message: `no lost ${req.expect?.file ?? 'file'} here to recover (${this.#health} ${t.file})` };
+		}
+		if (doneGen !== null && doneGen > (generationOf(t.file) ?? 0)) {
+			throw { code: 'refused', message: `the done-record names history generation ${doneGen}, past ${t.file}` };
+		}
 		const n = Math.max(0, ...files.map((x) => generationOf(x) ?? 0)) + 1;
 		const file = dbFileName(n);
 		const source = f.source();
 		let recovery: { migrationSource: string[]; lateBaseline: string };
 		try {
 			const view = await source.view();
-			recovery = { migrationSource: await source.ids(), lateBaseline: JSON.stringify({ writeSeq: view.writeSeq, rows: view.rows }) };
+			// The P3 store's ids, and those of P3's own journal the page sends, so an
+			// entry there never brings back a shot the empty file left out (N1).
+			const ids = new Set([...(await source.ids()), ...(req.known ?? [])]);
+			recovery = { migrationSource: [...ids], lateBaseline: JSON.stringify({ writeSeq: view.writeSeq, rows: view.rows }) };
 			if (kind === 'snapshot') {
 				const name = from ?? SNAPSHOT_FILE;
 				if (name !== SNAPSHOT_FILE && name !== SNAPSHOT_PREV_FILE) throw { code: 'refused', message: `${name} isn't a rows snapshot` };
@@ -875,6 +916,12 @@ class Owner {
 		await f.writeDoneRecord(doneRecordText({ generation: n, poolGeneration: t.generation, at: this.#now() })).catch((e) => {
 			f.log?.(`recovery: the done-record wasn't written (${engineError(e).code}); the marker keeps it`);
 		});
+		this.#recovered = { from: t.file, generation: n };
+		// This owner serves the new file now, so no Worker queued behind it opens
+		// the lost one again; tabs follow the marker to it (B1).
+		this.#target = { ...t, file };
+		await this.#open();
+		if (!this.#releasing) this.#tell();
 		return { generation: n };
 	}
 

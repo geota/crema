@@ -91,13 +91,16 @@ export function flipDisk(): FlipDisk {
 			open.delete(ctx);
 		},
 		engine(ctx): Engine {
+			// A pause is the Worker's own (each installs its pool), apart from the tests' `paused`.
+			const pausedHere = new Set<Pool>();
+			const isPaused = (pool: Pool) => paused.has(pool) || pausedHere.has(pool);
 			const info = (pool: Pool): PoolInfo => ({
 				vfs: `crema-${pool}`,
 				dir: pool,
 				generation: 0,
 				capacity: 16,
-				files: paused.has(pool) ? [] : [...files[pool]].map((f) => `/${f}`).sort(),
-				paused: paused.has(pool)
+				files: isPaused(pool) ? [] : [...files[pool]].map((f) => `/${f}`).sort(),
+				paused: isPaused(pool)
 			});
 			const hit = (at: string) => {
 				if (dead.has(ctx)) throw { code: 'dead', message: `${ctx} is dead` };
@@ -116,10 +119,12 @@ export function flipDisk(): FlipDisk {
 						// Only this context's handles in that pool count.
 						for (const db of mine) if ((db as unknown as { pool?: Pool }).pool === pool) throw { code: 'pool.filesInUse', message: 'open' };
 					}
-					paused.add(pool);
+					pausedHere.add(pool);
 				},
 				resumePool: async (pool) => {
-					if (!disk.stuck.has(pool)) paused.delete(pool);
+					if (disk.stuck.has(pool)) return;
+					pausedHere.delete(pool);
+					paused.delete(pool);
 				},
 				readRepairDone: async () => null,
 				createRecovery: async (o) => {
@@ -238,6 +243,7 @@ export function flipEnv(disk: FlipDisk, done: DoneRecordBox, o: { quota?: () => 
 				}
 				done.text = text;
 			},
+			readDoneRecord: async () => done.text,
 			estimate: async () => o.quota?.() ?? null
 		})
 	});

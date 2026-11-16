@@ -14,7 +14,7 @@ import { HistoryDbClient, type PageEvents, type WorkerLike } from './client.js';
 import { HISTORY_JOURNAL } from './journal.js';
 import { INDEX_FILE } from './names.js';
 import { chooseStage, type StageChoice } from './stage.js';
-import { dbFileName, opfsDoneRecordReader, writeMarker } from './marker.js';
+import { dbFileName, opfsDoneRecordReader, readMarker, writeMarker } from './marker.js';
 import { serviceWorkerWindowCount } from '#lib/pwa/window-count.js';
 import { HistoryDb } from '#lib/history/history-db.js';
 import { idbDetails } from '#lib/history-source/details.js';
@@ -169,6 +169,7 @@ export async function historyStage(): Promise<Stage2 | null> {
 		client: booted.client ?? unavailableClient(booted.choice.unavailable ?? 'unknown'),
 		details: idbDetails(new HistoryDb({ expectExisting: () => true }), { bump: false }),
 		storage: localStorage,
+		file: booted.choice.target.file,
 		restage: (generation) => restageHistoryDb(generation)
 	};
 }
@@ -182,7 +183,10 @@ export async function restageHistoryDb(generation: number): Promise<Stage2> {
 	const booted = await bootHistoryDb();
 	if (!booted || booted.choice.stage !== 2) throw new Error('not on stage 2');
 	const poolGeneration = booted.choice.target.generation;
-	writeMarker(localStorage, { state: 'done', generation, poolGeneration, at: Date.now() });
+	// Never back to an older file than the marker names (REVIEW-476 B1).
+	const now = readMarker(localStorage);
+	if (now?.state === 'done' && now.generation > generation) throw new Error(`the marker names a newer history file (${now.generation})`);
+	if (!(now?.state === 'done' && now.generation === generation)) writeMarker(localStorage, { state: 'done', generation, poolGeneration, at: Date.now() });
 	const choice: StageChoice = {
 		...booted.choice,
 		reason: 'recovered',
@@ -198,6 +202,7 @@ export async function restageHistoryDb(generation: number): Promise<Stage2> {
 		client,
 		details: idbDetails(new HistoryDb({ expectExisting: () => true }), { bump: false }),
 		storage: localStorage,
+		file: dbFileName(generation),
 		restage: (g) => restageHistoryDb(g)
 	};
 }

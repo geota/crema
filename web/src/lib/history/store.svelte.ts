@@ -143,6 +143,8 @@ import { HistoryDbTooNew, SqliteRows, sqliteJournal, type RowJournal, type Sqlit
 import type { DetailsStore } from '#lib/history-source/details.js';
 import type { JournalStorage } from '#lib/history-db/pending.js';
 import { historyStage, stagedBootActive } from '#lib/history-db/start.js';
+import { dbFileName, readMarker as readSqliteMarker } from '#lib/history-db/marker.js';
+import { MARKER_KEY } from '#lib/history-db/names.js';
 import {
 	STORE_MARKER_KEY,
 	markerSaysDone,
@@ -323,6 +325,8 @@ export interface Stage2 {
 	 * and gives the client of that file (W5c). Without it, recovery isn't offered.
 	 */
 	restage?(generation: number): Promise<Stage2>;
+	/** The file this client serves (`history.db`, `history-<n>.db`): a marker naming another is followed (W5c). */
+	file?: string;
 }
 
 /** P3's journal, `crema.history.pending`. */
@@ -1629,12 +1633,73 @@ export class HistoryStore {
 	/** Stage 2: every write to `history.db`, this tab's own too, as its owner posts it (SPEC §10). */
 	private listenToClient(s2: Stage2): void {
 		this.unlistenClient?.();
-		this.unlistenClient = s2.client.onChange((c) => {
+		const offChange = s2.client.onChange((c) => {
 			if (this.stage2 !== s2) return;
 			for (const id of [...c.upserted, ...c.deleted]) this.heard.add(id);
 			if (this.loadedFlag && this.mode === 'idb' && this.deletesPaused === 0) this.applyHeard();
 		});
+		// Another tab's recovery moved the history to a new file: follow it (REVIEW-476 B1).
+		const offStatus = s2.client.onStatus(() => {
+			if (this.stage2 === s2) this.maybeFollow();
+		});
+		const onStorage = (e: StorageEvent) => {
+			if (e.key === MARKER_KEY && this.stage2 === s2) this.maybeFollow();
+		};
+		if (typeof window !== 'undefined') window.addEventListener('storage', onStorage);
+		this.unlistenClient = () => {
+			offChange();
+			offStatus();
+			if (typeof window !== 'undefined') window.removeEventListener('storage', onStorage);
+		};
 	}
+
+	private following: Promise<unknown> | null = null;
+
+	/**
+	 * The marker names another file than this tab's (another tab's recovery,
+	 * W5c): while this tab can't use what it has (`lost`, or an owner it
+	 * refuses), it moves to that file, writing the shots only it holds there.
+	 */
+	private maybeFollow(): void {
+		const s2 = this.stage2;
+		if (!s2?.restage || !s2.file || this.following || this.recovering) return;
+		const m = readSqliteMarker(s2.storage);
+		if (m?.state !== 'done' || dbFileName(m.generation) === s2.file) return;
+		const stuck = this.healthState === 'lost' || this.healthState === 'unavailable' || s2.client.status.health !== 'ok';
+		if (!stuck) return;
+		this.following = this.moveTo(m.generation)
+			.catch((e) => console.warn('[history] couldn’t follow the recovered history', e))
+			.finally(() => (this.following = null));
+	}
+
+	/** This tab onto `history-<n>.db`, which a recovery made (S9). */
+	private async moveTo(generation: number): Promise<boolean> {
+		const s2 = this.stage2;
+		if (!s2?.restage) return false;
+		const afterLoss = this.healthState === 'lost';
+		const next = await s2.restage(generation);
+		this.stage2 = next;
+		const db = new SqliteRows(next.client, next.details);
+		this.sqlite = db;
+		this.db = db as unknown as HistoryDb;
+		this.journal = sqliteJournal(next.storage);
+		this.listenToClient(next);
+		const mine = afterLoss ? this.forgetLostStore() : new Set<string>();
+		this.mode = 'booting';
+		this.healthState = 'loading';
+		this.oldCopyInfo = null;
+		if (!(await this.openSqlite(db))) return false;
+		await this.loadFromDb(afterLoss ? { mine, afterLoss: true } : {});
+		this.recordHeldJournal(db);
+		await this.flushed();
+		if (afterLoss) {
+			this.lastFill = { restored: 0, notRestored: 0 };
+			await this.fillFromArchive();
+			this.lastRecoveryState = { ...this.lastFill };
+		}
+		return this.health === 'ok';
+	}
+	private recovering = false;
 	private unlistenClient: (() => void) | null = null;
 
 	private listenToTabs(): void {
@@ -2798,28 +2863,31 @@ export class HistoryStore {
 	private async recoverStage2(kind: 'empty' | 'oldCopy' | 'snapshot', from?: string): Promise<RecoveryResult> {
 		if (this.healthState !== 'lost') return this.healthState === 'ok' ? 'reopened' : false;
 		const s2 = this.stage2;
-		if (!s2?.restage) return false;
-		const { generation } = await s2.client.recover(kind, from);
-		const next = await s2.restage(generation);
-		this.stage2 = next;
-		const db = new SqliteRows(next.client, next.details);
-		this.sqlite = db;
-		this.db = db as unknown as HistoryDb;
-		this.journal = sqliteJournal(next.storage);
-		this.listenToClient(next);
-		const mine = this.forgetLostStore();
-		this.mode = 'booting';
-		this.healthState = 'loading';
-		this.oldCopyInfo = null;
-		if (!(await this.openSqlite(db))) return false;
-		await this.loadFromDb({ mine, afterLoss: true });
-		this.recordHeldJournal(db);
-		await this.flushed();
-		this.lastFill = { restored: 0, notRestored: 0 };
-		await this.fillFromArchive();
-		this.lastRecoveryState = { ...this.lastFill };
-		return this.health === 'ok';
+		if (!s2?.restage || this.recovering) return false;
+		this.recovering = true;
+		try {
+			// P3's journal ids: the new file never imports them, so "start empty"
+			// stays empty and a shot deleted here stays deleted (REVIEW-476 N1).
+			const known = readPending()
+				.map((r) => r.id)
+				.filter((id): id is string => typeof id === 'string');
+			let generation: number;
+			try {
+				({ generation } = await s2.client.recover(kind, from, known));
+			} catch (e) {
+				// Another tab's recovery came first: its file is the history now.
+				const m = readSqliteMarker(s2.storage);
+				if (m?.state !== 'done' || dbFileName(m.generation) === s2.file) throw e;
+				generation = m.generation;
+			}
+			await this.following;
+			if (this.stage2 !== s2) return this.health === 'ok' ? 'reopened' : false;
+			return await this.moveTo(generation);
+		} finally {
+			this.recovering = false;
+		}
 	}
+
 
 	/** Lost: start again with no shots. */
 	startEmpty(): Promise<RecoveryResult> {
@@ -3325,6 +3393,9 @@ export class HistoryStore {
 		if (idx < 0) return;
 		const next = edit(this.shots[idx]);
 		if (next === null || next === this.shots[idx]) return;
+		// Edited here before its first write: this tab's own now, never dropped
+		// as another tab's duplicate (REVIEW-476 N5).
+		this.pulled.delete(id);
 		this.shots = [...this.shots.slice(0, idx), next, ...this.shots.slice(idx + 1)];
 		this.persist();
 	}
