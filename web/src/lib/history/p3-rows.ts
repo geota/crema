@@ -12,8 +12,8 @@
  */
 import type { ShotRow } from './model';
 
-/** The key the store answers on. */
-export const P3_ROWS: unique symbol = Symbol('crema.history.p3Rows');
+/** The key the store answers on: a registered symbol, the same in a module loaded twice (`vi.resetModules`). */
+export const P3_ROWS: unique symbol = Symbol.for('crema.history.p3Rows') as never;
 
 /** Every live row newest first (`live`), and every row, tombstones too (`raw`). Reactive. */
 export interface P3Rows {

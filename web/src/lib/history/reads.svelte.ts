@@ -293,6 +293,8 @@ export interface ReadsDeps {
 	waitMs?: number;
 	/** Told of a mismatch, before it throws. */
 	onMismatch?(m: HistoryReadMismatch): void;
+	/** Throw a mismatch, uncaught (the default): a test of the comparison itself turns it off. */
+	throwMismatch?: boolean;
 }
 
 /** A watched answer: the current one, and whether it has come. */
@@ -303,8 +305,8 @@ export interface Watched<T> {
 
 export class HistoryReads {
 	readonly #d: ReadsDeps;
-	/** The client's health as last heard: what makes a watched answer go to the index. */
-	#health = $state<string | null>(null);
+	/** Moves when the client's status does: what makes a watched answer look again. */
+	#statusTick = $state(0);
 	#subscribed: object | null = null;
 	/** Answers compared, and the mismatches, for the tests. */
 	compared = 0;
@@ -319,8 +321,7 @@ export class HistoryReads {
 		const db = this.#d.db();
 		if (!db || this.#subscribed === db) return;
 		this.#subscribed = db;
-		this.#health = db.status.health;
-		db.onStatus((s) => (this.#health = s.health));
+		db.onStatus(() => this.#statusTick++);
 	}
 
 	#fresh(store: HistoryStore = this.#d.store()): FreshDeps {
@@ -330,7 +331,7 @@ export class HistoryReads {
 	/** Whether this tab may ask its index now. Reactive on the client's health and the store's load. */
 	indexUsable(store: HistoryStore = this.#d.store()): boolean {
 		this.#follow();
-		void this.#health;
+		void this.#statusTick;
 		return indexUsable(this.#fresh(store));
 	}
 
@@ -360,6 +361,7 @@ export class HistoryReads {
 		const m = new HistoryReadMismatch(q.key, diff);
 		this.mismatches.push(m);
 		this.#d.onMismatch?.(m);
+		if (this.#d.throwMismatch === false) return;
 		console.error(m.message);
 		// Uncaught, so a test fails and dev's console shows it.
 		queueMicrotask(() => {
