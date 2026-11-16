@@ -363,6 +363,7 @@ fn a_restored_rows_snapshot_becomes_the_next_generation_and_its_snapshots_move_f
         Err(StoreError::Refused(_))
     ));
 }
+
 #[test]
 fn step_9_fills_only_the_summary_and_never_brings_a_row_back() {
     let d = dir();
