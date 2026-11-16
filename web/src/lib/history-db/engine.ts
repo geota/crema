@@ -49,6 +49,12 @@ export interface Engine {
 	open(opts: OpenOptions): Promise<EngineDb>;
 	/** The `.repair-done` report of a repair generation (REVIEW-444 notes 2, 3), or null when it has none. */
 	readRepairDone(pool: Pool, generation: number): Promise<{ copied: string[] } | null>;
+	/**
+	 * How a copy names its destination (`copyTo`, `flipCopyTo`): `{place:
+	 * pool, file}` on OPFS, which is the default; the tests' engines keep both
+	 * pools in memory under names of their own.
+	 */
+	placeOf?(pool: Pool, file: string): { place: string; file: string };
 }
 
 /** `e` as an {@link EngineError}. */

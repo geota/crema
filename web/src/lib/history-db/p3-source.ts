@@ -7,7 +7,7 @@
  * `expectExisting`, so a store that isn't there yet (a first boot before its
  * migration) aborts the upgrade, and no empty database appears in its place.
  */
-import { HistoryDb } from '#lib/history/history-db.js';
+import { HistoryDb, META_MIGRATION } from '#lib/history/history-db.js';
 import type { P3Source } from './index-sync.js';
 
 export function p3Source(opts: { idb?: () => IDBFactory | undefined; name?: string } = {}): P3Source {
@@ -25,6 +25,10 @@ export function p3Source(opts: { idb?: () => IDBFactory | undefined; name?: stri
 			return rows.map((r) => ({ id: r.id, rowJson: JSON.stringify(r) }));
 		},
 		ids: () => db.rowIds(),
+		async migration() {
+			const m = await db.meta<unknown>(META_MIGRATION);
+			return m == null ? null : JSON.stringify(m);
+		},
 		close: () => db.close()
 	};
 }

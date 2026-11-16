@@ -68,6 +68,12 @@ export interface P3Source {
 	rowsAfter(after: string | null, limit: number): Promise<{ id: string; rowJson: string }[]>;
 	/** Every id it holds, in one read transaction. */
 	ids(): Promise<string[]>;
+	/**
+	 * Its own migration record (`meta.migration`: `sourceIds`, `sourceHash`,
+	 * `lateIds`), as JSON, or null: the flip copies it into `history.db` so
+	 * the P3 store's own late-row step goes on there (W5, S13).
+	 */
+	migration?(): Promise<string | null>;
 	close(): void;
 }
 
@@ -445,61 +451,95 @@ export class IndexSync implements IndexSyncLike {
 	}
 
 	async #runDiff(live: () => void): Promise<void> {
-		const p3 = async <T>(f: () => Promise<T>): Promise<T> => {
-			try {
-				return await f();
-			} catch {
-				throw { code: 'p3Read', message: 'the P3 store could not be read' };
-			}
-		};
-		// 1. The P3 store's writeSeq before the first batch, and the index's own seq.
-		const start = await this.#step(async () => {
-			live();
-			const view = await p3(() => this.#d.source.view());
-			if (!view.done) throw { code: 'p3NotReady', message: 'the P3 store is not migrated yet' };
-			const since = Number(await this.#call<number>('writeSeq'));
-			return { writeSeq: view.writeSeq, since };
-		});
-		// 2. Every row, in batches, upserted where it differs.
-		let after: string | null = null;
-		for (;;) {
-			const more = await this.#step(async () => {
-				live();
-				const rows = await p3(() => this.#d.source.rowsAfter(after, DIFF_BATCH));
-				if (rows.length === 0) return false;
-				// In calls of a few rows each, so the tabs' reads go between them.
-				for (let i = 0; i < rows.length; i += DIFF_WRITE_ROWS) {
-					live();
-					const part = rows.slice(i, i + DIFF_WRITE_ROWS).map((r) => ({ rowJson: r.rowJson }));
-					const w = await this.#call<Written>('diffBatch', part);
-					this.#d.notify(w.change);
-				}
-				after = rows[rows.length - 1].id;
-				return rows.length === DIFF_BATCH;
-			});
-			if (!more) break;
-		}
-		// 3. The ids the P3 store doesn't hold, read in one transaction, removed
-		// in steps; a row the index wrote after the diff began stays.
-		await this.#step(async () => {
-			live();
-			const ids = await p3(() => this.#d.source.ids());
-			live();
-			await this.#call('removeAbsentBegin', { ids, sinceSeq: start.since });
-		});
-		for (;;) {
-			const done = await this.#step(async () => {
-				live();
-				const s = await this.#call<AbsentStep>('removeAbsentNext');
-				this.#d.notify(s.change);
-				return s.done;
-			});
-			if (done) break;
-		}
-		// 4. Every P3 seq up to the one read first is applied.
-		await this.#step(async () => {
-			live();
-			await this.#call('setSourceSeq', String(start.writeSeq));
+		await fullDiff({
+			step: (f) => this.#step(f),
+			call: (method, arg) => this.#call(method, arg),
+			notify: (c) => this.#d.notify(c),
+			source: this.#d.source,
+			live
 		});
 	}
+}
+
+/** What a full diff needs: its own order, the index's calls, and the P3 store. */
+export interface DiffSteps {
+	/** Runs `f` after every step before it, yielding between steps. */
+	step<T>(f: () => Promise<T>): Promise<T>;
+	/** One index call. */
+	call<T>(method: string, arg?: unknown): Promise<T>;
+	notify(change: ChangeSet): void;
+	source: P3Source;
+	/** Throws when the diff should stop (stopped, or a newer one began). */
+	live(): void;
+}
+
+/**
+ * The full diff (SPEC §11 stage 1 step 3): every P3 row in batches of
+ * {@link DIFF_BATCH}, upserted where it differs, in calls of
+ * {@link DIFF_WRITE_ROWS}; then the ids the P3 store doesn't hold, read in one
+ * transaction, removed in steps, leaving any row the index wrote after the
+ * diff began; then `source_seq` becomes the `writeSeq` read before the first
+ * batch, which it returns. The stage-1 upkeep runs it, and so does the flip's
+ * step 5 (W5), which needs the index up to date, not the boot check (M4).
+ * The P3 store is only read.
+ */
+export async function fullDiff(d: DiffSteps): Promise<{ writeSeq: number }> {
+	const { live } = d;
+	const p3 = async <T>(f: () => Promise<T>): Promise<T> => {
+		try {
+			return await f();
+		} catch {
+			throw { code: 'p3Read', message: 'the P3 store could not be read' };
+		}
+	};
+	// 1. The P3 store's writeSeq before the first batch, and the index's own seq.
+	const start = await d.step(async () => {
+		live();
+		const view = await p3(() => d.source.view());
+		if (!view.done) throw { code: 'p3NotReady', message: 'the P3 store is not migrated yet' };
+		const since = Number(await d.call<number>('writeSeq'));
+		return { writeSeq: view.writeSeq, since };
+	});
+	// 2. Every row, in batches, upserted where it differs.
+	let after: string | null = null;
+	for (;;) {
+		const more = await d.step(async () => {
+			live();
+			const rows = await p3(() => d.source.rowsAfter(after, DIFF_BATCH));
+			if (rows.length === 0) return false;
+			// In calls of a few rows each, so the tabs' reads go between them.
+			for (let i = 0; i < rows.length; i += DIFF_WRITE_ROWS) {
+				live();
+				const part = rows.slice(i, i + DIFF_WRITE_ROWS).map((r) => ({ rowJson: r.rowJson }));
+				const w = await d.call<Written>('diffBatch', part);
+				d.notify(w.change);
+			}
+			after = rows[rows.length - 1].id;
+			return rows.length === DIFF_BATCH;
+		});
+		if (!more) break;
+	}
+	// 3. The ids the P3 store doesn't hold, read in one transaction, removed
+	// in steps; a row the index wrote after the diff began stays.
+	await d.step(async () => {
+		live();
+		const ids = await p3(() => d.source.ids());
+		live();
+		await d.call('removeAbsentBegin', { ids, sinceSeq: start.since });
+	});
+	for (;;) {
+		const done = await d.step(async () => {
+			live();
+			const s = await d.call<AbsentStep>('removeAbsentNext');
+			d.notify(s.change);
+			return s.done;
+		});
+		if (done) break;
+	}
+	// 4. Every P3 seq up to the one read first is applied.
+	await d.step(async () => {
+		live();
+		await d.call('setSourceSeq', String(start.writeSeq));
+	});
+	return { writeSeq: start.writeSeq };
 }

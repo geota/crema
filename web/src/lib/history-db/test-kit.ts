@@ -400,6 +400,9 @@ function fakeDb(f: FakeFile, ctx: string): EngineDb {
 					return f.rows.size;
 				case 'writeSeq':
 					return f.writeSeq;
+				// The fake's truth files are finished ones (W5's open checks it).
+				case 'migrationState':
+					return 'done';
 				case 'pruneTabs': {
 					let n = 0;
 					for (const t of a.gone as string[]) if (f.applied.delete(t)) n++;
@@ -499,6 +502,10 @@ export interface EnvOptions {
 	engine?(ctx: string): Engine;
 	/** Each Worker's stage-1 index upkeep (W2), given its Worker's context. */
 	indexSync?(ctx: string, deps: Parameters<NonNullable<OwnerDeps['indexSync']>>[0]): ReturnType<NonNullable<OwnerDeps['indexSync']>>;
+	/** Each Worker's flip deps (W5). */
+	flip?(ctx: string): OwnerDeps['flip'];
+	/** A context died: what else it held goes too (a disk of the test's own). */
+	onKill?(ctx: string): void;
 }
 
 export class Env {
@@ -518,6 +525,7 @@ export class Env {
 		this.locks.kill(ctx);
 		this.bus.kill(ctx);
 		this.disk.kill(ctx);
+		this.#o.onKill?.(ctx);
 	}
 
 	freeze(ctx: string): void {
@@ -568,12 +576,14 @@ export class Env {
 			}
 		};
 		const sync = this.#o.indexSync;
+		const flip = this.#o.flip?.(ctx);
 		serveWorker({
 			scope,
 			engine: this.#o.engine?.(ctx) ?? this.disk.engine(ctx),
 			locks: this.locks.forCtx(ctx),
 			channel: (name) => this.bus.channel(name, ctx),
-			...(sync ? { indexSync: (d) => sync(ctx, d) } : {})
+			...(sync ? { indexSync: (d) => sync(ctx, d) } : {}),
+			...(flip ? { flip } : {})
 		});
 		this.workers.push(w);
 		return w;
