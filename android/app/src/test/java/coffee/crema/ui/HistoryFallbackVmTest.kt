@@ -35,6 +35,8 @@ class HistoryFallbackVmTest {
     private val shotsJson get() = File(app.filesDir, HistoryStore.FILE_NAME)
 
     @Before fun reset() {
+        // These read P3a's `shots.db` directly: stage 1, a history that hasn't flipped (#310 A5). Stage2VmTest covers history.db.
+        coffee.crema.history.HistoryStore.stage2Enabled = false
         SafeFile.resetForTest()
         Stores.resetForTest()
         SaveFloor.resetForTest()
@@ -44,6 +46,7 @@ class HistoryFallbackVmTest {
     }
 
     @After fun tearDown() {
+        coffee.crema.history.HistoryStore.stage2Enabled = coffee.crema.history.HistoryStore.STAGE2_IN_BUILD
         HistoryStore.freeSpaceForTest = null
         store.clear()
         VmHarness.idle()

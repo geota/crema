@@ -36,7 +36,15 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class ShotHistorySizeTest {
-    @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
+    @org.junit.Before fun openStoreSaves() {
+        coffee.crema.persist.SafeFile.openAllForTest()
+        // P3a's `shots.db` (stage 1): these read it directly (#310 A5).
+        HistoryStore.stage2Enabled = false
+    }
+
+    @org.junit.After fun stage2Back() {
+        HistoryStore.stage2Enabled = HistoryStore.STAGE2_IN_BUILD
+    }
 
 
     private fun shot(i: Int, samples: Int) = StoredShot(
