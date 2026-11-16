@@ -192,8 +192,43 @@ class HistorySyncReadsTest {
         assertEquals(HistoryHealth.LEGACY, load.health)
         assertFalse(s.holdsRows)
         assertNull(s.syncRows())
-        s.accept(listOf(s.rowFor(shot("x", 1))))
+        assertFalse(s.accept(listOf(s.rowFor(shot("x", 1)))))
         assertNull(s.syncRows(), "nothing is held for it")
+    }
+
+    @Test
+    fun `a save handed in before the store opens is read once it opens`() = runBlocking {
+        // REVIEW-467 N1: a retry or a rebuild leaves the store unopened while saves go on.
+        assertTrue(store().save(listOf(shot("a", 1))))
+        val s = store()
+        val stamped = store().also { it.loadAll() }.syncRow("a")!!.copy(visualizerId = "vis-a")
+        assertTrue(s.accept(listOf(stamped)), "taken note of, open or not")
+        s.loadAll()
+        assertTrue(s.holdsRows)
+        assertEquals("vis-a", s.syncRow("a")?.visualizerId, "the stamp handed in, not the older stored row")
+        assertTrue(s.save(listOf(stamped), accepted = true))
+        assertEquals("vis-a", store().load().single().visualizerId)
+    }
+
+    @Test
+    fun `a row deleted while the store is out of reach reads as gone`() = runBlocking {
+        // REVIEW-467 N2: out of reach mid-session, rows still in memory.
+        val marker = File(app.filesDir, HistoryStore.MARKER_NAME)
+        try {
+            assertTrue(store().save(listOf(shot("a", 1), shot("b", 2))))
+            val s = store()
+            s.loadAll()
+            assertTrue(s.usesSql)
+            marker.delete()
+            marker.mkdirs(); File(marker, "x").writeText("x")
+            assertEquals(HistoryHealth.UNAVAILABLE, s.retry().health)
+            assertTrue(s.holdsRows, "out of reach, it answers for its rows")
+            s.delete(listOf("a"))
+            assertNull(s.syncRow("a"), "a deleted row is gone for sync")
+            assertEquals(listOf("b"), s.syncRows()?.map { it.id })
+        } finally {
+            marker.deleteRecursively()
+        }
     }
 
     @Test

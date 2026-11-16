@@ -138,6 +138,40 @@ class SyncReadsStoreVmTest {
         assertEquals(null, dbField("s2", "notes"), "the stored row is untouched")
     }
 
+    @Test
+    fun `a Replace restore's bound rows are what sync reads before their saves land`() {
+        // REVIEW-467 N3. The backup, from another device: s1 is on Visualizer there.
+        val theirs = plant(3).map { if (it.id == "s1") it.copy(visualizerId = "vis-1", notes = "theirs") else it }
+        SafeFile.openAllForTest()
+        runBlocking { assertTrue(HistoryStore(app, coreJson).save(theirs)) }
+        val source = vm()
+        val sourceLib = VmHarness.library(source)
+        VmHarness.idleUntil("the rows") { sourceLib.rowsReady }
+        val zip = runBlocking { sourceLib.buildBackupZip(BackupKind.FILE) }!!
+        val bytes = zip.file.readBytes()
+        zip.release()
+
+        // This device: the same shots, s1 not uploaded from here.
+        store.clear(); VmHarness.idle(); store = ViewModelStore()
+        runBlocking { HistoryStore(app, coreJson).erase() }
+        plant(3)
+        val vm = vm()
+        val library = VmHarness.library(vm)
+        assertEquals(null, library.syncShot("s1")?.visualizerId)
+        var seen: String? = "unread"
+        library.beforeRestoreRows = { seen = library.syncShot("s1")?.visualizerId }
+        try {
+            vm.startRestore(bytes, "backup", MainViewModel.RestoreMode.WIPE)
+            VmHarness.idleUntil("the report") { vm.ui.value.restoreReport != null }
+            vm.confirmRestore()
+            VmHarness.idleUntil("the restore") { dbField("s1", "visualizerId") == "vis-1" }
+        } finally {
+            library.beforeRestoreRows = null
+        }
+        assertEquals("vis-1", seen, "bound before its batch is saved: an upload pass can't send it again")
+        assertEquals("vis-1", library.syncShot("s1")?.visualizerId)
+    }
+
     /** The sync and upload consumers name no view (#310 A3a): a new one can't slip back to it. */
     @Test
     fun `the sync and upload consumers don't read the view`() {

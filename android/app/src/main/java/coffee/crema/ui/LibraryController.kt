@@ -1546,6 +1546,9 @@ class LibraryController(
     /** Test seam: runs between step 7's series writes and its rows. */
     @Volatile internal var afterRestoreSeries: (suspend () -> Unit)? = null
 
+    /** Test seam: runs between step 7's change to the view (and to what sync reads) and its row saves. */
+    @Volatile internal var beforeRestoreRows: (suspend () -> Unit)? = null
+
     /** Test seam: runs between step 7's merge into `shots.db` and its removes (a kill there leaves the union). */
     @Volatile internal var beforeRestoreRemove: (suspend () -> Unit)? = null
 
@@ -1711,6 +1714,11 @@ class LibraryController(
                 },
                 { it },
             )
+            // Every restored row is what sync reads from now, not batch by batch as
+            // the saves land: uploads aren't paused by a restore, and a Replace's
+            // bound row must never read as unbound (REVIEW-467 N3).
+            historyStore.accept(second.next)
+            beforeRestoreRows?.invoke()
             // Their heavy parts wait for the save (#310 P4a), staged only now: staged
             // before, they'd read as curves here and the recompute wouldn't fill them.
             second.series.forEach(historyStore::stage)

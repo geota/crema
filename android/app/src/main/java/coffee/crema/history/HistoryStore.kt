@@ -235,9 +235,10 @@ class HistoryStore(
     /**
      * Rows handed to the store that it hasn't written yet, by id (#310 A3a):
      * each [save]'s rows that differ from what it last saw, taken at the call
-     * ([accept]), and each [updateHidden] change. An entry goes once that very
-     * row lands in [stored] (written, or found unchanged), or its row is
-     * deleted. A row that only reached the pending journal stays: the store
+     * ([accept]), and each [updateHidden] change. An entry goes once a row
+     * equal to it in every field, its summary too (`remove(key, value)` uses
+     * `equals`, not identity), lands in [stored] (written, or found
+     * unchanged), or its row is deleted. A row that only reached the pending journal stays: the store
      * holds it there. So a reader of the store ([syncRow], [syncRows]) sees an
      * edit as soon as its save is called, not when its write lands, and never
      * misses a row on its way from here to [stored]: [stored] is written
@@ -1005,12 +1006,16 @@ class HistoryStore(
      * Take note of [rows], a save's, at the call (#310 A3a): each the store
      * hasn't seen goes into [latest] until it lands, so a reader of the store
      * sees it now. [save] does this first; a caller that launches a save calls
-     * it before the launch, and tells the save whether it did (the result:
-     * false while the store doesn't hold its rows, so the save takes note
-     * itself once it runs). Rows being deleted aren't taken.
+     * it before the launch, and tells the save whether it did (the result).
+     * Taken before the store opens too (a first load, a retry, a rebuild): a
+     * save handed in then would otherwise be in neither [latest] nor
+     * [stored] once the store opens, and an older row would read in its
+     * place until it lands (REVIEW-467 N1). Not on the legacy backend, whose
+     * rows are the view's list ([toLegacy] drops what was taken). Rows being
+     * deleted aren't taken.
      */
     fun accept(rows: List<ShotRow>): Boolean {
-        if (!holdsRows) return false
+        if (mode == Mode.LEGACY) return false
         var any = false
         for (r in rows) {
             if (seen[r.id] === r || r.id in deleting) continue
@@ -1349,6 +1354,9 @@ class HistoryStore(
                         Mode.BLOCKED -> {
                             for (id in ids) {
                                 latest.remove(id)
+                                // Gone for what reads the store now, not only at the next launch (REVIEW-467 N2).
+                                stored.remove(id)
+                                seen.remove(id)
                                 pendingHidden.remove(id)
                                 staged.remove(id)
                                 journaledStage.remove(id)
