@@ -39,6 +39,14 @@ fun <T : ShotMeta> filterAndSortShots(
     coffeeOf: (ShotMeta) -> String? = { shotCoffee(it) { null }?.key },
     /** Only pinned shots (#311). */
     pinnedOnly: Boolean = false,
+    /**
+     * Tags every listed shot carries (AND), through its effective tags
+     * ([effectiveTags]): its own, else its live bag's ([liveTags]). #310
+     * SPEC §6, owner question 2.
+     */
+    tagsAll: List<String> = emptyList(),
+    /** A live bag's tags, by bag id; none by default. */
+    liveTags: (beanId: String) -> List<String>? = { null },
 ): List<T> {
     val dayMs = 24L * 60L * 60L * 1000L
     val startOfDay = Calendar.getInstance().apply {
@@ -61,18 +69,31 @@ fun <T : ShotMeta> filterAndSortShots(
             else -> s.bean?.beanId == beanFilter
         }
         val matchesMethod = methodFilter == null || (s.methodOf ?: "espresso") == methodFilter
-        matchesSearch && matchesRange && matchesProfile && matchesBean && matchesMethod && (!pinnedOnly || s.pinned)
+        val matchesTags = tagsAll.isEmpty() || effectiveTags(s, liveTags).let { tags -> tagsAll.all { it in tags } }
+        matchesSearch && matchesRange && matchesProfile && matchesBean && matchesMethod && matchesTags && (!pinnedOnly || s.pinned)
     }
-    val asc = when (sort) {
-        "rating" -> filtered.sortedBy { it.rating ?: 0 }
-        "profile" -> filtered.sortedBy { it.profileName?.lowercase() ?: "" }
-        "bean" -> filtered.sortedBy { it.beanLabel?.lowercase() ?: "" }
-        "yield" -> filtered.sortedBy { it.yieldG ?: 0f }
-        "time" -> filtered.sortedBy { it.durationMs }
-        else -> filtered.sortedBy { it.completedAtMs }
+    // SPEC §6's total order: the key, then the time, then the id, all the
+    // sort's way, so ties come newest first under a descending sort and oldest
+    // first under an ascending one, as the index orders them (#310 A2,
+    // REVIEW-448 note 6).
+    val byKey: Comparator<T> = when (sort) {
+        "rating" -> compareBy { it.rating ?: 0 }
+        "profile" -> compareBy { it.profileName?.lowercase() ?: "" }
+        "bean" -> compareBy { it.beanLabel?.lowercase() ?: "" }
+        "yield" -> compareBy { it.yieldG ?: 0f }
+        "time" -> compareBy { it.durationMs }
+        else -> compareBy { 0 }
     }
-    return if (sortDesc) asc.reversed() else asc
+    val asc = byKey.thenBy { it.completedAtMs }.thenBy { it.id }
+    return filtered.sortedWith(if (sortDesc) asc.reversed() else asc)
 }
+
+/**
+ * A shot's effective tags (#310 SPEC §6): its own when it has any, else its
+ * live bag's ([liveTags], by bag id). Matched exactly, as the core does.
+ */
+fun effectiveTags(s: ShotMeta, liveTags: (beanId: String) -> List<String>?): List<String> =
+    s.tags.ifEmpty { s.bean?.beanId?.let(liveTags).orEmpty() }
 
 /**
  * [nowMs] floored to the minute — the `now` the History screens pass to

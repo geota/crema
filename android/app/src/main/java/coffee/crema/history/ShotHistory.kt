@@ -458,3 +458,10 @@ fun downsampleBrewSeries(
     return series.copy(samples = indices(n.toUInt(), SHOT_SAMPLE_CAP.toUInt()).map { series.samples[it.toInt()] })
 }
 
+
+/**
+ * The stat strip from the core's `BrewHistoryStats` JSON (#310 A2: the
+ * index's `stats_json`, SPEC §7). Null when it doesn't read.
+ */
+fun decodeBrewHistoryStats(text: String): BrewHistoryStats? =
+    runCatching { statsJson.decodeFromString(BrewHistoryStats.serializer(), text) }.getOrNull()

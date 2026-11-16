@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.history.IndexHealth
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaButton
@@ -62,7 +63,11 @@ fun HistoryIndexDebugPanel(vm: MainViewModel) {
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text("History index (stage 1)", style = MaterialTheme.typography.labelLarge)
-        for (line in historyIndexLines(health) + listOfNotNull(result)) {
+        // #310 A2: whether History reads the index now, and why not.
+        val reads = vm.historyIndexReads.collectAsStateWithLifecycle().value
+        val readsLine = (if (reads != null) "History reads the index" else "History reads the rows in memory: ${vm.historyIndexFallback ?: "?"}")
+            .let { l -> coffee.crema.history.IndexWindow.lastFirstPageMs?.let { "$l; last list's first page in ${"%.0f".format(it)} ms" } ?: l }
+        for (line in historyIndexLines(health) + readsLine + listOfNotNull(result)) {
             Text(
                 line,
                 style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono, fontSize = 10.sp),
@@ -82,6 +87,18 @@ fun HistoryIndexDebugPanel(vm: MainViewModel) {
                 variant = CremaButtonVariant.Text,
                 enabled = !busy,
                 label = "Rebuild",
+            )
+            // B1's device numbers for History's reads (#310 A2): reads only.
+            CremaButton(
+                onClick = {
+                    run {
+                        val r = vm.historyIndexReads.value ?: return@run "History isn't on the index: ${vm.historyIndexFallback}"
+                        coffee.crema.history.HistoryIndexBench.run(r, searches = listOf("esp", "bloom", "zqx"), nowMs = System.currentTimeMillis()).joinToString("\n")
+                    }
+                },
+                variant = CremaButtonVariant.Text,
+                enabled = !busy,
+                label = "Measure",
             )
         }
     }

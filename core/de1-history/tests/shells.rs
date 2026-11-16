@@ -97,10 +97,8 @@ enum Expect {
     /// keys is reversed. The reference's ties follow the sort's direction
     /// (`change_ties_follow_the_sort_direction`,
     /// `change_equal_times_order_by_id_the_sorts_way`). Web keeps ties newest
-    /// first both ways, so its ascending sorts differ. Android sorts
-    /// ascending, stably over the store's newest-first order, then reverses
-    /// the whole list for a descending sort, so its ties run against the sort
-    /// both ways.
+    /// first both ways, so its ascending sorts differ. Android adopted the
+    /// rule in #310 A2, with the tag filter, so it matches exactly.
     TiesReversed,
     /// A rule SPEC §5 or §6 changed: the answers differ, and the named test in
     /// `src/reference.rs` pins the new rule.
@@ -148,7 +146,7 @@ fn expect_web(q: &HistoryQuery, name: &str) -> Expect {
 fn expect_android(name: &str) -> Expect {
     match ANDROID_CHANGED.iter().find(|(n, _)| *n == name) {
         Some((_, t)) => Expect::Changed(t),
-        None => Expect::TiesReversed,
+        None => Expect::Exact,
     }
 }
 
@@ -262,10 +260,8 @@ fn the_reference_reproduces_the_web_list() {
 fn the_reference_reproduces_the_android_list() {
     let (exact, ties, changed) = check_shell("rows.android.jsonl", "golden.android.json", true);
     assert_eq!(changed, ANDROID_CHANGED.len());
-    assert!(
-        exact + ties >= 30,
-        "{exact} exact, {ties} with reversed ties"
-    );
+    assert_eq!(ties, 0, "Android's ties follow the sort (#310 A2)");
+    assert!(exact >= 33, "{exact} exact, with the tag queries");
 }
 
 #[test]

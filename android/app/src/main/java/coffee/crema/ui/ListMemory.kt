@@ -95,6 +95,33 @@ class ListMemory internal constructor(
         }
     }
 
+    /**
+     * [resolve] for a list that finds a key's index with a query (#310 A2:
+     * `index_of` on the history index), so it can suspend.
+     */
+    suspend fun resolveAsync(key: String, indexOfKey: suspend (String) -> Int?): Pair<Int, Int> {
+        val a = anchors[key] ?: return 0 to 0
+        val found = a.itemKey?.let { indexOfKey(it) }
+        return when {
+            found != null -> found to a.offset.coerceAtLeast(0)
+            a.itemKey == null -> a.index.coerceAtLeast(0) to a.offset.coerceAtLeast(0)
+            else -> a.index.coerceAtLeast(0) to 0
+        }
+    }
+
+    /**
+     * The live list state for [key] in [shell], or a new one at the anchor's
+     * raw index and offset, and whether it still needs its anchor's key found
+     * ([resolveAsync]) once rows exist: a paged list can't look a key up
+     * while it seeds.
+     */
+    fun pagedListState(shell: String, key: String): Pair<LazyListState, Boolean> {
+        val live = liveKey("list", shell, key)
+        lists[live]?.takeIf { isCurrent(key, live) }?.let { return it to false }
+        val a = anchors[key]
+        return LazyListState(a?.index?.coerceAtLeast(0) ?: 0, a?.offset?.coerceAtLeast(0) ?: 0).also { lists[live] = it } to (a?.itemKey != null)
+    }
+
     /** The live list state for [key] in [shell] (seeded from the anchor when new or stale). */
     fun listState(shell: String, key: String, indexOfKey: (String) -> Int?): LazyListState {
         val live = liveKey("list", shell, key)
@@ -218,11 +245,34 @@ fun rememberListMemoryState(key: String, itemCount: Int, indexOfKey: (String) ->
     val shell = LocalListShell.current
     val state = remember(memory, shell, key) { memory.listState(shell, key, indexOfKey) }
     TrackAnchor(
+        memory, key, "list:$shell:$key", state, itemCount, { indexOfKey(it) },
+        position = { state.firstVisibleItemIndex to state.firstVisibleItemScrollOffset },
+        firstKey = { state.layoutInfo.visibleItemsInfo.firstOrNull()?.key },
+        total = { state.layoutInfo.totalItemsCount },
+        scrollTo = { i, o -> state.scrollToItem(i, o) },
+    )
+    return state
+}
+
+/**
+ * [rememberListMemoryState] for a paged list (#310 A2, SPEC §7: the History
+ * window), whose rows load a page at a time: [indexOfKey] is a query
+ * (`index_of`), so a new state seeds at the anchor's raw place and moves to
+ * its item once the list has rows. A row not loaded yet has no string key,
+ * and its anchor keeps the raw index.
+ */
+@Composable
+fun rememberPagedListMemoryState(key: String, itemCount: Int, indexOfKey: suspend (String) -> Int?): LazyListState {
+    val memory = LocalListMemory.current
+    val shell = LocalListShell.current
+    val (state, unresolved) = remember(memory, shell, key) { memory.pagedListState(shell, key) }
+    TrackAnchor(
         memory, key, "list:$shell:$key", state, itemCount, indexOfKey,
         position = { state.firstVisibleItemIndex to state.firstVisibleItemScrollOffset },
         firstKey = { state.layoutInfo.visibleItemsInfo.firstOrNull()?.key },
         total = { state.layoutInfo.totalItemsCount },
         scrollTo = { i, o -> state.scrollToItem(i, o) },
+        unresolved = unresolved,
     )
     return state
 }
@@ -234,7 +284,7 @@ fun rememberGridMemoryState(key: String, itemCount: Int, indexOfKey: (String) ->
     val shell = LocalListShell.current
     val state = remember(memory, shell, key) { memory.gridState(shell, key, indexOfKey) }
     TrackAnchor(
-        memory, key, "grid:$shell:$key", state, itemCount, indexOfKey,
+        memory, key, "grid:$shell:$key", state, itemCount, { indexOfKey(it) },
         position = { state.firstVisibleItemIndex to state.firstVisibleItemScrollOffset },
         firstKey = { state.layoutInfo.visibleItemsInfo.firstOrNull()?.key },
         total = { state.layoutInfo.totalItemsCount },
@@ -284,23 +334,25 @@ private fun TrackAnchor(
     writer: String,
     state: Any,
     itemCount: Int,
-    indexOfKey: (String) -> Int?,
+    indexOfKey: suspend (String) -> Int?,
     position: () -> Pair<Int, Int>,
     firstKey: () -> Any?,
     total: () -> Int,
     scrollTo: suspend (Int, Int) -> Unit,
+    /** Seeded without finding the anchor's key (a paged list): find it once rows exist. */
+    unresolved: Boolean = false,
 ) {
     val currentIndexOfKey by rememberUpdatedState(indexOfKey)
     // A restore is pending while the state was seeded from an anchor before
     // any row existed — recording now would overwrite the anchor with "top".
     var pending by remember(state) {
         val a = memory.anchor(key)
-        mutableStateOf(itemCount == 0 && a != null && a.writer != writer)
+        mutableStateOf(a != null && a.writer != writer && (itemCount == 0 || unresolved))
     }
     val hasRows = itemCount > 0
     LaunchedEffect(state, hasRows) {
         if (pending && hasRows) {
-            val (i, o) = memory.resolve(key, currentIndexOfKey)
+            val (i, o) = memory.resolveAsync(key, currentIndexOfKey)
             scrollTo(i, o)
             pending = false
         }
@@ -330,7 +382,7 @@ fun beansListKey(facets: coffee.crema.beans.BeanFacets, sort: String, desc: Bool
 /** Beans → Roasters directory. */
 fun roastersListKey(showDuplicates: Boolean): String = "beans/roasters|$showDuplicates"
 
-/** History: per range, profile, bean and method filter and sort. */
+/** History: per range, profile, bean, method and tag filter and sort. */
 fun historyListKey(
     range: String,
     profile: String?,
@@ -338,7 +390,8 @@ fun historyListKey(
     method: String?,
     sort: String,
     desc: Boolean,
-): String = "history|$range|${profile.orEmpty()}|${bean.orEmpty()}|${method.orEmpty()}|$sort|$desc"
+    tag: String? = null,
+): String = "history|$range|${profile.orEmpty()}|${bean.orEmpty()}|${method.orEmpty()}|$sort|$desc" + (tag?.let { "|$it" } ?: "")
 
 /** Profiles (with the guided-brew recipes below them): per status + roast facet (#124) and sort. */
 fun profilesListKey(status: String, roast: String?, sort: String, desc: Boolean, showHiddenRecipes: Boolean): String =
