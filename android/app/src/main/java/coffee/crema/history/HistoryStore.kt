@@ -419,6 +419,16 @@ class HistoryStore(
     /** Open for a save or a delete that came before any load (tests plant rows this way). */
     private fun ensureOpenLocked() {
         if (mode == Mode.UNOPENED) openLocked(force = false)
+        // Another store in this process flipped (a view model made again while this one's store
+        // lived on): shots.db is the old copy now, and this store's writes go to stage 2's journal,
+        // which history.db takes in order at the next open (rule 3, #310 A5).
+        if (mode == Mode.SQL && stage2Enabled && STAGE2_IN_PROCESS == stage2.marker.absolutePath) {
+            closeDb()
+            onStage2 = true
+            mode = Mode.BLOCKED
+            health = HistoryHealth.UNAVAILABLE
+            lastError = "The shot history moved to SQLite in another part of the app: restart to see it."
+        }
     }
 
     private fun openLocked(force: Boolean) {
@@ -1063,7 +1073,7 @@ class HistoryStore(
             return
         }
         val db = try {
-            HistoryDbBridge.openNow(f, HistoryDbBridge.options(coffee.crema.core.HistoryRole.AUTHORITY))
+            HistoryAuthority.openTakingOver(f)
         } catch (e: HistoryDbException.TooNew) {
             tooNew = true
             unavailable("The shot history was written by a newer version of Crema: update the app.")
@@ -1098,6 +1108,8 @@ class HistoryStore(
 
     /** [db] is open and checked: late rows, the stage-2 journal, then the store reads and writes it. */
     private fun attachAuth(generation: Int, db: HistoryDbBridge, forceLate: Boolean) {
+        HistoryAuthority.hold(stage2.db(generation), db)
+        STAGE2_IN_PROCESS = stage2.marker.absolutePath
         val source = SqliteHistorySource.open(db, json, details)
         val a = HistoryAuthority(generation, db, source, tables)
         tooNew = runCatching { !db.now { it.health() }.writable }.getOrDefault(false)
@@ -2491,6 +2503,14 @@ class HistoryStore(
         helper?.handler?.markQuarantinedForTest(aside)
     }
 
+    /** Test seam: [id]'s `row_json` as the truth file holds it now (`shots.db` or `history.db`), or null (#310 A5). */
+    @androidx.annotation.VisibleForTesting
+    internal fun truthRowJsonForTest(id: String): String? = when (mode) {
+        Mode.AUTH -> auth?.db?.now { it.get(listOf(id)) }?.firstOrNull()?.rowJson
+        Mode.SQL -> tables.rawRows(db().readableDatabase, listOf(id))[id]
+        else -> null
+    }
+
     /** Test seam: every file this store has open closed, as a process exit leaves them (#310 A5). */
     @androidx.annotation.VisibleForTesting
     internal suspend fun closeForTest() = withContext(Dispatchers.IO) {
@@ -2624,8 +2644,11 @@ class HistoryStore(
         val stayed = mutableListOf<String>()
         fun gone(name: String, ok: Boolean) { if (!ok) stayed += name }
         closeDb()
-        // history.db under the core's lock first (S11): nothing writes a file this is about to remove.
+        // history.db under the core's lock first (S11), and any other store's in this process:
+        // nothing writes a file this is about to remove.
         closeAuth()
+        HistoryAuthority.closeEveryHeld()
+        STAGE2_IN_PROCESS = null
         onStage2 = false
         tooNew = false
         stage2Marker = null
@@ -2810,6 +2833,9 @@ class HistoryStore(
          * as stage 1 does, whatever the marker says: an older build's view.
          */
         @Volatile internal var stage2Enabled = STAGE2_IN_BUILD
+
+        /** A store in this process is on `history.db` (its marker's path): no store here writes that `shots.db` again. */
+        @Volatile internal var STAGE2_IN_PROCESS: String? = null
 
         /** Whether this build ships stage 2. */
         const val STAGE2_IN_BUILD = false

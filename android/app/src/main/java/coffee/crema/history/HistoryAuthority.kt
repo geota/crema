@@ -4,6 +4,7 @@ import coffee.crema.core.BrewSeries
 import coffee.crema.core.HistoryChangeSet
 import coffee.crema.core.HistoryHeavy
 import coffee.crema.core.HistoryLive
+import coffee.crema.core.HistoryRole
 import coffee.crema.core.HistoryRowIn
 import coffee.crema.core.ShotSummary
 import kotlinx.coroutines.channels.BufferOverflow
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.serialization.json.JsonObject
+import java.io.File
 import kotlin.concurrent.withLock
 
 /*
@@ -93,11 +95,43 @@ internal class HistoryAuthority(
     }
 
     fun close() {
+        release(db)
         runCatching { db.now { it.closeAll() } }
     }
 
     companion object {
         /** Rows per page of a load. */
         const val PAGE = 500
+
+        /**
+         * Every truth file open in this process, by path (S4: one connection
+         * per file). A second store here (a view model made again while the
+         * first one's store still holds the file) takes the file over: the
+         * first one's bridge closes under the core's lock, so its later writes
+         * fail into stage 2's journal rather than refusing the new store.
+         */
+        private val HELD = HashMap<String, HistoryDbBridge>()
+
+        /** Opens [file] as the truth, taking it over from another store in this process. */
+        fun openTakingOver(file: File): HistoryDbBridge = synchronized(HELD) {
+            val key = file.absolutePath
+            HELD.remove(key)?.let { old -> runCatching { old.now { it.closeAll() } } }
+            HistoryDbBridge.openNow(file, HistoryDbBridge.options(HistoryRole.AUTHORITY)).also { HELD[key] = it }
+        }
+
+        /** [db], opened elsewhere (the flip's copy), is this process's holder of [file]. */
+        fun hold(file: File, db: HistoryDbBridge) = synchronized(HELD) {
+            val key = file.absolutePath
+            HELD.remove(key)?.takeIf { it !== db }?.let { old -> runCatching { old.now { it.closeAll() } } }
+            HELD[key] = db
+        }
+
+        private fun release(db: HistoryDbBridge) = synchronized(HELD) { HELD.entries.removeAll { it.value === db } }
+
+        /** Erase (S11): every truth file this process holds, closed under the core's lock, before anything goes. */
+        fun closeEveryHeld() {
+            val all = synchronized(HELD) { HELD.values.toList().also { HELD.clear() } }
+            for (b in all) runCatching { b.now { it.closeAll() } }
+        }
     }
 }
