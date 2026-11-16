@@ -228,6 +228,9 @@ export class FakeFile {
 	writeSeq = 0;
 	openBy: string | null = null;
 	corrupt = false;
+	/** An export walk runs: a delete holds the row (hidden) instead of removing it (SPEC §9). */
+	walking = false;
+	held = new Set<string>();
 	/** Every write that took effect, in order: who, which seq, what. */
 	log: { tab: string | null; seq: number | null; write: Write }[] = [];
 	constructor(readonly role: 'index' | 'authority') {}
@@ -354,12 +357,17 @@ function writeTo(f: FakeFile, w: Write, tab: string | null, seq: number | null) 
 		const ids = w.rows.map((r) => {
 			const id = String(JSON.parse(r.rowJson).id);
 			f.rows.set(id, r.rowJson);
+			// As the core does: an upsert of a held row ends its hold (write.rs).
+			f.held.delete(id);
 			return id;
 		});
 		return change(f, ids, []);
 	}
 	if (w.kind === 'delete') {
-		for (const id of w.ids) f.rows.delete(id);
+		for (const id of w.ids) {
+			if (f.walking && f.rows.has(id)) f.held.add(id);
+			else f.rows.delete(id);
+		}
 		return change(f, [], w.ids);
 	}
 	return change(f, [], []);
@@ -384,7 +392,10 @@ function fakeDb(f: FakeFile, ctx: string): EngineDb {
 				case 'upsert':
 					return { change: writeTo(f, { kind: 'upsert', rows: arg as { rowJson: string }[] }, null, null) };
 				case 'get':
-					return (arg as string[]).filter((id) => f.rows.has(id)).map((id) => ({ id, rowJson: f.rows.get(id)! }));
+					// As the core's `get`: held rows are hidden (sql.rs, hold_delete = 0).
+					return (arg as string[])
+						.filter((id) => f.rows.has(id) && !f.held.has(id))
+						.map((id) => ({ id, rowJson: f.rows.get(id)! }));
 				case 'count':
 					return f.rows.size;
 				case 'writeSeq':

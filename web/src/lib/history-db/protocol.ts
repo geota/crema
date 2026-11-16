@@ -116,7 +116,20 @@ export type Request =
 	| (Header & { op: 'read'; name: ReadName; arg?: unknown })
 	| (Header & { op: 'write'; wseq: number; atMs: number; write: Write })
 	/** The owner tab's drain of the pending journal (M5): insert each row whose id is absent. */
-	| (Header & { op: 'drain'; rows: string[] });
+	| (Header & { op: 'drain'; entries: JournalEntry[] });
+
+/**
+ * One pending-journal entry, as the drain sends it (M5, REVIEW-456 F2). A
+ * capture journals its row with the tab and write seq its write was given, so
+ * the owner can tell an entry whose write already landed (and may have been
+ * deleted since) from one that never did. An entry journaled without a write
+ * (while read-only) has neither.
+ */
+export interface JournalEntry {
+	row: string;
+	tab?: string;
+	wseq?: number;
+}
 
 export interface ReplyOk {
 	t: 'reply';
@@ -151,10 +164,20 @@ export interface ChangeSet {
 	kinds: Record<string, unknown>;
 }
 
-/** A drain's outcome: the ids it inserted, and those already there (left as they are). */
+/**
+ * A drain's outcome, by id (F2). The page removes the entries of `inserted`,
+ * `present` and `applied`; it keeps `waiting` (the capturing tab is alive and
+ * its write hasn't landed yet) and `refused` for a later drain.
+ */
 export interface Drained {
+	/** Inserted now. */
 	inserted: string[];
+	/** Already there: left as it is (it may have been edited since). */
 	present: string[];
+	/** Its write already landed: not inserted again, even if the row is gone or held now. */
+	applied: string[];
+	waiting: string[];
+	refused: string[];
 }
 
 /** On `crema-history-rpc`, from the owner's Worker: it holds the lock and answers. */
@@ -182,7 +205,20 @@ export interface Change {
 	change: ChangeSet;
 }
 
-export type RpcMessage = Request | Reply | Ready | Gone | Hello;
+/**
+ * On `crema-history-rpc`, from the tab that flipped (SPEC §11 step 7, W5):
+ * `history.db` is the truth now. A stage-1 tab that hears it stops writing the
+ * P3 store and reloads. W1 is the first build that listens, so every later
+ * build's flip reaches it (REVIEW-456 N4).
+ */
+export interface Flipped {
+	t: 'flipped';
+	v: number;
+	build: string;
+	generation: number;
+}
+
+export type RpcMessage = Request | Reply | Ready | Gone | Hello | Flipped;
 
 /**
  * Whether a client of `stage` that expects `expect` may use `owner` (M1). A

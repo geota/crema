@@ -214,7 +214,7 @@
 			// Temporary backup files a closed tab left (#310 P2w).
 			void sweepBackupTemp();
 			// The SQLite history's owner and client (#310 W1). Nothing reads it yet.
-			startHistoryDb();
+			startHistoryDb({ canReload: () => canReloadNow(reloadInputs()) });
 		});
 		// Keep the cached Visualizer Premium flag (it gates the edit sync's
 		// Premium-only PATCH fields) fresh: re-probe at most once per 24 h.

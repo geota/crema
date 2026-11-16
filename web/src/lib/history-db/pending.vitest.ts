@@ -6,9 +6,12 @@
  * the drains a hello, a lock and a `storage` event start.
  */
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { appendPending, drainPending, pendingKey } from './pending';
+import { appendPending, drainPending, NOTHING_DRAINED, pendingKey } from './pending';
 import { Env, FakeStorage, openTab, STAGE2, row } from './test-kit';
-import type { Drained } from './protocol';
+import type { Drained, JournalEntry } from './protocol';
+
+// Fake timers drive minutes of protocol time; under a full parallel run that takes real seconds.
+vi.setConfig({ testTimeout: 60_000 });
 
 const flush = async () => {
 	for (let i = 0; i < 5; i++) await Promise.resolve();
@@ -49,11 +52,11 @@ describe('every interleaving of two appenders, two drains and an edit', () => {
 			const store = new Map<string, string>();
 			// The owner's drain, held until its commit step: insert each absent id.
 			const commits: Record<string, () => void> = {};
-			const insert = (d: string) => (rows: string[]) =>
+			const insert = (d: string) => (entries: JournalEntry[]) =>
 				new Promise<Drained>((resolve) => {
 					commits[d] = () => {
-						const out: Drained = { inserted: [], present: [] };
-						for (const r of rows) {
+						const out: Drained = { ...NOTHING_DRAINED, inserted: [], present: [] };
+						for (const { row: r } of entries) {
 							const id = JSON.parse(r).id;
 							if (store.has(id)) out.present.push(id);
 							else {
@@ -81,9 +84,9 @@ describe('every interleaving of two appenders, two drains and an edit', () => {
 			for (const d of ['d1', 'd2']) commits[d]?.();
 			await Promise.all(drains);
 			// The next owner's drain takes what's left.
-			await drainPending(storage, async (rows) => {
-				const out: Drained = { inserted: [], present: [] };
-				for (const r of rows) {
+			await drainPending(storage, async (entries) => {
+				const out: Drained = { ...NOTHING_DRAINED, inserted: [], present: [] };
+				for (const { row: r } of entries) {
 					const id = JSON.parse(r).id;
 					if (store.has(id)) out.present.push(id);
 					else {
@@ -108,7 +111,7 @@ describe('every interleaving of two appenders, two drains and an edit', () => {
 		let release: (d: Drained) => void = () => {};
 		const d = drainPending(storage, () => new Promise((r) => (release = r)));
 		storage.setItem(pendingKey('a'), row('a', 2));
-		release({ inserted: ['a'], present: [] });
+		release({ ...NOTHING_DRAINED, inserted: ['a'] });
 		await d;
 		expect(storage.getItem(pendingKey('a'))).toBe(row('a', 2));
 	});
@@ -117,7 +120,7 @@ describe('every interleaving of two appenders, two drains and an edit', () => {
 		const storage = new FakeStorage();
 		appendPending(storage, row('a', 1));
 		appendPending(storage, row('b', 1));
-		await drainPending(storage, async () => ({ inserted: ['a'], present: [] }));
+		await drainPending(storage, async () => ({ ...NOTHING_DRAINED, inserted: ['a'] }));
 		expect(storage.keys()).toEqual([pendingKey('b')]);
 	});
 });

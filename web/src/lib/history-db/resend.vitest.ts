@@ -8,6 +8,9 @@ import { Env, openTab, STAGE2, row, type FakeFile } from './test-kit';
 import type { Applied, Reply, Request } from './protocol';
 import { RPC_CHANNEL } from './names';
 
+// Fake timers drive minutes of protocol time; under a full parallel run that takes real seconds.
+vi.setConfig({ testTimeout: 60_000 });
+
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
