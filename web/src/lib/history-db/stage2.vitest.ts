@@ -330,8 +330,31 @@ describe.runIf(historyWasmBuilt)('the store on stage 2', () => {
 		await expect(store.whenReady(100)).rejects.toThrow();
 		const shot = { ...realShot(91, realSamples(8, 2)), id: 'while-unknown' };
 		store.recordCaptured(shot as unknown as Record<string, unknown>);
+		await store.flushed();
 		expect(env.storage.getItem(PENDING_KEY_PREFIX + 'while-unknown')).toContain('while-unknown');
+		// Never a fall back to the P3 store: not its rows, its meta, or its journal.
 		expect(await oldCopyBytes()).toBe(before);
+		expect(localStorage.getItem(PENDING_KEY)).toBeNull();
+	});
+
+	it('an owner that goes unavailable mid-session: read-only, shots to stage 2’s journal, never a P3 write', async () => {
+		const { t } = await flipped(4);
+		const store = await storeOn(t);
+		await store.ready;
+		const before = await oldCopyBytes();
+		// Another build's tab takes the database: this tab's client refuses it (M1).
+		t.freeze();
+		const shot = { ...realShot(92, realSamples(8, 3)), id: 'owner-gone' };
+		t.client.write = async () => {
+			throw Object.assign(new Error('History is open in another window'), { code: 'readOnly' });
+		};
+		store.recordCaptured(shot as unknown as Record<string, unknown>);
+		await store.flushed();
+		expect(env.storage.getItem(PENDING_KEY_PREFIX + 'owner-gone')).toContain('owner-gone');
+		expect(store.unsavedShots).toContain('owner-gone');
+		expect(await oldCopyBytes()).toBe(before);
+		expect(localStorage.getItem(PENDING_KEY)).toBeNull();
+		t.thaw();
 	});
 
 	it('too new: the store is unavailable with "update the app", never lost', async () => {
