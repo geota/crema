@@ -43,7 +43,9 @@ W0_KILLS=20 pnpm test:browser durability --project webkit
   pool generation (`gen()`), because some browsers share one OPFS between profiles:
   on macOS, Playwright's WebKit keeps it in `~/Library/WebKit/org.webkit.Playwright`.
   Nothing here deletes a pool, so that directory grows; remove it by hand to reclaim
-  the space.
+  the space. A test lists only its own generations' directories (`listFiles`): in a
+  shared OPFS, other tests write their files while it reads, and WebKit fails a read
+  of a file written after `getFile()` with `NotFoundError`.
 
 ## Android Chrome
 
