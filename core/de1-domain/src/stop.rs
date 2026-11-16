@@ -435,9 +435,17 @@ const RESTART_GAP_INTERVALS: u32 = 3;
 /// before the slope across it stops counting as flow.
 const RESTART_OFF_TREND_G: f32 = 3.0;
 /// Two readings this close are a live scale's, 5 to 10 Hz, where a step off
-/// the trend between them is no pour. Slower scales keep every step in the
-/// lead, as the disturbance check does (`DESIGN.md` §3.5).
-const LEAD_STEP_GAP_MAX: Duration = Duration::from_millis(500);
+/// the trend between them is no pour: 3 g off it in 300 ms is a change of
+/// flow of 10 g/s. Slower scales keep every step in the lead (`DESIGN.md`
+/// §3.5, REVIEW-462 B1).
+const LEAD_STEP_GAP_MAX: Duration = Duration::from_millis(300);
+/// The most the lead window takes off in all, grams: one load inside the
+/// 10 Hz band (4.2 g), with noise. A touch that lands and lifts nets to 0,
+/// and a load that stays is taken off once. A run of real steps, a pour
+/// that surges, then reaches the window after the first, so its trend
+/// catches up, where taking each off kept the trend at 0 and the lead with
+/// it (REVIEW-462 B1).
+const LEAD_OFFSET_MAX_G: f32 = 4.5;
 
 /// The instant the weight leg fired, captured for post-shot drip learning
 /// (the training sample's inputs — `drip = final − weight_g`,
@@ -615,7 +623,9 @@ impl AutoStop {
         {
             let dt = now.saturating_sub(at).as_secs_f32();
             let off = grams - before - self.lead_trend * dt;
-            if off.abs() > RESTART_OFF_TREND_G {
+            if off.abs() > RESTART_OFF_TREND_G
+                && (self.lead_offset_g + off).abs() <= LEAD_OFFSET_MAX_G
+            {
                 self.lead_offset_g += off;
             }
         }
