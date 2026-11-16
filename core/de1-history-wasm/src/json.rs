@@ -3,8 +3,8 @@
 //! this module adds the store's write and status types, and the error shape.
 
 use de1_history::store::{
-    AbsentStep, Applied, Duplicate, ExportWalk, FileInfo, FtsStatus, Health, Heavy, IndexWrite, JournalMode,
-    Maintained, Recovery, RidId, Role, RowIn, StoreError, Write, Written,
+    AbsentStep, Applied, Duplicate, ExportWalk, FileInfo, FtsStatus, Health, Heavy, IndexWrite,
+    JournalMode, Maintained, Recovery, RidId, Role, RowIn, StoreError, Write, Written,
 };
 use de1_history::{ChangeSet, Live};
 use serde::{Deserialize, Serialize};

@@ -48,9 +48,9 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
 use crate::json::{
-    AbsentStepJson, AppliedJson, ErrorJson, HealthJson, IndexWriteJson, InfoJson, JournalJson, MaintainedJson,
-    PlaceJson, RecoveryJson, RidIdJson, RoleJson, RowJson, WalkJson, WriteJson, WrittenJson,
-    rows_in,
+    AbsentStepJson, AppliedJson, ErrorJson, HealthJson, IndexWriteJson, InfoJson, JournalJson,
+    MaintainedJson, PlaceJson, RecoveryJson, RidIdJson, RoleJson, RowJson, WalkJson, WriteJson,
+    WrittenJson, rows_in,
 };
 use crate::pools::{self, PoolError, Which};
 
