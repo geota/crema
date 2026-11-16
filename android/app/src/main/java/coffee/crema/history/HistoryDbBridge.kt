@@ -62,7 +62,8 @@ import coffee.crema.core.HistoryDb as CoreHistoryDb
  * Errors are [coffee.crema.core.HistoryDbException]s, one subclass per
  * class (SPEC §12). From A1 the app's one caller is [HistoryIndex], which
  * runs inside `HistoryStore.lock` on IO and so calls through [now] and
- * [openNow] rather than switching dispatchers under the lock.
+ * [openNow] rather than switching dispatchers under the lock. From R1a
+ * [SqliteHistorySource] is the backup's and restore's (not in use until A5).
  */
 class HistoryDbBridge private constructor(
     private val db: CoreHistoryDb,
@@ -169,6 +170,9 @@ class HistoryDbBridge private constructor(
     suspend fun exportBegin(): HistoryExportWalk = call { it.exportBegin() }
 
     suspend fun exportNext(token: ULong, n: UInt): List<HistoryRow> = call { it.exportNext(token, n) }
+
+    /** The walk's set again from its first row (#310 R1a): a backup reads it twice. */
+    suspend fun exportRewind(token: ULong) = call { it.exportRewind(token) }
 
     suspend fun exportEnd(token: ULong) = call { it.exportEnd(token) }
 

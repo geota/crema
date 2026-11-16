@@ -9,6 +9,7 @@
     "wasm": "wasm-pack build ../core/de1-wasm --target web --out-dir ../../web/src/lib/wasm --out-name de1_wasm",
     "wasm:test": "wasm-pack build ../core/de1-wasm --target web --out-dir ../../web/.wasm-test --out-name de1_wasm -- --features test-seeds",
     "wasm:history": "../scripts/history-wasm-build.sh",
+    "wasm:history:test": "../scripts/history-wasm-build.sh --test",
     "dev": "vite dev",
     "build": "pnpm wasm && pnpm wasm:history && vite build",
     "preview": "vite preview",
@@ -16,12 +17,12 @@
     "test": "vitest run",
     "test:vitest": "vitest run",
     "test:browser": "tsc -p tests/browser && playwright test",
+    "test:pwa": "tsc -p tests/browser && playwright test -c playwright.pwa.config.ts",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "openapi": "openapi-typescript src/lib/visualizer/openapi.json -o src/lib/visualizer/openapi.d.ts"
   },
   "devDependencies": {
-    "@katama-labs/vite-pwa-sveltekit": "^2.0.0",
     "@playwright/test": "1.65.0",
     "@sveltejs/adapter-static": "^4.0.1",
     "@sveltejs/kit": "^3.1.1",
@@ -29,8 +30,10 @@
     "@tailwindcss/vite": "^4.3.5",
     "@types/node": "^26.6.6",
     "@types/web-bluetooth": "^0.0.22",
+    "@vite-pwa/sveltekit": "2.0.2",
     "fake-indexeddb": "6.2.8",
     "jsdom": "^31.0.0",
+    "magicast": "^0.5.5",
     "openapi-typescript": "^7.13.0",
     "subset-font": "^2.9.0",
     "svelte": "^5.57.3",
@@ -38,7 +41,6 @@
     "tailwindcss": "^4.3.5",
     "typescript": "^6.0.3",
     "vite": "^8.3.6",
-    "vite-plugin-pwa": "^2.0.0",
     "vitest": "^5.1.0"
   },
   "dependencies": {

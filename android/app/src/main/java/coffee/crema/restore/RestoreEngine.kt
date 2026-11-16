@@ -372,6 +372,14 @@ enum class RestoreStep { MARKER, TOMBSTONES, PHOTOS, RECIPES, BEANS, PROFILES, S
 
 /** What the engine writes through. Each call updates memory, then awaits the write, and says whether it landed. */
 interface RestoreSink {
+    /**
+     * A run begins, before step 0 plans it again (#310 R1a): on the SQLite
+     * store, the moment its wipe counts from, so a row written after it is
+     * never removed (M3). It handles its own failures: a step it can't serve
+     * then stops.
+     */
+    suspend fun restoreStarts() {}
+
     /** What the device holds, once the shots' telemetry has loaded. */
     suspend fun localState(): LocalState
     /** A shot runs, or a firmware flash holds the link. */
@@ -486,6 +494,7 @@ class RestoreEngine(
     ): RestoreOutcome = withContext(NonCancellable) {
         if (!running.compareAndSet(false, true)) return@withContext RestoreOutcome.Busy
         try {
+            sink.restoreStarts()
             // Step 0: re-plan from the device as it is now.
             val plan = plan(prepared, kind, reviveDeleted)
             when {

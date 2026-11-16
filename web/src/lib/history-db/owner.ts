@@ -27,8 +27,15 @@
  *   another stage may read but not write (M1). Every write's `ChangeSet` goes
  *   out on `crema-history-changes`.
  * - **Release** (handover, the page hidden and idle, a factory reset):
- *   finish the call running, close the file, pause the pool, then let the
- *   lock go. `pause` refuses while a file is open, so the order is the rule.
+ *   finish the calls queued until the queue is quiet, close the file, pause
+ *   the pool, then let the lock go. `pause` refuses while a file is open, so
+ *   the order is the rule. A `retry` while letting go is ignored, and an open
+ *   in progress stops at its next step, so nothing opens after the lock is
+ *   gone (REVIEW-456 F3); an `acquire` while letting go queues again after.
+ * - **A paused pool** lists no files, so it is `unavailable`, never `lost` (N3).
+ * - **The drain** (M5, F2) applies a journaled capture as its own write, under
+ *   its tab and seq, so a capture that already landed is never inserted again,
+ *   even after the user deleted it or while an export holds it.
  * - Nothing here deletes a file, a pool or a slot.
  */
 import type { ChannelLike } from './ports.js';
@@ -37,11 +44,13 @@ import { engineError, type Engine, type EngineDb, type EngineError } from './eng
 import { CHANGES_CHANNEL, OWNER_LOCK, RPC_CHANNEL, TAB_LOCK_PREFIX } from './names.js';
 import {
 	PROTOCOL_VERSION,
+	ONCE,
 	READS,
 	acceptsOwner,
 	type Applied,
 	type ChangeSet,
 	type Drained,
+	type JournalEntry,
 	type OwnerHealth,
 	type OwnerInfo,
 	type Reply,
@@ -120,6 +129,8 @@ class Owner {
 	#rpc: ChannelLike | null = null;
 	#changes: ChannelLike | null = null;
 	#seen = new Set<string>();
+	/** `acquire` came while letting go: queue again once released. */
+	#again = false;
 	#prune: ReturnType<typeof setInterval> | null = null;
 
 	constructor(d: OwnerDeps) {
@@ -161,10 +172,12 @@ class Owner {
 				void this.release(m.t === 'stop').then(() => this.#post({ t: 'released', n: m.n }));
 				return;
 			case 'retry':
-				if (this.#phase === 'owner' && this.#health !== 'ok') {
+				// Never while letting go: the open would land after the lock is gone (F3).
+				if (this.#phase === 'owner' && !this.#releasing && this.#health !== 'ok') {
 					this.#enqueue(async () => {
 						await this.#open();
-						this.#announce();
+						// Letting go meanwhile: no `ready` just before `gone`.
+						if (!this.#releasing) this.#announce();
 					});
 				}
 				return;
@@ -180,7 +193,13 @@ class Owner {
 
 	/** Queue for the owner lock; when it arrives, open the file and serve. */
 	acquire(): void {
-		if (this.#phase !== 'idle' || !this.#target) return;
+		if (!this.#target || this.#phase === 'stopped' || this.#stopping) return;
+		if (this.#phase !== 'idle') {
+			// Asked again while letting go (pagehide, then pageshow at once):
+			// queue for the lock again once this hold has ended (F3).
+			if (this.#releasing) this.#again = true;
+			return;
+		}
 		this.#phase = 'waiting';
 		this.#stopping = false;
 		this.#releasing = false;
@@ -194,6 +213,10 @@ class Owner {
 			.finally(() => {
 				if (this.#abort === abort) this.#abort = null;
 				this.#phase = this.#stopping ? 'stopped' : 'idle';
+				if (this.#again && !this.#stopping) {
+					this.#again = false;
+					this.acquire();
+				}
 			});
 	}
 
@@ -212,7 +235,12 @@ class Owner {
 		}
 		await released;
 		// Finish the call that runs, refuse the rest (`notOwner`), then close.
-		await this.#queue;
+		// Until the queue is quiet: work queued while it drained runs before
+		// the file closes, never after the lock is gone (F3).
+		for (let q = this.#queue; ; q = this.#queue) {
+			await q;
+			if (q === this.#queue) break;
+		}
 		if (this.#prune) clearInterval(this.#prune);
 		this.#prune = null;
 		this.#close();
@@ -229,6 +257,7 @@ class Owner {
 	async release(final: boolean): Promise<void> {
 		if (final) this.#stopping = true;
 		this.#releasing = true;
+		this.#again = false;
 		if (this.#phase === 'waiting') this.#abort?.abort();
 		this.#letGo?.();
 		this.#letGo = null;
@@ -260,9 +289,13 @@ class Owner {
 		const t = this.#target!;
 		const { engine } = this.#d;
 		const stage1 = this.#stage === 1;
+		// Letting go, or no longer the owner: stop before the next step (F3).
+		const gone = () => this.#releasing || this.#phase !== 'owner';
 		this.#close();
+		if (gone()) return;
 		if (t.pool === 'db' && t.generation > 0) {
 			const done = await engine.readRepairDone('db', t.generation);
+			if (gone()) return;
 			if (!done || !done.copied.includes(`/${t.file}`)) {
 				this.#fail('unavailable', 'repairUnfinished');
 				return;
@@ -272,7 +305,9 @@ class Owner {
 		let wait = INSTALL_FIRST_WAIT_MS;
 		for (;;) {
 			try {
+				if (gone()) return;
 				const info = await engine.installPool(t.pool, t.generation);
+				if (gone()) return;
 				if (info.paused) await engine.resumePool(t.pool);
 				break;
 			} catch (e) {
@@ -286,9 +321,16 @@ class Owner {
 				wait = Math.min(wait * 2, INSTALL_MAX_WAIT_MS);
 			}
 		}
+		if (gone()) return;
 		let listed: string[];
 		try {
-			listed = engine.poolInfo(t.pool).files;
+			const info = engine.poolInfo(t.pool);
+			// A paused pool lists no files: that is "can't see", not "absent" (N3).
+			if (info.paused) {
+				this.#fail(stage1 ? 'index_fallback' : 'unavailable', 'paused');
+				return;
+			}
+			listed = info.files;
 		} catch (e) {
 			this.#fail(stage1 ? 'index_fallback' : 'unavailable', engineError(e).code);
 			return;
@@ -298,7 +340,7 @@ class Owner {
 			return;
 		}
 		try {
-			this.#db = await engine.open({
+			const db = await engine.open({
 				pool: t.pool,
 				file: t.file,
 				role: t.role,
@@ -306,6 +348,11 @@ class Owner {
 				generation: t.generation,
 				journal: t.journal
 			});
+			if (gone()) {
+				db.close();
+				return;
+			}
+			this.#db = db;
 			this.#fail('ok', 'open');
 		} catch (e) {
 			const code = engineError(e).code;
@@ -425,12 +472,22 @@ class Owner {
 				if (applied.outcome === 'done') this.#notify(applied.written.change);
 				return applied;
 			}
+			case 'once':
+				// The walk and its holds are stage 2's, on the truth file (#310 R1w): never the index's.
+				if (!(ONCE as readonly string[]).includes(req.name)) {
+					throw { code: 'refused', message: `${req.name} isn't a once-only call` };
+				}
+				if (req.stage !== 2 || this.#stage !== 2) {
+					throw { code: 'otherStage', message: 'the export walk is stage 2’s' };
+				}
+				this.#sameFile(req);
+				return db.call(req.name, req.arg);
 			case 'drain':
 				if (req.stage !== 2 || this.#stage !== 2) {
 					throw { code: 'otherStage', message: 'the pending journal is stage 2’s' };
 				}
 				this.#sameFile(req);
-				return this.#drain(db, req.rows);
+				return this.#drain(db, req.entries);
 		}
 	}
 
@@ -440,13 +497,57 @@ class Owner {
 		}
 	}
 
-	/** Insert each journaled row whose id is absent (M5). A present id may have been edited since: left alone. */
-	async #drain(db: EngineDb, rows: string[]): Promise<Drained> {
-		const out: Drained = { inserted: [], present: [] };
-		for (const rowJson of rows) {
+	/**
+	 * The pending journal's drain (M5, REVIEW-456 F2), each entry in one queued
+	 * call, so no other write runs between its checks and its insert:
+	 * - **An id already there** is left as it is (it may have been edited since).
+	 * - **An entry with its write's `{tab, wseq}`** is applied *as that write*,
+	 *   through `apply`. If the write already landed, that's `alreadyApplied`
+	 *   and nothing is written, even when the shot has since been deleted, or
+	 *   is held by an export (which `get` hides): the user's delete stands. If it
+	 *   hadn't, the shot goes in now, under its seq, so the tab's own resend
+	 *   lands as `alreadyApplied` and can't undo a later edit.
+	 * - **A gap** (an earlier write of that tab hasn't landed) waits while the
+	 *   tab lives, since its outbox will close it. A tab that's gone never will,
+	 *   so its entry falls back to the next rule.
+	 * - **An entry with no write** is inserted only if its id is absent, under
+	 *   a seq of its own (`journal:<id>`, 1), so a second drain of the same
+	 *   entry, after a crash between the insert and the key's removal, is
+	 *   `alreadyApplied` and can't bring a deleted shot back.
+	 */
+	async #drain(db: EngineDb, entries: JournalEntry[]): Promise<Drained> {
+		const out: Drained = { inserted: [], present: [], applied: [], waiting: [], refused: [] };
+		let alive: Set<string> | null = null;
+		const tabAlive = async (tab: string): Promise<boolean> => {
+			if (!alive) {
+				try {
+					const q = await this.#d.locks.query?.();
+					alive = new Set((q?.held ?? []).map((l) => l.name ?? ''));
+				} catch {
+					alive = null;
+					return true;
+				}
+			}
+			return alive.has(TAB_LOCK_PREFIX + tab);
+		};
+		const put = async (id: string, tab: string, seq: number, rowJson: string): Promise<Applied['outcome']> => {
+			const a = (await db.call('apply', {
+				tab,
+				seq,
+				atMs: this.#now(),
+				write: { kind: 'upsert', rows: [{ rowJson }] }
+			})) as Applied;
+			if (a.outcome === 'done') {
+				this.#notify(a.written.change);
+				out.inserted.push(id);
+			} else if (a.outcome === 'alreadyApplied') out.applied.push(id);
+			else if (a.outcome === 'refused') out.refused.push(id);
+			return a.outcome;
+		};
+		for (const e of entries) {
 			let id: string;
 			try {
-				id = String(JSON.parse(rowJson).id);
+				id = String(JSON.parse(e.row).id);
 			} catch {
 				continue;
 			}
@@ -455,9 +556,18 @@ class Owner {
 				out.present.push(id);
 				continue;
 			}
-			const written = (await db.call('upsert', [{ rowJson }])) as { change: ChangeSet };
-			this.#notify(written.change);
-			out.inserted.push(id);
+			if (e.tab && e.wseq) {
+				this.#seen.add(e.tab);
+				const outcome = await put(id, e.tab, e.wseq, e.row);
+				if (outcome !== 'gap') continue;
+				if (await tabAlive(e.tab)) {
+					out.waiting.push(id);
+					continue;
+				}
+			}
+			const own = `journal:${id}`;
+			this.#seen.add(own);
+			if ((await put(id, own, 1, e.row)) === 'gap') out.waiting.push(id);
 		}
 		return out;
 	}

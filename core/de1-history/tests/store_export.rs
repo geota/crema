@@ -122,6 +122,56 @@ fn a_walk_writes_exactly_the_rows_it_began_with_and_holds_deletes() {
 }
 
 #[test]
+fn a_walk_runs_newest_first_as_it_began_and_rewinds_to_the_same_set() {
+    let d = dir();
+    let path = file(&d, "history.db");
+    let mut store = create(&path);
+    // Written oldest first, with two rows on one date: the walk's order is
+    // the P3 stores' (newest first, ties by id descending), not the rids'.
+    store
+        .upsert(&rows_in(&[
+            row("a", 10, json!({})),
+            row("c", 30, json!({})),
+            row("b2", 20, json!({})),
+            row("b1", 20, json!({})),
+            row("d", 40, json!({})),
+        ]))
+        .expect("writes");
+    let walk = store.export_begin().expect("begins");
+    assert_eq!(walk.count, 5);
+    let first = store.export_next(walk.token, 2).expect("a step");
+    assert_eq!(
+        first.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        ["d", "c"]
+    );
+    // An edit that moves a row's date doesn't move it in the walk, and a
+    // delete holds the row; both are read as they are now.
+    store
+        .upsert(&rows_in(&[row(
+            "a",
+            50,
+            json!({ "metadata": { "notes": "moved" } }),
+        )]))
+        .expect("writes");
+    store.delete(&["b1".into()]).expect("deletes");
+    let order =
+        |rows: &[(String, String)]| rows.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
+    let rest = walk_all(&mut store, walk.token, 2, |_, _| {});
+    assert_eq!(order(&rest), ["b2", "b1", "a"]);
+    assert!(rest[2].1.contains("moved"));
+    // Rewound: the same set in the same order, with what each row holds now.
+    store.export_rewind(walk.token).expect("rewinds");
+    let again = walk_all(&mut store, walk.token, 3, |_, _| {});
+    assert_eq!(order(&again), ["d", "c", "b2", "b1", "a"]);
+    store.export_end(walk.token).expect("ends");
+    assert!(matches!(
+        store.export_rewind(walk.token),
+        Err(StoreError::UnknownWalk(_))
+    ));
+    assert_eq!(store.release_holds().expect("reads"), ["b1"]);
+}
+
+#[test]
 fn holds_left_by_a_closed_walk_are_released_at_the_next_open() {
     let d = dir();
     let path = file(&d, "history.db");
@@ -146,6 +196,52 @@ fn holds_left_by_a_closed_walk_are_released_at_the_next_open() {
     let mut store = reopen(&path);
     assert_eq!(store.release_holds().expect("reads"), ["a"]);
     store.delete(&held).expect("deletes");
+    assert_eq!(ids_of(&store), set(&["b"]));
+}
+
+#[test]
+fn delete_held_removes_only_rows_still_held_and_no_walk_needs() {
+    // REVIEW-468 W5-1: a release that races an upsert of a held row leaves it.
+    let d = dir();
+    let path = file(&d, "history.db");
+    let mut store = create(&path);
+    let rows: Vec<String> = ["a", "b", "c", "d"]
+        .iter()
+        .enumerate()
+        .map(|(i, id)| row(id, i64::try_from(i).unwrap_or(0), json!({})))
+        .collect();
+    store.upsert(&rows_in(&rows)).expect("writes");
+    let one = store.export_begin().expect("begins");
+    store
+        .delete(&["a".into(), "b".into(), "c".into()])
+        .expect("holds");
+    store.export_end(one.token).expect("ends");
+    let held = store.release_holds().expect("holds");
+    assert_eq!(held.len(), 3);
+    // A walk begins (its set skips the held rows), b comes back before the
+    // release deletes it, and d is held for that walk.
+    let two = store.export_begin().expect("begins");
+    store
+        .upsert(&rows_in(&[row("b", 1, json!({ "notes": "back" }))]))
+        .expect("writes");
+    store
+        .delete(&["d".into()])
+        .expect("holds d for the open walk");
+    let mut asked = held.clone();
+    asked.push("d".into());
+    asked.push("nope".into());
+    let mut gone = store.delete_held(&asked).expect("deletes");
+    gone.sort();
+    assert_eq!(gone, vec!["a".to_owned(), "c".to_owned()]);
+    // b is back and live; d stays, held, for the walk that needs it.
+    assert_eq!(ids_of(&store), set(&["b", "d"]));
+    assert_eq!(store.release_holds().expect("holds"), Vec::<String>::new());
+    store.export_end(two.token).expect("ends");
+    assert_eq!(store.release_holds().expect("holds"), vec!["d".to_owned()]);
+    assert_eq!(
+        store.delete_held(&["d".into()]).expect("deletes"),
+        vec!["d".to_owned()]
+    );
     assert_eq!(ids_of(&store), set(&["b"]));
 }
 

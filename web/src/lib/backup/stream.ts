@@ -11,10 +11,12 @@
  * disk-backed `File`; else `Blob` parts in memory.
  *
  * The header counts the shots first, so the walk reads every shot twice: once
- * to learn which ones the core can write, once to write them. Rows are the
- * snapshot taken at the start, so a shot saved during the walk is in the next
- * backup. Between batches the walk yields, reports progress, and stops on an
- * abort, leaving nothing behind.
+ * to learn which ones the core can write, once to write them. The shots are a
+ * snapshot taken at the start (the P3 store), or a source's two walks begun
+ * together (`#lib/history-source`, #310 R1w), so a shot saved during the walk
+ * is in the next backup; either way exactly the header's count of lines goes
+ * out, or nothing does. Between batches the walk yields, reports progress,
+ * and stops on an abort, leaving nothing behind.
  */
 
 import { Zip, ZipDeflate } from 'fflate';
@@ -245,13 +247,37 @@ export async function sweepBackupTemp(
 export interface BackupWalkInput {
 	/** The export envelope without `shots` (see `exportBackupBundle`). */
 	envelope: string;
-	/** The shots to write, a snapshot taken before the walk. */
-	shots: readonly unknown[];
+	/**
+	 * The shots to write: a snapshot taken before the walk, or a source's two
+	 * passes over the same shots (`#lib/history-source`, #310 R1w).
+	 */
+	shots: readonly unknown[] | ShotPasses;
 	/** Bean photos, by bean id, read one at a time. */
 	photos?: () => AsyncIterable<[beanId: string, bytes: Uint8Array]>;
 	createdAt: number;
 	appVersion: string;
 	deviceLabel: string;
+}
+
+/**
+ * Shots read twice in the same order: once to count what the core can write,
+ * once to write it. The second pass throws if its shots aren't the first's.
+ */
+export interface ShotPasses {
+	readonly total: number;
+	pass(): AsyncIterable<unknown>;
+}
+
+/** The snapshot's shots as two passes over the same array. */
+function passesOf(shots: readonly unknown[] | ShotPasses): ShotPasses {
+	if (!Array.isArray(shots)) return shots as ShotPasses;
+	const rows = shots as readonly unknown[];
+	return {
+		total: rows.length,
+		async *pass() {
+			yield* rows;
+		}
+	};
 }
 
 /** How far the walk is. */
@@ -269,6 +295,8 @@ export interface BackupWalkOptions {
 	/** Let the page breathe between batches. */
 	pause?: () => Promise<void>;
 	limits?: typeof BACKUP_LIMITS;
+	/** Each shot written, as it's written. */
+	onShot?: (row: unknown) => void;
 }
 
 /** What the walk built, and how to let go of it. */
@@ -322,7 +350,8 @@ export async function streamBackup(input: BackupWalkInput, opts: BackupWalkOptio
 	const batch = opts.batch ?? 25;
 	const pause = opts.pause ?? nextTick;
 	const sink = opts.sink ?? (await openBackupSink());
-	const total = input.shots.length;
+	const shots = passesOf(input.shots);
+	const total = shots.total;
 	const enc = new TextEncoder();
 
 	// Zip output, pushed synchronously by fflate and written between pushes.
@@ -354,14 +383,18 @@ export async function streamBackup(input: BackupWalkInput, opts: BackupWalkOptio
 		// Pass 1: which shots the core can write, so the header counts them.
 		const readable: boolean[] = new Array(total);
 		const shotsOmitted: { index: number; id: string | null }[] = [];
-		for (let i = 0; i < total; i++) {
-			readable[i] = shotLine(input.shots[i]) != null;
-			if (!readable[i]) shotsOmitted.push({ index: i, id: shotId(input.shots[i]) });
-			if ((i + 1) % batch === 0) {
+		let i = 0;
+		for await (const row of shots.pass()) {
+			if (i >= total) throw new Error('A shot changed while it was being backed up. Try again.');
+			readable[i] = shotLine(row) != null;
+			if (!readable[i]) shotsOmitted.push({ index: i, id: shotId(row) });
+			i += 1;
+			if (i % batch === 0) {
 				await pause();
 				stop();
 			}
 		}
+		if (i !== total) throw new Error('A shot changed while it was being backed up. Try again.');
 		const written = total - shotsOmitted.length;
 		// As the whole-string export: shots of which none could be read are a
 		// failed section, not a gap. That file would look like a good backup of
@@ -411,14 +444,18 @@ export async function streamBackup(input: BackupWalkInput, opts: BackupWalkOptio
 		// Pass 2: the lines, in order.
 		const degraded: string[] = [];
 		let shotsWritten = 0;
-		for (let i = 0; i < total; i++) {
-			if (!readable[i]) continue;
-			const out = shotLine(input.shots[i]);
+		let at = 0;
+		for await (const row of shots.pass()) {
+			const index = at++;
+			if (index >= total) throw new Error('A shot changed while it was being backed up. Try again.');
+			if (!readable[index]) continue;
+			const out = shotLine(row);
 			if (out == null) {
 				// Readable a moment ago: the snapshot's rows don't change.
 				throw new Error('A shot changed while it was being backed up. Try again.');
 			}
-			if (out.withoutProfile) degraded.push(shotId(input.shots[i]) ?? '');
+			if (out.withoutProfile) degraded.push(shotId(row) ?? '');
+			opts.onShot?.(row);
 			await push(out.line, false, true);
 			shotsWritten += 1;
 			if (shotsWritten % batch === 0) {
@@ -427,6 +464,8 @@ export async function streamBackup(input: BackupWalkInput, opts: BackupWalkOptio
 				stop();
 			}
 		}
+		// The header counts `written` lines: exactly that many went out.
+		if (shotsWritten !== written) throw new Error('A shot changed while it was being backed up. Try again.');
 		await push(backupTail(input.envelope), true);
 		opts.onProgress?.({ shotsWritten, shotsTotal: written });
 

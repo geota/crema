@@ -429,6 +429,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         notify = { msg -> notifyUser(msg) },
         log = { appendLog(it) },
         backupZip = { daily -> library.buildBackupZip(if (daily) BackupKind.DAILY else BackupKind.DRIVE) },
+        quickMark = { library.backupMark() },
         backupFileName = { library.backupFileName() },
         applyRestore = { file, wipe, from ->
             startRestoreFile(file, from?.name?.ifBlank { null } ?: "your Google Drive backup", if (wipe) RestoreMode.WIPE else RestoreMode.MERGE, from, adopt = true)

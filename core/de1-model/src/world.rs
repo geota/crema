@@ -215,6 +215,9 @@ pub struct World {
     read_requested: bool,
     /// The substate the core last heard.
     heard_sub: Option<SubState>,
+    /// A sample split the session since the last state heard: the substate
+    /// heard is the old flow's, so its wind-down isn't this one's.
+    split_since_state: bool,
     /// The stop the core owes, by its writes: when the last `Stop` went out.
     owed_last: Option<u64>,
     /// `Stop`s in this owed episode.
@@ -356,6 +359,7 @@ impl World {
             wake_at: None,
             read_requested: false,
             heard_sub: None,
+            split_since_state: false,
             owed_last: None,
             stops_in_episode: 0,
             flow_samples_since_stop: 0,
@@ -978,6 +982,7 @@ impl World {
                         // shot's frame memory ends with it.
                         self.replacing = true;
                         self.last_sample_frame = None;
+                        self.split_since_state = true;
                         self.unseen = !self.read_only;
                         self.owed_last = None;
                         self.stops_in_episode = 0;
@@ -997,6 +1002,7 @@ impl World {
                     // memory ends with it.
                     self.replacing = true;
                     self.last_sample_frame = None;
+                    self.split_since_state = true;
                     self.unseen = !self.read_only;
                     if self.owed_last.is_none() {
                         self.stops_in_episode = 0;
@@ -1254,14 +1260,18 @@ impl World {
             self.owed_last = Some(self.now);
         }
         self.heard_sub = sub;
+        self.split_since_state = false;
     }
 
     /// I2 on a `Stop`, and the start or the next beat of an owed episode.
     fn watch_stop(&mut self, who: Who) {
         let mode = self.heard.and_then(ActiveMode::of);
-        let winding = self
-            .heard_sub
-            .is_some_and(de1_domain::session::is_wind_down);
+        // After a split on a sample, the core judges a new flow, which the
+        // old flow's wind-down says nothing about (REVIEW-451 N2).
+        let winding = !self.split_since_state
+            && self
+                .heard_sub
+                .is_some_and(de1_domain::session::is_wind_down);
         if mode.is_none() {
             self.violate(Invariant::I2, "Stop with no session".into());
         }

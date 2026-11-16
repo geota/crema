@@ -1352,7 +1352,7 @@ class LibraryController(
     /** Snapshot the backup inputs, or null + a notice when there's nothing to
      *  back up. Custom profiles only — built-ins ship with the app, so backing
      *  them up would only create duplicates. Cheap; runs on the caller. */
-    private fun backupSnapshot(): BackupSnapshot? {
+    private fun backupSnapshot(quiet: Boolean = false): BackupSnapshot? {
         val customs = customProfilesJson
         val s = uiState()
         // "Nothing to back up" only when EVERYTHING the bundle carries is empty /
@@ -1375,7 +1375,8 @@ class LibraryController(
             json.encodeToString(coffee.crema.core.CommonSettings.serializer(), currentPrefs().toCommonSettings()),
         ) && currentPrefs().qcGrind == null
         if (noData && noProfileOrg && settingsDefault) {
-            notify("Nothing to back up yet"); return null
+            if (!quiet) notify("Nothing to back up yet")
+            return null
         }
         // Hidden rows the walk finds without the curve their summary names: counted for the report (#408 S5).
         val missingCurves = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
@@ -1472,9 +1473,7 @@ class LibraryController(
         backupWalkStarts()
         val cache = app.cacheDir
         sweepBackupTemp(cache)
-        val photos = snap.state.beans
-            .filter { BeanImageStore.exists(app, it.id) }
-            .map { it.id to BeanImageStore.beanImageFile(app, it.id) }
+        val photos = photosOf(snap)
         return runCatching {
             streamBackupZip(
                 snap, json, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME, deviceLabel(),
@@ -1486,7 +1485,9 @@ class LibraryController(
         }.fold(
             onSuccess = { built ->
                 val gaps = BuiltBackup(jsonl = "", degraded = built.degraded, omitted = built.omitted)
-                built.omitted.forEach { appendLog("Backup left out ${it.kind} ${omittedRowId(it, snap) ?: "at ${it.index}"}") }
+                // A shot by its place in the walk (#310 R1a): the snapshot's rows needn't be the walk's.
+                fun idOf(row: OmittedBackupRow) = if (row.kind == "shot") row.id ?: built.shotIds.getOrNull(row.index) else omittedRowId(row, snap)
+                built.omitted.forEach { appendLog("Backup left out ${it.kind} ${idOf(it) ?: "at ${it.index}"}") }
                 built.degraded.forEach { appendLog("Backup left out the profile of shot $it") }
                 built.photosSkipped.forEach { appendLog("Backup left out the photo of bean $it") }
                 backupGapsNotice(gaps)?.let { notify(it) }
@@ -1497,11 +1498,11 @@ class LibraryController(
                 }
                 // What this backup doesn't hold whole: Free up space keeps these (REVIEW-440 B1).
                 // An omitted shot it can't name makes the whole set unknown.
-                val omittedShots = built.omitted.filter { it.kind == "shot" }.map { omittedRowId(it, snap) }
-                val inBackup = snap.shots.mapTo(HashSet()) { it.id }
+                val omittedShots = built.omitted.filter { it.kind == "shot" }.map(::idOf)
+                val inBackup = built.shotIds.toHashSet()
                 val curveless = snap.missingCurves + historyStore.unreadableSeries.filter { it in inBackup }
                 val whole = if (omittedShots.any { it == null }) null else inBackup - (omittedShots.filterNotNull() + curveless + built.degraded).toSet()
-                BackupZip(built.file, built.counts, built.contentHash, release = { releaseBackupFile(built.file) }, whole = whole)
+                BackupZip(built.file, built.counts, built.contentHash, release = { releaseBackupFile(built.file) }, whole = whole, mark = built.mark)
             },
             onFailure = {
                 when (it) {
@@ -1512,6 +1513,26 @@ class LibraryController(
                 null
             },
         )
+    }
+
+    /** The bean photos a backup of [snap] holds: bean id → file. */
+    private fun photosOf(snap: BackupSnapshot): List<Pair<String, File>> =
+        snap.state.beans
+            .filter { BeanImageStore.exists(app, it.id) }
+            .map { it.id to BeanImageStore.beanImageFile(app, it.id) }
+
+    /**
+     * Auto-backup's quick "changed?" mark of a backup made now (#310 R1a):
+     * the history's write mark and a hash of the rest ([backupMark]), with
+     * no walk. Null when the history keeps no write counter (P3a's store),
+     * when there's nothing to back up, or before the rows are in.
+     */
+    suspend fun backupMark(): String? {
+        if (!rowsReady) return null
+        val snap = backupSnapshot(quiet = true) ?: return null
+        return withContext(Dispatchers.Default) {
+            snap.history.writeMark()?.let { backupMark(it, backupEnvelope(snap, json, withShots = false), photosOf(snap)) }
+        }
     }
 
     /** A suggested filename for the SAF create-document picker. */
@@ -1555,6 +1576,45 @@ class LibraryController(
     /** Sharing a restored Visualizer line wanted and didn't get: for the report. */
     @Volatile var restoreHeldSharing: List<String> = emptyList()
         private set
+
+    /** Step 7 on P3a's `shots.db` (#310 R1a): the store, and the view over it. */
+    private val shotsDbRestore = object : coffee.crema.history.ShotsRestore {
+        override suspend fun rows(): List<ShotRow> = allShots()
+
+        override fun hasCurve(row: ShotRow): Boolean = this@LibraryController.hasCurve(row)
+
+        override fun rowFor(shot: coffee.crema.history.StoredShot): ShotRow = historyStore.rowFor(shot)
+
+        override suspend fun writeSeries(shots: List<coffee.crema.history.StoredShot>): Int = historyStore.writeSeriesOf(shots)
+
+        override suspend fun settle(next: (List<ShotRow>) -> coffee.crema.restore.NextShots): coffee.crema.restore.NextShots {
+            var out: coffee.crema.restore.NextShots? = null
+            editRows(
+                { rows ->
+                    val hidden = historyStore.hiddenRows(rows.history.mapTo(HashSet()) { it.id })
+                    val second = next(rows.history + hidden).also { out = it }
+                    rows.copy(history = rows.history.with(viewOf(second.next)))
+                },
+                { it },
+            )
+            val settled = checkNotNull(out)
+            // Every restored row is what sync reads from now, not batch by batch as
+            // the merges land: uploads aren't paused by a restore, and a Replace's
+            // bound row must never read as unbound (REVIEW-467 N3).
+            historyStore.accept(settled.next)
+            beforeRestoreRows?.invoke()
+            return settled
+        }
+
+        override fun stage(shot: coffee.crema.history.StoredShot) {
+            historyStore.stage(shot)
+        }
+
+        override suspend fun merge(rows: List<ShotRow>): Boolean = persistHistoryAll(rows)
+
+        // The plan named them, less the rows still listed: the backup's ids are already out.
+        override suspend fun remove(named: List<String>, backupIds: Set<String>) = historyStore.delete(named)
+    }
 
     /** The stores a restore writes, through the library's state. */
     fun restoreSink(deps: RestoreDeps): coffee.crema.restore.RestoreSink = object : coffee.crema.restore.RestoreSink {
@@ -1693,47 +1753,21 @@ class LibraryController(
         }
 
         /**
-         * Step 7 on `shots.db` (SPEC §7, P3): merge, then remove. Every row the
-         * plan leaves is written straight to the store, past the view's cap,
-         * incoming rows over local ones with the same id; then one explicit
-         * delete of the rows not in the backup. A kill between leaves the union:
-         * re-running the restore finishes it. Dismissing the marker instead keeps
-         * the union for good (its `runDeletes` skips ids still listed), which
-         * loses nothing. The view takes the newest rows.
+         * Step 7 on `shots.db` (SPEC §7, P3): merge, then remove, through the
+         * history seam ([coffee.crema.restore.restoreShots], #310 R1a). Every
+         * row the plan leaves is written straight to the store, past the
+         * view's cap, incoming rows over local ones with the same id; then one
+         * explicit delete of the rows not in the backup. A kill between leaves
+         * the union: re-running the restore finishes it. Dismissing the marker
+         * instead keeps the union for good (its `runDeletes` skips ids still
+         * listed), which loses nothing. The view takes the newest rows.
          */
-        private suspend fun applyShotsToStore(plan: coffee.crema.core.RestorePlan, records: coffee.crema.restore.RestoreRecords, replace: Boolean): Int? {
-            val first = coffee.crema.restore.nextShots(allShots(), records.parsed.shots, plan.shots, replace, ::hasCurve, historyStore::rowFor)
-            var failed = historyStore.writeSeriesOf(first.series)
-            afterRestoreSeries?.invoke()
-            var second = first
-            editRows(
-                { rows ->
-                    val hidden = historyStore.hiddenRows(rows.history.mapTo(HashSet()) { it.id })
-                    second = coffee.crema.restore.nextShots(rows.history + hidden, records.parsed.shots, plan.shots, replace, ::hasCurve, historyStore::rowFor)
-                    rows.copy(history = rows.history.with(viewOf(second.next)))
-                },
-                { it },
+        private suspend fun applyShotsToStore(plan: coffee.crema.core.RestorePlan, records: coffee.crema.restore.RestoreRecords, replace: Boolean): Int? =
+            coffee.crema.restore.restoreShots(
+                shotsDbRestore, plan, records, replace,
+                afterSeries = { afterRestoreSeries?.invoke() },
+                beforeRemove = { beforeRestoreRemove?.invoke() },
             )
-            // Every restored row is what sync reads from now, not batch by batch as
-            // the saves land: uploads aren't paused by a restore, and a Replace's
-            // bound row must never read as unbound (REVIEW-467 N3).
-            historyStore.accept(second.next)
-            beforeRestoreRows?.invoke()
-            // Their heavy parts wait for the save (#310 P4a), staged only now: staged
-            // before, they'd read as curves here and the recompute wouldn't fill them.
-            second.series.forEach(historyStore::stage)
-            // Merge: every row, in batches, none deleted.
-            for (batch in second.next.chunked(RESTORE_BATCH)) {
-                if (!persistHistoryAll(batch)) return null
-            }
-            val written = first.series.mapTo(HashSet()) { it.id }
-            failed += historyStore.writeSeriesOf(second.series.filterNot { it.id in written })
-            beforeRestoreRemove?.invoke()
-            // Then remove: the rows the plan names, and only those, if still not listed.
-            val listed = second.next.mapTo(HashSet()) { it.id }
-            historyStore.delete(plan.shots.remove.filterNot { it in listed })
-            return failed
-        }
 
         override suspend fun applySingletons(plan: coffee.crema.core.RestorePlan, records: coffee.crema.restore.RestoreRecords): Boolean {
             val p = records.parsed
@@ -3296,8 +3330,6 @@ class LibraryController(
 }
 
 /** Rows a restore writes to the store per batch. */
-private const val RESTORE_BATCH = 250
-
 /** The message after a profile import: "Imported 2 profiles; 3 already in your
  *  library", with the first error when some didn't import (web words it the
  *  same, F12b). */

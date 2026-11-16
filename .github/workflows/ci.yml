@@ -338,7 +338,8 @@ jobs:
             --bench history -- --ignored --nocapture --test-threads=1
 
   # ─────────────────────────────────────────────────────────────────────
-  # Web shell gates: install, build wasm bundle, svelte-check, build.
+  # Web shell gates: install, build wasm bundle, svelte-check, build, and
+  # the built service worker in Playwright.
   # Depends on the Rust core indirectly (`pnpm wasm` rebuilds de1-wasm).
   # ─────────────────────────────────────────────────────────────────────
   web:
@@ -400,7 +401,14 @@ jobs:
         working-directory: web
         run: pnpm check
 
-      # Unit tests (vitest). They import the wasm bundle built above.
+      # The history store's Node test bundle (#310 R1w): `memory-truth`, so
+      # the backup seam's SQLite tests keep a `history.db` in memory. Into
+      # web/.wasm-test/history/, outside src/; the app never loads it.
+      - name: Build the history wasm test bundle
+        working-directory: web
+        run: pnpm wasm:history:test
+
+      # Unit tests (vitest). They import the wasm bundles built above.
       - name: Unit tests (vitest)
         working-directory: web
         run: pnpm test
@@ -408,6 +416,18 @@ jobs:
       - name: Build (adapter-static)
         working-directory: web
         run: pnpm build
+
+      # The service worker of the build above (#172), in Chromium and WebKit:
+      # the shell starts offline, every wasm file is precached, Google Fonts
+      # are runtime-cached, and a new deploy is offered, never auto-applied.
+      # web/tests/browser/pwa.spec.ts.
+      - name: Install Playwright's Chromium and WebKit
+        working-directory: web
+        run: pnpm exec playwright install --with-deps chromium webkit
+
+      - name: Service worker (Playwright)
+        working-directory: web
+        run: pnpm test:pwa
 
       # AC-23: the relay wasm bridge reproduces core/de1-relay's seeded vectors
       # byte for byte. Its deterministic constructors exist only in this separate

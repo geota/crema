@@ -14,6 +14,12 @@
  *   outbox is resent, in order, whenever an owner appears, a write comes back
  *   `gap`, or an answer is late. The owner's `apply` skips what it already
  *   applied, so the last action wins and nothing applies twice.
+ * - **No seq is abandoned** (REVIEW-456 F1): a write the owner answered with
+ *   an error (its health, a full disk, another stage or file) didn't consume
+ *   its seq, so it stays and is resent. After 30 s at the front of the outbox
+ *   it is given up: the caller hears, and the seq goes as a no-op (an upsert
+ *   of nothing), so the tab's later writes never wait on it. A missing seq the
+ *   outbox no longer holds (a pruned tab) goes as a no-op too.
  * - **Can't answer** (S2): no answer for 5 s is `index_fallback` on stage 1
  *   and `unavailable` (read-only) on stage 2, where new shots go to the
  *   pending journal and edits are refused. Reads keep being resent and reject
@@ -23,15 +29,27 @@
  *   again; hidden and idle for 30 s also releases, so a tab the browser freezes
  *   in the background doesn't keep the database (owner question 4, W0);
  *   visible again acquires. A Worker that errors, or misses its pings for
- *   10 s, is terminated and a new one started; it queues for the lock.
- * - **Pending journal** (M5): the owner tab drains it (`pending.ts`) when its
- *   Worker gets the lock, when a client says hello, and on a `storage` event.
+ *   10 s, is terminated and a new one started, after a wait that doubles
+ *   from 1 s to 60 s (N1); it queues for the lock.
+ * - **Pending journal** (M5): a capture journals its row with its write's
+ *   seq, before the write goes (F2). The owner tab drains the journal
+ *   (`pending.ts`) when its Worker gets the lock, when a client says hello, and
+ *   on a `storage` event.
+ * - **The flip** (N4): a stage-1 tab that hears it calls `onFlipped`, and the
+ *   shell reloads when it may.
  * - **Factory reset** (S10): {@link HistoryDbClient.stop} closes, pauses and
  *   releases before any removal, and never takes the lock again.
  */
 import type { ChannelLike } from './ports.js';
 import type { LockManagerLike } from './ports.js';
-import { appendPending, drainPending, pendingKey, removeIfUnchanged, type JournalStorage } from './pending.js';
+import {
+	appendPending,
+	drainPending,
+	entryText,
+	removeIfUnchanged,
+	replaceIfUnchanged,
+	type JournalStorage
+} from './pending.js';
 import { CHANGES_CHANNEL, PENDING_KEY_PREFIX, RPC_CHANNEL, STAGE_LOCK, TAB_LOCK_PREFIX } from './names.js';
 import type { PageToWorker, WorkerToPage } from './owner.js';
 import {
@@ -45,6 +63,7 @@ import {
 	type Drained,
 	type Expect,
 	type OwnerInfo,
+	type OnceName,
 	type ReadName,
 	type Reply,
 	type Request,
@@ -65,6 +84,11 @@ export const WORKER_DEAD_MS = 10_000;
 export const IDLE_RELEASE_MS = 30_000;
 /** How long `stop` waits for the Worker to close and let go. */
 export const STOP_WAIT_MS = 5_000;
+/** A Worker restart waits this long, doubling to {@link RESTART_MAX_MS} while restarts keep coming (N1). */
+export const RESTART_FIRST_MS = 1_000;
+export const RESTART_MAX_MS = 60_000;
+/** A Worker that has run this long has its restart wait reset. */
+const RESTART_RESET_AFTER_MS = 30_000;
 const TICK_MS = 1_000;
 
 /** SPEC §12, as this tab sees it. */
@@ -122,6 +146,11 @@ export interface ClientOptions {
 	events?: PageEvents;
 	tab?: string;
 	now?(): number;
+	/**
+	 * A stage-1 tab heard the flip (SPEC §11): `history.db` is the truth now,
+	 * so it must stop writing the P3 store and reload (N4).
+	 */
+	onFlipped?(): void;
 	/** The page's timers (the tests freeze them with the tab). */
 	timers?: Timers;
 }
@@ -144,9 +173,27 @@ interface Pending {
 	req: Request;
 	firstAt: number;
 	sentAt: number;
+	/** The owner answered this copy, with an error the write survives (F1). */
+	answered?: boolean;
+	lastError?: { code: string; message: string };
+	/** A seq given up (F1): a no-op that consumes it, so later writes don't wait. */
+	skip?: boolean;
+	/** When this write became the front of the outbox: its 30 s count from there (B1). */
+	frontAt?: number;
+	/** The owner answered `gap`: sent again as soon as the write before it lands (B2). */
+	gapped?: boolean;
+	/** A no-op's given-up write, settled from the no-op's answer. */
+	origin?: Pending;
+	/** A once-only call: the owner tab it went to (#310 R1w). */
+	to?: string;
+	/** A capture's journal entry, and the text it was written with (F2). */
+	capture?: { key: string; text: string; rowJson: string };
 	resolve(value: unknown): void;
 	reject(error: unknown): void;
 }
+
+/** What a given-up seq is written as: an upsert of nothing, which `apply` consumes. */
+const SKIP: Write = { kind: 'upsert', rows: [] };
 
 const noop = () => {};
 
@@ -171,11 +218,20 @@ export class HistoryDbClient {
 	#pingN = 0;
 	#lastPong = 0;
 	#since = 0;
+	/** The last time an owner this client accepts answered anything. */
+	#lastHeard = 0;
+	#gapResendAt = -Infinity;
 	#wantOwner = true;
 	#stopped = false;
 	#releaseTabLocks: (() => void)[] = [];
 	#tabLockHeld = false;
 	#draining: Promise<unknown> | null = null;
+	#restartWait = RESTART_FIRST_MS;
+	#restartTimer: unknown = null;
+	#workerStartedAt = 0;
+	#flipped = false;
+	readonly #diagnostics: string[] = [];
+	readonly #unreadable = new Set<string>();
 	#drainAgain = false;
 	readonly #statusListeners = new Set<(s: ClientStatus) => void>();
 	readonly #changeListeners = new Set<(c: ChangeSet) => void>();
@@ -190,6 +246,17 @@ export class HistoryDbClient {
 
 	get status(): ClientStatus {
 		return this.#status;
+	}
+
+	/** The last few things worth a line in Settings' diagnostics (N5). */
+	get diagnostics(): readonly string[] {
+		return this.#diagnostics;
+	}
+
+	#diag(line: string): void {
+		this.#diagnostics.push(line);
+		if (this.#diagnostics.length > 50) this.#diagnostics.shift();
+		console.warn(`history-db: ${line}`);
 	}
 
 	onStatus(f: (s: ClientStatus) => void): () => void {
@@ -227,6 +294,37 @@ export class HistoryDbClient {
 	}
 
 	/**
+	 * A once-only call (#310 R1w): the export walk's and a hold's release,
+	 * whose state lives on the owner's connection. Sent once to the owner
+	 * this tab knows, and never resent; refused (`ownerChanged`) if that owner
+	 * goes, lets go or its Worker restarts before it answers, and
+	 * (`unavailable`) after 30 s without an answer. Stage 2 only.
+	 */
+	once<T = unknown>(name: OnceName, arg?: unknown): Promise<T> {
+		if (this.#stopped) return Promise.reject(new HistoryDbError('stopped', 'the history store is stopped'));
+		if (this.#o.stage !== 2) return Promise.reject(new HistoryDbError('stage1', 'the export walk is stage 2’s'));
+		const owner = this.#status.owner;
+		if (!owner || this.#status.health !== 'ok') {
+			return Promise.reject(new HistoryDbError('unavailable', this.#status.message ?? 'the history store did not answer'));
+		}
+		const req = this.#header({ op: 'once', name, arg });
+		return new Promise<T>((resolve, reject) => {
+			const p: Pending = { req, firstAt: this.#now(), sentAt: 0, to: owner.tab, resolve: resolve as (v: unknown) => void, reject };
+			this.#pending.set(req.id, p);
+			this.#transmit(p);
+		});
+	}
+
+	/** Refuse every once-only call that went to an owner `gone` says is gone. */
+	#dropOnce(gone: (to: string | undefined) => boolean): void {
+		for (const p of [...this.#pending.values()]) {
+			if (p.req.op !== 'once' || !gone(p.to)) continue;
+			this.#settle(p);
+			p.reject(new HistoryDbError('ownerChanged', 'the owner changed while the call was in flight'));
+		}
+	}
+
+	/**
 	 * A write, applied through the owner's `apply` in this tab's order (M11).
 	 * Stage 2 only (stage 1's index follows the P3 store, and no tab writes it),
 	 * and refused while the database is unavailable to this tab (read-only).
@@ -240,19 +338,34 @@ export class HistoryDbClient {
 		if (s.health !== 'ok' && s.health !== 'loading') {
 			return Promise.reject(new HistoryDbError('readOnly', s.message ?? OTHER_WINDOW_MESSAGE));
 		}
-		const req = this.#header({ op: 'write', wseq: ++this.#wseq, atMs: this.#now(), write });
+		return this.#queueWrite(this.#writeRequest(write));
+	}
+
+	#writeRequest(write: Write, wseq = ++this.#wseq): Request & { op: 'write' } {
+		return this.#header({ op: 'write', wseq, atMs: this.#now(), write }) as Request & { op: 'write' };
+	}
+
+	#queueWrite(req: Request, extra: Partial<Pending> = {}): Promise<Applied> {
 		return new Promise<Applied>((resolve, reject) => {
 			const p: Pending = {
 				req,
 				firstAt: this.#now(),
 				sentAt: 0,
 				resolve: resolve as (v: unknown) => void,
-				reject
+				reject,
+				...extra
 			};
 			this.#pending.set(req.id, p);
 			this.#outbox.push(p);
+			this.#markFront();
 			this.#transmit(p);
 		});
+	}
+
+	/** The outbox's front write starts its 30 s now, if it hasn't (B1). */
+	#markFront(): void {
+		const f = this.#outbox.find((q) => !q.skip);
+		if (f && f.frontAt === undefined) f.frontAt = this.#now();
 	}
 
 	/**
@@ -264,15 +377,35 @@ export class HistoryDbClient {
 	async capture(rowJson: string): Promise<'written' | 'journaled'> {
 		const storage = this.#o.storage;
 		if (!storage || this.#o.stage !== 2) throw new HistoryDbError('stage1', 'captures journal on stage 2 only');
-		const id = appendPending(storage, rowJson);
-		if (this.#status.health !== 'ok') return 'journaled';
+		if (this.#stopped || this.#status.health !== 'ok') {
+			// No write goes: journaled with no seq, for the owner's insert-if-absent.
+			appendPending(storage, rowJson);
+			return 'journaled';
+		}
+		// The write's seq is given first and journaled with the row (F2), so a
+		// drain can tell this capture landed even if the shot is deleted after.
+		const req = this.#writeRequest({ kind: 'upsert', rows: [{ rowJson }] });
+		let entry: ReturnType<typeof appendPending> | null = null;
 		try {
-			const applied = await this.write({ kind: 'upsert', rows: [{ rowJson }] });
+			entry = appendPending(storage, rowJson, { tab: this.tab, wseq: req.wseq });
+		} catch (e) {
+			// B3: the journal is full, but the owner is ok: the write still goes,
+			// first in SPEC §9's ladder. If it's given up, the caller hears, and
+			// keeps the shot in memory with the banner.
+			this.#diag(`the pending journal refused a capture (${(e as Error).name ?? 'error'}); writing it without one`);
+		}
+		try {
+			const applied = await this.#queueWrite(
+				req,
+				entry ? { capture: { key: entry.key, text: entry.text, rowJson } } : {}
+			);
 			if (applied.outcome === 'done' || applied.outcome === 'alreadyApplied') {
-				removeIfUnchanged(storage, pendingKey(id), rowJson);
+				if (entry) removeIfUnchanged(storage, entry.key, entry.text);
 				return 'written';
 			}
-		} catch {
+		} catch (e) {
+			// With no journal entry, nothing durable holds the shot: say so.
+			if (!entry) throw e;
 			// Kept in the journal: the owner drains it.
 		}
 		return 'journaled';
@@ -293,8 +426,14 @@ export class HistoryDbClient {
 			w.terminate();
 		}
 		this.#worker = null;
+		if (this.#restartTimer) this.#timers.clearTimeout(this.#restartTimer);
+		this.#restartTimer = null;
 		this.#teardown();
-		for (const p of this.#pending.values()) p.reject(new HistoryDbError('stopped', 'the history store stopped'));
+		for (const p of this.#pending.values()) {
+			const e = new HistoryDbError('stopped', 'the history store stopped');
+			p.reject(e);
+			p.origin?.reject(e);
+		}
 		this.#pending.clear();
 		this.#outbox = [];
 	}
@@ -326,13 +465,16 @@ export class HistoryDbClient {
 
 	#transmit(p: Pending): void {
 		p.sentAt = this.#now();
+		p.answered = false;
+		p.gapped = false;
 		if (this.#status.ownerHere && this.#worker) this.#worker.postMessage(p.req);
 		else this.#rpc?.postMessage(p.req);
 	}
 
 	/** Resend every read, then the whole outbox in seq order (M11). */
 	#resendAll(): void {
-		for (const p of this.#pending.values()) if (p.req.op !== 'write') this.#transmit(p);
+		// A once-only call is never resent (#310 R1w).
+		for (const p of this.#pending.values()) if (p.req.op !== 'write' && p.req.op !== 'once') this.#transmit(p);
 		for (const p of this.#outbox) this.#transmit(p);
 	}
 
@@ -346,12 +488,28 @@ export class HistoryDbClient {
 			return;
 		}
 		if (!r.ok && r.error.code === 'notOwner') {
-			// That Worker let go: the request goes to whoever owns now.
+			// That Worker let go: the request goes to whoever owns now. A
+			// once-only call doesn't: what it named went with the owner.
 			if (r.owner.tab === this.tab) this.#setStatus({ ownerHere: false });
+			if (p.req.op === 'once') this.#dropOnce((to) => to === p.to);
 			return;
 		}
 		this.#answered(r.owner);
 		if (!r.ok) {
+			if (p.req.op === 'write') {
+				// F1: the owner threw before or inside `apply` (its health, a full
+				// disk, another stage or file), so the seq wasn't consumed. Never
+				// drop it: it stays, in order, is resent, and after 30 s is given up
+				// as a no-op that consumes the seq (`#giveUp`).
+				p.answered = true;
+				p.lastError = r.error;
+				// A given-up write's no-op failed too: the write hasn't landed.
+				if (p.origin) {
+					p.origin.lastError ??= r.error;
+					this.#settleOrigin(p, null);
+				}
+				return;
+			}
 			this.#settle(p);
 			p.reject(new HistoryDbError(r.error.code, r.error.message));
 			return;
@@ -365,6 +523,26 @@ export class HistoryDbClient {
 		const wseq = p.req.wseq;
 		if (a.outcome === 'gap') {
 			// A write before it never arrived: send the outbox again, in order.
+			// A missing seq the outbox no longer holds (the owner pruned this
+			// tab's entry, C2a note 7) never will: it's sent as a no-op first.
+			const held = new Set(this.#outbox.map((q) => (q.req.op === 'write' ? q.req.wseq : 0)));
+			const first = Math.min(...held);
+			const skips: Pending[] = [];
+			for (let s = a.last + 1; s < first; s++) {
+				if (!held.has(s)) skips.push(this.#skipFor(s));
+			}
+			this.#outbox.unshift(...skips);
+			for (const q of skips) this.#transmit(q);
+			// B2: never the whole outbox on every gap. This write goes again as soon
+			// as the one before it lands. That one is resent only if it's neither
+			// on its way nor answered with an error (the tick resends those), and
+			// the whole outbox at most once per ANSWER_MS.
+			p.gapped = true;
+			const now = this.#now();
+			const before = this.#outbox.find((q) => q.req.op === 'write' && q.req.wseq === a.last + 1);
+			if (skips.length || (before && (before.answered || now - before.sentAt < ANSWER_MS))) return;
+			if (now - this.#gapResendAt < ANSWER_MS) return;
+			this.#gapResendAt = now;
 			for (const q of this.#outbox) this.#transmit(q);
 			return;
 		}
@@ -373,19 +551,82 @@ export class HistoryDbClient {
 		for (const q of [...this.#outbox]) {
 			if (q.req.op !== 'write' || q.req.wseq > upTo) continue;
 			this.#settle(q);
-			if (q === p) {
-				if (a.outcome === 'refused') q.reject(new HistoryDbError('refused', a.reason));
-				else q.resolve(a);
-			} else {
-				q.resolve({ outcome: 'alreadyApplied', last: upTo } satisfies Applied);
-			}
+			const outcome: Applied = q === p ? a : { outcome: 'alreadyApplied', last: upTo };
+			if (q.origin) this.#settleOrigin(q, q === p ? a : null);
+			if (outcome.outcome === 'refused') q.reject(new HistoryDbError('refused', outcome.reason));
+			else q.resolve(outcome);
 		}
+		this.#markFront();
+		// B2: the writes the owner answered `gap` go now, in order.
+		for (const q of this.#outbox) {
+			if (!q.gapped) continue;
+			q.gapped = false;
+			this.#transmit(q);
+		}
+	}
+
+	/**
+	 * A given-up write's caller hears from its no-op: `done` means the write
+	 * never landed (the no-op took its seq), `alreadyApplied` that it did. A
+	 * no-op settled by a later write's answer can't tell, so that's a failure.
+	 */
+	#settleOrigin(skip: Pending, own: Applied | null): void {
+		const o = skip.origin!;
+		skip.origin = undefined;
+		if (own?.outcome === 'alreadyApplied') o.resolve(own);
+		else o.reject(o.lastError ? new HistoryDbError(o.lastError.code, o.lastError.message) : new HistoryDbError('unavailable', 'the history store did not take the write'));
+	}
+
+	/** A no-op write that consumes `wseq` (F1). */
+	#skipFor(wseq: number): Pending {
+		const p: Pending = {
+			req: this.#writeRequest(SKIP, wseq),
+			firstAt: this.#now(),
+			sentAt: 0,
+			skip: true,
+			resolve: noop,
+			reject: noop
+		};
+		this.#pending.set(p.req.id, p);
+		return p;
+	}
+
+	/**
+	 * F1: a write the owner hasn't taken in 30 s is given up. A capture's
+	 * journal entry first loses its seq (so the drain inserts it if absent,
+	 * rather than read the no-op as the capture having landed); then the seq
+	 * goes as a no-op in the write's place, so the tab's later writes don't
+	 * wait on it; then the caller hears.
+	 */
+	#giveUp(p: Pending): void {
+		const storage = this.#o.storage;
+		if (p.capture && storage) {
+			replaceIfUnchanged(storage, p.capture.key, p.capture.text, entryText({ row: p.capture.rowJson }));
+		}
+		const skip = this.#skipFor((p.req as Request & { op: 'write' }).wseq);
+		const i = this.#outbox.indexOf(p);
+		if (i >= 0) this.#outbox.splice(i, 1, skip);
+		this.#pending.delete(p.req.id);
+		// An owner answering now settles the caller from the no-op's answer: a
+		// write merely queued at a busy owner may have landed. With no owner
+		// heard for 5 s, the caller hears at once.
+		if (this.#now() - this.#lastHeard < ANSWER_MS) skip.origin = p;
+		else {
+			p.reject(
+				new HistoryDbError(p.lastError?.code ?? 'unavailable', p.lastError?.message ?? 'the history store did not take the write')
+			);
+		}
+		this.#transmit(skip);
+		this.#markFront();
 	}
 
 	#settle(p: Pending): void {
 		this.#pending.delete(p.req.id);
 		const i = this.#outbox.indexOf(p);
-		if (i >= 0) this.#outbox.splice(i, 1);
+		if (i >= 0) {
+			this.#outbox.splice(i, 1);
+			this.#markFront();
+		}
 	}
 
 	// ── The owner ──────────────────────────────────────────────────────────
@@ -400,10 +641,20 @@ export class HistoryDbClient {
 					this.#cannotUse('otherBuild', m.owner);
 					return;
 				}
+				// Another owner: the one a once-only call went to has gone.
+				this.#dropOnce((to) => to !== m.owner.tab);
 				this.#answered(m.owner, m.owner.tab === this.tab);
 				this.#resendAll();
 				return;
+			case 'flipped':
+				// N4: only a stage-1 tab acts; a stage-2 tab already reads history.db.
+				if (this.#o.stage === 1 && !this.#flipped) {
+					this.#flipped = true;
+					this.#o.onFlipped?.();
+				}
+				return;
 			case 'gone':
+				this.#dropOnce((to) => to === m.owner.tab);
 				if (this.#status.owner?.tab === m.owner.tab) {
 					this.#setStatus({ owner: null, ownerHere: false });
 					this.#since = this.#now();
@@ -422,6 +673,7 @@ export class HistoryDbClient {
 	/** An owner this client accepts answered: its health is ours. */
 	#answered(owner: OwnerInfo, here?: boolean): void {
 		this.#since = this.#now();
+		this.#lastHeard = this.#since;
 		const health: ClientHealth = owner.health === 'ok' ? 'ok' : owner.health;
 		this.#setStatus({
 			health,
@@ -476,13 +728,32 @@ export class HistoryDbClient {
 		if (now - this.#lastTick > 3 * TICK_MS) this.#lastPong = now;
 		this.#lastTick = now;
 		let late = false;
+		const heard = now - this.#lastHeard < ANSWER_MS;
+		const front = this.#outbox.find((q) => !q.skip);
 		for (const p of [...this.#pending.values()]) {
-			if (p.req.op !== 'write' && now - p.firstAt >= GATED_MS) {
+			if (p.req.op === 'write') {
+				// F1, B1: a write gives up after 30 s at the front of the outbox, one
+				// at a time: a write behind it waits on it, not on the owner, and a
+				// healthy owner's long queue doesn't count against it.
+				if (p === front && p.frontAt !== undefined && now - p.frontAt >= GATED_MS) {
+					this.#giveUp(p);
+					continue;
+				}
+				// A no-op whose own answer hasn't come settles its caller as failed.
+				if (p.origin && now - p.firstAt >= 2 * ANSWER_MS) this.#settleOrigin(p, null);
+			} else if (now - p.firstAt >= GATED_MS) {
 				this.#settle(p);
 				p.reject(new HistoryDbError('unavailable', this.#status.message ?? 'the history store did not answer'));
 				continue;
 			}
-			if (now - p.sentAt >= ANSWER_MS) late = true;
+			if (now - p.sentAt < ANSWER_MS) continue;
+			// A once-only call waits for its answer, or its 30 s, never a resend.
+			if (p.req.op === 'once') continue;
+			// Answered with an error or `gap`, or late at an owner that answers
+			// other calls (busy): this one again, alone. Late with no owner heard
+			// from for 5 s: the owner can't answer.
+			if (p.answered || p.gapped || heard) this.#transmit(p);
+			else late = true;
 		}
 		if (late || (!this.#status.owner && now - this.#since >= ANSWER_MS)) {
 			// An owner of another build answers, but not as one we may use: that stays the reason.
@@ -500,6 +771,7 @@ export class HistoryDbClient {
 		const w = this.#o.makeWorker();
 		this.#worker = w;
 		this.#lastPong = this.#now();
+		this.#workerStartedAt = this.#now();
 		w.onmessage = (e) => {
 			if (this.#worker === w) this.#onWorker(e.data as WorkerToPage);
 		};
@@ -511,14 +783,30 @@ export class HistoryDbClient {
 		if (this.#wantOwner) w.postMessage({ t: 'acquire' } satisfies PageToWorker);
 	}
 
-	/** S1: a Worker that errors or stops answering is terminated; a new one queues for the lock. */
+	/**
+	 * S1: a Worker that errors or stops answering is terminated; a new one
+	 * queues for the lock, after a wait that doubles from 1 s to 60 s while
+	 * restarts keep coming, so a Worker that can't load isn't restarted in a
+	 * tight loop (N1). Meanwhile this tab is a client of whoever owns.
+	 */
 	#restartWorker(): void {
 		if (this.#stopped) return;
+		const wasOwner = this.#status.ownerHere;
 		this.#worker?.terminate();
 		this.#worker = null;
+		// The connection a once-only call named went with the Worker.
+		if (wasOwner) this.#dropOnce((to) => to === this.tab);
 		this.#setStatus({ ownerHere: false });
-		this.#startWorker();
 		this.#resendAll();
+		if (this.#restartTimer) return;
+		const wait = this.#restartWait;
+		this.#restartWait = Math.min(wait * 2, RESTART_MAX_MS);
+		this.#restartTimer = this.#timers.setTimeout(() => {
+			this.#restartTimer = null;
+			if (this.#stopped) return;
+			this.#startWorker();
+			this.#resendAll();
+		}, wait);
 	}
 
 	#watchWorker(now: number): void {
@@ -535,6 +823,7 @@ export class HistoryDbClient {
 		switch (m.t) {
 			case 'pong':
 				this.#lastPong = this.#now();
+				if (this.#lastPong - this.#workerStartedAt >= RESTART_RESET_AFTER_MS) this.#restartWait = RESTART_FIRST_MS;
 				return;
 			case 'state':
 				if (m.owner && m.info) {
@@ -542,6 +831,7 @@ export class HistoryDbClient {
 					this.#resendAll();
 					if (this.#o.stage === 2) void this.#drain();
 				} else if (this.#status.ownerHere) {
+					this.#dropOnce((to) => to === this.tab);
 					this.#setStatus({ ownerHere: false, owner: null });
 					this.#since = this.#now();
 					this.#hello();
@@ -657,7 +947,9 @@ export class HistoryDbClient {
 			this.#idle = null;
 			if (this.#o.events?.visibility() !== 'hidden') return;
 			// Idle: nothing of ours in flight. Otherwise look again later.
-			if (this.#pending.size > 0 || this.#draining) this.#armIdle();
+			// A no-op seq still on its way isn't the user's work (F1, N6).
+			const busy = [...this.#pending.values()].some((p) => !p.skip);
+			if (busy || this.#draining) this.#armIdle();
 			else this.release();
 		}, IDLE_RELEASE_MS);
 	}
@@ -681,7 +973,16 @@ export class HistoryDbClient {
 			do {
 				this.#drainAgain = false;
 				if (!this.#status.ownerHere || this.#stopped) return;
-				await drainPending(storage, (rows) => this.#send(this.#header({ op: 'drain', rows })) as Promise<Drained>);
+				const done = await drainPending(
+					storage,
+					(entries) => this.#send(this.#header({ op: 'drain', entries })) as Promise<Drained>,
+					(key) => {
+						if (this.#unreadable.has(key)) return;
+						this.#unreadable.add(key);
+						this.#diag(`pending journal entry ${key} isn't a shot row; left in place`);
+					}
+				);
+				for (const id of done.refused) this.#diag(`pending journal entry for ${id} was refused by the store; left in place`);
 			} while (this.#drainAgain);
 		};
 		this.#draining = run()

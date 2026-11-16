@@ -162,8 +162,46 @@ test('a frozen owner: the other tab goes read-only and journals a shot; thawed, 
 		await other.eval(`window.h1.until({ health: 'ok' }, 20000)`);
 		await owner.eval(`new Promise((r) => setTimeout(r, 1500))`);
 		expect(await owner.eval(`window.h1.read('get', ['shot:frozen']).then((r) => r.value.length)`)).toBe(1);
-		expect(await other.eval('window.h1.pending()')).toEqual([]);
+		// localStorage reaches another tab's renderer a moment later.
+		await expect.poll(() => other.eval('window.h1.pending()'), { timeout: 5_000 }).toEqual([]);
 	} finally {
 		await browser.close();
 	}
+});
+
+/**
+ * W1b's premises on the real core (REVIEW-456 F1, F2): an upsert of nothing
+ * consumes its seq, and a write whose seq landed is `alreadyApplied` when it
+ * comes again, whether its row was deleted since or is held by an export,
+ * which `get` hides. The drain and the give-up rest on these.
+ */
+test('the real apply: a no-op consumes its seq; a landed seq never writes again, deleted or held', async ({ tab, gen }) => {
+	const t = await tab();
+	const g = gen();
+	await newTruth(t, g, { k: 1 });
+	const apply = (tabId: string, seq: number, rows: string[]) =>
+		t.call<{ outcome: string }>('call', {
+			h: 'db',
+			m: 'apply',
+			a: { tab: tabId, seq, atMs: 0, write: { kind: 'upsert', rows: rows.map((rowJson) => ({ rowJson })) } }
+		});
+	const get = (id: string) => t.call<unknown[]>('call', { h: 'db', m: 'get', a: [id] });
+	// F1: the skip.
+	expect(await apply('tab-a', 1, [])).toMatchObject({ outcome: 'done' });
+	expect(await t.call('call', { h: 'db', m: 'appliedSeq', a: 'tab-a' })).toBe(1);
+	expect(await apply('tab-a', 3, [row('x', 1)])).toMatchObject({ outcome: 'gap' });
+	// F2: deleted since.
+	expect(await apply('tab-a', 2, [row('shot-d', 0)])).toMatchObject({ outcome: 'done' });
+	await t.call('call', { h: 'db', m: 'delete', a: ['shot-d'] });
+	expect(await apply('tab-a', 2, [row('shot-d', 0)])).toMatchObject({ outcome: 'alreadyApplied' });
+	expect(await get('shot-d')).toEqual([]);
+	// F2: held by an export walk, hidden from get.
+	expect(await apply('tab-b', 1, [row('shot-h', 0)])).toMatchObject({ outcome: 'done' });
+	const walk = await t.call<{ token: string }>('call', { h: 'db', m: 'exportBegin' });
+	await t.call('call', { h: 'db', m: 'delete', a: ['shot-h'] });
+	expect(await get('shot-h')).toEqual([]);
+	expect(await apply('tab-b', 1, [row('shot-h', 0)])).toMatchObject({ outcome: 'alreadyApplied' });
+	// Still held: the walk's end releases it for the shell's delete.
+	await t.call('call', { h: 'db', m: 'exportEnd', a: walk.token });
+	expect(await t.call('call', { h: 'db', m: 'releaseHolds' })).toEqual(['shot-h']);
 });

@@ -22,11 +22,13 @@ W0_KILLS=20 pnpm test:browser durability --project webkit
 | `connections.spec.ts` | One connection per file (S4); two files in one pool and across two, with the snapshot and flip copies; SQLite ≥ 3.54 and equal to the native pin | Chromium, WebKit |
 | `capacity.spec.ts` | A full `crema-db` adds capacity and the write goes through (S5) | Chromium, WebKit |
 | `w1.spec.ts` | The app's `HistoryDbClient` and Worker (W1): either tab answers, a reload and a closed owner move ownership, in-flight requests retry, the last action wins; a frozen owner leaves the other tab read-only with a journaled shot, which the thawed owner drains; stage 1 never installs `crema-db`; `stop` lets the pool go; no file goes missing | Chromium, WebKit (the frozen owner: Chromium, bare CDP) |
+| `r1w.spec.ts` | The backup seam's SQLite source (R1w, M3): a restore into `history.db` from a tab that doesn't own it, the owner tab killed between batches and a shot captured in a third tab meanwhile, finishes through the next owner; no row of the backup is deleted, the plan's removes and their details are gone, the new shot stays | Chromium, WebKit |
 | `bench.spec.ts` | The wasm under 1 MB gzip; B1's browser bench at 5,000, 20,000 and 100,000 rows, the first-page lines gated | Chromium (project `bench`, alone, after the others) |
 
 ## How it's put together
 
 - `w1/`: a page running the app's own `src/lib/history-db/` client and Worker (W1), driven as `window.h1`.
+- `r1w/`: the same client and Worker under the backup seam's SQLite source (`src/lib/history-source/`, R1w), driven as `window.r1w`. Its page bundles app modules whose types reach the whole app, so `tsc -p tests/browser` leaves it out and `pnpm check` types those modules.
 - `harness/`: a test page and its Worker. The Worker loads the production wasm and
   forwards calls (`window.w0.call(op, args)`), holds Web Locks, and reads or plants
   raw OPFS files. Throwaway, like the smallest stage-2 client and boot in

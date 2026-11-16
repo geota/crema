@@ -2,10 +2,14 @@
 //!
 //! **Export.** [`Store::export_begin`] fixes the walk's set: the `rid`s of
 //! the rows a backup takes (live, not tombstoned), in a `TEMP` table on this
-//! connection, and gives a token and the count for the header.
-//! [`Store::export_next`] returns the next rows of the set in `rid` order with
+//! connection, and gives a token and the count for the header. It fixes the
+//! order too: newest first, ties by id, as the P3 stores list their rows, so
+//! a backup of the same history is the same bytes from either store (R1a).
+//! [`Store::export_next`] returns the next rows of the set in that order with
 //! their current `row_json`, each step its own short read, so writes go on
-//! between steps. A delete during a walk doesn't remove a row of the set: it
+//! between steps; an edit that moves a row's date doesn't move it in the walk.
+//! [`Store::export_rewind`] starts the same set again, for a shell that reads
+//! it twice (Android counts the lines it can write before the header). A delete during a walk doesn't remove a row of the set: it
 //! sets `hold_delete`, which hides it everywhere, so every `rid` of the set
 //! still has a row and the header's count is the lines written. When the walk
 //! ends, or at the next open, [`Store::release_holds`] gives the held ids; the
@@ -26,7 +30,7 @@ use rusqlite::OptionalExtension;
 use super::Store;
 use super::error::{Result, Source, StoreError, error_of};
 use super::read::RowOut;
-use super::write::{RowIn, Written};
+use super::write::{RowIn, Written, delete_in};
 
 /// The export walks open on this connection.
 #[derive(Debug, Default)]
@@ -35,7 +39,7 @@ pub(crate) struct Walks {
     base: u64,
     /// Tokens handed out so far.
     issued: u64,
-    /// Open walks, by token: the last `rid` returned.
+    /// Open walks, by token: the last place returned.
     active: BTreeMap<u64, i64>,
 }
 
@@ -108,12 +112,15 @@ pub struct RidId {
     pub id: String,
 }
 
-/// The walk set, on this connection only (M3).
+/// The walk set, on this connection only (M3): each row's place in the walk,
+/// fixed at its start, and its `rid`, which a delete checks.
 const WALK_SET: &str = "CREATE TEMP TABLE IF NOT EXISTS walk_set (
-  rid INTEGER NOT NULL,
   token INTEGER NOT NULL,
-  PRIMARY KEY (rid, token)
-) WITHOUT ROWID";
+  pos INTEGER NOT NULL,
+  rid INTEGER NOT NULL,
+  PRIMARY KEY (token, pos)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS temp.walk_set_rid ON walk_set(rid)";
 
 impl Store {
     /// Begins an export walk over the live rows (SPEC §9).
@@ -130,8 +137,9 @@ impl Store {
             let tx = self.conn.unchecked_transaction()?;
             tx.execute_batch(WALK_SET)?;
             let n = tx.execute(
-                "INSERT INTO temp.walk_set (rid, token) \
-                 SELECT rid, ?1 FROM shot WHERE deleted_at IS NULL AND hold_delete = 0",
+                "INSERT INTO temp.walk_set (token, pos, rid) \
+                 SELECT ?1, ROW_NUMBER() OVER (ORDER BY completed_at DESC, id DESC), rid \
+                 FROM shot WHERE deleted_at IS NULL AND hold_delete = 0",
                 [token_i],
             )?;
             tx.commit()?;
@@ -145,9 +153,9 @@ impl Store {
         })
     }
 
-    /// The walk's next `n` rows, in `rid` order, with their current
-    /// `row_json`: an edit since the walk began is in the line, and a row
-    /// tombstoned since is written with its tombstone. Empty at the end.
+    /// The walk's next `n` rows, newest first as the walk began, with their
+    /// current `row_json`: an edit since the walk began is in the line, and a
+    /// row tombstoned since is written with its tombstone. Empty at the end.
     ///
     /// # Errors
     /// [`StoreError::UnknownWalk`] for a token this connection didn't begin
@@ -161,8 +169,8 @@ impl Store {
         let rows: Vec<(i64, RowOut)> = self
             .conn
             .prepare_cached(
-                "SELECT s.rid, s.id, s.row_json FROM temp.walk_set w JOIN shot s ON s.rid = w.rid \
-                 WHERE w.token = ?1 AND w.rid > ?2 ORDER BY w.rid LIMIT ?3",
+                "SELECT w.pos, s.id, s.row_json FROM temp.walk_set w JOIN shot s ON s.rid = w.rid \
+                 WHERE w.token = ?1 AND w.pos > ?2 ORDER BY w.pos LIMIT ?3",
             )
             .and_then(|mut st| {
                 st.query_map((token_i, after, i64::from(n)), |r| {
@@ -177,10 +185,26 @@ impl Store {
                 .collect()
             })
             .map_err(|e| error_of(&e, Source::Session))?;
-        if let Some((rid, _)) = rows.last() {
-            self.walks.active.insert(token, *rid);
+        if let Some((pos, _)) = rows.last() {
+            self.walks.active.insert(token, *pos);
         }
         Ok(rows.into_iter().map(|(_, r)| r).collect())
+    }
+
+    /// Starts the walk's set again from its first row: the same rows in the
+    /// same order, each read as it is now. The holds stay.
+    ///
+    /// # Errors
+    /// [`StoreError::UnknownWalk`] for a token that isn't open.
+    pub fn export_rewind(&mut self, token: u64) -> Result<()> {
+        self.usable()?;
+        match self.walks.active.get_mut(&token) {
+            Some(at) => {
+                *at = 0;
+                Ok(())
+            }
+            None => Err(StoreError::UnknownWalk(token)),
+        }
     }
 
     /// Ends a walk. Rows held for it may then be released
@@ -220,6 +244,35 @@ impl Store {
             .prepare_cached(sql)
             .and_then(|mut st| st.query_map([], |r| r.get(0))?.collect())
             .map_err(|e| error_of(&e, Source::Session))
+    }
+
+    /// Removes the rows of `ids` that are still held and no open walk needs,
+    /// in one transaction, and returns the ids it removed. A row an upsert
+    /// brought back since [`Store::release_holds`] listed it isn't held any
+    /// more, so it stays (REVIEW-468 W5-1). The shell deletes the details of
+    /// the ids this returns, after it: a crash between leaves details without
+    /// a row, which is harmless (SPEC §2), never a row without its curve.
+    ///
+    /// # Errors
+    /// A SQLite error class, with the transaction rolled back.
+    pub fn delete_held(&mut self, ids: &[String]) -> Result<Vec<String>> {
+        let walking = self.walks.any();
+        let (deleted, _) = self.write("delete.commit", "delete.committed", |tx, st, f| {
+            let mut held = Vec::new();
+            for id in ids {
+                let rid: Option<i64> = tx
+                    .prepare_cached("SELECT rid FROM shot WHERE id = ?1 AND hold_delete = 1")?
+                    .query_row([id], |r| r.get(0))
+                    .optional()?;
+                if rid.is_some() && !held.contains(id) {
+                    held.push(id.clone());
+                }
+            }
+            // A row an open walk still needs stays held: `delete_in` skips it
+            // and doesn't list it as deleted.
+            delete_in(tx, st, f, &held, walking).map(|out| out.deleted)
+        })?;
+        Ok(deleted)
     }
 
     /// Begins a restore: the `write_seq` now. Rows created after this are

@@ -214,16 +214,22 @@ fn case() -> impl Strategy<Value = Case> {
                 pace,
                 (untared_cup_g, tare_latency_ms),
             )| {
-                // A step on a slow scale is §3.5's known limit: the
-                // disturbance check assumes 5 to 10 Hz, so a paced case
-                // draws none. A bump is judged at any pace (REVIEW-451 S1).
-                let ops = if pace.is_some() {
-                    ops.into_iter()
-                        .filter(|op| !matches!(op, Op::Scale(ScaleMode::StepUp { .. })))
-                        .collect()
-                } else {
-                    ops
-                };
+                // A step or a bump while the scale is still slow is §3.5's
+                // known limit: the disturbance check assumes 5 to 10 Hz. So a
+                // paced case draws neither until a scale op ends its pace;
+                // after that, at 10 Hz, both are judged (REVIEW-451 S1 and N1).
+                let mut paced = pace.is_some();
+                let ops = ops
+                    .into_iter()
+                    .filter(|op| match op {
+                        Op::Scale(ScaleMode::StepUp { .. } | ScaleMode::Bump { .. }) => !paced,
+                        Op::Scale(_) | Op::ScaleConnect => {
+                            paced = false;
+                            true
+                        }
+                        _ => true,
+                    })
+                    .collect();
                 Case {
                     params: De1Params {
                         unknown_pour,
@@ -1626,6 +1632,97 @@ fn a_touch_before_the_first_flow_tare_lands_keeps_the_weight_stop() {
         }
     }
     assert_eq!(runs, 108);
+}
+
+/// REVIEW-454 Q2: a scale silent for 3 to 8 s from the start of a shot
+/// comes back to a cup already filling, and a 3 to 5 g touch lands 0.2 to 2 s
+/// later. The step is inside the 10 Hz band, so it reads as coffee, but no
+/// more than the band's known limit allows. The lead's flow doesn't count it:
+/// on the few readings since the return it read as 8 g/s, and the lead
+/// stopped an 18 g shot at a true 10.6 g.
+#[test]
+fn a_touch_inside_the_band_after_a_return_doesnt_stop_early() {
+    let params = De1Params {
+        preinfusion: false,
+        ending: Ending::None,
+        ..De1Params::default()
+    };
+    let mut runs = 0;
+    for silence_ms in [3_000u64, 5_000, 8_000] {
+        for gap_ms in [200u64, 500, 1_000, 2_000] {
+            for (grams, ms) in [(3.0f32, 1_300u64), (4.0, 1_300), (4.0, 500), (5.0, 1_300)] {
+                for target in [18.0f32, 36.0] {
+                    runs += 1;
+                    let ops = [
+                        Op::Advance { ms: 100_000 },
+                        Op::AppStart { yield_g: target },
+                        Op::Scale(ScaleMode::Stall),
+                        Op::Advance { ms: silence_ms },
+                        Op::Scale(ScaleMode::Healthy),
+                        Op::Advance { ms: gap_ms },
+                        Op::Scale(ScaleMode::Bump { grams, ms }),
+                        Op::Advance { ms: 90_000 },
+                    ];
+                    let mut world = World::new(params, 0.0, 5_000, false, false);
+                    for op in &ops {
+                        world.apply(op);
+                    }
+                    let broken: Vec<_> = world
+                        .violations
+                        .iter()
+                        .filter(|v| v.invariant.status() == Status::Enforced)
+                        .collect();
+                    assert!(
+                        broken.is_empty(),
+                        "silent {silence_ms} ms, {grams} g for {ms} ms {gap_ms} ms after, \
+                         {target} g: {broken:?}"
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(runs, 96);
+}
+
+/// REVIEW-451 N2: the user's Stop, owed after a live split while the core
+/// last heard the old flow's `Ending`, is retried into what the split found.
+/// The split is a new flow to the core, so the old flow's wind-down doesn't
+/// make the retry a stop while winding down (I2).
+#[test]
+fn a_stop_retried_after_a_split_is_not_one_while_winding_down() {
+    let case = Case {
+        params: De1Params {
+            preinfusion: false,
+            ending: Ending::Prompt,
+            idle_ignored: 0,
+            two_tap_steam: false,
+            unknown_pour: false,
+            heating_ms: 1_000,
+        },
+        headspace_ml: 0.0,
+        lane_timeout_ms: 5_000,
+        read_only: false,
+        pre_flush: false,
+        pace: None,
+        untared_cup_g: None,
+        tare_latency_ms: 200,
+        ops: vec![
+            Op::GroupHead(MachineState::Espresso),
+            Op::LoseWrites(5),
+            Op::Advance { ms: 24_200 },
+            Op::LoseStates(1),
+            Op::Advance { ms: 1_000 },
+            Op::LoseStates(2),
+            Op::GroupHead(MachineState::Espresso),
+            Op::LoseStates(2),
+            Op::Advance { ms: 1_600 },
+            Op::UserStop,
+            Op::Advance { ms: 100 },
+        ],
+    };
+    let world = run(&case);
+    assert!(world.coverage.replaced >= 1, "the split");
+    assert!(world.violations.is_empty(), "{:?}", world.violations);
 }
 
 /// No preinfusion and no `Ending`: the reviews' probe machine.

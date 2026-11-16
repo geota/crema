@@ -37,10 +37,34 @@ function pageEvents(): PageEvents {
 	};
 }
 
+/** How often a tab told of the flip looks again for a moment it may reload. */
+const FLIP_RELOAD_RETRY_MS = 5_000;
+
+/**
+ * Reloads once `canReload` allows (not mid-shot, not mid-flash), looking again
+ * every few seconds. For the flip (SPEC §11, N4): until the reload, a shot this
+ * tab still records goes to the P3 store, which the flipped build imports as a
+ * late row (step 8), so nothing is lost by waiting.
+ */
+export function reloadWhenIdle(canReload: () => boolean, reload: () => void = () => location.reload()): void {
+	const tryNow = () => {
+		if (canReload()) reload();
+		else setTimeout(tryNow, FLIP_RELOAD_RETRY_MS);
+	};
+	tryNow();
+}
+
+export interface StartOptions {
+	/** May the page reload now? (the shell's PWA update gate). */
+	canReload?: () => boolean;
+}
+
 /** Starts this tab's history store, once. Null where the browser can't run it. */
-export function startHistoryDb(): HistoryDbClient | null {
+export function startHistoryDb(opts: StartOptions = {}): HistoryDbClient | null {
 	if (client || !supported()) return client;
 	client = new HistoryDbClient({
+		// A stage-1 tab that hears the flip reloads into the new build's view (N4).
+		onFlipped: () => reloadWhenIdle(opts.canReload ?? (() => true)),
 		stage: 1,
 		expect: { role: 'index', file: INDEX_FILE },
 		target: { pool: 'index', generation: 0, file: INDEX_FILE, role: 'index', create: true, journal: HISTORY_JOURNAL },

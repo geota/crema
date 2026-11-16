@@ -193,6 +193,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   restore. A restore interrupted part-way says so at the next launch. Other
   Crema tabs reload once it finishes. Shots a frozen tab kept come back
   without their raw capture and don't resend the webhook.
+- **The web app's service worker is built by the official
+  `@vite-pwa/sveltekit` again** — no visible change: it starts offline, keeps
+  the wasm engines and Google Fonts cached, and still asks before loading an
+  update. For maintainers: the SvelteKit 3 fork
+  `@katama-labs/vite-pwa-sveltekit` and its npm watch workflow are gone, the
+  worker's options live in `withPwa(...)` in `web/vite.config.ts`, and
+  `pnpm test:pwa` checks the built worker in Chromium and WebKit (#172).
 
 ### Fixed
 
