@@ -10,10 +10,12 @@
  *
  * Runs in the `bench` project, alone after the others: these are timings.
  * `W2_BENCH_ROWS` picks the size. Every line is gated on a developer's
- * machine; on CI's shared runners, as in `bench.spec.ts`, only the first page
- * and the rebuild are, and the rest is recorded (`W2_BENCH_STRICT=1` gates it
- * all there too): the budgets are the reference device's.
+ * machine. On CI the timings are report-only, a table in the step summary, as
+ * the native benches are (#445): the budgets are the reference device's, and a
+ * shared runner isn't it. `HISTORY_BENCH_STRICT=1` gates them there too. The
+ * functional checks (every row indexed, the counts) always hold.
  */
+import fs from 'node:fs';
 import type { Page } from '@playwright/test';
 import { BASE, expect, test } from './fixtures.ts';
 
@@ -49,9 +51,6 @@ const BUDGET = {
 	facets: 80
 };
 
-/** What CI gates: the first page and the rebuild. */
-const GATED_ON_CI = new Set(['rebuild', 'open', 'first']);
-
 async function w2(page: Page, g: number): Promise<void> {
 	await page.goto(`${BASE}/tests/browser/w2/index.html?g=${g}`);
 	await page.waitForFunction(() => document.body.dataset.ready === '1');
@@ -79,9 +78,22 @@ test(`the History list's reads through the index at ${N.toLocaleString('en')} ro
 	const got = { rebuild: open.readyMs, longest: open.longestCallMs, wait: open.waitMs, open: openMs, ...reads };
 	console.log(`W2 at ${N} rows (ms): ${JSON.stringify(got)}; ${open.probes} probes during the diff`);
 	await testInfo.attach('w2-bench', { contentType: 'application/json', body: JSON.stringify({ rows: N, got, budget: BUDGET }) });
-	const strict = !process.env.CI || process.env.W2_BENCH_STRICT === '1';
+	const md = [
+		`### W2: the History list through the index, ${N.toLocaleString('en')} rows (Chrome)`,
+		'',
+		'| Line | Budget (ms) | Measured (ms) |',
+		'| --- | ---: | ---: |',
+		...Object.entries(BUDGET).map(([k, b]) => {
+			const ms = got[k as keyof typeof got];
+			return `| ${k} | ${b} | ${ms.toFixed(1)}${ms > b ? ' (over)' : ''} |`;
+		})
+	].join('\n');
+	if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${md}\n\n`);
+	// Functional, always: the index answers for every row it was built from.
+	expect(await page.evaluate(() => window.h2.count())).toBe(N);
+	const strict = process.env.HISTORY_BENCH_STRICT === '1' || (!process.env.CI && process.env.HISTORY_BENCH_STRICT !== '0');
+	if (!strict) return void (await page.evaluate(() => window.h2.stop()));
 	for (const [k, budget] of Object.entries(BUDGET)) {
-		if (!strict && !GATED_ON_CI.has(k)) continue;
 		expect.soft(got[k as keyof typeof got], `${k} within ${budget} ms`).toBeLessThanOrEqual(budget);
 	}
 	await page.evaluate(() => window.h2.stop());
