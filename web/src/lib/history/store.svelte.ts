@@ -690,10 +690,34 @@ export class HistoryStore {
 		try {
 			if (!(await this.openSqlite(db))) return;
 			await this.loadFromDb();
+			this.recordHeldJournal(db);
 		} finally {
 			clearTimeout(slow);
 		}
 	}
+
+	/**
+	 * P3's journal entries this tab held in memory went in whole, with their
+	 * curves, through the first write. Once that has landed, and before any
+	 * later write such as a delete, they go through the id rule too, which
+	 * finds them present and records them in `migration_source`: then the
+	 * entry, still in P3's key, never brings back a shot deleted after
+	 * (REVIEW-474 N2).
+	 */
+	private recordHeldJournal(db: SqliteRows): void {
+		const rows = this.heldJournal;
+		this.heldJournal = [];
+		if (rows.length === 0) return;
+		this.writeChain = this.writeChain.then(async () => {
+			try {
+				await db.importLate(rows);
+			} catch {
+				// Next boot: the entry is still in P3's key, and the row is in history.db.
+			}
+		});
+	}
+	/** P3 journal rows this tab held in memory at the stage-2 open (N2). */
+	private heldJournal: RowRecord[] = [];
 
 	/** Opens `history.db` and takes P3's journal in; false when blocked (lost, too new, unavailable). */
 	private async openSqlite(db: SqliteRows): Promise<boolean> {
@@ -711,10 +735,12 @@ export class HistoryStore {
 		// whole below, with their curves, rather than as a journal's light row.
 		const mine = new Set(this.shots.map((s) => s.id));
 		const late: RowRecord[] = [];
+		this.heldJournal = [];
 		for (const raw of readPending()) {
 			const shot = typeof raw.id === 'string' ? coerceStoredShot(raw) : null;
-			if (!shot || mine.has(shot.id)) continue;
-			late.push(rowOfShot(shot, summarize(shot)));
+			if (!shot) continue;
+			if (mine.has(shot.id)) this.heldJournal.push(rowOfShot(shot, summarize(shot)));
+			else late.push(rowOfShot(shot, summarize(shot)));
 		}
 		if (late.length > 0) {
 			try {
@@ -2556,6 +2582,7 @@ export class HistoryStore {
 			this.mode = 'booting';
 			this.healthState = 'loading';
 			await this.loadFromDb();
+			this.recordHeldJournal(this.sqlite);
 			return this.health === 'ok';
 		}
 		const db = this.newDb(() => markerSaysDone());

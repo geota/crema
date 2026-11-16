@@ -363,3 +363,63 @@ fn a_restored_rows_snapshot_becomes_the_next_generation_and_its_snapshots_move_f
         Err(StoreError::Refused(_))
     ));
 }
+#[test]
+fn step_9_fills_only_the_summary_and_never_brings_a_row_back() {
+    let d = dir();
+    let mut t = truth_after_flip(&d, 2);
+    let zero = |id: &str| rowin(row(id, 70, json!({ "summary": { "sampleCount": 0 } })));
+    let brew = rowin(row(
+        "brew",
+        71,
+        json!({ "brewMethod": "v60", "summary": { "sampleCount": 0 } }),
+    ));
+    t.import_late(&[zero("edited"), zero("gone"), zero("held"), brew], None)
+        .expect("imports");
+    // A brew log never waits for samples (REVIEW-474 B1).
+    let mut late = t.late_ids().expect("reads");
+    late.sort();
+    assert_eq!(
+        late,
+        vec!["edited".to_owned(), "gone".to_owned(), "held".to_owned()]
+    );
+    // Stage 2 edits one, deletes one, and an export walk holds one.
+    t.upsert(&rows_in(&[row(
+        "edited",
+        70,
+        json!({ "metadata": { "notes": "mine" }, "summary": { "sampleCount": 0 } }),
+    )]))
+    .expect("edits");
+    t.delete(&["gone".to_owned()]).expect("deletes");
+    let walk = t.export_begin().expect("walks");
+    t.delete(&["held".to_owned()]).expect("holds");
+    // The older build writes the series.
+    let full = |id: &str| {
+        rowin(row(
+            id,
+            70,
+            json!({ "metadata": { "notes": "p3's" }, "summary": { "sampleCount": 25 } }),
+        ))
+    };
+    t.settle_late(&[full("edited"), full("gone"), full("held")])
+        .expect("fills");
+    let c = common::raw_conn(&file(&d, "history.db"));
+    let edited: String = c
+        .query_row("SELECT row_json FROM shot WHERE id = 'edited'", [], |r| {
+            r.get(0)
+        })
+        .expect("reads");
+    assert!(edited.contains("\"mine\""), "{edited}");
+    assert!(edited.contains("\"sampleCount\":25"), "{edited}");
+    assert!(
+        t.existing(&["gone".to_owned()]).expect("reads").is_empty(),
+        "a deleted row came back"
+    );
+    let held: i64 = c
+        .query_row("SELECT hold_delete FROM shot WHERE id = 'held'", [], |r| {
+            r.get(0)
+        })
+        .expect("reads");
+    assert_eq!(held, 1, "the hold ended");
+    assert!(t.late_ids().expect("reads").is_empty());
+    t.export_end(walk.token).expect("ends");
+}

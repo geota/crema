@@ -9,9 +9,11 @@
 //!   back, and nothing here is deleted. Imported rows with no samples go into
 //!   `meta.late_ids`, for step 9. With a baseline, `meta.late_baseline` moves
 //!   to it in the same transaction.
-//! - [`Store::settle_late`] is step 9: the late rows' newer copies (an older
-//!   build writes the series after the row), upserted only for ids still in
-//!   `late_ids`; an id whose row now has samples leaves the list.
+//! - [`Store::settle_late`] is step 9: an older build writes the series
+//!   after the row, so a late row's newer P3 copy may have samples. Only its
+//!   `summary` moves onto the row this file holds, keeping every edit made
+//!   here; a row deleted or held here, or a brew log (never any samples),
+//!   leaves the list and is never written (REVIEW-474 B1, N1).
 //! - [`Store::existing`] says which ids have a row, held ones too: what a
 //!   delete's details may go by (REVIEW-468 W5-2).
 //!
@@ -138,7 +140,12 @@ impl Store {
                 if out.duplicates.contains(&id) {
                     continue;
                 }
-                if derive_row(&r.row_json).ok().and_then(|d| d.sample_count) == Some(0)
+                // A brew log never has samples: it isn't waiting for any, and
+                // step 9 would only rewrite it (REVIEW-474 B1).
+                let derived = derive_row(&r.row_json).ok();
+                if derived
+                    .as_ref()
+                    .is_some_and(|d| !d.is_brew_log && d.sample_count == Some(0))
                     && !late.contains(&id)
                 {
                     late.push(id.clone());
@@ -170,40 +177,65 @@ impl Store {
     }
 
     /// Step 9 (see the module): `rows` are the P3 store's copies of late
-    /// rows; only those still in `late_ids` are written, and an id whose row
-    /// now has samples, or that has no row here any more, leaves the list.
+    /// rows, read again. For each id still in `late_ids` whose row here is
+    /// there, not held and not a brew log, and whose P3 copy now has samples,
+    /// only the P3 copy's `summary` moves onto the row this file holds: every
+    /// other field stays, so no edit made here is undone (REVIEW-474 B1), as
+    /// P3's own step 9 fills only the samples. The series itself is in the
+    /// shared details already. An id with no row, a held row, a brew log, or
+    /// one that has its samples now leaves `late_ids`; nothing comes back
+    /// (N1).
     ///
     /// # Errors
     /// [`StoreError::Refused`] off the truth file; as [`Store::upsert`].
     pub fn settle_late(&mut self, rows: &[RowIn]) -> Result<Written> {
         self.authority_only("a late-row fill")?;
         let late = self.late_ids()?;
-        let wanted: Vec<RowIn> = rows
+        let incoming: std::collections::HashMap<String, serde_json::Value> = rows
             .iter()
-            .filter(|r| {
-                serde_json::from_str::<serde_json::Value>(&r.row_json)
-                    .ok()
-                    .and_then(|v| row_id(&v).map(|id| late.iter().any(|l| l == id)))
-                    .unwrap_or(false)
+            .filter_map(|r| {
+                let v: serde_json::Value = serde_json::from_str(&r.row_json).ok()?;
+                let id = row_id(&v)?.to_owned();
+                Some((id, v))
             })
-            .cloned()
             .collect();
-        let present = self.existing(&late)?;
         let (o, st) = self.write("late.commit", "late.committed", |tx, st, f| {
-            let o = upsert_in(tx, st, f, &wanted)?;
+            let mut fills: Vec<RowIn> = Vec::new();
             let mut keep: Vec<String> = Vec::new();
             for id in &late {
-                if !present.contains(id) {
+                let here: Option<(String, bool, bool, Option<i64>)> = tx
+                    .prepare_cached(
+                        "SELECT row_json, hold_delete, is_brew_log, sample_count FROM shot WHERE id = ?1",
+                    )?
+                    .query_row([id], |r| {
+                        Ok((r.get(0)?, r.get::<_, i64>(1)? != 0, r.get::<_, i64>(2)? != 0, r.get(3)?))
+                    })
+                    .optional()?;
+                // Deleted or held here, or a brew log: done with, never written.
+                let Some((stored, held, brew, samples)) = here else { continue };
+                if held || brew || samples.unwrap_or(0) > 0 {
                     continue;
                 }
-                let samples: Option<Option<i64>> = tx
-                    .prepare_cached("SELECT sample_count FROM shot WHERE id = ?1")?
-                    .query_row([id], |r| r.get(0))
-                    .optional()?;
-                if samples.flatten().unwrap_or(0) == 0 {
-                    keep.push(id.clone());
+                let filled = incoming.get(id).and_then(|p3| {
+                    let summary = p3.get("summary")?;
+                    let n = summary.get("sampleCount").and_then(serde_json::Value::as_i64)?;
+                    if n <= 0 {
+                        return None;
+                    }
+                    let mut row: serde_json::Value = serde_json::from_str(&stored).ok()?;
+                    row.as_object_mut()?.insert("summary".into(), summary.clone());
+                    Some(row.to_string())
+                });
+                match filled {
+                    Some(row_json) => fills.push(RowIn {
+                        row_json,
+                        heavy: None,
+                        pulled: false,
+                    }),
+                    None => keep.push(id.clone()),
                 }
             }
+            let o = upsert_in(tx, st, f, &fills)?;
             if keep != late {
                 st.next();
                 tx.prepare_cached(
