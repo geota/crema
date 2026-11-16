@@ -206,7 +206,7 @@ fun SettingsConfirmDialogs(state: SettingsConfirmState, vm: MainViewModel, ui: M
         title = "Re-pull every shot?",
         body = "Re-pulls your entire Visualizer history from the beginning. Existing shots are de-duplicated against what you already have.",
         confirmLabel = "Re-pull",
-        onConfirm = { vm.visualizer.resyncAllShots(ui.history); state.pendingResync = false },
+        onConfirm = { vm.visualizer.resyncAllShots(); state.pendingResync = false },
         onDismiss = { state.pendingResync = false },
     )
     // The Drive picker: choose a backup, then Merge, or Replace behind the same

@@ -11,6 +11,7 @@ import coffee.crema.visualizer.VisualizerSync
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
@@ -35,6 +36,8 @@ data class SharingUiState(
     val missingUploadTotal: Int = 0,
     /** Machine shots no upload can take, because they have no telemetry. */
     val noTelemetryShots: Int = 0,
+    /** Visualizer's backlog, whether or not uploads are held: what a different account is asked to take. */
+    val visualizerUnsent: Int = 0,
     /** Shot ids with an upload in flight to any destination. */
     val uploadingShotIds: Set<String> = emptySet(),
     /** The connected DE1's serial, once read. */
@@ -61,7 +64,7 @@ class SharingController(
     private val scope: CoroutineScope,
     private val visualizer: VisualizerSync,
     decent: DecentSync,
-    /** The live UI snapshot (history, the destination mirrors, the DE1 info). */
+    /** The live UI snapshot (the destination mirrors, the DE1 info). */
     private val uiFlow: StateFlow<MainUiState>,
     /** Synchronously update the UI snapshot (the VM's `_ui.update`). */
     private val updateUi: ((MainUiState) -> MainUiState) -> Unit,
@@ -69,6 +72,14 @@ class SharingController(
     private val notify: (String) -> Unit,
     /** Model-register → name (core `machineModelName`), injectable for tests. */
     private val modelName: (UInt?) -> String? = { decentModelName(it) },
+    /**
+     * Every row as the history's store holds it, read in one go (#310 A3a):
+     * the backlogs, their counts and each row's targets are worked out from
+     * this, never from the view.
+     */
+    private val syncRows: () -> List<ShotRow>,
+    /** Bumped whenever [syncRows] changes: the derived state follows it. */
+    private val syncRowsVersion: () -> kotlinx.coroutines.flow.Flow<Long>,
 ) {
     val destinations: List<UploadDestination> = listOf(visualizer, decent)
 
@@ -91,7 +102,7 @@ class SharingController(
     // ── Derived state ───────────────────────────────────────────────────────
 
     private data class Inputs(
-        val history: List<ShotRow>,
+        val rows: List<ShotRow>,
         val visualizer: VisualizerSync.UiState,
         val decent: DecentSync.UiState,
         val serial: String?,
@@ -102,6 +113,7 @@ class SharingController(
         val targets: Map<String, List<UploadTarget>>,
         val missing: Int,
         val noTelemetry: Int,
+        val visualizerUnsent: Int,
         val uploading: Set<String>,
         val serial: String?,
         val serialOnDecent: Boolean?,
@@ -111,13 +123,15 @@ class SharingController(
     /** Keep [SharingUiState]'s derived fields current. Call once from the VM's init. */
     fun start() {
         scope.launch {
-            uiFlow
-                .map { Inputs(it.history, it.visualizer, it.decent, connectedSerial(it), visualizer.shotsSettled) }
-                // History by identity: it is replaced, never mutated, and a deep
-                // compare of every shot on each state change would cost more
-                // than the recompute it saves.
+            // The store's rows change apart from the UI state (a save landing), and
+            // the UI state apart from them (a sign-in): either works it out again.
+            uiFlow.combine(syncRowsVersion()) { ui, _ -> ui }
+                .map { Inputs(syncRows(), it.visualizer, it.decent, connectedSerial(it), visualizer.shotsSettled) }
+                // Rows by identity: the store's list is new whenever a row changes,
+                // and a deep compare of every shot on each state change would cost
+                // more than the recompute it saves.
                 .distinctUntilChanged { a, b ->
-                    a.history === b.history && a.visualizer == b.visualizer && a.decent == b.decent &&
+                    a.rows === b.rows && a.visualizer == b.visualizer && a.decent == b.decent &&
                         a.serial == b.serial && a.shotsSettled == b.shotsSettled
                 }
                 .map { derive(it) }
@@ -128,6 +142,7 @@ class SharingController(
                             uploadTargets = d.targets,
                             missingUploadTotal = d.missing,
                             noTelemetryShots = d.noTelemetry,
+                            visualizerUnsent = d.visualizerUnsent,
                             uploadingShotIds = d.uploading,
                             connectedSerial = d.serial,
                             connectedSerialOnDecent = d.serialOnDecent,
@@ -139,9 +154,10 @@ class SharingController(
     }
 
     private fun derive(i: Inputs): Derived = Derived(
-        targets = i.history.associate { it.id to uploadTargetsFor(it, destinations) },
-        missing = missingUploadTotal(i.history, destinations),
-        noTelemetry = i.history.count(visualizer::noTelemetry),
+        targets = i.rows.associate { it.id to uploadTargetsFor(it, destinations) },
+        missing = missingUploadTotal(i.rows, destinations),
+        noTelemetry = i.rows.count(visualizer::noTelemetry),
+        visualizerUnsent = visualizer.unsent(i.rows).size,
         uploading = i.visualizer.uploadingShotIds + i.decent.uploadingShotIds,
         serial = i.serial,
         serialOnDecent = if (i.serial == null || !i.decent.linked) null else i.serial in i.decent.serials,
@@ -205,7 +221,7 @@ class SharingController(
     fun offerCatchUp(id: UploadTargetId) {
         val d = destination(id)
         if (!d.enabled) return
-        val count = d.unsent(uiFlow.value.history).size
+        val count = d.unsent(syncRows()).size
         if (count > 0) sharing { it.copy(catchUpOffer = CatchUpOffer(id, count)) }
     }
 
@@ -227,7 +243,7 @@ class SharingController(
 
     /** Push the whole backlog to every enabled destination, one summary notice. */
     fun uploadMissing() {
-        drain(missingUploadCounts(uiFlow.value.history, destinations).keys, clearOffer = false)
+        drain(missingUploadCounts(syncRows(), destinations).keys, clearOffer = false)
     }
 
     private fun drain(ids: Set<UploadTargetId>, clearOffer: Boolean) {
@@ -237,9 +253,9 @@ class SharingController(
             try {
                 val parts = mutableListOf<String>()
                 for (d in destinations.filter { it.id in ids }) {
-                    // Each pass reads the history fresh: an earlier destination's
+                    // Each pass reads the store fresh: an earlier destination's
                     // pass may have stamped ids the next one should see.
-                    val r = d.uploadUnsentNow(uiFlow.value.history)
+                    val r = d.uploadUnsentNow(syncRows())
                     if (r.attempted > 0 || r.stopped != null || r.note != null) parts += summarize(d.id, r)
                 }
                 if (parts.isNotEmpty()) notify("Uploaded ${parts.joinToString(", ")}")

@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -222,9 +223,30 @@ class HistoryStore(
     /** Rows a delete has taken out of the store, or is about to. */
     private val deleting: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
-    /** Bumped on every change to [stored], for [hiddenRows]'s cache. */
-    @Volatile private var version = 0L
+    /**
+     * Bumped on every change to [stored], [latest] or [deleting], after the
+     * change: [hiddenRows]' and [syncRows]' caches, and [rowsVersion].
+     */
+    private val versionFlow = MutableStateFlow(0L)
+    private val version: Long get() = versionFlow.value
+    private fun bumpVersion() = versionFlow.update { it + 1 }
     @Volatile private var hiddenCache: Triple<Long, Set<String>, List<ShotRow>>? = null
+
+    /**
+     * Rows handed to the store that it hasn't written yet, by id (#310 A3a):
+     * each [save]'s rows that differ from what it last saw, taken at the call
+     * ([accept]), and each [updateHidden] change. An entry goes once that very
+     * row lands in [stored] (written, or found unchanged), or its row is
+     * deleted. A row that only reached the pending journal stays: the store
+     * holds it there. So a reader of the store ([syncRow], [syncRows]) sees an
+     * edit as soon as its save is called, not when its write lands, and never
+     * misses a row on its way from here to [stored]: [stored] is written
+     * first and the entry goes after, and readers read here first.
+     */
+    private val latest = ConcurrentHashMap<String, ShotRow>()
+
+    /** [syncRows]' last answer and the [version] it was read at. */
+    @Volatile private var syncCache: Pair<Long, List<ShotRow>>? = null
 
     /** The day of the last rows snapshot. */
     @Volatile private var snapshotDay: LocalDate? = null
@@ -520,6 +542,8 @@ class HistoryStore(
     private fun toLegacy() {
         closeDb()
         mode = Mode.LEGACY
+        // The legacy backend's rows are the view's list: nothing is held here.
+        latest.clear()
         health = HistoryHealth.LEGACY
     }
 
@@ -834,11 +858,12 @@ class HistoryStore(
         // The new rows replace the old with no gap: readers run outside the lock, and a
         // row missing for a moment would read as gone, or as having no curve (#419 M1).
         replaceRows(rows.associateBy { it.id })
+        settleLatest()
         withProfile += profiled
         withProfile.retainAll(profiled)
         // A curve on disk is known from the summary; the file isn't read until it's wanted.
         for (r in rows) if (r.summarisedCurve) onDisk += r.id
-        version++
+        bumpVersion()
         snapshotDay = snapshotFile.takeIf { it.exists() }?.lastModified()?.let { localDateOf(it, ZoneId.systemDefault()) }
         val (view, hidden) = splitView(rows)
         return HistoryLoad(view, hidden.size, health)
@@ -848,7 +873,7 @@ class HistoryStore(
     private fun replaceRows(next: Map<String, ShotRow>) {
         stored.putAll(next)
         stored.keys.retainAll(next.keys)
-        version++
+        bumpVersion()
     }
 
     // ── Rows past the cap ────────────────────────────────────────────────────
@@ -929,7 +954,7 @@ class HistoryStore(
         }
         if (!changed) return
         dirtySummary += id
-        version++
+        bumpVersion()
     }
 
     /** Changes to rows past the cap that are in memory and not yet written ([flushHidden]). */
@@ -943,12 +968,15 @@ class HistoryStore(
      */
     fun updateHidden(id: String, transform: (ShotRow) -> ShotRow): Boolean {
         if (mode != Mode.SQL || id in deleting) return false
-        val prev = pendingHidden[id] ?: stored[id] ?: return false
+        // A save handed in and not yet written is the newest version (#310 A3a).
+        val prev = pendingHidden[id] ?: latest[id] ?: stored[id] ?: return false
         val next = transform(prev)
         if (next == prev && !staged.containsKey(id)) return true
         pendingHidden[id] = next
+        // Readers of the store see it at once, and an older save landing first doesn't hide it.
+        latest[id] = next
         stored[id] = next.copy(summary = stored[id]?.summary ?: next.summary)
-        version++
+        bumpVersion()
         return true
     }
 
@@ -961,6 +989,85 @@ class HistoryStore(
                 writeLocked(listOf(row))
             }
         }
+    }
+
+    // ── What sync and upload read (#310 A3a) ─────────────────────────────────
+
+    /**
+     * Whether the store answers for its own rows ([syncRow], [syncRows]): on
+     * `shots.db`, or out of reach with what it holds and journaled. Not on the
+     * legacy backend, whose rows are the view's list (the file is that list),
+     * nor before the store opens.
+     */
+    val holdsRows: Boolean get() = mode == Mode.SQL || mode == Mode.BLOCKED
+
+    /**
+     * Take note of [rows], a save's, at the call (#310 A3a): each the store
+     * hasn't seen goes into [latest] until it lands, so a reader of the store
+     * sees it now. [save] does this first; a caller that launches a save calls
+     * it before the launch, and tells the save whether it did (the result:
+     * false while the store doesn't hold its rows, so the save takes note
+     * itself once it runs). Rows being deleted aren't taken.
+     */
+    fun accept(rows: List<ShotRow>): Boolean {
+        if (!holdsRows) return false
+        var any = false
+        for (r in rows) {
+            if (seen[r.id] === r || r.id in deleting) continue
+            if (latest.put(r.id, r) !== r) any = true
+        }
+        if (any) bumpVersion()
+        return true
+    }
+
+    /**
+     * The row [id] as the store holds it now, the writes handed to it
+     * included ([latest]); null when it holds no such row, or is deleting it.
+     * What sync's "is it still here" and "is it bound" read (P3 spec, #354
+     * review): never the view, which may not hold a row the store does. Only
+     * meaningful while [holdsRows].
+     */
+    fun syncRow(id: String): ShotRow? {
+        if (id in deleting) return null
+        // [latest] first: a row leaves it only after [stored] has it.
+        return latest[id] ?: stored[id]
+    }
+
+    /**
+     * Every row the store holds, the writes handed to it included, newest
+     * first (SPEC S3): the light projection sync's planners and the upload
+     * backlogs read. Read in one go from memory, which mirrors `shots.db`
+     * with what's on its way there: a row moves from [latest] to [stored],
+     * [stored] written first, and this reads [latest] first, so no row is
+     * ever missing from it for being mid-write. A deleted row is gone from
+     * it once its delete is called. Null when the store doesn't hold its own
+     * rows ([holdsRows]).
+     */
+    fun syncRows(): List<ShotRow>? {
+        if (!holdsRows) return null
+        val v = version
+        syncCache?.let { (at, rows) -> if (at == v) return rows }
+        val ahead = HashMap(latest)
+        val all = HashMap<String, ShotRow>(stored.size + ahead.size)
+        for ((id, r) in stored) all[id] = r
+        all.putAll(ahead)
+        all.keys.removeAll(deleting)
+        val rows = all.values.sortedWith(ORDER)
+        syncCache = v to rows
+        return rows
+    }
+
+    /** Bumped on every change to the rows [syncRows] reads: a change notice for what derives from them. */
+    val rowsVersion: StateFlow<Long> get() = versionFlow
+
+    /** [latest]'s entries a load found as the store now holds them: nothing more to land. */
+    private fun settleLatest() {
+        if (latest.isEmpty()) return
+        for ((id, r) in latest) {
+            val s = stored[id] ?: continue
+            if (s == r.copy(summary = s.summary)) latest.remove(id, r)
+        }
+        bumpVersion()
     }
 
     // ── A shot whole ─────────────────────────────────────────────────────────
@@ -1090,7 +1197,7 @@ class HistoryStore(
                     }
                     if (changed) {
                         dirtySummary += row.id
-                        version++
+                        bumpVersion()
                     }
                 }
                 read.samples
@@ -1177,11 +1284,15 @@ class HistoryStore(
      * in the store. On the legacy backend the list is the file, as before P3a.
      * True when it landed.
      */
-    suspend fun save(rows: List<ShotRow>): Boolean {
+    suspend fun save(rows: List<ShotRow>, accepted: Boolean = false): Boolean {
         // The legacy backend's floor is checked at the call: a save that waits
         // out a load would otherwise land a snapshot from before it.
         val openAtCall = SafeFile.savesOpen(file) && !SafeFile.savesHeld(file)
         if (mode == Mode.LEGACY && !SaveFloor.admit(file, WHAT)) return false
+        // Readers of the store see these rows from now, not once the write lands (#310 A3a).
+        // A caller that launched this save took note of them at the launch ([accepted]):
+        // again now could put back a row a change since ([updateHidden]) has replaced.
+        if (!accepted) accept(rows)
         return withContext(NonCancellable) {
             lock.withLock {
                 withContext(Dispatchers.IO) {
@@ -1224,7 +1335,7 @@ class HistoryStore(
                                 series.deleteGz(id)
                                 forgetMemory(id)
                             }
-                            version++
+                            bumpVersion()
                             // A journal line for one of these would bring it back at the next launch (M3).
                             retireJournal(ids.toSet())
                         }
@@ -1237,6 +1348,7 @@ class HistoryStore(
                         // The store is out of reach: the delete waits in the journal with the rows made meanwhile (S1).
                         Mode.BLOCKED -> {
                             for (id in ids) {
+                                latest.remove(id)
                                 pendingHidden.remove(id)
                                 staged.remove(id)
                                 journaledStage.remove(id)
@@ -1246,7 +1358,7 @@ class HistoryStore(
                         Mode.UNOPENED -> Unit
                     }
                     deleting.removeAll(ids.toSet())
-                    version++
+                    bumpVersion()
                     refreshReads()
                 }
             }
@@ -1254,6 +1366,7 @@ class HistoryStore(
     }
 
     private fun forgetMemory(id: String) {
+        latest.remove(id)
         wrote(id)
         deleted += id
         unreadNow.remove(id)
@@ -1272,7 +1385,7 @@ class HistoryStore(
     /** Take [ids] out of the hidden rows now, before their delete lands. */
     fun forget(ids: Collection<String>) {
         deleting += ids
-        version++
+        bumpVersion()
     }
 
     /** The restore marker's deletes: these shots' series, by name, the rows no longer listing them. */
@@ -1284,6 +1397,13 @@ class HistoryStore(
 
     private fun upsertLocked(rows: List<ShotRow>): Boolean {
         val changed = rows.filter { row -> row.id !in deleting && (staged.containsKey(row.id) || !unchanged(row)) }
+        // A row found as the store holds it, or being deleted, has nothing more to land (#310 A3a).
+        if (latest.isNotEmpty() && changed.size < rows.size) {
+            val writing = changed.mapTo(HashSet()) { it.id }
+            var any = false
+            for (r in rows) if (r.id !in writing && latest.remove(r.id, r)) any = true
+            if (any) bumpVersion()
+        }
         if (changed.isEmpty()) return true
         return writeLocked(changed)
     }
@@ -1345,6 +1465,8 @@ class HistoryStore(
             deleted.remove(id)
             stored[id] = w.row.copy(summary = w.summary)
             seen[id] = w.row
+            // Landed: after [stored] has it, so a reader never misses it (#310 A3a).
+            latest.remove(id, w.row)
             if (w.shot.profile != null) withProfile += id
             if (w.staging != null) {
                 // Its heavy parts are in the store now; a curve that didn't write stays staged for the next save.
@@ -1356,7 +1478,7 @@ class HistoryStore(
             journaled = journaled - id
         }
         withProfile += profiles.keys
-        version++
+        bumpVersion()
         // These rows landed: an older journal line for one would undo them at the next launch (M3).
         retireJournal(writes.mapTo(HashSet()) { it.row.id })
     }
@@ -1801,9 +1923,9 @@ class HistoryStore(
         written.clear()
         stored.clear(); withProfile.clear(); staged.clear(); journaledStage.clear(); legacyHeavy.clear(); seriesWritten.clear(); seen.clear();
         deleted.clear(); writeGen.clear(); unreadNow.clear()
-        onDisk.clear(); deleting.clear(); pendingHidden.clear(); dirtySummary.clear()
+        onDisk.clear(); deleting.clear(); pendingHidden.clear(); dirtySummary.clear(); latest.clear()
         synchronized(recent) { recent.clear() }
-        version++
+        bumpVersion()
         unreadableSeries = emptySet()
         unsavedCurves = emptySet()
         journaled = emptySet()
