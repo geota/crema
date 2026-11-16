@@ -14,7 +14,7 @@ import { HistoryDbClient, type PageEvents, type WorkerLike } from './client.js';
 import { HISTORY_JOURNAL } from './journal.js';
 import { INDEX_FILE } from './names.js';
 import { chooseStage, type StageChoice } from './stage.js';
-import { opfsDoneRecordReader } from './marker.js';
+import { dbFileName, opfsDoneRecordReader, writeMarker } from './marker.js';
 import { serviceWorkerWindowCount } from '#lib/pwa/window-count.js';
 import { HistoryDb } from '#lib/history/history-db.js';
 import { idbDetails } from '#lib/history-source/details.js';
@@ -168,7 +168,37 @@ export async function historyStage(): Promise<Stage2 | null> {
 		// Stage 2 with its truth unknown this boot: the store is unavailable, shots to the journal.
 		client: booted.client ?? unavailableClient(booted.choice.unavailable ?? 'unknown'),
 		details: idbDetails(new HistoryDb({ expectExisting: () => true }), { bump: false }),
-		storage: localStorage
+		storage: localStorage,
+		restage: (generation) => restageHistoryDb(generation)
+	};
+}
+
+/**
+ * After a recovery into `history-<n>.db` (S9, W5c): the marker names it (the
+ * owner wrote the done-record first), and this tab's client moves to it. The
+ * old client lets the database go first, so the new one's Worker takes it.
+ */
+export async function restageHistoryDb(generation: number): Promise<Stage2> {
+	const booted = await bootHistoryDb();
+	if (!booted || booted.choice.stage !== 2) throw new Error('not on stage 2');
+	const poolGeneration = booted.choice.target.generation;
+	writeMarker(localStorage, { state: 'done', generation, poolGeneration, at: Date.now() });
+	const choice: StageChoice = {
+		...booted.choice,
+		reason: 'recovered',
+		unavailable: undefined,
+		target: { ...booted.choice.target, file: dbFileName(generation) },
+		expect: { role: 'authority', file: dbFileName(generation), generation: poolGeneration }
+	};
+	await client?.stop();
+	client = clientFor(choice, {});
+	client.start();
+	booting = Promise.resolve({ client, choice });
+	return {
+		client,
+		details: idbDetails(new HistoryDb({ expectExisting: () => true }), { bump: false }),
+		storage: localStorage,
+		restage: (g) => restageHistoryDb(g)
 	};
 }
 

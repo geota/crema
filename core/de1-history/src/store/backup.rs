@@ -404,6 +404,52 @@ impl Store {
         Ok(())
     }
 
+    /// Makes this file, a copy of a rows snapshot, the recovery file of
+    /// generation `generation` after `lost` (S9), in one transaction: its
+    /// `generation`, `migration = done` (source `snapshot`), the late-row
+    /// baseline from `init`, and `init`'s ids added to `migration_source`, so
+    /// step 8 imports only what an older build writes after the choice.
+    ///
+    /// # Errors
+    /// [`StoreError::Refused`] on a file that isn't a finished truth file; a
+    /// SQLite error class.
+    pub fn set_recovery(&mut self, generation: u32, init: &Recovery) -> Result<()> {
+        self.writable()?;
+        let sql = |e: rusqlite::Error| error_of(&e, Source::Session);
+        if !finished_truth(&self.conn).map_err(sql)? {
+            return Err(StoreError::Refused(
+                "only a finished truth file becomes a recovery file".into(),
+            ));
+        }
+        let ids = serde_json::to_string(&init.migration_source)
+            .map_err(|e| StoreError::Refused(e.to_string()))?;
+        let tx =
+            Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate).map_err(sql)?;
+        for (k, v) in [
+            ("generation", generation.to_string()),
+            ("late_baseline", init.late_baseline.clone()),
+            (
+                "migration",
+                r#"{"state":"done","source":"snapshot"}"#.to_owned(),
+            ),
+        ] {
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES (?1, ?2) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (k, v),
+            )
+            .map_err(sql)?;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO migration_source (id) SELECT DISTINCT value FROM json_each(?1)",
+            [&ids],
+        )
+        .map_err(sql)?;
+        tx.commit().map_err(sql)?;
+        self.info.generation = generation;
+        Ok(())
+    }
+
     /// `PRAGMA integrity_check`, the whole of it (verify, SPEC §11): the
     /// problems it reports, or none. It reads every page, so the shell calls
     /// it only at the flip, before anything else uses the file (N4).

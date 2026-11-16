@@ -122,6 +122,33 @@ export function flipDisk(): FlipDisk {
 					if (!disk.stuck.has(pool)) paused.delete(pool);
 				},
 				readRepairDone: async () => null,
+				createRecovery: async (o) => {
+					hit(`db/${o.file}:createRecovery`);
+					if (disk.unusable.get(`db/${o.file}`)) throw { code: 'refused', message: `${o.file} holds something` };
+					const mod = await historyWasm();
+					let db: WasmDb;
+					try {
+						db = await mod.HistoryDb.createRecovery(
+							JSON.stringify({ place: 'memory', file: nameOf('db', o.file), generation: o.generation, journal: 'truncate', recovery: o.recovery })
+						);
+					} catch (e) {
+						throw typeof e === 'string' ? JSON.parse(e) : e;
+					}
+					files.db.add(o.file);
+					const mine = open.get(ctx) ?? new Set<WasmDb>();
+					open.set(ctx, mine);
+					mine.add(db);
+					return {
+						call: async (method, arg) => {
+							hit(`db/${o.file}:${method}`);
+							return callDb(db, method, arg);
+						},
+						close() {
+							mine.delete(db);
+							close(db);
+						}
+					};
+				},
 				placeOf: (pool, file) => {
 					const name = nameOf(pool, file);
 					byName.set(name, { pool, file });

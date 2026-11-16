@@ -57,6 +57,8 @@ import { CHANGES_CHANNEL, OWNER_LOCK, RPC_CHANNEL, TAB_LOCK_PREFIX } from './nam
 import type { IndexSyncLike, P3Source, SyncDeps } from './index-sync.js';
 import { runFlip, type FlipArgs, type FlipCapture, type FlipOutcome } from './flip.js';
 import { lateRows, type LateImport } from './late.js';
+import { dbFileName, doneRecordText, generationOf } from './marker.js';
+import { SNAPSHOT_FILE, SNAPSHOT_PREV_FILE } from './names.js';
 import {
 	PROTOCOL_VERSION,
 	ONCE,
@@ -68,8 +70,10 @@ import {
 	type JournalEntry,
 	type OwnerHealth,
 	type OwnerInfo,
+	type RecoverKind,
 	type Reply,
 	type Request,
+	type SnapshotFile,
 	type RpcMessage,
 	type Stage,
 	type Target
@@ -674,9 +678,18 @@ class Owner {
 			throw { code: 'protocol', message: `protocol ${req.v}, owner speaks ${PROTOCOL_VERSION}` };
 		}
 		this.#seen.add(req.tab);
+		// The `lost` banner's choices work on the pool, not on the file that went (S9).
+		if (req.op === 'recover' || req.op === 'snapshotInfo') {
+			if (req.stage !== 2 || this.#stage !== 2) throw { code: 'otherStage', message: 'recovery files are stage 2’s' };
+			return req.op === 'recover' ? this.#recover(req.kind, req.from) : this.#snapshotInfo();
+		}
 		const db = this.#db;
 		if (!db || this.#health !== 'ok') throw { code: this.#health, message: this.#reason };
 		switch (req.op) {
+			case 'snapshot':
+				if (req.stage !== 2 || this.#stage !== 2) throw { code: 'otherStage', message: 'the rows snapshot is stage 2’s' };
+				this.#sameFile(req);
+				return this.#snapshot(db);
 			case 'read':
 				if (!(READS as readonly string[]).includes(req.name)) {
 					throw { code: 'refused', message: `${req.name} isn't a read` };
@@ -737,6 +750,132 @@ class Owner {
 				return { imported: out.imported, known: out.known, duplicates: out.duplicates };
 			}
 		}
+	}
+
+	/** The `crema-db` files, by name, from a pool that's installed and not paused. */
+	#dbFiles(): string[] {
+		const info = this.#d.engine.poolInfo('db');
+		if (info.paused) throw { code: 'unavailable', message: 'the pool is paused' };
+		return info.files.map((f) => f.replace(/^\//, ''));
+	}
+
+	/**
+	 * The daily rows snapshot (SPEC §11): the online backup copy of the open
+	 * truth file into `history-snapshot.db`, the one before it kept as
+	 * `history-snapshot-prev.db`. Skipped when `write_seq` and the generation
+	 * haven't moved since the last one. The core's copy refuses an older truth
+	 * over a newer one (the `(generation, write_seq)` guard).
+	 */
+	async #snapshot(db: EngineDb): Promise<{ copied: boolean }> {
+		const { engine } = this.#d;
+		const t = this.#target!;
+		const place = (file: string) => engine.placeOf?.('db', file) ?? { place: 'db', file };
+		const files = this.#dbFiles();
+		const info = (await db.call('info')) as { generation?: number };
+		const seq = Number(await db.call('writeSeq')) || 0;
+		if (files.includes(SNAPSHOT_FILE)) {
+			const snap = await engine.open({ pool: 'db', file: SNAPSHOT_FILE, role: 'authority', create: false, generation: t.generation, journal: t.journal });
+			try {
+				const snapInfo = (await snap.call('info')) as { generation?: number };
+				const snapSeq = Number(await snap.call('writeSeq')) || 0;
+				if (snapSeq === seq && (snapInfo.generation ?? 0) === (info.generation ?? 0)) return { copied: false };
+				await snap.call('copyTo', { ...place(SNAPSHOT_PREV_FILE), journal: t.journal });
+			} finally {
+				snap.close();
+			}
+		}
+		await db.call('copyTo', { ...place(SNAPSHOT_FILE), journal: t.journal });
+		return { copied: true };
+	}
+
+	async #snapshotInfo(): Promise<SnapshotFile[]> {
+		const t = this.#target!;
+		const out: SnapshotFile[] = [];
+		const files = this.#dbFiles();
+		for (const name of [SNAPSHOT_FILE, SNAPSHOT_PREV_FILE]) {
+			if (!files.includes(name)) continue;
+			try {
+				const snap = await this.#d.engine.open({ pool: 'db', file: name, role: 'authority', create: false, generation: t.generation, journal: t.journal });
+				try {
+					out.push({ name, rows: Number(await snap.call('count', { sort: { key: 'date', dir: 'desc' } })) || 0, at: 0 });
+				} finally {
+					snap.close();
+				}
+			} catch {
+				// A snapshot that doesn't open isn't offered.
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * The `lost` banner's choice (SPEC §11 "Store lost or unreadable", S9),
+	 * into a new `history-<n>.db`, one past the highest generation the pool
+	 * lists, so no file there is written over and the damaged one stays for a
+	 * later attempt. Its `migration_source` is every id the P3 store holds now
+	 * and its late-row baseline the P3 store's `writeSeq` and row count now, so
+	 * step 8 imports only what an older build writes after the choice, and
+	 * "start empty" stays empty. Then the done-record; the page writes the
+	 * marker. Nothing here deletes a file.
+	 */
+	async #recover(kind: RecoverKind, from?: string): Promise<{ generation: number }> {
+		const f = this.#d.flip;
+		const { engine } = this.#d;
+		const t = this.#target!;
+		if (!f || !engine.createRecovery) throw { code: 'refused', message: 'this build makes no recovery files' };
+		const files = this.#dbFiles();
+		const n = Math.max(0, ...files.map((x) => generationOf(x) ?? 0)) + 1;
+		const file = dbFileName(n);
+		const source = f.source();
+		let recovery: { migrationSource: string[]; lateBaseline: string };
+		try {
+			const view = await source.view();
+			recovery = { migrationSource: await source.ids(), lateBaseline: JSON.stringify({ writeSeq: view.writeSeq, rows: view.rows }) };
+			if (kind === 'snapshot') {
+				const name = from ?? SNAPSHOT_FILE;
+				if (name !== SNAPSHOT_FILE && name !== SNAPSHOT_PREV_FILE) throw { code: 'refused', message: `${name} isn't a rows snapshot` };
+				if (!files.includes(name)) throw { code: 'refused', message: `there is no ${name}` };
+				const snap = await engine.open({ pool: 'db', file: name, role: 'authority', create: false, generation: t.generation, journal: t.journal });
+				try {
+					await snap.call('copyTo', { ...(engine.placeOf?.('db', file) ?? { place: 'db', file }), journal: t.journal });
+				} finally {
+					snap.close();
+				}
+				const db = await engine.open({ pool: 'db', file, role: 'authority', create: false, generation: t.generation, journal: t.journal });
+				try {
+					await db.call('setRecovery', { generation: n, recovery });
+				} finally {
+					db.close();
+				}
+			} else {
+				const db = await engine.createRecovery({ file, generation: n, journal: t.journal, recovery });
+				try {
+					if (kind === 'oldCopy') {
+						// The old copy's rows; their details are where P3 left them.
+						let after: string | null = null;
+						for (;;) {
+							const rows = await source.rowsAfter(after, 200);
+							if (rows.length === 0) break;
+							await db.call('upsert', rows.map((r) => ({ rowJson: r.rowJson })));
+							after = rows[rows.length - 1].id;
+							if (rows.length < 200) break;
+						}
+					}
+				} finally {
+					db.close();
+				}
+			}
+		} finally {
+			try {
+				source.close();
+			} catch {
+				// Best-effort.
+			}
+		}
+		await f.writeDoneRecord(doneRecordText({ generation: n, poolGeneration: t.generation, at: this.#now() })).catch((e) => {
+			f.log?.(`recovery: the done-record wasn't written (${engineError(e).code}); the marker keeps it`);
+		});
+		return { generation: n };
 	}
 
 	#sameFile(req: Request): void {

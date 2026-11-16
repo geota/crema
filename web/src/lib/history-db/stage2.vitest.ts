@@ -30,6 +30,8 @@ import { flipDisk, flipEnv, stageDeps, type DoneRecordBox, type FlipDisk } from 
 import { seedP3, p3Db, indexReady } from './w2-kit.js';
 import { chooseStage, type StageChoice } from './stage.js';
 import { canonical } from './flip.js';
+import { dbFileName } from './marker.js';
+import { MARKER_KEY } from './names.js';
 
 const realIdb = (globalThis as { indexedDB?: unknown }).indexedDB;
 beforeAll(async () => {
@@ -428,5 +430,116 @@ describe.runIf(historyWasmBuilt)('older builds after the flip (SPEC §11 "Downgr
 		const mine = disk.calls.slice(from);
 		expect(mine.some((c) => c.startsWith('index/'))).toBe(true);
 		expect(mine.filter((c) => c.startsWith('db'))).toEqual([]);
+	});
+});
+
+describe.runIf(historyWasmBuilt)('W5c: recovery files, the rows snapshot, pulled duplicates', () => {
+	const STAGE2_OF = (g: number) => {
+		const file = dbFileName(g);
+		return {
+			stage: 2 as const,
+			expect: { role: 'authority' as const, file, generation: 0 },
+			target: { pool: 'db' as const, generation: 0, file, role: 'authority' as const, create: false, journal: 'exclusiveWal' as const }
+		};
+	};
+	/** As `start.ts`'s `restageHistoryDb`: the marker, then a client of the new file. */
+	function restageFrom(old: Tab): (g: number) => Promise<Stage2> {
+		return async (g) => {
+			env.storage.setItem(MARKER_KEY, JSON.stringify({ state: 'done', generation: g, poolGeneration: 0, at: Date.now() }));
+			await old.client.stop();
+			const t = openTab(env, STAGE2_OF(g));
+			tabs.push(t);
+			return { ...stage2Of(t), restage: restageFrom(t) };
+		};
+	}
+	/** Flipped, then `history.db` gone: a stage-2 store that is `lost`. */
+	async function lostStore(n = 5): Promise<{ store: HistoryStore; t: Tab }> {
+		const { t } = await flipped(n);
+		await t.client.snapshot();
+		disk.files.db.delete('history.db');
+		await t.client.stop();
+		t.close();
+		tabs.splice(tabs.indexOf(t), 1);
+		const choice = await boot();
+		const t2 = tabOn(choice);
+		const store = new HistoryStore({ stage2: async () => ({ ...stage2Of(t2), restage: restageFrom(t2) }) });
+		await expect.poll(() => store.health, { timeout: 20_000 }).toBe('lost');
+		return { store, t: t2 };
+	}
+	const currentTab = () => tabs[tabs.length - 1];
+
+	it('start empty: a new history-1.db, the damaged file left, and a reboot stays on it and empty (S9)', async () => {
+		const { store } = await lostStore();
+		const before = await oldCopyBytes();
+		expect(await store.startEmpty()).toBe(true);
+		expect(store.health).toBe('ok');
+		expect(JSON.parse(env.storage.getItem(MARKER_KEY)!)).toMatchObject({ state: 'done', generation: 1 });
+		expect(disk.files.db.has('history-1.db')).toBe(true);
+		expect((await dbRows(currentTab())).size).toBe(0);
+		// A reboot: the marker names history-1.db, and late rows import nothing.
+		const t = await reboot(currentTab());
+		expect(t.client.status.owner?.file).toBe('history-1.db');
+		expect((await dbRows(t)).size).toBe(0);
+		expect(await oldCopyBytes()).toBe(before);
+	});
+
+	it('the old copy: history-1.db holds the P3 store’s rows', async () => {
+		const { store } = await lostStore(7);
+		expect(await store.recoverOldCopy()).toBe(true);
+		expect((await dbRows(currentTab())).size).toBe(7);
+		const t = await reboot(currentTab());
+		expect((await dbRows(t)).size).toBe(7);
+	});
+
+	it('the rows snapshot: daily, skipped when nothing moved, one previous copy kept; a recovery from it is generation n', async () => {
+		const { t } = await flipped(4);
+		expect(await t.client.snapshot()).toEqual({ copied: true });
+		expect(await t.client.snapshot()).toEqual({ copied: false });
+		const store = await storeOn(t);
+		await store.ready;
+		store.recordCaptured({ ...realShot(600, realSamples(9, 1)), id: 'after-snap' } as unknown as Record<string, unknown>);
+		await store.flushed();
+		// The store takes the day's snapshot after its first write; the old one is kept.
+		await expect.poll(() => disk.files.db.has('history-snapshot-prev.db'), { timeout: 5_000 }).toBe(true);
+		expect(await t.client.snapshot()).toEqual({ copied: false });
+		expect(disk.files.db.has('history-snapshot.db')).toBe(true);
+		const info = await t.client.snapshotInfo();
+		expect(info.map((s) => [s.name, s.rows])).toEqual([
+			['history-snapshot.db', 5],
+			['history-snapshot-prev.db', 4]
+		]);
+		// Lost, then the snapshot: history-1.db from it, its generation set.
+		disk.files.db.delete('history.db');
+		await store.flushed();
+		await t.client.stop();
+		t.close();
+		tabs.splice(tabs.indexOf(t), 1);
+		const t2 = tabOn(await boot());
+		const lost = new HistoryStore({ stage2: async () => ({ ...stage2Of(t2), restage: restageFrom(t2) }) });
+		await expect.poll(() => lost.health, { timeout: 20_000 }).toBe('lost');
+		expect(await lost.recoverSnapshot('history-snapshot.db')).toBe(true);
+		const now = currentTab();
+		expect((await dbRows(now)).has('after-snap')).toBe(true);
+		expect(((await now.client.read('info')) as { generation: number }).generation).toBe(1);
+	}, 60_000);
+
+	it('N8: two tabs pulling one Visualizer shot store it once, and the other tab drops its copy', async () => {
+		const { t } = await flipped(3);
+		const t2 = tabOn(STAGE2_OF(0));
+		await indexReady(t2.client);
+		const a = await storeOn(t);
+		const b = await storeOn(t2);
+		await Promise.all([a.ready, b.ready]);
+		const pull = (id: string) => ({ ...realShot(800, realSamples(6, 2)), id, visualizerId: 'viz-remote-1' }) as StoredShot;
+		expect(a.insertPulled(pull('pulled-a'))).toBe(true);
+		await a.flushed();
+		expect(b.insertPulled(pull('pulled-b'))).toBe(true);
+		await b.flushed();
+		const rows = await dbRows(t);
+		const holders = [...rows.values()].filter((r) => r.visualizerId === 'viz-remote-1').map((r) => r.id);
+		expect(holders).toEqual(['pulled-a']);
+		expect(b.get('pulled-b')).toBeUndefined();
+		expect((await detailsOf(['pulled-b'])).has('pulled-b')).toBe(false);
+		await expect.poll(() => b.get('pulled-a')?.id, { timeout: 5_000 }).toBe('pulled-a');
 	});
 });

@@ -169,7 +169,26 @@ export type Request =
 	 * journal or the pre-P3 store, inserted by the id rule (never an id
 	 * `migration_source` or `history.db` has). Idempotent, so resent like a read.
 	 */
-	| (Header & { op: 'importLate'; rows: { rowJson: string }[] });
+	| (Header & { op: 'importLate'; rows: { rowJson: string }[] })
+	/**
+	 * Stage 2 (W5c, SPEC §11, S9): the `lost` banner's choice, into a new
+	 * `history-<n>.db`, whatever the open file's health. Sent once, never resent.
+	 */
+	| (Header & { op: 'recover'; kind: RecoverKind; from?: string })
+	/** Stage 2 (W5c): the daily rows snapshot, `history-snapshot.db`, keeping one previous copy. */
+	| (Header & { op: 'snapshot' })
+	/** Stage 2 (W5c): the rows snapshots there are, for the `lost` banner. */
+	| (Header & { op: 'snapshotInfo' });
+
+/** What a recovery file starts from (S9). */
+export type RecoverKind = 'empty' | 'oldCopy' | 'snapshot';
+
+/** A rows snapshot, as the `lost` banner lists it. */
+export interface SnapshotFile {
+	name: string;
+	rows: number;
+	at: number;
+}
 
 /**
  * One pending-journal entry, as the drain sends it (M5, REVIEW-456 F2). A
@@ -204,7 +223,7 @@ export type Reply = ReplyOk | ReplyErr;
 
 /** A write's outcome (`AppliedJson`). */
 export type Applied =
-	| { outcome: 'done'; written: { change: ChangeSet } }
+	| { outcome: 'done'; written: { change: ChangeSet; duplicates?: { id: string; existingId: string }[] } }
 	| { outcome: 'alreadyApplied'; last: number }
 	| { outcome: 'gap'; last: number }
 	| { outcome: 'refused'; reason: string };

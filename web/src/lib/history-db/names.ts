@@ -32,6 +32,9 @@ export const PENDING_KEY_PREFIX = 'crema.history.sqlite.pending.';
 export const INDEX_FILE = 'history-index.db';
 /** Stage 2's truth, in `crema-db` (a recovery generation is `history-<n>.db`). */
 export const DB_FILE = 'history.db';
+/** The daily rows snapshot, in `crema-db`, and the one before it (SPEC §11). */
+export const SNAPSHOT_FILE = 'history-snapshot.db';
+export const SNAPSHOT_PREV_FILE = 'history-snapshot-prev.db';
 
 /** The Web Lock the owner's Worker holds: whoever holds it owns the database (SPEC §8). */
 export const OWNER_LOCK = 'crema-history-db';
