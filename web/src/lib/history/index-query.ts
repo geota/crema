@@ -3,6 +3,7 @@
  * `HistoryQuery` (#310 W2, SPEC §6), and the day groups' edges (§7).
  */
 import { maySearch, type HistoryQuery, type SortKey } from '#lib/history-db/window.svelte.js';
+import type { Live } from '#lib/history-db/protocol.js';
 import type { SortDir, SortField } from './list-filter';
 import { COFFEE_FILTER_PREFIX } from './search';
 
@@ -60,3 +61,26 @@ export function dayEdges(now: Date): number[] {
 
 /** The day groups' labels, in `group_counts` order. */
 export const DAY_LABELS = ['Today', 'Yesterday', 'This week', 'Earlier'] as const;
+
+/** What the live libraries are read from: the bean store and the custom methods. */
+export interface LiveSources {
+	beans: readonly { id: string; name: string; roasterId?: string | null; tags?: readonly string[] }[];
+	roaster(id: string): { name: string; canonicalRoasterId?: string | null } | null;
+	methods: readonly { id: string; label: string }[];
+}
+
+/**
+ * The live libraries for the index's queries (SPEC §5, §6): each bag's current
+ * name and roaster, a roaster merged into another answering as that one (as
+ * the page's `liveCoffee` does), its tags, and every custom method's label.
+ */
+export function historyLive(src: LiveSources): Live {
+	return {
+		beans: src.beans.map((b) => {
+			let roaster = b.roasterId ? src.roaster(b.roasterId) : null;
+			if (roaster?.canonicalRoasterId) roaster = src.roaster(roaster.canonicalRoasterId) ?? roaster;
+			return { beanId: b.id, name: b.name, roaster: roaster?.name ?? null, tags: [...(b.tags ?? [])] };
+		}),
+		methods: src.methods.map((m) => ({ method: m.id, label: m.label }))
+	};
+}

@@ -136,6 +136,20 @@ describe('resolveScroll through a windowed list (#310 P5w)', () => {
 		expect(resolveScroll(box, snap, locate)).toEqual({ top: 1500, anchored: true });
 	});
 
+	it('waits for an anchor whose place is still being looked up: the first found wins (#310 W2)', () => {
+		const box = list(KEYS.slice(0, 3), 0);
+		let first: number | null | 'pending' = 'pending';
+		const locate = (key: string) => (key === 'bean:15' ? first : key === 'bean:16' ? 1600 : null);
+		const snap = { top: 9, anchors: [{ key: 'bean:15', offset: 30 }, { key: 'bean:16', offset: 0 }] };
+		// The first anchor's `index_of` hasn't answered: not the second one, not the pixels.
+		expect(resolveScroll(box, snap, locate)).toEqual({ top: 0, anchored: false, pending: true });
+		first = 1500;
+		expect(resolveScroll(box, snap, locate)).toEqual({ top: 1470, anchored: true });
+		// The first anchor was deleted meanwhile: the next one.
+		first = null;
+		expect(resolveScroll(box, snap, locate)).toEqual({ top: 1600, anchored: true });
+	});
+
 	it('prefers a rendered anchor to the locator', () => {
 		const box = list(KEYS, 200);
 		const snap = { top: 0, anchors: [{ key: 'bean:4', offset: 50 }] };

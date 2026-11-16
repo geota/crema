@@ -203,6 +203,8 @@ export class IndexWindow<R> {
 	groups = $state.raw<number[] | null>(null);
 	/** Moves whenever a page lands or goes: whatever reads {@link rowAt} reruns. */
 	version = $state(0);
+	/** Moves when the list's rows or order may have moved (a relist): places from before are stale. */
+	listGen = $state(0);
 	/** From the window's start to its first page, ms. */
 	firstPageMs: number | null = null;
 	readonly #createdAt = performance.now();
@@ -508,6 +510,7 @@ export class IndexWindow<R> {
 	/** The set or the order moved: the count, the visible pages again, the others dropped. */
 	async #relist(): Promise<void> {
 		this.#gen++;
+		this.listGen++;
 		this.#indexOf.clear();
 		const before = this.#wanted();
 		let dropped = false;

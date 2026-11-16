@@ -24,7 +24,7 @@ describe('listItems', () => {
 
 	it('phone, date sort: day headings between, not counted', () => {
 		const items = listItems(rows, { headings: true, now, current: (r) => r });
-		expect(items.map((i) => (i.kind === 'row' ? `${i.key}:${i.pos}` : i.label))).toEqual([
+		expect(items.map((i) => (i.kind === 'head' ? i.label : `${i.key}:${i.pos}`))).toEqual([
 			'Today',
 			'a:1',
 			'Yesterday',

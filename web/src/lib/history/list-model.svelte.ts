@@ -55,6 +55,12 @@ export interface ListModelDeps {
 	tagsOf(shot: ShotRow): readonly string[];
 	/** A library bag's live name and roaster, for the coffee key. */
 	liveCoffee(beanId: string): { name: string; roaster: string | null } | null;
+	/**
+	 * Whether the list reads these derivations (#310 W2): while History reads
+	 * the stage-1 index they'd only cost, so the stats don't run. True by
+	 * default.
+	 */
+	active?(): boolean;
 }
 
 /** A facet pill's data: an id, a label and how many rows carry it. */
@@ -84,6 +90,7 @@ export class HistoryListModel {
 			return () => clearTimeout(timer);
 		});
 		$effect(() => {
+			if (deps.active && !deps.active()) return;
 			const rows = this.filtered;
 			void this.versions.rating;
 			// The rows `filtered` holds are as of the last list change: a rating

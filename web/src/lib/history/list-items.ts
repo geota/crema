@@ -23,6 +23,17 @@ export type ListItem =
 			readonly note: boolean;
 			/** 1-based place among the rows, headings not counted. */
 			readonly pos: number;
+	  }
+	/**
+	 * A row whose page hasn't loaded (#310 W2, SPEC §7 rule 2): drawn as a
+	 * placeholder of the row's height, keyed by its place.
+	 */
+	| {
+			readonly kind: 'skeleton';
+			readonly key: string;
+			/** The row had its note line when it was last loaded: keep its height. */
+			readonly note: boolean;
+			readonly pos: number;
 	  };
 
 /** An item's height in px for each kind and layout, the gap below it included. */

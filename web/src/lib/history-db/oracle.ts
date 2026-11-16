@@ -94,6 +94,11 @@ export interface OracleDeps<R> {
 	read<T>(name: 'indexState' | 'writeSeq' | 'count' | 'stats' | 'indexOf' | 'groupCounts', arg?: unknown): Promise<T>;
 	/** Told of a mismatch, before it throws. */
 	onMismatch?(m: HistoryOracleMismatch): void;
+	/**
+	 * Skip an answer that comes sooner than this after the last check began:
+	 * dev keeps the page fast at 20,000 rows; the tests check every answer.
+	 */
+	throttleMs?: number;
 }
 
 /** Relative tolerance for the stats: SQLite sums in its own order (SPEC §7). */
@@ -124,6 +129,8 @@ export class DevOracle<R> {
 	/** The reference's ids per query, for one state of the rows. */
 	#cache = new Map<string, string[]>();
 	#cacheKey = '';
+	#rowsJson: string | null = null;
+	#lastAt = -Infinity;
 	/** Answers checked and skipped (not comparable then), for the tests. */
 	checked = 0;
 	skipped = 0;
@@ -161,12 +168,16 @@ export class DevOracle<R> {
 		});
 	}
 
+	/** The rows' state now: a new one empties the caches. */
+	#state(key: string): void {
+		if (key === this.#cacheKey) return;
+		this.#cache = new Map();
+		this.#cacheKey = key;
+		this.#rowsJson = null;
+	}
+
 	/** The reference's ids for `q` over the rows as they are. */
-	#ids(q: HistoryQuery, rowsJson: () => string, stateKey: string): string[] {
-		if (stateKey !== this.#cacheKey) {
-			this.#cache = new Map();
-			this.#cacheKey = stateKey;
-		}
+	#ids(q: HistoryQuery, rowsJson: () => string): string[] {
 		const key = JSON.stringify(q);
 		let ids = this.#cache.get(key);
 		if (!ids) {
@@ -177,6 +188,9 @@ export class DevOracle<R> {
 	}
 
 	async #check(a: WindowAnswer<R>): Promise<void> {
+		const now = performance.now();
+		if (now - this.#lastAt < (this.#d.throttleMs ?? 0)) return void this.skipped++;
+		this.#lastAt = now;
 		const before = this.#d.inStep();
 		if (!before.quiet) return void this.skipped++;
 		const st = await this.#d.read<{ sourceSeq: number; seenSeqs: number[] }>('indexState');
@@ -198,11 +212,11 @@ export class DevOracle<R> {
 		const indexAfter = Number(await this.#d.read<number>('writeSeq'));
 		if (!after.quiet || after.seq !== before.seq || indexAfter !== indexSeq) return void this.skipped++;
 		const rows = this.#d.rows();
-		const rowsJson = () => JSON.stringify(rows);
-		const stateKey = `${after.seq}:${indexSeq}:${rows.length}`;
+		this.#state(`${after.seq}:${indexSeq}:${rows.length}`);
+		const rowsJson = () => (this.#rowsJson ??= JSON.stringify(rows));
 		this.checked++;
 		const q = a.query;
-		const ids = () => this.#ids(q, rowsJson, stateKey);
+		const ids = () => this.#ids(q, rowsJson);
 		switch (a.kind) {
 			case 'count': {
 				if (again !== ids().length) throw new HistoryOracleMismatch('count', q, `${again} vs ${ids().length}`);

@@ -64,8 +64,11 @@ export function shotPasses(s: AnyShot, f: ListFilters, lookups: FilterLookups): 
 }
 
 /**
- * `rows` in the chosen order. Ties fall back to newest first, so equal-keyed
- * rows stay in date order within their bucket.
+ * `rows` in the chosen order: the key, then `completedAt`, then the id, all in
+ * the chosen direction (#310 SPEC §6, the core's total order). Ties follow the
+ * sort, newest first under a descending sort and oldest first under an
+ * ascending one, so this in-memory path (`index_fallback`) orders equal keys
+ * as the index does (#448 note 6).
  */
 export function sortShots<T extends AnyShot>(rows: readonly T[], field: SortField, direction: SortDir): T[] {
 	const dir = direction === 'asc' ? 1 : -1;
@@ -91,7 +94,7 @@ export function sortShots<T extends AnyShot>(rows: readonly T[], field: SortFiel
 				k = cmpStr(a.bean?.name ?? null, b.bean?.name ?? null);
 				break;
 		}
-		return k * dir || b.completedAt - a.completedAt;
+		return (k || a.completedAt - b.completedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) * dir;
 	});
 	return arr;
 }
