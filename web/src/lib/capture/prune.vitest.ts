@@ -13,6 +13,7 @@ setHistoryStoreDefaultsForTest({ backend: 'legacy' });
 import { getCaptureStore } from './store.ts';
 import { CAPTURE_KEEP_KEY, readCaptureKeep } from './limit.ts';
 import { capturesOverLimit, pruneCaptures } from './prune.ts';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 function row(id: string, at: number): StoredShot {
 	return {
@@ -102,7 +103,7 @@ describe('raw captures past the limit', () => {
 		localStorage.setItem('crema.history.v2', JSON.stringify([...rows, 'not a row']));
 		const damaged = new HistoryStore();
 		await settle();
-		expect(damaged.rawAll).toHaveLength(3);
+		expect(p3RowsOf(damaged).raw).toHaveLength(3);
 		expect(await pruneCaptures(damaged, 'off')).toEqual([]);
 		expect(await captureIds()).toHaveLength(3);
 	});

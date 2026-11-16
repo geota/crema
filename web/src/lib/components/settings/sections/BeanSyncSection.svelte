@@ -16,6 +16,7 @@
 	import { getBeanStore, readSyncSettings, type SyncResult as BeanSyncResult } from '#lib/bean/index.js';
 	import { getHistoryStore } from '#lib/history/index.js';
 	import { historyFullNotice } from '#lib/history/brew-date.js';
+	import { getHistoryReads, liveCount } from '#lib/history/reads.svelte.js';
 	import {
 		appendSyncLog,
 		directionPulls,
@@ -286,6 +287,8 @@
 		}
 	}
 
+	/** Shots on this device, by a query (#310 W3). */
+	const shotCount = getHistoryReads().watch(() => liveCount(), 0);
 	const unsyncedShotCount = $derived(history.visualizerBacklog.length);
 	const noTelemetryCount = $derived(history.withoutTelemetry.length);
 </script>
@@ -360,7 +363,7 @@
 
 		<StRow
 			title="Shots"
-			sub={`${history.all.length} shot(s) on this device${unsyncedShotCount > 0 ? `, ${unsyncedShotCount} unsynced` : ''}${noTelemetryCount > 0 ? `, ${noTelemetryCount} without telemetry` : ''}. Last sync: ${syncTimeLabel(config.lastSyncAt.shots)}.`}
+			sub={`${shotCount.value} shot(s) on this device${unsyncedShotCount > 0 ? `, ${unsyncedShotCount} unsynced` : ''}${noTelemetryCount > 0 ? `, ${noTelemetryCount} without telemetry` : ''}. Last sync: ${syncTimeLabel(config.lastSyncAt.shots)}.`}
 		>
 			{#snippet control()}
 				<StSegment

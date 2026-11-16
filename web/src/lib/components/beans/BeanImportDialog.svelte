@@ -47,6 +47,7 @@
 		historyDroppedNotice,
 		type StoredShot
 	} from '#lib/history/index.js';
+	import { getHistoryReads, liveRows } from '#lib/history/reads.svelte.js';
 	import { prepareImportedShot, type CoreImportedShot } from '#lib/bean/imported-shot.js';
 	import FileDropZone from '#lib/components/shared/FileDropZone.svelte';
 
@@ -236,7 +237,7 @@
 				images[m[1]] = bytes;
 			}
 			cremaZipImages = images;
-			preview = buildPreview(plan, filename);
+			preview = await buildPreview(plan, filename);
 			step = 'preview';
 		} catch (e) {
 			step = 'error';
@@ -259,7 +260,7 @@
 				return;
 			}
 			const plan = JSON.parse(planJson) as CorePlan;
-			preview = buildPreview(plan, file.name);
+			preview = await buildPreview(plan, file.name);
 			step = 'preview';
 		} catch (e) {
 			step = 'error';
@@ -292,7 +293,7 @@
 				return;
 			}
 			const plan = JSON.parse(planJson) as CorePlan;
-			preview = buildPreview(plan, file.name);
+			preview = await buildPreview(plan, file.name);
 			step = 'preview';
 		} catch (e) {
 			step = 'error';
@@ -348,7 +349,7 @@
 				return;
 			}
 			const plan = JSON.parse(planJson) as CorePlan;
-			preview = buildPreview(plan, jsonFiles[0].name);
+			preview = await buildPreview(plan, jsonFiles[0].name);
 			step = 'preview';
 		} catch (e) {
 			step = 'error';
@@ -446,7 +447,7 @@
 	 * was itself dedup'd re-point at the surviving library bean via
 	 * `beanIdRemap`.
 	 */
-	function buildPreview(plan: CorePlan, filename: string): Preview {
+	async function buildPreview(plan: CorePlan, filename: string): Promise<Preview> {
 		const merge = mergeBeanImport(plan.beans, plan.roasters, library.beans, library.roasters);
 		const newBeans = merge.newBeans as Bean[];
 		const updatedBeans = merge.updatedBeans as Bean[];
@@ -462,8 +463,9 @@
 		// Not loaded is not empty: with no rows, every shot would land again.
 		if (!history.loaded) throw new Error('Shot history is still loading. Try again in a moment.');
 		// Every live row, past the view too (#310): a hidden shot is still here.
+		// By a query, whole and from one state (W3).
 		const existingShotKeys = new Set(
-			history.rawAll.filter((s) => s.deletedAt == null).map(
+			(await getHistoryReads().answer(liveRows())).map(
 				(s) => `${s.completedAt}·${(s.bean?.name ?? '').trim().toLowerCase()}`
 			)
 		);

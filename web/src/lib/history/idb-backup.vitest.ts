@@ -11,6 +11,7 @@ import { summarize } from './summary';
 import { freshStorage } from './idb-test-kit';
 import { getHistoryStore } from './store.svelte';
 import { buildBackupJsonl, backupContents } from '#lib/backup/index.js';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const realIdb = (globalThis as { indexedDB?: unknown }).indexedDB;
 beforeAll(async () => {
@@ -36,10 +37,10 @@ it('a backup from a cold start includes every row, whole', async () => {
 
 	const history = getHistoryStore();
 	await history.whenReady();
-	expect(history.all).toHaveLength(310);
+	expect(p3RowsOf(history).live).toHaveLength(310);
 	// From a cold start no row holds a curve (P4w): the
 	// backup loads each one whole.
-	for (const row of history.rawAll) expect('samples' in row.record).toBe(false);
+	for (const row of p3RowsOf(history).raw) expect('samples' in row.record).toBe(false);
 	expect(backupContents().shots).toBe(310);
 
 	const built = (await buildBackupJsonl('test'))!;

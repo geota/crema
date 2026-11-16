@@ -16,6 +16,7 @@ import {
 } from '#lib/restore/tab-safety.js';
 import { getHistoryStore } from './store.svelte';
 import { FakeLocks } from '#lib/testing/fake-locks.js';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 vi.mock('#lib/bean/bag-empty-prompt.js', () => ({ promptBagEmpty: () => {} }));
 
@@ -80,7 +81,7 @@ describe('a shot in a frozen tab', () => {
 		expect(getHistoryStore().get('shot:frozen')?.bagDebit).toBe(18);
 		expect(getBeanStore().getBean('a')?.remaining).toBe(82);
 		await commitFrozenShots(null);
-		expect(getHistoryStore().all.filter((s) => s.id === 'shot:frozen')).toHaveLength(1);
+		expect(p3RowsOf(getHistoryStore()).live.filter((s) => s.id === 'shot:frozen')).toHaveLength(1);
 	});
 
 	it('waits while this boot is frozen too, and is kept', async () => {
@@ -118,7 +119,7 @@ describe('a shot in a frozen tab', () => {
 		// The second tab boots with its own copy of the same stash.
 		localStorage.setItem(FROZEN_SHOTS_KEY, stash);
 		await commitFrozenShots(null);
-		expect(getHistoryStore().all.filter((s) => s.id === 'shot:dup')).toHaveLength(1);
+		expect(p3RowsOf(getHistoryStore()).live.filter((s) => s.id === 'shot:dup')).toHaveLength(1);
 		expect(getBeanStore().getBean('a')?.remaining).toBe(82);
 		expect(peekFrozenShots()).toEqual([]);
 	});

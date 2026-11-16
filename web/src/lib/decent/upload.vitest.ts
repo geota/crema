@@ -8,24 +8,28 @@ const shots = new Map<string, StoredShot>();
 let seriesReady = async (): Promise<boolean> => true;
 /** Whether the rows have loaded, for the `ready` gates (#310 P3w). */
 let rowsReady = true;
-vi.mock('#lib/history/store.svelte.js', () => ({
-	getHistoryStore: () => ({
-		seriesReady: () => seriesReady(),
-		readyWithin: async () => rowsReady,
-		get loaded() {
-			return rowsReady;
-		},
-		get: (id: string) => shots.get(id),
-		loadShot: async (id: string) => shots.get(id),
-		get all() {
-			return [...shots.values()];
-		},
-		bindDecentId: (id: string, decentId: string, machine?: ShotMachine) => {
-			const s = shots.get(id);
-			if (s) shots.set(id, { ...s, decentId, ...(machine ? { machine } : {}) });
-		}
-	})
-}));
+vi.mock('#lib/history/store.svelte.js', async () => {
+	const { P3_ROWS } = await import('#lib/history/p3-rows.js');
+	return {
+		getHistoryStore: () => ({
+			seriesReady: () => seriesReady(),
+			readyWithin: async () => rowsReady,
+			get loaded() {
+				return rowsReady;
+			},
+			get: (id: string) => shots.get(id),
+			loadShot: async (id: string) => shots.get(id),
+			get all() {
+				return [...shots.values()];
+			},
+			[P3_ROWS]: () => ({ live: [...shots.values()], raw: [...shots.values()] }),
+			bindDecentId: (id: string, decentId: string, machine?: ShotMachine) => {
+				const s = shots.get(id);
+				if (s) shots.set(id, { ...s, decentId, ...(machine ? { machine } : {}) });
+			}
+		})
+	};
+});
 let liveSerial: number | null = null;
 vi.mock('#lib/state/machine-readout.svelte.js', () => ({
 	getMachineReadout: () => ({

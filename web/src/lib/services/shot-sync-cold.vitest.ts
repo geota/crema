@@ -45,6 +45,7 @@ import { summarize } from '#lib/history/summary.js';
 import { boot, freshStorage, stored } from '#lib/history/idb-test-kit.js';
 import type { StoredShot } from '#lib/history/model.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const realIdb = (globalThis as { indexedDB?: unknown }).indexedDB;
 beforeAll(async () => {
@@ -108,12 +109,12 @@ describe('from a cold start', () => {
 		const shots = Array.from({ length: 4 }, (_, i) => ({ ...realShot(i, realSamples(7, i)), visualizerId: null }));
 		await seed(shots);
 		const history = await boot();
-		for (const row of history.all) expect('samples' in row.record).toBe(false);
+		for (const row of p3RowsOf(history).live) expect('samples' in row.record).toBe(false);
 		const out = await run(ShotSync.pipe(Effect.flatMap((s) => s.uploadUnsyncedShots(history))));
 		expect(out.uploaded).toBe(4);
 		expect(h.exported.map((e) => e.samples)).toEqual([7, 7, 7, 7]);
 		expect(h.exported.every((e) => e.profile)).toBe(true);
-		for (const row of history.all) expect(row.visualizerId).toMatch(/^viz-/);
+		for (const row of p3RowsOf(history).live) expect(row.visualizerId).toMatch(/^viz-/);
 	});
 
 	it('a shot that can’t be read is skipped and logged, never sent without its curve', async () => {

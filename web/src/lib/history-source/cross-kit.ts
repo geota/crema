@@ -13,6 +13,7 @@ import type { StoredShot } from '#lib/history/model.js';
 import { SqliteSource } from './sqlite';
 import { idbDetails } from './details';
 import { directPort, freshFile, makeTruth, openTruth } from './sqlite-kit';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 /** `shots` in `crema-history`, migrated, as a P3 boot finds it. */
 export async function p3History(shots: readonly StoredShot[]): Promise<void> {
@@ -33,7 +34,7 @@ export async function sqliteOfP3(batch = 25): Promise<{ source: SqliteSource; po
 	await makeTruth(file);
 	const truth = await openTruth(file);
 	const port = directPort(truth);
-	const ids = getHistoryStore().rawAll.map((s) => s.id).reverse();
+	const ids = p3RowsOf(getHistoryStore()).raw.map((s) => s.id).reverse();
 	const rows = await rawDb().rowsOf(ids);
 	for (let i = 0; i < ids.length; i += 100) {
 		await port.write({

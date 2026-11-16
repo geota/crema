@@ -11,6 +11,7 @@ import { realSamples, realShot } from '#lib/testing/real-shots.js';
 import { downloadBlob } from '#lib/utils/download.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
 import { boot, freshStorage, writeOldCopy } from '#lib/history/idb-test-kit.js';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 vi.mock('$app/navigation', () => ({ goto: vi.fn(() => Promise.resolve()) }));
 vi.mock('#lib/utils/download.js', async (importOriginal) => ({
@@ -91,7 +92,7 @@ describe('the lost banner', () => {
 		await tick();
 		await new Promise((r) => setTimeout(r, 10));
 		expect(goto).not.toHaveBeenCalled();
-		expect(b.rawAll).toHaveLength(2);
+		expect(p3RowsOf(b).raw).toHaveLength(2);
 	});
 
 	it('Restore a backup opens Settings once the history starts empty', async () => {

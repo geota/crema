@@ -62,6 +62,7 @@ import { HttpStatusError } from '../effect/errors.ts';
 import type { StoredShot } from '#lib/history/model.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
 import type { TokenSet } from '../visualizer/oauth.ts';
+import { P3_ROWS } from '#lib/history/p3-rows.js';
 
 function mkHttp(
 	handler: (
@@ -260,6 +261,7 @@ describe('ShotSync.patchEditedShot — pending-only PATCHes', () => {
 	const historyOf = (s: StoredShot) =>
 		({
 			all: [s],
+			[P3_ROWS]: () => ({ live: [s], raw: [s] }),
 			loaded: true,
 			get: (id: string) => (id === s.id ? s : undefined),
 			setTags: (_id: string, tags: string[]) => {
@@ -554,6 +556,7 @@ describe('ShotSync pull merges through the core', () => {
 			get rawAll() {
 				return shots;
 			},
+			[P3_ROWS]: () => ({ live: shots, raw: shots }),
 			loaded: true,
 			get: (id: string) => shots.find((x) => x.id === id),
 			bindVisualizerId: vi.fn(),
@@ -659,6 +662,7 @@ describe('ShotSync: an offline barista clear survives the next pull (V3 #6, V2 P
 		const history = {
 			all: [shot],
 			rawAll: [shot],
+			[P3_ROWS]: () => ({ live: [shot], raw: [shot] }),
 			loaded: true,
 			get: (id: string) => (id === shot.id ? shot : undefined),
 			bindVisualizerId: vi.fn(),

@@ -36,6 +36,7 @@
 
 import { Effect, Schedule } from 'effect';
 import { getHistoryStore } from '#lib/history/store.svelte.js';
+import { liveSyncRows } from '#lib/history/sync-view.js';
 import { reportUploadOutcome } from '#lib/history/upload-toast.js';
 import { appendSyncLog } from '#lib/visualizer/sync-config.js';
 import { isBrewLog, refusedNoSamples, toCoreShotMachine, type AnyShot, type StoredShot } from '#lib/history/model.js';
@@ -552,7 +553,7 @@ export function uploadUnsentDecentShots(
 		if (!(await getHistoryStore().readyWithin())) {
 			return { uploaded: 0, failed: 0, skipped: 0, notOnAccount: [], stopped: null, lastError: null };
 		}
-		const backlog = unsentDecentShots(getHistoryStore().all).sort((a, b) => a.completedAt - b.completedAt);
+		const backlog = unsentDecentShots(liveSyncRows(getHistoryStore())).sort((a, b) => a.completedAt - b.completedAt);
 		return drain(
 			backlog.map((s) => s.id),
 			{ manual: true, backlog: true, fetchFn: opts.fetchFn, onProgress: opts.onProgress }

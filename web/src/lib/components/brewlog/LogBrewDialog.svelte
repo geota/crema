@@ -39,8 +39,9 @@
 	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import { promptBagEmpty } from '#lib/bean/bag-empty-prompt.js';
 	import { getHistoryStore } from '#lib/history/store.svelte.js';
+	import { getHistoryReads, liveRows } from '#lib/history/reads.svelte.js';
 	import { msToNextMinute } from '#lib/history/range.js';
-	import { snapshotFromBean, type AnyShot, type StoredShot } from '#lib/history/model.js';
+	import { snapshotFromBean, type AnyShot, type ShotRow, type StoredShot } from '#lib/history/model.js';
 	import {
 		brewDateError,
 		brewDateTooOld,
@@ -77,9 +78,17 @@
 	// svelte-ignore state_referenced_locally
 	const seed = prefill;
 
+	/**
+	 * Every live row, newest first, by a query (#310 W3): at once where this tab
+	 * has no index to ask, else once it answers. Until then the seeds come from
+	 * the prefill alone, and when the rows come every untouched field seeds again.
+	 */
+	const reads = getHistoryReads();
+	let seedSource: readonly ShotRow[] | null = reads.now(liveRows())?.value ?? null;
+
 	/** History projected for the core's seeding rule, newest first. */
 	function seedRows(): BrewSeedInput[] {
-		return history.all.map((s) => ({
+		return (seedSource ?? []).map((s) => ({
 			brewMethod: s.brewMethod ?? undefined,
 			beanId: s.bean?.beanId ?? undefined,
 			doseG: s.metadata.dose ?? undefined,
@@ -157,6 +166,22 @@
 	// Seed the numeric fields for the opening method (later re-seeds run
 	// from the chip handler with the freshly-picked id).
 	applySeeds(openingSeeds);
+	/** The user picked a method before the rows came: theirs stays. */
+	let methodPicked = false;
+	if (seedSource === null) {
+		void reads.answer(liveRows()).then(
+			(rows) => {
+				seedSource = rows;
+				const again = seedsFor(methodPicked ? method : null);
+				if (!methodPicked) {
+					method = again.method;
+					if (!presets.slice(0, INLINE_PRESET_COUNT).some((p) => p.id === again.method)) showAllMethods = true;
+				}
+				if (method !== OTHER_METHOD) applySeeds(again);
+			},
+			() => {}
+		);
+	}
 
 	/** The core's seeds for `m` (`null` = the opening method). */
 	function seedsFor(m: string | null) {
@@ -183,6 +208,7 @@
 	}
 
 	function pickMethod(id: string): void {
+		methodPicked = true;
 		method = id;
 		// "Other…" has no seeds until a name is typed — keep what's there.
 		if (id !== OTHER_METHOD) applySeeds(seedsFor(id));

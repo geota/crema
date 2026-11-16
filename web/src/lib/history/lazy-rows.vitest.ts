@@ -54,6 +54,7 @@ import { HistoryStore, LOADED_SHOTS_KEPT, HISTORY_KEY } from './store.svelte';
 import { nextShots } from '#lib/restore/engine.js';
 import { boot, freshStorage, stored, whole, writeOldCopy, LEGACY_KEY } from './idb-test-kit';
 import { getAllSeries } from './series-store';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const realIdb = (globalThis as { indexedDB?: unknown }).indexedDB;
 
@@ -143,7 +144,7 @@ describe('startup and the list read no details', () => {
 		// What a row, the stat strip, the filters and the facets read, for every
 		// row, three times over as a list scrolls up and down.
 		for (let pass = 0; pass < 3; pass++) {
-			for (const row of store.all) {
+			for (const row of p3RowsOf(store).live) {
 				peaksOf(row);
 				yieldOf(row);
 				ratioLabel(row);
@@ -152,10 +153,10 @@ describe('startup and the list read no details', () => {
 				decodeSpark(row.summary.spark);
 				store.get(row.id);
 			}
-			for (const row of store.rawAll) signatureForShot(row);
+			for (const row of p3RowsOf(store).raw) signatureForShot(row);
 		}
-		statsOf(store.all);
-		brewStatsOf(store.all);
+		statsOf(p3RowsOf(store).live);
+		brewStatsOf(p3RowsOf(store).live);
 		void store.withoutTelemetry;
 		void store.visualizerBacklog;
 		expect(reads.details, 'scrolling').toBe(0);
@@ -165,7 +166,7 @@ describe('startup and the list read no details', () => {
 		expect(wasmCalls.get('brewHistoryStats')).toBe(1);
 
 		// Opening a shot reads its details once; opening it again reads none.
-		const id = store.all[5].id;
+		const id = p3RowsOf(store).live[5].id;
 		expect((await store.loadShot(id))!.record.samples).toHaveLength(4);
 		expect(reads.details).toBe(1);
 		await store.loadShot(id);
@@ -176,7 +177,7 @@ describe('startup and the list read no details', () => {
 		const shots = [...small(310), guidedBrew(400)];
 		await seedStore(shots);
 		const store = await boot();
-		for (const row of store.rawAll) {
+		for (const row of p3RowsOf(store).raw) {
 			expect('samples' in row.record).toBe(false);
 			expect('profile' in row).toBe(false);
 			expect('brewSeries' in row).toBe(false);
@@ -184,7 +185,7 @@ describe('startup and the list read no details', () => {
 		const brew = store.get('shot:brew-400')!;
 		expect(brew.summary.brewSampleCount).toBe(30);
 		expect(decodeSpark(brew.summary.spark)).toMatchObject({ brew: true, machine: false, hasWeight: true });
-		const machine = store.all[0];
+		const machine = p3RowsOf(store).live[0];
 		expect(decodeSpark(machine.summary.spark)).toMatchObject({ machine: true });
 	});
 
@@ -192,7 +193,7 @@ describe('startup and the list read no details', () => {
 		await seedStore(small(40));
 		const { reads, dbFault } = countingDetails();
 		const store = await boot({ dbFault });
-		const ids = store.all.map((s) => s.id);
+		const ids = p3RowsOf(store).live.map((s) => s.id);
 		for (let i = 0; i <= LOADED_SHOTS_KEPT; i++) await store.loadShot(ids[i]);
 		expect(reads.details).toBe(LOADED_SHOTS_KEPT + 1);
 		await store.loadShot(ids[LOADED_SHOTS_KEPT]);
@@ -219,7 +220,7 @@ describe('the four quiet failures of a row with empty samples (SPEC §4)', () =>
 		const shots = small(20).map((s) => ({ ...s, visualizerId: null }));
 		await seedStore(shots);
 		const store = await boot();
-		for (const row of store.rawAll) {
+		for (const row of p3RowsOf(store).raw) {
 			const full = whole(shots.find((s) => s.id === row.id)!);
 			expect(signatureForShot(row), row.id).toBe(signatureForShot(full));
 		}
@@ -236,7 +237,7 @@ describe('the four quiet failures of a row with empty samples (SPEC §4)', () =>
 			updated_at_ms: null,
 			tag_list: []
 		} as unknown as WireShot;
-		expect(reconcileShots(store.rawAll, [remote])).toEqual([
+		expect(reconcileShots(p3RowsOf(store).raw, [remote])).toEqual([
 			expect.objectContaining({ kind: 'bind', localId: target.id, visualizerId: 'remote-7' })
 		]);
 	});
@@ -283,7 +284,7 @@ describe('the four quiet failures of a row with empty samples (SPEC §4)', () =>
 		const shots = small(12);
 		await seedStore(shots);
 		const store = await boot();
-		const rows = store.rawAll;
+		const rows = p3RowsOf(store).raw;
 		const wholes = rows.map((r) => whole(shots.find((s) => s.id === r.id)!));
 		rows.forEach((r, i) => {
 			expect(peaksOf(r), r.id).toEqual(peaksOf(wholes[i]));
@@ -348,7 +349,7 @@ describe('the legacy backend merges on write', () => {
 		}));
 		expect(r.stored).toBe(true);
 		// Rows another tab wrote, handed in as rows.
-		store.adoptRows(store.rawAll);
+		store.adoptRows(p3RowsOf(store).raw);
 		store.setRating(brew.id, 5);
 
 		// Whole in this tab, too: memory kept what the rows handed in lacked.
@@ -383,13 +384,13 @@ describe('whole shots from a cold start', () => {
 		await seedStore(shots);
 		const store = await boot();
 		// Five picks, one past the old 300.
-		const picked = [store.all[3].id, store.all[315].id, store.all[0].id, store.all[200].id, store.all[299].id];
+		const picked = [p3RowsOf(store).live[3].id, p3RowsOf(store).live[315].id, p3RowsOf(store).live[0].id, p3RowsOf(store).live[200].id, p3RowsOf(store).live[299].id];
 		const got = await store.loadMany(picked);
 		expect(got.map((s) => s.id)).toEqual(picked);
 		for (const s of got) expect(s.record.samples, s.id).toEqual(shots.find((x) => x.id === s.id)!.record.samples);
 		for (const s of got) expect(s.profile, s.id).toEqual(shots.find((x) => x.id === s.id)!.profile);
 		// Every row, as the history export walks them.
-		const all = await store.loadMany(store.all.map((s) => s.id));
+		const all = await store.loadMany(p3RowsOf(store).live.map((s) => s.id));
 		expect(all).toHaveLength(320);
 		for (const s of all) expect(s.record.samples, s.id).toEqual(shots.find((x) => x.id === s.id)!.record.samples);
 	}, 60_000);
@@ -403,8 +404,8 @@ describe('whole shots from a cold start', () => {
 			}
 		});
 		fail = true;
-		await expect(store.loadShot(store.all[1].id)).rejects.toThrow();
-		await expect(store.loadMany(store.all.map((s) => s.id))).rejects.toThrow();
+		await expect(store.loadShot(p3RowsOf(store).live[1].id)).rejects.toThrow();
+		await expect(store.loadMany(p3RowsOf(store).live.map((s) => s.id))).rejects.toThrow();
 	});
 });
 
@@ -413,7 +414,7 @@ describe('the restore plan reads counts from the summary', () => {
 		const shots = small(3).map((s) => ({ ...s, visualizerId: null }));
 		await seedStore(shots);
 		const store = await boot();
-		const rows = store.rawAll;
+		const rows = p3RowsOf(store).raw;
 		const backup = shots.map((s) => ({ ...s, record: { ...s.record, samples: realSamples(8, 40) } }));
 		const unknown = { ...rows[1], summary: { ...rows[1].summary, sampleCount: undefined } } as ShotRow;
 		const none = { ...rows[2], summary: { ...rows[2].summary, sampleCount: 0 } } as ShotRow;
@@ -431,7 +432,7 @@ describe('a store lost under the tab', () => {
 		const a = await boot();
 		const made = a.recordCaptured(realShot(64, realSamples(4)) as unknown as Record<string, unknown>)!;
 		await a.flushed();
-		const opened = a.all.find((s) => s.id !== made.id)!.id;
+		const opened = p3RowsOf(a).live.find((s) => s.id !== made.id)!.id;
 		await a.loadShot(opened);
 		await new Promise<void>((resolve, reject) => {
 			const req = indexedDB.deleteDatabase('crema-history');

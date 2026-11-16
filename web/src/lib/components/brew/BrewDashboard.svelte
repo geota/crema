@@ -119,6 +119,7 @@
 	import DialInCard from './DialInCard.svelte';
 	import { takePendingDialIn } from './dial-in.svelte';
 	import { getHistoryStore, effectiveGrindSetting, type AnyShot } from '#lib/history/index.js';
+	import { bagRows, getHistoryReads, newestRow } from '#lib/history/reads.svelte.js';
 	import PowerButton from '#lib/components/PowerButton.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -786,6 +787,14 @@
 	 * shots are matched by the frozen bean snapshot's id, same as the
 	 * bean drawer's per-bag shot list.
 	 */
+	const historyReads = getHistoryReads();
+	/** The active bag's shots, newest first, by a query (#310 W3). */
+	const activeBagShots = historyReads.watch(() => {
+		const beanId = beanLibrary.activeBeanId;
+		return beanId ? bagRows(beanId) : null;
+	}, []);
+	/** The newest row, by a query (#310 W3). */
+	const newestShot = historyReads.watch(() => newestRow(), null);
 	const lastBeanShot = $derived.by<AnyShot | null>(() => {
 		const beanId = beanLibrary.activeBeanId;
 		if (!beanId) return null;
@@ -793,7 +802,7 @@
 		// must not seed the DE1 dial-in card — its grind / water targets
 		// belong to a different instrument. Filter dial continuity comes
 		// from "Log again" instead.
-		return historyStore.all.find((s) => s.bean?.beanId === beanId && !s.brewMethod) ?? null;
+		return activeBagShots.value.find((s) => s.bean?.beanId === beanId && !s.brewMethod) ?? null;
 	});
 	/**
 	 * The history row of the just-finished shot: the newest stored shot, when it
@@ -802,7 +811,7 @@
 	 * wrong shot.
 	 */
 	const lastStoredShot = $derived.by<AnyShot | null>(() => {
-		const newest = historyStore.all[0];
+		const newest = newestShot.value;
 		return newest && lastShot && newest.record.duration === lastShot.duration ? newest : null;
 	});
 	/**

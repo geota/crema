@@ -37,7 +37,7 @@
 	// After each save: rows changed, so storage may have too (at most every 30 s).
 	$effect(() => {
 		if (!history.loaded) return;
-		void history.rawAll;
+		void history.rowsVersion;
 		watch.checkSoon();
 	});
 	const usedPct = $derived(

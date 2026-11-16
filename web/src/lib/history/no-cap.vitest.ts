@@ -23,6 +23,7 @@ import { freeUpPlan } from './free-up';
 import { readPending } from './pending';
 import { boot, freshStorage, stored } from './idb-test-kit';
 import { getHistoryStore } from './store.svelte';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const realIdb = (globalThis as { indexedDB?: unknown }).indexedDB;
 beforeAll(async () => {
@@ -77,14 +78,14 @@ describe('every row is kept', () => {
 		const store = await boot();
 		const made = store.recordCaptured(realShot(9_001, realSamples(6)) as unknown as Record<string, unknown>)!;
 		await store.flushed();
-		expect(store.all).toHaveLength(301);
-		const oldest = store.all[300].id;
+		expect(p3RowsOf(store).live).toHaveLength(301);
+		const oldest = p3RowsOf(store).live[300].id;
 		// A save of another row afterwards drops nothing either.
-		store.setRating(store.all[5].id, 2);
+		store.setRating(p3RowsOf(store).live[5].id, 2);
 		await store.flushed();
 		expect((await stored()).rows.size).toBe(301);
 		const again = await boot();
-		expect(again.all).toHaveLength(301);
+		expect(p3RowsOf(again).live).toHaveLength(301);
 		expect(again.get(made.id)).toBeDefined();
 		expect(again.get(oldest)).toBeDefined();
 		expect((await again.loadShot(made.id))!.record.samples).toHaveLength(6);
@@ -99,19 +100,19 @@ describe('every row is kept', () => {
 		expect(store.fitsHistory(at)).toBe(true);
 		const made = store.addManualBrew(brew(at))!;
 		await store.flushed();
-		expect(store.all).toHaveLength(5_001);
-		expect(store.all.at(-1)!.id).toBe(made.id);
+		expect(p3RowsOf(store).live).toHaveLength(5_001);
+		expect(p3RowsOf(store).live.at(-1)!.id).toBe(made.id);
 		// The newest row is still the last brew.
-		expect(store.all[0].id).toBe(shots[0].id);
+		expect(p3RowsOf(store).live[0].id).toBe(shots[0].id);
 		const again = await boot();
-		expect(again.all).toHaveLength(5_001);
-		expect(again.all.at(-1)!.id).toBe(made.id);
+		expect(p3RowsOf(again).live).toHaveLength(5_001);
+		expect(p3RowsOf(again).live.at(-1)!.id).toBe(made.id);
 	}, 120_000);
 
 	it('no automatic deletion: 20,000 rows, then 100 more saved, keeps all 20,100', async () => {
 		await seedStore(small(20_000));
 		const store = await boot();
-		expect(store.all).toHaveLength(20_000);
+		expect(p3RowsOf(store).live).toHaveLength(20_000);
 		const made: string[] = [];
 		for (let i = 0; i < 100; i++) {
 			made.push(store.recordCaptured(realShot(30_000 + i, realSamples(3)) as unknown as Record<string, unknown>)!.id);
@@ -123,7 +124,7 @@ describe('every row is kept', () => {
 		expect(details.size).toBe(20_100);
 		for (const id of made) expect(rows.has(id), id).toBe(true);
 		const again = await boot();
-		expect(again.all).toHaveLength(20_100);
+		expect(p3RowsOf(again).live).toHaveLength(20_100);
 	}, 300_000);
 });
 
@@ -173,7 +174,7 @@ describe('Free up space', () => {
 		const store = await boot();
 		// Older than the 25th row: rows 25..39, of which 30 and 38 are pinned.
 		const before = shots[24].completedAt;
-		const plan = freeUpPlan(store.rawAll, before);
+		const plan = freeUpPlan(p3RowsOf(store).raw, before);
 		expect(plan.ids.sort()).toEqual(shots.slice(25).filter((s) => !s.pinned).map((s) => s.id).sort());
 		expect(plan.pinnedKept).toBe(2);
 		expect(plan.bytes).toBeGreaterThan(0);
@@ -195,9 +196,9 @@ describe('Free up space', () => {
 		// The Visualizer copy stays there, and a pull leaves it out.
 		expect(remoteKeptOut().has('viz-35')).toBe(true);
 		// Newest rows, the "last brew", untouched.
-		expect(store.all[0].id).toBe(shots[0].id);
+		expect(p3RowsOf(store).live[0].id).toBe(shots[0].id);
 		const again = await boot();
-		expect(again.all).toHaveLength(27);
+		expect(p3RowsOf(again).live).toHaveLength(27);
 	});
 });
 
@@ -243,8 +244,8 @@ describe('a 5,000-shot backup from Android', () => {
 		const summary = await restoreBackup(jsonl, 'merge');
 		expect(summary.outcome.kind).toBe('done');
 		await history.flushed();
-		expect(history.all).toHaveLength(5_000);
-		for (const row of history.rawAll) expect(row.summary.sampleCount, row.id).toBe(counts.get(row.id));
+		expect(p3RowsOf(history).live).toHaveLength(5_000);
+		for (const row of p3RowsOf(history).raw) expect(row.summary.sampleCount, row.id).toBe(counts.get(row.id));
 		const { rows, details } = await stored();
 		expect(rows.size).toBe(5_000);
 		for (const [id, n] of counts) expect(details.get(id)?.samples, id).toHaveLength(n);

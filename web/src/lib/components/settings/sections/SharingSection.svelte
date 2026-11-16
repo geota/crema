@@ -20,6 +20,8 @@
 	import { onMount } from 'svelte';
 	import { getHistoryStore } from '#lib/history/index.js';
 	import { shotHistoryJsonl } from '#lib/history/crema-jsonl.js';
+	import { getHistoryReads, liveRows } from '#lib/history/reads.svelte.js';
+	import { liveSyncRows } from '#lib/history/sync-view.js';
 	import { downloadBlob } from '#lib/utils/download.js';
 	import {
 		clearVisualizerPremiumCache,
@@ -169,7 +171,7 @@
 		const acct = readDecentAccount();
 		if (!isDecentLinked(acct) || !acct.autoUpload || acct.needsReauth) return;
 		if (!history.loaded) return;
-		const count = unsentDecentShots(history.all).length;
+		const count = unsentDecentShots(liveSyncRows(history)).length;
 		if (count > 0) catchUp = { destination: 'Decent', count };
 	}
 	function setVisualizerAutoUpload(on: boolean): void {
@@ -340,8 +342,13 @@
 		if (!history.loaded) return;
 		// The rows carry no samples (#310 P4w): each shot goes whole, loaded a
 		// batch at a time. A read that fails stops the export, so no file goes
-		// out with empty curves.
-		const ids = history.all.map((s) => s.id);
+		// out with empty curves. Every live row, from one state (#310 W3).
+		let ids: string[];
+		try {
+			ids = (await getHistoryReads().answer(liveRows())).map((s) => s.id);
+		} catch {
+			return;
+		}
 		const whole = [];
 		try {
 			for (let i = 0; i < ids.length; i += 25) whole.push(...(await history.loadMany(ids.slice(i, i + 25))));

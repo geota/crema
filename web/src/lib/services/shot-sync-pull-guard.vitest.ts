@@ -24,6 +24,7 @@ vi.mock('#lib/history/series-store.js', () => ({
 }));
 
 import { HistoryStore } from '#lib/history/store.svelte.js';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 beforeAll(async () => {
 	await initTestWasm();
@@ -157,7 +158,7 @@ describe('a pull at the cap', () => {
 
 	it('pull_never_evicts_at_cap: refuses the add and counts it', async () => {
 		const history = full();
-		const before = history.all.map((s) => s.id);
+		const before = p3RowsOf(history).live.map((s) => s.id);
 
 		const refused = await reconcile(history, [
 			remoteShot('vis-new-1', { clock: COMPLETED + 1, duration_ms: 1 }),
@@ -165,7 +166,7 @@ describe('a pull at the cap', () => {
 		]);
 
 		expect(refused).toBe(2);
-		expect(history.all.map((s) => s.id)).toEqual(before);
+		expect(p3RowsOf(history).live.map((s) => s.id)).toEqual(before);
 	});
 
 	it('cap_refusal_skips_and_continues: a later update still applies', async () => {
@@ -189,7 +190,7 @@ describe('a pull at the cap', () => {
 		]);
 
 		expect(refused).toBe(0);
-		expect(history.all).toHaveLength(2);
+		expect(p3RowsOf(history).live).toHaveLength(2);
 	});
 });
 

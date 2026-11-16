@@ -30,6 +30,7 @@
 		type Roaster
 	} from '#lib/bean/index.js';
 	import { getHistoryStore, effectiveGrindSetting, yieldOf } from '#lib/history/index.js';
+	import { bagRows, getHistoryReads } from '#lib/history/reads.svelte.js';
 	import { getProfileStore } from '#lib/profiles/index.js';
 	import { restoreFocus, trapTab } from '#lib/a11y/focus.js';
 	import { shotTitle } from '#lib/brew/methods.js';
@@ -119,7 +120,9 @@
 		if (bean.bagSize <= 0) return 0;
 		return Math.max(0, Math.min(100, (bean.remaining / bean.bagSize) * 100));
 	});
-	const shotsWithThis = $derived(history.all.filter((s) => s.bean?.beanId === bean.id));
+	// This bag's shots, newest first, by a query (#310 W3).
+	const bagShots = getHistoryReads().watch(() => bagRows(bean.id), []);
+	const shotsWithThis = $derived(bagShots.value);
 
 	/**
 	 * "≈ N brews" left in the bag — the core's `brews_remaining_estimate`

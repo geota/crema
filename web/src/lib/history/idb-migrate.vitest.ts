@@ -24,6 +24,7 @@ import {
 	whole,
 	writeOldCopy
 } from './idb-test-kit';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const realIdb = (globalThis as { indexedDB?: unknown }).indexedDB;
 let idb: IDBFactory | undefined;
@@ -89,8 +90,8 @@ describe('migration', () => {
 		await writeOldCopy(source);
 		const store = await boot();
 		expect(store.health).toBe('ok');
-		expect(store.all).toHaveLength(5_000);
-		expect(store.rawAll).toHaveLength(5_000);
+		expect(p3RowsOf(store).live).toHaveLength(5_000);
+		expect(p3RowsOf(store).raw).toHaveLength(5_000);
 		await expectEveryField(source);
 	}, 240_000);
 
@@ -141,7 +142,7 @@ describe('migration', () => {
 		const series = (await oldCopyBytes()).series;
 		const store = await boot();
 		expect(store.health).toBe('ok');
-		expect(store.rawAll).toEqual([]);
+		expect(p3RowsOf(store).raw).toEqual([]);
 		expect(localStorage.getItem(`${LEGACY_KEY}.corrupt`)).not.toBeNull();
 		expect((await oldCopyBytes()).series).toBe(series);
 		expect((await stored()).meta).toMatchObject({ state: 'done', sourceIds: [] });
@@ -176,7 +177,7 @@ describe('migration', () => {
 		expect(a.health).toBe('ok');
 		expect(b.health).toBe('ok');
 		expect(clears).toHaveLength(1);
-		expect(b.rawAll.map((s) => s.id).sort()).toEqual(a.rawAll.map((s) => s.id).sort());
+		expect(p3RowsOf(b).raw.map((s) => s.id).sort()).toEqual(p3RowsOf(a).raw.map((s) => s.id).sort());
 	});
 });
 
@@ -252,7 +253,7 @@ describe('a failed run', () => {
 			source: { ...real, series: async () => Promise.reject(new Error('read failed')) }
 		});
 		expect(store.health).toBe('legacy');
-		expect(store.rawAll).toHaveLength(10);
+		expect(p3RowsOf(store).raw).toHaveLength(10);
 		const { rows, details, meta } = await stored();
 		expect([rows.size, details.size, meta]).toEqual([0, 0, undefined]);
 		expect(readStoreMarker()).toMatchObject({ kind: 'marker', marker: { state: 'failed', failures: 1 } });
@@ -467,7 +468,7 @@ describe('late rows from an old build', () => {
 		expect(await stored()).toEqual(newDb);
 
 		const second = await boot();
-		const ids = second.rawAll.map((s) => s.id);
+		const ids = p3RowsOf(second).raw.map((s) => s.id);
 		expect(ids).toContain(r1.id);
 		expect(ids).toContain(r2.id);
 		expect(ids).not.toContain(pulled.id);
@@ -498,7 +499,7 @@ describe('late rows from an old build', () => {
 		store.delete(late.id);
 		await store.flushed();
 		const after = await boot();
-		expect(after.rawAll.map((s) => s.id)).not.toContain(late.id);
+		expect(p3RowsOf(after).raw.map((s) => s.id)).not.toContain(late.id);
 		const meta = (await stored()).meta!;
 		expect(meta.sourceIds).toContain(late.id);
 		expect(META_MIGRATION).toBe('migration');

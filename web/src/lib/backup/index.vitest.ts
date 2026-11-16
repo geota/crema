@@ -35,6 +35,7 @@ async function restore(text: string, mode: RestoreMode) {
 	};
 }
 import { readStore, resetStorageStateForTest } from '#lib/utils/storage.js';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 /**
  * Round-trip tests for the whole-app backup/restore (review #07). The runes
@@ -150,7 +151,7 @@ describe('backup round-trip (review #07)', () => {
 		const summary = await restore(built.jsonl, 'merge');
 		// The backup's shot is older than everything a full history keeps.
 		expect(summary).toMatchObject({ shots: 0, droppedShots: 1 });
-		expect(history.all).toHaveLength(300);
+		expect(p3RowsOf(history).live).toHaveLength(300);
 	});
 
 	it('merge skips records whose ids are already present (idempotent re-restore)', async () => {
@@ -162,7 +163,7 @@ describe('backup round-trip (review #07)', () => {
 
 		expect(summary).toMatchObject({ beans: 0, roasters: 0, shots: 0, profiles: 0 });
 		expect(getBeanStore().beans.length).toBe(1);
-		expect(getHistoryStore().all.length).toBe(1);
+		expect(p3RowsOf(getHistoryStore()).live.length).toBe(1);
 	});
 
 	it('a malformed line: Replace changes nothing, Merge skips it and keeps the rest', async () => {
@@ -173,10 +174,10 @@ describe('backup round-trip (review #07)', () => {
 		const corrupted = built.jsonl.replace('\n', '\n{ this is not valid json \n');
 		await expect(restore(corrupted, 'wipe')).rejects.toThrow(/damaged/);
 		expect(getBeanStore().beans.length).toBe(0);
-		expect(getHistoryStore().all.length).toBe(0);
+		expect(p3RowsOf(getHistoryStore()).live.length).toBe(0);
 		await restore(corrupted, 'merge');
 		expect(getBeanStore().beans.length).toBe(1);
-		expect(getHistoryStore().all.length).toBe(1);
+		expect(p3RowsOf(getHistoryStore()).live.length).toBe(1);
 	});
 
 	it('refuses a file without the crema-backup header', async () => {

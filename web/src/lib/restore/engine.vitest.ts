@@ -27,6 +27,7 @@ import { readStore } from '#lib/utils/storage.js';
 import { coerceBean } from '#lib/bean/model.js';
 import { DELETE_AFTER_MS, MARKER_KEY, beginMarker, checkMarkerAtBoot, readMarker } from './marker';
 import { confirmText, outcomeMessage, refusalMessage } from './report';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const samples = [
 	{
@@ -269,7 +270,7 @@ describe('the plan, written per store', () => {
 		expect(plan.shots.remove).toEqual(['s7']);
 		const out = await runRestore(prepared, 'wipe', { expected: plan }, deps(new FakeLocks()));
 		expect(out.kind).toBe('done');
-		expect(getHistoryStore().rawAll.map((s) => s.id)).toEqual(['s1']);
+		expect(p3RowsOf(getHistoryStore()).raw.map((s) => s.id)).toEqual(['s1']);
 		expect(readMarker()).toMatchObject({ phase: 'finishing', mode: 'replace', deletes: { shots: ['s7'] } });
 	});
 
@@ -321,7 +322,7 @@ describe('the plan, written per store', () => {
 		const out = await runRestore(prepared, 'merge', { expected: seen }, deps(new FakeLocks()));
 		expect(out.kind).toBe('changed');
 		expect(getBeanStore().getBean('b1')?.name).toBe('Added meanwhile');
-		expect(getHistoryStore().all).toEqual([]);
+		expect(p3RowsOf(getHistoryStore()).live).toEqual([]);
 		expect(readMarker()).toBeNull();
 	});
 
@@ -380,7 +381,7 @@ describe('the #363 review', () => {
 				}
 			})
 		);
-		const rows = history.all.filter((s) => s.id === 'shot:remote:9');
+		const rows = p3RowsOf(history).live.filter((s) => s.id === 'shot:remote:9');
 		expect(rows).toHaveLength(1);
 		return { row: (await history.loadShot(rows[0].id))!, written };
 	}
@@ -421,7 +422,7 @@ describe('the #363 review', () => {
 			})
 		);
 		expect(out.kind).toBe('done');
-		expect(history.all.map((s) => s.id).sort()).toEqual(['s1', 's2', 's3']);
+		expect(p3RowsOf(history).live.map((s) => s.id).sort()).toEqual(['s1', 's2', 's3']);
 		expect(history.get('s2')?.metadata.rating).toBe(5);
 		expect(history.get('s3')?.bagDebit).toBe(17);
 		const stored = JSON.parse(localStorage.getItem('crema.history.v2')!) as StoredShot[];

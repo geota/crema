@@ -65,6 +65,7 @@
 	import BeanImportDialog from '#lib/components/beans/BeanImportDialog.svelte';
 	import { exportCrema, exportBeanconqueror } from '#lib/bean/export.js';
 	import { getHistoryStore } from '#lib/history/index.js';
+	import { everyId, getHistoryReads } from '#lib/history/reads.svelte.js';
 	import BeansEmptyState from '#lib/components/beans/BeansEmptyState.svelte';
 	import SortPill from '#lib/components/shared/SortPill.svelte';
 	import FilterPills from '#lib/components/shared/FilterPills.svelte';
@@ -107,7 +108,8 @@
 				// Not loaded is not empty: the export would carry no brews.
 				await history.whenReady();
 				// Whole: rows past the view are held without their samples (#310).
-				const shots = await history.loadMany(history.rawAll.map((s) => s.id));
+				// Every row, tombstones too, from one state (W3).
+				const shots = await history.loadMany(await getHistoryReads().answer(everyId()));
 				await exportBeanconqueror(library.beans, library.roasters, shots);
 			} catch (err) {
 				console.error('Beanconqueror export failed', err);

@@ -20,6 +20,7 @@ import { HistoryStore } from './store.svelte';
 import { dismissToast, getToasts } from '#lib/components/shared/toast.svelte.js';
 import { historyCutNotice } from './brew-date';
 import type { StoredShot } from './model';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const HOUR = 60 * 60 * 1000;
 const NOW = 1_700_000_000_000;
@@ -41,7 +42,7 @@ const brew = (completedAt: number, dose = 15) => ({
 
 /** The rows `LogBrewDialog` hands the core. */
 const seedRows = (store: HistoryStore) =>
-	store.all.map((s) => ({
+	p3RowsOf(store).live.map((s) => ({
 		brewMethod: s.brewMethod ?? undefined,
 		doseG: s.metadata.dose ?? undefined,
 		waterG: s.metadata.waterG ?? undefined,
@@ -93,7 +94,7 @@ describe('a backdated brew', () => {
 		const newest = store.addManualBrew(brew(NOW));
 		const older = store.addManualBrew(brew(NOW - 2 * HOUR));
 		const backdated = store.addManualBrew(brew(NOW - HOUR));
-		expect(store.all.map((s) => s.id)).toEqual([newest.id, backdated.id, older.id]);
+		expect(p3RowsOf(store).live.map((s) => s.id)).toEqual([newest.id, backdated.id, older.id]);
 	});
 
 	it('does not become the last brew that seeds the next log', () => {
@@ -128,7 +129,7 @@ describe('a backdated brew', () => {
 		const store = new HistoryStore();
 		for (let i = 0; i < 10; i++) store.addManualBrew(brew(NOW - i * HOUR, 20));
 		store.addManualBrew(brew(NOW - 100 * HOUR, 100));
-		const doses = Float32Array.from(store.all.map((s) => s.metadata.dose ?? 0));
+		const doses = Float32Array.from(p3RowsOf(store).live.map((s) => s.metadata.dose ?? 0));
 		// Only the newest ten count, and the old 100 g brew isn't one of them.
 		expect(brews_remaining_estimate(200, doses)).toBe(10);
 	});
@@ -136,10 +137,10 @@ describe('a backdated brew', () => {
 	it('leaves the newest rows in place when the history is full', () => {
 		const store = new HistoryStore();
 		for (let i = 0; i < 300; i++) store.addManualBrew(brew(NOW - i * HOUR));
-		const oldest = store.all.at(-1)!;
+		const oldest = p3RowsOf(store).live.at(-1)!;
 		const backdated = store.addManualBrew(brew(NOW - 1.5 * HOUR));
-		expect(store.all).toHaveLength(300);
-		expect(store.all[0].completedAt).toBe(NOW);
+		expect(p3RowsOf(store).live).toHaveLength(300);
+		expect(p3RowsOf(store).live[0].completedAt).toBe(NOW);
 		expect(store.get(backdated.id)).toBeDefined();
 		expect(store.get(oldest.id)).toBeUndefined();
 	});
@@ -169,18 +170,18 @@ describe('a row just made on this device', () => {
 
 	it('stays when the clock is behind a full history, and the oldest other row goes', () => {
 		const store = fullAheadOfTheClock();
-		const oldest = store.all.at(-1)!;
+		const oldest = p3RowsOf(store).live.at(-1)!;
 		const made = store.addManualBrew(brew(NOW));
 		expect(store.get(made.id)).toBeDefined();
 		expect(store.get(oldest.id)).toBeUndefined();
-		expect(store.all).toHaveLength(300);
+		expect(p3RowsOf(store).live).toHaveLength(300);
 	});
 
 	it('stays when a machine shot is captured behind a full history', () => {
 		const store = fullAheadOfTheClock();
-		const oldest = store.all.at(-1)!;
+		const oldest = p3RowsOf(store).live.at(-1)!;
 		const captured = {
-			...structuredClone(store.all[0]),
+			...structuredClone(p3RowsOf(store).live[0]),
 			id: 'captured',
 			completedAt: NOW,
 			brewMethod: null,
@@ -197,7 +198,7 @@ describe('the cap counts live rows', () => {
 	const withTombstones = () => {
 		const store = new HistoryStore();
 		for (let i = 0; i < 300; i++) store.addManualBrew(brew(NOW - i * HOUR));
-		for (const s of store.all.slice(0, 10)) {
+		for (const s of p3RowsOf(store).live.slice(0, 10)) {
 			store.bindVisualizerId(s.id, `remote-${s.id}`);
 			store.delete(s.id);
 		}
@@ -206,18 +207,18 @@ describe('the cap counts live rows', () => {
 
 	it('leaves room for a brew when tombstones fill the list', () => {
 		const store = withTombstones();
-		expect(store.all).toHaveLength(290);
+		expect(p3RowsOf(store).live).toHaveLength(290);
 		expect(store.fitsHistory(NOW - 1_000 * HOUR)).toBe(true);
 		const old = store.addManualBrew(brew(NOW - 1_000 * HOUR));
 		expect(store.get(old.id)).toBeDefined();
-		expect(store.all).toHaveLength(291);
+		expect(p3RowsOf(store).live).toHaveLength(291);
 	});
 
 	it('keeps tombstones, whose remote delete is still to go out', () => {
 		const store = withTombstones();
 		for (let i = 0; i < 20; i++) store.addManualBrew(brew(NOW + (i + 1) * 60_000));
-		expect(store.all).toHaveLength(300);
-		expect(store.rawAll).toHaveLength(310);
+		expect(p3RowsOf(store).live).toHaveLength(300);
+		expect(p3RowsOf(store).raw).toHaveLength(310);
 	});
 });
 
@@ -244,7 +245,7 @@ describe('a save that drops a row says so (#310 P0)', () => {
 		store.addManualBrew(brew(NOW));
 		expect(notices()).toEqual([]);
 		const pinned = full();
-		pinned.setPinned(pinned.all.at(-1)!.id, true);
+		pinned.setPinned(p3RowsOf(pinned).live.at(-1)!.id, true);
 		pinned.addManualBrew(brew(NOW + HOUR));
 		expect(notices(), 'a pinned row does not count against the cap').toEqual([]);
 	});
@@ -263,19 +264,19 @@ describe('a pinned row is never cut (#311)', () => {
 	const fullWithTheOldestPinned = () => {
 		const store = new HistoryStore();
 		for (let i = 0; i < 300; i++) store.addManualBrew(brew(NOW - i * HOUR));
-		const oldest = store.all.at(-1)!;
+		const oldest = p3RowsOf(store).live.at(-1)!;
 		store.setPinned(oldest.id, true);
 		return { store, oldest };
 	};
 
 	it('stays when a brew is logged on a full history, in memory and on disk', () => {
 		const { store, oldest } = fullWithTheOldestPinned();
-		const next = store.all.at(-2)!;
+		const next = p3RowsOf(store).live.at(-2)!;
 		store.addManualBrew(brew(NOW + HOUR));
 		store.addManualBrew(brew(NOW + 2 * HOUR));
 		expect(store.get(oldest.id)?.pinned).toBe(true);
 		expect(store.get(next.id), 'the oldest unpinned row goes instead').toBeUndefined();
-		expect(store.all).toHaveLength(301);
+		expect(p3RowsOf(store).live).toHaveLength(301);
 		expect(new HistoryStore().get(oldest.id)?.pinned).toBe(true);
 	});
 
@@ -291,7 +292,7 @@ describe('a pinned row is never cut (#311)', () => {
 	it('a newer pinned row leaves the cut at the 300th unpinned one', () => {
 		const store = new HistoryStore();
 		for (let i = 0; i < 300; i++) store.addManualBrew(brew(NOW - i * HOUR));
-		store.setPinned(store.all[0].id, true);
+		store.setPinned(p3RowsOf(store).live[0].id, true);
 		store.addManualBrew(brew(NOW + HOUR));
 		expect(store.fitsHistory(NOW - 299 * HOUR)).toBe(true);
 		expect(store.fitsHistory(NOW - 299 * HOUR - 1)).toBe(false);
@@ -316,8 +317,8 @@ describe('a pinned row is never cut (#311)', () => {
 			}
 			realSet(k, v);
 		});
-		store.setRating(store.all[0].id, 3);
-		expect(store.rawAll.length).toBeLessThan(300);
+		store.setRating(p3RowsOf(store).live[0].id, 3);
+		expect(p3RowsOf(store).raw.length).toBeLessThan(300);
 		expect(store.get(oldest.id)?.pinned).toBe(true);
 	});
 });
@@ -344,7 +345,7 @@ describe('inserting a batch', () => {
 		]);
 		expect(kept.map((s) => s.id)).toEqual(['new']);
 		expect(dropped).toBe(2);
-		expect(store.all).toHaveLength(300);
+		expect(p3RowsOf(store).live).toHaveLength(300);
 	});
 
 	it('doesn’t count a row a later row of the batch cut', () => {
@@ -356,7 +357,7 @@ describe('inserting a batch', () => {
 
 	it('counts an existing row the batch pushed out', () => {
 		const store = nearlyFull();
-		const oldest = store.all.at(-1)!;
+		const oldest = p3RowsOf(store).live.at(-1)!;
 		const { kept, dropped } = store.insertMany([shot('a', NOW + HOUR), shot('b', NOW + 2 * HOUR)]);
 		expect(kept).toHaveLength(2);
 		expect(dropped).toBe(1);
@@ -366,13 +367,13 @@ describe('inserting a batch', () => {
 	it('pull_never_evicts_at_cap: a full history refuses a pulled row and loses nothing', () => {
 		const store = nearlyFull();
 		store.addManualBrew(brew(NOW - 400 * HOUR));
-		const before = store.all.map((s) => s.id);
+		const before = p3RowsOf(store).live.map((s) => s.id);
 		expect(store.freeSlots).toBe(0);
 
 		expect(store.insertPulled(shot('new', NOW + HOUR))).toBe(false);
 
-		expect(store.all.map((s) => s.id)).toEqual(before);
-		expect(new HistoryStore().all.map((s) => s.id)).toEqual(before);
+		expect(p3RowsOf(store).live.map((s) => s.id)).toEqual(before);
+		expect(p3RowsOf(new HistoryStore()).live.map((s) => s.id)).toEqual(before);
 	});
 
 	it('the notice says Re-sync, because a plain Sync won’t fetch refused rows', () => {
@@ -386,8 +387,8 @@ describe('inserting a batch', () => {
 		const store = nearlyFull();
 		expect(store.freeSlots).toBe(1);
 		expect(store.insertPulled(shot('new', NOW + HOUR))).toBe(true);
-		expect(store.all[0].id).toBe('new');
-		expect(store.all).toHaveLength(300);
+		expect(p3RowsOf(store).live[0].id).toBe('new');
+		expect(p3RowsOf(store).live).toHaveLength(300);
 	});
 
 	it('a tombstone doesn’t take a slot, and a pull leaves it', () => {
@@ -398,7 +399,7 @@ describe('inserting a batch', () => {
 		expect(store.freeSlots).toBe(1);
 		expect(store.insertPulled(shot('new', NOW + HOUR))).toBe(true);
 		expect(store.get('deleted')?.deletedAt).not.toBeNull();
-		expect(store.rawAll).toHaveLength(301);
+		expect(p3RowsOf(store).raw).toHaveLength(301);
 	});
 
 	it('a list over the cap stays as it is through a pull', () => {
@@ -406,7 +407,7 @@ describe('inserting a batch', () => {
 		localStorage.setItem('crema.history.v2', JSON.stringify(rows));
 		const store = new HistoryStore();
 		expect(store.insertPulled(shot('new', NOW + HOUR))).toBe(false);
-		expect(store.all).toHaveLength(350);
+		expect(p3RowsOf(store).live).toHaveLength(350);
 	});
 
 	it('leaves a list over the cap alone when nothing is new', () => {
@@ -414,7 +415,7 @@ describe('inserting a batch', () => {
 		localStorage.setItem('crema.history.v2', JSON.stringify(rows));
 		const store = new HistoryStore();
 		expect(store.insertMany([rows[0], rows[1]])).toEqual({ kept: [], dropped: 0 });
-		expect(store.all).toHaveLength(350);
+		expect(p3RowsOf(store).live).toHaveLength(350);
 	});
 });
 
@@ -428,10 +429,10 @@ describe('a row with no date', () => {
 		const undated = { ...raw[0], id: 'undated', completedAt: 0 };
 		localStorage.setItem('crema.history.v2', JSON.stringify([undated, ...raw]));
 		const store = new HistoryStore();
-		expect(store.all.at(-1)?.id).toBe('undated');
+		expect(p3RowsOf(store).live.at(-1)?.id).toBe('undated');
 		store.addManualBrew(brew(NOW - HOUR));
 		expect(stored().find((s: StoredShot) => s.id === 'undated').completedAt).toBe(0);
-		expect(new HistoryStore().all.at(-1)?.id).toBe('undated');
+		expect(p3RowsOf(new HistoryStore()).live.at(-1)?.id).toBe('undated');
 	});
 
 	it('doesn’t seed the next log', () => {
@@ -441,7 +442,7 @@ describe('a row with no date', () => {
 		const undated = { ...raw[0], id: 'undated', completedAt: 0 };
 		undated.metadata = { ...undated.metadata, dose: 30 };
 		localStorage.setItem('crema.history.v2', JSON.stringify([undated, ...raw]));
-		expect(new HistoryStore().all[0].metadata.dose).toBe(15);
+		expect(p3RowsOf(new HistoryStore()).live[0].metadata.dose).toBe(15);
 	});
 });
 
@@ -464,9 +465,9 @@ describe('changing a saved date', () => {
 		const first = store.addManualBrew(brew(NOW));
 		const second = store.addManualBrew(brew(NOW - HOUR));
 		store.updateManualBrew(first.id, { completedAt: NOW - 2 * HOUR });
-		expect(store.all.map((s) => s.id)).toEqual([second.id, first.id]);
+		expect(p3RowsOf(store).live.map((s) => s.id)).toEqual([second.id, first.id]);
 		const reloaded = new HistoryStore();
-		expect(reloaded.all.map((s) => s.id)).toEqual([second.id, first.id]);
+		expect(p3RowsOf(reloaded).live.map((s) => s.id)).toEqual([second.id, first.id]);
 		expect(reloaded.get(first.id)?.completedAt).toBe(NOW - 2 * HOUR);
 	});
 
@@ -508,7 +509,7 @@ describe('rows saved out of order', () => {
 		const b = first.addManualBrew(brew(NOW - HOUR));
 		const raw = JSON.parse(localStorage.getItem('crema.history.v2') as string);
 		localStorage.setItem('crema.history.v2', JSON.stringify(raw.reverse()));
-		expect(new HistoryStore().all.map((s) => s.id)).toEqual([a.id, b.id]);
+		expect(p3RowsOf(new HistoryStore()).live.map((s) => s.id)).toEqual([a.id, b.id]);
 	});
 
 	it('a pulled shot lands by its date', () => {
@@ -516,6 +517,6 @@ describe('rows saved out of order', () => {
 		const newer = store.addManualBrew(brew(NOW));
 		const pulled = { ...newer, id: 'pulled', completedAt: NOW - HOUR } as StoredShot;
 		store.insertPulled(pulled);
-		expect(store.all.map((s) => s.id)).toEqual([newer.id, 'pulled']);
+		expect(p3RowsOf(store).live.map((s) => s.id)).toEqual([newer.id, 'pulled']);
 	});
 });

@@ -27,7 +27,7 @@
 		bagStock,
 		lowStockHint,
 		type Roaster, activateBean } from '#lib/bean/index.js';
-	import { getHistoryStore } from '#lib/history/store.svelte.js';
+	import { bagRows, getHistoryReads } from '#lib/history/reads.svelte.js';
 	import RoasterAutocomplete from '#lib/components/beans/RoasterAutocomplete.svelte';
 	import QuickStepper from './QuickStepper.svelte';
 	import { getSettingsStore } from '#lib/settings/index.js';
@@ -49,7 +49,6 @@
 	/** The shared library store — used for editor write paths only. */
 	const library = getBeanStore();
 	/** The shot log — the bag's own recent doses for the stock hint. */
-	const history = getHistoryStore();
 	/**
 	 * The brew context — the unified read-side seam. Resolves live library
 	 * vs. in-flight snapshot, so the card follows a replay correctly
@@ -106,12 +105,15 @@
 	 */
 	const grinder = $derived(display?.grinder.trim() || defaultGrinder);
 	/** Burn-down: the core's stock rule, over this bag's own recent doses. */
+	// This bag's shots, by a query (#310 W3).
+	const bagShots = getHistoryReads().watch(() => {
+		const id = display?.source?.id;
+		return id ? bagRows(id) : null;
+	}, []);
 	const reorderHint = $derived.by<string | null>(() => {
 		if (!display) return null;
 		const id = display.source?.id;
-		const doses = id
-			? history.all.filter((s) => s.bean?.beanId === id).map((s) => s.metadata.dose ?? 0)
-			: [];
+		const doses = id ? bagShots.value.map((s) => s.metadata.dose ?? 0) : [];
 		return lowStockHint(bagStock(display, doses));
 	});
 	const roastOptions: Roast[] = ['light', 'medium', 'dark'];

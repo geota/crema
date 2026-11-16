@@ -16,6 +16,7 @@ import { boot, freshStorage, stored } from '#lib/history/idb-test-kit.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
 import { choiceDialog, confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 import { exportBackup, lastBackupAt } from '#lib/backup/index.js';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 vi.mock('#lib/components/shared/confirm-dialog.svelte.js', () => ({
 	confirmDialog: vi.fn(async () => true),
@@ -108,7 +109,7 @@ it('offers a backup, previews the count, and deletes the unpinned shots older th
 	expect(rows.size).toBe(12);
 	for (const s of shots.slice(10, 18)) expect(rows.has(s.id), s.id).toBe(false);
 	expect(rows.has(shots[18].id) && rows.has(shots[19].id)).toBe(true);
-	expect(history.all).toHaveLength(12);
+	expect(p3RowsOf(history).live).toHaveLength(12);
 	expect(target.textContent).toContain('Deleted 8 shots.');
 	done();
 });
@@ -124,7 +125,7 @@ it('a backup that doesn’t finish, a dismissed question or a No deletes nothing
 		if (step === 'no') vi.mocked(confirmDialog).mockResolvedValue(false);
 		const { target, done } = await freeUpBefore(midnightOf(NOW - 9 * DAY));
 		expect((await stored()).rows.size, step).toBe(20);
-		expect(history.all, step).toHaveLength(20);
+		expect(p3RowsOf(history).live, step).toHaveLength(20);
 		if (step === 'backup fails') expect(target.textContent).toContain('nothing was deleted');
 		done();
 		vi.mocked(confirmDialog).mockResolvedValue(true);
@@ -179,7 +180,7 @@ it('#437 B1: a backup that can’t say which shots it holds whole deletes nothin
 		const { target, done } = await freeUpBefore(midnightOf(NOW - 9 * DAY));
 		expect(confirmDialog, JSON.stringify(gaps)).not.toHaveBeenCalled();
 		expect((await stored()).rows.size).toBe(20);
-		expect(history.all).toHaveLength(20);
+		expect(p3RowsOf(history).live).toHaveLength(20);
 		expect(target.textContent).toContain('nothing was deleted');
 		done();
 	}

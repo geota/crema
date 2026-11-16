@@ -20,6 +20,7 @@ import { pruneCaptures } from '#lib/capture/prune.js';
 import { HistoryStore, type ChannelLike } from './store.svelte';
 import { summarize } from './summary';
 import { boot, freshStorage, historyDbExists, rawDb, settled, stored, whole, writeOldCopy, LEGACY_KEY } from './idb-test-kit';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const realIdb = (globalThis as { indexedDB?: unknown }).indexedDB;
 let idb: IDBFactory;
@@ -173,9 +174,9 @@ describe('no cap: every row is kept and shown (#310 P6w)', () => {
 		const shots = small(5_000);
 		await seedStore(shots);
 		const store = await boot();
-		expect(store.all).toHaveLength(5_000);
-		expect(store.rawAll).toHaveLength(5_000);
-		store.setRating(store.all[10].id, 1);
+		expect(p3RowsOf(store).live).toHaveLength(5_000);
+		expect(p3RowsOf(store).raw).toHaveLength(5_000);
+		store.setRating(p3RowsOf(store).live[10].id, 1);
 		store.setNotes(shots[4_000].id, 'an old row, edited');
 		const made = store.recordCaptured(realShot(9_999, realSamples(4)) as unknown as Record<string, unknown>)!;
 		await store.flushed();
@@ -184,7 +185,7 @@ describe('no cap: every row is kept and shown (#310 P6w)', () => {
 		expect(details.size).toBe(5_001);
 		expect(rows.get(shots[4_000].id)!.metadata.notes).toBe('an old row, edited');
 		const again = await boot();
-		expect(again.rawAll).toHaveLength(5_001);
+		expect(p3RowsOf(again).raw).toHaveLength(5_001);
 		expect(again.get(made.id)).toBeDefined();
 	}, 120_000);
 
@@ -195,23 +196,23 @@ describe('no cap: every row is kept and shown (#310 P6w)', () => {
 		const added = small(10, 100).map((s) => a.recordCaptured(s as unknown as Record<string, unknown>)!.id);
 		await a.flushed();
 		// B never heard of them.
-		b.setRating(b.all[20].id, 2);
+		b.setRating(p3RowsOf(b).live[20].id, 2);
 		await b.flushed();
 		const { rows } = await stored();
 		expect(rows.size).toBe(60);
 		for (const id of added) expect(rows.has(id)).toBe(true);
-		expect(rows.get(b.all[20].id)!.metadata.rating).toBe(2);
+		expect(rows.get(p3RowsOf(b).live[20].id)!.metadata.rating).toBe(2);
 	});
 
 	it('rows past the old 300 are rows, like the newest, shown, and whole on demand', async () => {
 		const shots = small(320);
 		await seedStore(shots);
 		const store = await boot();
-		const hidden = store.rawAll[315];
-		expect(store.all.some((s) => s.id === hidden.id)).toBe(true);
+		const hidden = p3RowsOf(store).raw[315];
+		expect(p3RowsOf(store).live.some((s) => s.id === hidden.id)).toBe(true);
 		// No heavy part is on a row at all, in view or past it (P4w).
 		expect('samples' in hidden.record).toBe(false);
-		expect('samples' in store.all[0].record).toBe(false);
+		expect('samples' in p3RowsOf(store).live[0].record).toBe(false);
 		expect(hidden.summary.sampleCount).toBe(shots.find((s) => s.id === hidden.id)!.record.samples.length);
 		const full = (await store.loadShot(hidden.id))!;
 		expect(full.record.samples).toEqual(shots.find((s) => s.id === hidden.id)!.record.samples);
@@ -223,7 +224,7 @@ describe('no cap: every row is kept and shown (#310 P6w)', () => {
 		const shots = small(320).map((s) => ({ ...s, visualizerId: null }));
 		await seedStore(shots);
 		const store = await boot();
-		const hidden = store.rawAll[316];
+		const hidden = p3RowsOf(store).raw[316];
 		const full = whole(shots.find((s) => s.id === hidden.id)!);
 		const p = peaksOf(full);
 		const remote: WireShot = {
@@ -237,7 +238,7 @@ describe('no cap: every row is kept and shown (#310 P6w)', () => {
 			updated_at_ms: null,
 			tag_list: []
 		} as unknown as WireShot;
-		expect(reconcileShots(store.rawAll, [remote])).toEqual([
+		expect(reconcileShots(p3RowsOf(store).raw, [remote])).toEqual([
 			expect.objectContaining({ kind: 'bind', localId: hidden.id, visualizerId: 'remote-1' })
 		]);
 		// Its de-dup signature is the whole shot's; read as curveless, it wouldn't be.
@@ -251,13 +252,13 @@ describe('no cap: every row is kept and shown (#310 P6w)', () => {
 		const shots = small(320);
 		await seedStore(shots);
 		const store = await boot();
-		const hidden = store.rawAll[315];
+		const hidden = p3RowsOf(store).raw[315];
 		store.setPinned(hidden.id, true);
 		await store.flushed();
 		const captures = getCaptureStore();
-		for (const id of [store.all[0].id, store.all[1].id, hidden.id]) await captures.put(id, []);
+		for (const id of [p3RowsOf(store).live[0].id, p3RowsOf(store).live[1].id, hidden.id]) await captures.put(id, []);
 		expect(await pruneCaptures(store, '10')).toEqual([]);
-		expect((await pruneCaptures(store, 'off')).sort()).toEqual([store.all[0].id, store.all[1].id].sort());
+		expect((await pruneCaptures(store, 'off')).sort()).toEqual([p3RowsOf(store).live[0].id, p3RowsOf(store).live[1].id].sort());
 		expect(await captures.keys()).toEqual([hidden.id]);
 		await captures.delete(hidden.id);
 	});
@@ -265,7 +266,7 @@ describe('no cap: every row is kept and shown (#310 P6w)', () => {
 	it('a new shot past the old 300 pushes nothing out, and an old one is kept, not refused', async () => {
 		await seedStore(small(300));
 		const store = await boot();
-		const oldest = store.all[299].id;
+		const oldest = p3RowsOf(store).live[299].id;
 		store.addManualBrew({
 			method: 'pourover',
 			completedAt: Date.now(),
@@ -281,14 +282,14 @@ describe('no cap: every row is kept and shown (#310 P6w)', () => {
 			nextPlan: null
 		});
 		await store.flushed();
-		expect(store.all).toHaveLength(301);
-		expect(store.all.map((s) => s.id)).toContain(oldest);
+		expect(p3RowsOf(store).live).toHaveLength(301);
+		expect(p3RowsOf(store).live.map((s) => s.id)).toContain(oldest);
 		expect(store.fitsHistory(1)).toBe(true);
 		expect(store.freeSlots).toBeUndefined();
 		const old = { ...realShot(7_000, realSamples(3)), completedAt: 1 };
 		expect(store.insertMany([old])).toMatchObject({ kept: [expect.objectContaining({ id: old.id })], dropped: 0 });
 		await store.flushed();
-		expect(store.all.at(-1)!.id).toBe(old.id);
+		expect(p3RowsOf(store).live.at(-1)!.id).toBe(old.id);
 		expect((await stored()).rows.size).toBe(302);
 	});
 });
@@ -301,7 +302,7 @@ describe('saves upsert, and only a delete by name removes', () => {
 		const r = await store.restoreRows((rows) => ({ next: rows.slice(0, 5), series: [], remove: [] }));
 		expect(r.stored).toBe(true);
 		expect((await stored()).rows.size).toBe(20);
-		expect(store.rawAll).toHaveLength(20);
+		expect(p3RowsOf(store).raw).toHaveLength(20);
 	});
 
 	it('a delete removes that row and its details, and nothing else', async () => {
@@ -320,7 +321,7 @@ describe('saves upsert, and only a delete by name removes', () => {
 		const shots = small(320);
 		await seedStore(shots);
 		const store = await boot();
-		const hidden = store.rawAll[318];
+		const hidden = p3RowsOf(store).raw[318];
 		// A backup row for it with no curve and no profile, overwriting.
 		const bare = { ...hidden, profile: null, record: { ...hidden.record, samples: [] }, metadata: { ...hidden.metadata, notes: 'from backup' } };
 		await store.restoreRows((rows) => ({
@@ -415,7 +416,7 @@ describe('the pending journal', () => {
 		expect((await stored()).details.has(made.id)).toBe(false);
 		expect(store.unsavedShots).toEqual([made.id]);
 		// Space freed; the user rates a different shot.
-		const other = store.all.find((s) => s.id !== made.id)!;
+		const other = p3RowsOf(store).live.find((s) => s.id !== made.id)!;
 		store.setRating(other.id, 4);
 		await store.flushed();
 		const s = await stored();
@@ -506,10 +507,10 @@ describe('other tabs', () => {
 		await until(() => b.get(made.id) !== undefined);
 		await until(() => b.get(made.id)?.summary.sampleCount === 4);
 		expect((await b.loadShot(made.id))!.record.samples).toHaveLength(4);
-		a.setRating(b.all[3].id, 1);
+		a.setRating(p3RowsOf(b).live[3].id, 1);
 		await a.flushed();
-		await until(() => b.all[3].metadata.rating === 1);
-		expect(b.all[3].summary.sampleCount).toBeGreaterThan(0);
+		await until(() => p3RowsOf(b).live[3].metadata.rating === 1);
+		expect(p3RowsOf(b).live[3].summary.sampleCount).toBeGreaterThan(0);
 		a.delete(made.id);
 		await a.flushed();
 		await until(() => b.get(made.id) === undefined);
@@ -596,7 +597,7 @@ describe('a store that is lost or can’t open', () => {
 		expect(await store.recoverOldCopy()).toBe(true);
 		expect(store.health).toBe('ok');
 		await store.flushed();
-		expect(store.rawAll.map((s) => s.id).sort()).toEqual([...shots.map((s) => s.id), made.id].sort());
+		expect(p3RowsOf(store).raw.map((s) => s.id).sort()).toEqual([...shots.map((s) => s.id), made.id].sort());
 	});
 
 	it('start empty is a choice, and keeps the old copy out of the late-row check', async () => {
@@ -611,8 +612,8 @@ describe('a store that is lost or can’t open', () => {
 		expect(store.health).toBe('lost');
 		await store.startEmpty();
 		expect(store.health).toBe('ok');
-		expect(store.rawAll).toEqual([]);
-		expect((await boot()).rawAll).toEqual([]);
+		expect(p3RowsOf(store).raw).toEqual([]);
+		expect(p3RowsOf((await boot())).raw).toEqual([]);
 	});
 
 	it('the rows snapshot brings the rows back', async () => {
@@ -632,7 +633,7 @@ describe('a store that is lost or can’t open', () => {
 		expect(lost.health).toBe('lost');
 		expect(await lost.snapshotInfo()).toEqual([{ name: snapshotNameOf(Date.now()), at: expect.any(Number), rows: 12 }]);
 		expect(await lost.recoverSnapshot()).toBe(true);
-		expect(lost.rawAll.map((s) => s.id).sort()).toEqual(shots.map((s) => s.id).sort());
+		expect(p3RowsOf(lost).raw.map((s) => s.id).sort()).toEqual(shots.map((s) => s.id).sort());
 		expect(lost.get(shots[0].id)!.metadata.rating).toBe(3);
 	});
 
@@ -849,7 +850,7 @@ describe('a store that is lost or can’t open', () => {
 		expect(b.health).toBe('lost');
 		expect(await a.recoverOldCopy()).toBe(true);
 		await until(() => b.health === 'ok');
-		expect(b.rawAll.map((s) => s.id).sort()).toEqual(shots.map((s) => s.id).sort());
+		expect(p3RowsOf(b).raw.map((s) => s.id).sort()).toEqual(shots.map((s) => s.id).sort());
 	});
 
 	it.each([
@@ -871,7 +872,7 @@ describe('a store that is lost or can’t open', () => {
 		const store = await boot();
 		expect(store.health).toBe('ok');
 		await deleteHistoryDb();
-		store.setRating(store.all[1].id, 2);
+		store.setRating(p3RowsOf(store).live[1].id, 2);
 		await store.flushed();
 		expect(store.health).toBe('lost');
 		expect(await historyDbExists(idb)).toBe(false);
@@ -936,7 +937,7 @@ describe('a store that is lost or can’t open', () => {
 		const again = await boot({ snapshotRoot, now: clock.now });
 		const [newer, older] = await again.snapshotInfo();
 		expect(await again.recoverSnapshot(older.name)).toBe(true);
-		expect(again.rawAll).toHaveLength(6);
+		expect(p3RowsOf(again).raw).toHaveLength(6);
 		// The next day's save is a new copy: the one with the new shot stays.
 		clock.day = 2;
 		again.setRating(shots[1].id, 2);
@@ -951,7 +952,7 @@ describe('a store that is lost or can’t open', () => {
 		const all = await boot({ snapshotRoot, now: clock.now });
 		expect(all.health).toBe('lost');
 		expect(await all.recoverSnapshot('all')).toBe(true);
-		expect(all.rawAll.map((s) => s.id).sort()).toEqual([...shots.map((s) => s.id), made.id].sort());
+		expect(p3RowsOf(all).raw.map((s) => s.id).sort()).toEqual([...shots.map((s) => s.id), made.id].sort());
 		expect(all.get(shots[1].id)!.metadata.rating).toBe(2);
 		expect(all.get(shots[0].id)!.metadata.rating).toBe(3);
 	});
@@ -978,7 +979,7 @@ describe('a store that is lost or can’t open', () => {
 			// Today's copy of 6 stands.
 			expect((await empty.snapshotInfo()).map((s) => s.rows)).toEqual([6]);
 			clock.day = 1;
-			empty.setRating(empty.all[0].id, 1);
+			empty.setRating(p3RowsOf(empty).live[0].id, 1);
 			await empty.flushed();
 			await until(() => files.size === 2);
 			expect((await empty.snapshotInfo()).map((s) => s.rows)).toEqual([1, 6]);
@@ -1166,7 +1167,7 @@ describe('a store that is lost or can’t open', () => {
 			expect(readStoreMarker().kind).toBe('none');
 			expect(store.storageError).toMatch(/marker/);
 			refuse = false;
-			store.setRating(store.all[0].id, 1);
+			store.setRating(p3RowsOf(store).live[0].id, 1);
 			await store.flushed();
 			expect(readStoreMarker()).toMatchObject({ kind: 'marker', marker: { state: 'done', rows: 3 } });
 		} finally {
@@ -1186,7 +1187,7 @@ describe('a store that is lost or can’t open', () => {
 		broken = false;
 		expect(await store.retryOpen()).toBe(true);
 		await store.flushed();
-		expect(store.rawAll).toHaveLength(6);
+		expect(p3RowsOf(store).raw).toHaveLength(6);
 		expect((await stored()).rows.has(made.id)).toBe(true);
 	});
 
@@ -1206,11 +1207,11 @@ describe('not loaded is not empty', () => {
 	it('reading the rows before they load throws in tests', async () => {
 		await seedStore(small(2));
 		const store = new HistoryStore();
-		expect(() => store.all).toThrow(/before the rows loaded/);
-		expect(() => store.rawAll).toThrow(/before the rows loaded/);
+		expect(() => p3RowsOf(store).live).toThrow(/before the rows loaded/);
+		expect(() => p3RowsOf(store).raw).toThrow(/before the rows loaded/);
 		expect(() => store.get('x')).toThrow(/before the rows loaded/);
 		await settled(store);
-		expect(store.all).toHaveLength(2);
+		expect(p3RowsOf(store).live).toHaveLength(2);
 	});
 
 	it('the skeleton says still loading after 5 s, and gated callers give up after 30 s', async () => {

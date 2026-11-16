@@ -8,6 +8,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import type { CoreOutput, CremaCore, NotificationSource } from '#lib/core/index.js';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 /** The core's own test `ShotSample`; byte 17 is the frame number. */
 function sampleIn(frame: number): Uint8Array {
@@ -62,7 +63,7 @@ describe('the web records shots through the core', () => {
 		t.settings.set('baristaName', 'Sam');
 		// A real pour: 48 samples × 250 ms = 12 s, so it isn't an aborted pull.
 		await t.pour(1_000, 48);
-		const shot = (await t.history.loadShot(t.history.all[0].id))!;
+		const shot = (await t.history.loadShot(p3RowsOf(t.history).live[0].id))!;
 		expect(shot, 'a recorded shot').toBeDefined();
 		// The core's record: its frames and the overlays it filled live.
 		expect(shot.record.samples.slice(0, 4).map((s) => s.sample.frameNumber)).toEqual([0, 2, 2, 3]);
@@ -87,7 +88,7 @@ describe('the web records shots through the core', () => {
 			p[19] = p.slice(0, 19).reduce((a, b) => a ^ b, 0);
 			return p;
 		};
-		const before = t.history.all.length; // the store is an app-wide singleton
+		const before = p3RowsOf(t.history).live.length; // the store is an app-wide singleton
 		await t.feed('ScaleWeight', bookoo(100), 900);
 		await t.feed('De1State', new Uint8Array([4, 5]), 1_000);
 		for (let i = 1; i <= 8; i++) {
@@ -98,12 +99,12 @@ describe('the web records shots through the core', () => {
 		// The drip settle ends at its backstop.
 		const internals = t.app as unknown as { applyCoreOutput(out: CoreOutput): void };
 		internals.applyCoreOutput(await core.onTick(7_000));
-		expect(t.history.all).toHaveLength(before);
+		expect(p3RowsOf(t.history).live).toHaveLength(before);
 		const undo = getToasts().find((x) => x.action?.label === 'Undo');
 		expect(undo, 'the undo toast').toBeDefined();
 		undo!.action!.run();
-		expect(t.history.all).toHaveLength(before + 1);
-		expect((await t.history.loadShot(t.history.all[0].id))!.record.samples.map((s) => s.sample.frameNumber)).toEqual([
+		expect(p3RowsOf(t.history).live).toHaveLength(before + 1);
+		expect((await t.history.loadShot(p3RowsOf(t.history).live[0].id))!.record.samples.map((s) => s.sample.frameNumber)).toEqual([
 			0, 2, 2, 3, 3, 3, 3, 3
 		]);
 		await core.disconnectScale();
@@ -114,7 +115,7 @@ describe('the web records shots through the core', () => {
 		const t = await makeApp();
 		await t.pour(1_000, 48);
 		const shot = {
-			...(await t.history.loadShot(t.history.all[0].id))!,
+			...(await t.history.loadShot(p3RowsOf(t.history).live[0].id))!,
 			tags: ['dial-in'],
 			yieldTarget: 36,
 			brewTempTarget: 93.5,

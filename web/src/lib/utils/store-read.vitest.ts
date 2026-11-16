@@ -28,6 +28,7 @@ import {
 	writeJson,
 	writeStore
 } from './storage';
+import { p3RowsOf } from '#lib/history/p3-rows.js';
 
 const KEY = 'crema.test.v1';
 const WHAT = 'test log';
@@ -381,7 +382,7 @@ describe('rows a loader cannot coerce', () => {
 	it('a shot survives the save that drops it from the rows', () => {
 		localStorage.setItem(HISTORY, JSON.stringify([good, badRow]));
 		const store = new HistoryStore();
-		expect(store.all.map((s) => s.id)).toEqual(['shot-1']);
+		expect(p3RowsOf(store).live.map((s) => s.id)).toEqual(['shot-1']);
 
 		store.delete('shot-1');
 		const kept = JSON.parse(localStorage.getItem(skippedKeyOf(HISTORY))!) as { row: unknown }[];
@@ -449,8 +450,8 @@ describe('history at the quota', () => {
 		readStore(HISTORY, { what: 'shot history' });
 		vi.restoreAllMocks();
 
-		store.setRating(store.all[0].id, 3);
-		expect(store.all).toHaveLength(20);
+		store.setRating(p3RowsOf(store).live[0].id, 3);
+		expect(p3RowsOf(store).live).toHaveLength(20);
 		expect(localStorage.getItem(HISTORY)).toBe(raw);
 	});
 
@@ -460,8 +461,8 @@ describe('history at the quota', () => {
 		vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
 			throw new DOMException('denied', 'SecurityError');
 		});
-		store.setRating(store.all[0].id, 3);
-		expect(store.all).toHaveLength(20);
+		store.setRating(p3RowsOf(store).live[0].id, 3);
+		expect(p3RowsOf(store).live).toHaveLength(20);
 	});
 
 	it('quota still evicts, to keep saving', () => {
@@ -473,7 +474,7 @@ describe('history at the quota', () => {
 			if (failures-- > 0) throw new DOMException('full', 'QuotaExceededError');
 			real(k, v);
 		});
-		store.setRating(store.all[0].id, 3);
-		expect(store.all).toHaveLength(18);
+		store.setRating(p3RowsOf(store).live[0].id, 3);
+		expect(p3RowsOf(store).live).toHaveLength(18);
 	});
 });
