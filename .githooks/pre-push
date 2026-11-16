@@ -72,6 +72,10 @@ if [[ "${SKIP_WEB:-0}" != "1" ]]; then
 	( cd web && pnpm wasm ) \
 		|| fail "wasm-pack build failed"
 
+	step "pnpm wasm:history (the history Worker's wasm; needs a clang for wasm32)"
+	( cd web && pnpm wasm:history ) \
+		|| fail "pnpm wasm:history failed — see core/de1-history-wasm/README.md for the clang"
+
 	step "pnpm check (svelte-kit sync + svelte-check)"
 	( cd web && pnpm check ) \
 		|| fail "svelte-check errors — fix type / a11y issues"

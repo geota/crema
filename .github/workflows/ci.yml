@@ -389,6 +389,13 @@ jobs:
         working-directory: web
         run: pnpm wasm
 
+      # The history Worker's wasm (#310 W1): `pnpm check` types it and
+      # `pnpm build` bundles it. scripts/history-wasm-build.sh finds the
+      # runner's clang for SQLite's C.
+      - name: Build the history wasm
+        working-directory: web
+        run: pnpm wasm:history
+
       # `pnpm check` runs `svelte-kit sync` then svelte-check; fails on any error.
       - name: Type-check + svelte-check
         working-directory: web

@@ -48,7 +48,9 @@
 	import { describeError } from '#lib/utils/error.js';
 	import { installStorageNotices } from '#lib/shell/storage-notices.js';
 	import { installVisualizerNotices } from '#lib/shell/visualizer-notices.js';
+	import { startHistoryDb, stopHistoryDb } from '#lib/history-db/start.js';
 	import {
+		freezeCremaWrites,
 		installResetListener,
 		resetReportMessage,
 		takeResetReport
@@ -132,7 +134,14 @@
 	let restoreListener: RestoreListener | null = null;
 
 	onMount(async () => {
-		stopResetListener = installResetListener();
+		// Another tab's reset: freeze, and the history store lets its pools go
+		// before that tab removes them (S10).
+		stopResetListener = installResetListener({
+			freeze: () => {
+				freezeCremaWrites();
+				void stopHistoryDb();
+			}
+		});
 		restoreListener = installRestoreListener({
 			busy: machineRunning,
 			onFrozen: () => freezeOverlay.show(),
@@ -204,6 +213,8 @@
 			void checkRestoreMarker();
 			// Temporary backup files a closed tab left (#310 P2w).
 			void sweepBackupTemp();
+			// The SQLite history's owner and client (#310 W1). Nothing reads it yet.
+			startHistoryDb();
 		});
 		// Keep the cached Visualizer Premium flag (it gates the edit sync's
 		// Premium-only PATCH fields) fresh: re-probe at most once per 24 h.
