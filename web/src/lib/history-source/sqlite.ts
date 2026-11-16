@@ -65,6 +65,12 @@ export interface SqliteSourceOptions {
 	batch?: number;
 	/** A whole shot's summary (`#lib/history/summary.js`'s `summarize`). */
 	summarize: (shot: StoredShot) => ShotSummary;
+	/**
+	 * Runs a release only while no restore runs in any tab, or answers null
+	 * (`guards.ts`'s `apartFromRestores`). A restore's upsert of a held row
+	 * ends its hold; a release racing it would delete the row it brought back.
+	 */
+	apartFromRestores?: <T>(f: () => Promise<T>) => Promise<T | null>;
 }
 
 /** `ExportWalk` as the wasm gives it: the token as text. */
@@ -126,6 +132,7 @@ export class SqliteSource implements HistorySource {
 	readonly #details: DetailsStore;
 	readonly #batch: number;
 	readonly #summarize: (shot: StoredShot) => ShotSummary;
+	readonly #apart: SqliteSourceOptions['apartFromRestores'];
 	#live = 0;
 
 	constructor(o: SqliteSourceOptions) {
@@ -133,6 +140,7 @@ export class SqliteSource implements HistorySource {
 		this.#details = o.details;
 		this.#batch = o.batch ?? 100;
 		this.#summarize = o.summarize;
+		this.#apart = o.apartFromRestores;
 		o.db.onChange?.(() => void this.countLive());
 		void this.countLive();
 	}
@@ -212,12 +220,19 @@ export class SqliteSource implements HistorySource {
 	 * export and before the next; W5 runs it at boot too.
 	 */
 	async settleHolds(): Promise<number> {
-		const ids = await this.#db.read<string[]>('releaseHolds');
-		for (const part of chunks(ids, this.#batch)) {
-			await this.#details.delete(part);
-			landed(await this.#db.write({ kind: 'delete', ids: part }));
-		}
-		return ids.length;
+		const run = async () => {
+			const ids = await this.#db.read<string[]>('releaseHolds');
+			for (const part of chunks(ids, this.#batch)) {
+				await this.#details.delete(part);
+				// Only the rows still held: one an upsert brought back since is the user's again.
+				const still = new Set(await this.#db.read<string[]>('releaseHolds'));
+				const rows = part.filter((id) => still.has(id));
+				if (rows.length > 0) landed(await this.#db.write({ kind: 'delete', ids: rows }));
+			}
+			return ids.length;
+		};
+		// A restore runs: it may bring a held row back. The next export, or boot, releases.
+		return this.#apart ? ((await this.#apart(run)) ?? 0) : run();
 	}
 
 	// ── Export ─────────────────────────────────────────────────────────────

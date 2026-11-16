@@ -12,7 +12,10 @@ import { summarize } from '#lib/history/summary.js';
 import type { ShotPlan } from '#lib/core/crema-core.js';
 import { memorySink, streamBackup } from '#lib/backup/stream.js';
 import { DELETE_AFTER_MS, beginMarker, checkMarkerAtBoot, finishMarker } from '#lib/restore/marker.js';
+import { FakeLocks } from '#lib/testing/fake-locks.js';
+import { RESTORE_LOCK } from '#lib/restore/tab-safety.js';
 import { SqliteSource, type HistoryDbPort } from './sqlite';
+import { apartFromRestores } from './guards';
 import { ShotsMoved } from './types';
 import {
 	Crash,
@@ -256,6 +259,53 @@ describe.runIf(historyWasmBuilt)('the SQLite source (#310 R1w)', () => {
 			again.close();
 			again.free();
 		}
+	});
+
+	it('a release deletes only rows still held: one an upsert brought back since stays', async () => {
+		const { db, port, details } = await setup();
+		await seed(port, details, ['s1', 's2', 's3'].map((id) => shot(id)));
+		const other = directPort(db);
+		let armed = false;
+		const racing: HistoryDbPort = {
+			...port,
+			read: async (name, arg) => {
+				const v = await port.read(name, arg);
+				// An upsert of s2 (a restore's, were it not kept apart) lands between the release's reads.
+				if (name === 'releaseHolds' && armed) {
+					armed = false;
+					await seed(other, details, [shot('s2', { metadata: { ...shot('s2').metadata, rating: 5 } })]);
+				}
+				return v as never;
+			}
+		};
+		const source = new SqliteSource({ db: racing, details, summarize, batch: 2 });
+		const ex = await source.exportShots();
+		await port.write({ kind: 'delete', ids: ['s2'] });
+		await all(ex.pass());
+		await all(ex.pass());
+		armed = true;
+		await ex.close();
+		expect((await rowsOf(port)).get('s2')).toMatchObject({ metadata: { rating: 5 } });
+		expect((await projection(port)).find((r) => r.id === 's2')?.held).toBe(false);
+	});
+
+	it('a release waits out a restore: under `crema-restore`, or not at all', async () => {
+		const { port, details } = await setup();
+		await seed(port, details, ['s1', 's2'].map((id) => shot(id)));
+		const locks = new FakeLocks();
+		const source = new SqliteSource({ db: port, details, summarize, apartFromRestores: apartFromRestores(locks) });
+		const ex = await source.exportShots();
+		await port.write({ kind: 'delete', ids: ['s2'] });
+		const unlock = await locks.hold(RESTORE_LOCK);
+		await ex.close();
+		// A restore runs: the hold stays for later.
+		expect((await projection(port)).find((r) => r.id === 's2')?.held).toBe(true);
+		expect(details.map.has('s2')).toBe(true);
+		unlock();
+		await new Promise((r) => setTimeout(r, 0));
+		expect(await source.settleHolds()).toBe(1);
+		expect((await projection(port)).map((r) => r.id)).toEqual(['s1']);
+		expect(details.map.has('s2')).toBe(false);
 	});
 
 	describe('restore: merge, then remove (M3)', () => {
