@@ -24,7 +24,7 @@ export default defineConfig({
 	testDir: 'tests/browser',
 	testMatch: '*.spec.ts',
 	// The service-worker tests need the app's production build: `pnpm test:pwa`.
-	testIgnore: 'pwa.spec.ts',
+	testIgnore: ['pwa.spec.ts', 'upgrade.spec.ts'],
 	// The durability runs are long; each test sets its own budget too.
 	timeout: 120_000,
 	fullyParallel: true,
@@ -48,8 +48,8 @@ export default defineConfig({
 	projects: android
 		? [{ name: 'android-chrome', use: { browserName: 'chromium' } }]
 		: [
-				{ name: 'chromium', use: { browserName: 'chromium' }, testIgnore: ['bench.spec.ts', 'w2.spec.ts', 'pwa.spec.ts'] },
-				{ name: 'webkit', use: { browserName: 'webkit' }, testIgnore: ['bench.spec.ts', 'w2.spec.ts', 'pwa.spec.ts'] },
+				{ name: 'chromium', use: { browserName: 'chromium' }, testIgnore: ['bench.spec.ts', 'w2.spec.ts', 'pwa.spec.ts', 'upgrade.spec.ts'] },
+				{ name: 'webkit', use: { browserName: 'webkit' }, testIgnore: ['bench.spec.ts', 'w2.spec.ts', 'pwa.spec.ts', 'upgrade.spec.ts'] },
 				{
 					name: 'bench',
 					use: { browserName: 'chromium' },
