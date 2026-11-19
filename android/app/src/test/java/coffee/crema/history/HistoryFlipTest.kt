@@ -34,6 +34,9 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class HistoryFlipTest {
+    /** A hang fails this test, with every thread's stack, instead of holding the run (#310 A5). */
+    @get:org.junit.Rule val hang = HangWatch()
+
     private val app = ApplicationProvider.getApplicationContext<Application>()
     private val filesDir get() = app.filesDir
     private val sqliteDir get() = File(filesDir, HistoryStore.SQLITE_DIR)
