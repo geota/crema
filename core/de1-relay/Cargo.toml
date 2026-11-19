@@ -27,7 +27,8 @@ zeroize = { version = "1", features = ["derive"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-typeshare = "1.0.5"
+# The #[typeshare] attribute only: the macro crate, without the runtime crate's chrono (RUSTSEC-2026-0543).
+typeshare = { package = "typeshare-annotation", version = "1.0.5" }
 
 # The crate's own integration tests, vectors and corpus replay need the
 # deterministic test hooks; this self-dependency turns `test-seeds` on for test
