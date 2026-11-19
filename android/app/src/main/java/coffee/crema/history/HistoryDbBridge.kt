@@ -63,7 +63,8 @@ import coffee.crema.core.HistoryDb as CoreHistoryDb
  * class (SPEC §12). From A1 the app's one caller is [HistoryIndex], which
  * runs inside `HistoryStore.lock` on IO and so calls through [now] and
  * [openNow] rather than switching dispatchers under the lock. From R1a
- * [SqliteHistorySource] is the backup's and restore's (not in use until A5).
+ * [SqliteHistorySource] is the backup's and restore's, and from A5
+ * [HistoryAuthority] and the flip ([HistoryFlip]) call it on `history.db`.
  */
 class HistoryDbBridge private constructor(
     private val db: CoreHistoryDb,
@@ -84,6 +85,10 @@ class HistoryDbBridge private constructor(
         /** [open] on the calling thread, for a caller already on IO inside its own lock (A1's hook). */
         internal fun openNow(file: File, options: HistoryOpenOptions, io: CoroutineDispatcher = Dispatchers.IO): HistoryDbBridge =
             HistoryDbBridge(CoreHistoryDb.open(file.path, options), io)
+
+        /** [createRecovery] on the calling thread, for a caller on IO inside the store's lock (#310 A5). */
+        internal fun createRecoveryNow(file: File, options: HistoryOpenOptions, recovery: HistoryRecovery, io: CoroutineDispatcher = Dispatchers.IO): HistoryDbBridge =
+            HistoryDbBridge(CoreHistoryDb.createRecovery(file.path, options, recovery), io)
 
         /** Creates the recovery file [file] after `lost` (S9) and opens it. */
         suspend fun createRecovery(

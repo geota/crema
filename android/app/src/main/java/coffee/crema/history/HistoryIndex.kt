@@ -269,6 +269,33 @@ internal class HistoryIndex(
         }
     }
 
+    // ── The flip (#310 A5) ───────────────────────────────────────────────────
+
+    /** The index's seqs and `pending` now, or null when it isn't open. Under the lock. */
+    fun settled(): coffee.crema.core.HistoryIndexState? = opened()?.let { b -> b.now { it.indexState() } }
+
+    /**
+     * The flip's copy (SPEC §11 step 5): this index into [dest] with its
+     * promote, in the core's one call. The index itself is untouched: its
+     * role stays `index`. Under the lock, right after the full diff settled.
+     */
+    fun flipCopy(dest: File, init: coffee.crema.core.HistoryFlipInit) {
+        val b = opened() ?: throw IllegalStateException("the index isn't open")
+        check(fresh) { "the index isn't up to date" }
+        b.now { it.flipCopyTo(dest.path, coffee.crema.core.HistoryJournalMode.WAL, init) }
+    }
+
+    /**
+     * A failed verify (M4): the index is derived (rule 4), so it is closed
+     * and its files removed, and the next [HistoryStore.syncIndex] builds it
+     * again from `shots.db`. Under the lock.
+     */
+    fun discardForRebuild() {
+        closeAll()
+        persist("the flip's verify failed: the index is rebuilt from shots.db")
+        for (suffix in SUFFIXES) File(file.path + suffix).delete()
+    }
+
     // ── The hook (M4) ────────────────────────────────────────────────────────
 
     override fun begin(): Any? {

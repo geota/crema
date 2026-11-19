@@ -30,6 +30,13 @@ pub const POINTS: &[&str] = &[
     "set_live.committed",
     "apply.commit",
     "apply.committed",
+    // Android stage 2 (A5): the flip's heavy copy and step 8's late rows.
+    "heavy.row",
+    "heavy.commit",
+    "heavy.committed",
+    "late.source",
+    "late.commit",
+    "late.committed",
     // Maintenance: each batch, and the swap.
     "derive.batch",
     "derive.commit",
@@ -49,6 +56,12 @@ pub const POINTS: &[&str] = &[
     "late.commit",
     "late.committed",
 ];
+
+/// Every store opened while this is above 0 caps its file at that many
+/// pages (`PRAGMA max_page_count`), so a write that grows it fails with a
+/// real `SQLITE_FULL` (PLAN A5: a full disk through the core). Tests only.
+#[cfg(feature = "faults")]
+pub static MAX_PAGES_FOR_TEST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// The armed faults and a log of the statements the store ran.
 #[derive(Debug, Default)]

@@ -1,5 +1,6 @@
 package coffee.crema.history
 
+import coffee.crema.core.HistoryChangeSet
 import coffee.crema.core.HistoryHeavy
 import coffee.crema.core.HistoryRowIn
 import coffee.crema.restore.NextShots
@@ -33,8 +34,8 @@ internal interface ShotDetails {
 
 /** Where [SqliteHistorySource] can be stopped in a test, as a kill would. */
 internal enum class SourceFault {
-    /** A hold's details are deleted; its row isn't yet (S6). */
-    RELEASE_AFTER_DETAILS,
+    /** A hold's rows are deleted; their details aren't yet (S6, SPEC "From R1w"). */
+    RELEASE_AFTER_ROWS,
 
     /** A restore's merge is about to write its next batch. */
     BEFORE_MERGE_BATCH,
@@ -44,16 +45,16 @@ internal enum class SourceFault {
 }
 
 /**
- * #310 R1a: the SQLite store as a [HistorySource] (SQLite SPEC §9). Not in
- * use until A5 switches the app to it.
+ * #310 R1a: the SQLite store as a [HistorySource] (SQLite SPEC §9). From A5
+ * the app's backups walk it once the store is on `history.db`.
  *
  * - **Export** uses the store's walk: its set and order are fixed when it
  *   begins (newest first, ties by id, as P3a lists rows), and a delete during
  *   it holds the row, so the header's count is the lines written. When the
  *   walk ends, and when the store opens ([open]), the held rows are released
- *   **details first** (S6): their series go, then their rows. A kill between
- *   leaves a held, hidden row that the next open releases again, never
- *   details with no row or a row with none.
+ *   **rows first** (SPEC "From R1w"): the rows still held go, then the
+ *   series of exactly those with no row now. A kill between leaves series
+ *   with no row, which is harmless, never a row without its curve.
  * - **Deletes** ([delete]) keep a row's details while a walk is open, since
  *   the walk may still read them; the walk's release takes them.
  * - **Restore** is merge, then remove (M3): [beginRestore] reads the store's
@@ -149,26 +150,33 @@ internal class SqliteHistorySource private constructor(
     }
 
     /**
-     * The held rows no walk needs, released details first (S6), and the
-     * details of rows deleted outright while a walk was open, once none is.
-     * Returns the held ids it removed. Blocking.
+     * The held rows no walk needs, released **rows first** (SPEC "From R1w",
+     * REVIEW-468 W5-1): the core removes only rows still held
+     * (`delete_held`), and only then go the details of exactly those ids,
+     * and of rows deleted outright while a walk was open, each only when no
+     * row holds its id now. A row an upsert brought back meanwhile keeps its
+     * curve. A kill between leaves details with no row, which is harmless
+     * (SPEC §2): every writer puts details before the row, so a recreated id
+     * overwrites them. Returns the held ids it removed. Blocking.
      */
     fun releaseHolds(): List<String> = lock.withLock {
         val held = db.now { it.releaseHolds() }
+        val removed = if (held.isEmpty()) emptyList() else db.now { it.deleteHeld(held) }
         val gone = if (walks == 0 && deferred.isNotEmpty()) {
             val ids = deferred.toList()
             deferred.removeAll(ids.toSet())
-            // Written again since (a restore, a pull): its details are its own again.
-            val back = db.now { it.get(ids) }.mapTo(HashSet()) { it.id }
-            ids.filterNot { it in back }
+            ids
         } else {
             emptyList()
         }
-        if (held.isEmpty() && gone.isEmpty()) return emptyList()
-        details.delete((held + gone).distinct())
-        crash(SourceFault.RELEASE_AFTER_DETAILS)
-        if (held.isNotEmpty()) db.now { it.delete(held) }
-        held
+        val candidates = (removed + gone).distinct()
+        if (candidates.isEmpty()) return emptyList()
+        crash(SourceFault.RELEASE_AFTER_ROWS)
+        // Written again since (a restore, a pull): its details are its own again.
+        val back = db.now { it.get(candidates) }.mapTo(HashSet()) { it.id }
+        val orphaned = candidates.filterNot { it in back }
+        if (orphaned.isNotEmpty()) details.delete(orphaned)
+        removed
     }
 
     /**
@@ -176,20 +184,38 @@ internal class SqliteHistorySource private constructor(
      * then their details. While a walk is open a row of its set is held, and
      * its details stay until the walk's release.
      */
-    suspend fun delete(ids: List<String>) = withContext(Dispatchers.IO) { deleteNow(ids) }
+    suspend fun delete(ids: List<String>): HistoryChangeSet? = withContext(Dispatchers.IO) { deleteNow(ids) }
 
-    private fun deleteNow(ids: List<String>) = lock.withLock {
-        if (ids.isEmpty()) return@withLock
-        db.now { it.delete(ids) }
+    /** [delete] on the calling thread, for a caller on IO (the store's writes, under its lock). */
+    fun deleteNow(ids: List<String>): HistoryChangeSet? = lock.withLock {
+        if (ids.isEmpty()) return@withLock null
+        val change = db.now { it.delete(ids) }
         if (walks == 0) details.delete(ids) else deferred += ids
+        change
     }
 
     override fun writeMark(): String? = db.now { "${db.path}#${it.info().generation}#${it.writeSeq()}" }
 
     // ── Restore (M3) ─────────────────────────────────────────────────────────
 
-    /** Every row the store lists, read in pages by `rid` (never [HistoryDbBridge.page], which is for display). */
+    /**
+     * Every row the store lists, read in pages by `rid` (never
+     * [HistoryDbBridge.page], which is for display), as one set (S3,
+     * REVIEW-466 note 4): `write_seq` is read before the first page and
+     * after the last, and a walk it moved under starts again. After three
+     * tries the pages are read under [lock], which every writer takes, so
+     * nothing moves. A planner never sees a partial or moving set.
+     */
     fun allRows(): List<ShotRow> {
+        repeat(3) {
+            val before = db.now { it.writeSeq() }
+            val rows = readAllRows()
+            if (db.now { it.writeSeq() } == before) return rows
+        }
+        return lock.withLock { readAllRows() }
+    }
+
+    private fun readAllRows(): List<ShotRow> {
         val out = ArrayList<ShotRow>()
         var after = Long.MIN_VALUE
         while (true) {

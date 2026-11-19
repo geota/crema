@@ -41,7 +41,7 @@ pub use export::{ExportWalk, RidId};
 pub use faults::Faults;
 pub use fts::{FtsCheck, FtsStatus, Maintained};
 pub use index::{ABSENT_BATCH_ROWS, AbsentError, AbsentStep, IndexState, IndexWrite};
-pub use late::LateImport;
+pub use late::{HeavyOut, LateImport, LateImported, LateRows};
 pub use read::{CoffeeFacet, Destination, Facets, Page, RidRow, RowOut, SyncPage, SyncRow};
 pub use write::{Applied, Duplicate, Heavy, RowIn, Write, Written};
 
@@ -726,6 +726,17 @@ fn open_conn(path: &Path, opts: &OpenOptions, check: Check) -> Result<(Connectio
     conn.busy_timeout(Duration::from_millis(u64::from(opts.busy_timeout_ms)))
         .map_err(open_err)?;
     conn.execute_batch(PRAGMAS).map_err(open_err)?;
+    #[cfg(feature = "faults")]
+    {
+        let pages = faults::MAX_PAGES_FOR_TEST.load(std::sync::atomic::Ordering::Relaxed);
+        if pages > 0 {
+            // SQLite never sets it below the file's size: any growth is `SQLITE_FULL`.
+            conn.query_row(&format!("PRAGMA max_page_count = {pages}"), [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .map_err(open_err)?;
+        }
+    }
     // WAL without shared memory needs exclusive locking before the file is
     // first read (REVIEW-439 note 1). A connection setting: it writes nothing.
     if opts.journal == JournalMode::ExclusiveWal {

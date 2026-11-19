@@ -33,10 +33,10 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use de1_history::store::{
-    self, Applied, CoffeeFacet, Destination, Duplicate, ExportWalk, Facets, FileInfo, FtsCheck,
-    FtsStatus, Health, Heavy, IndexState, IndexWrite, JournalMode, Maintained, OpenOptions, Page,
-    Recovery, RidId, RidRow, Role, RowIn, RowOut, Store, StoreError, SyncPage, SyncRow, Write,
-    Written,
+    self, Applied, CoffeeFacet, Destination, Duplicate, ExportWalk, Facets, FileInfo, FlipInit,
+    FtsCheck, FtsStatus, Health, Heavy, HeavyOut, IndexState, IndexWrite, JournalMode,
+    LateImported, LateRows, Maintained, OpenOptions, Page, Recovery, RidId, RidRow, Role, RowIn,
+    RowOut, Store, StoreError, SyncPage, SyncRow, Write, Written,
 };
 use de1_history::{
     Anchor, BeanScope, ChangeKinds, ChangeSet, Cursor, Dir, Live, LiveBean, LiveMethod, Sort,
@@ -701,7 +701,7 @@ impl From<Facets> for HistoryFacets {
 
 /// A row of the sync projection (SPEC §9, S3). A `held` row is deleted by
 /// name (REVIEW-442 note 7), not absent.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct HistorySyncRow {
     pub rid: i64,
     pub id: String,
@@ -714,6 +714,10 @@ pub struct HistorySyncRow {
     pub sample_count: Option<i64>,
     pub profile_name: Option<String>,
     pub held: bool,
+    /// `summary.finalWeight`: the reconcile signature's weight (PLAN A5).
+    pub final_weight: Option<f64>,
+    /// `visualizerUpdatedAt`: the known rows' version (PLAN A5).
+    pub visualizer_updated_at: Option<i64>,
 }
 
 impl From<SyncRow> for HistorySyncRow {
@@ -730,12 +734,14 @@ impl From<SyncRow> for HistorySyncRow {
             sample_count: r.sample_count,
             profile_name: r.profile_name,
             held: r.held,
+            final_weight: r.final_weight,
+            visualizer_updated_at: r.visualizer_updated_at,
         }
     }
 }
 
 /// A page of the sync projection and the `write_seq` it was read at.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct HistorySyncPage {
     pub rows: Vec<HistorySyncRow>,
     pub seq: u64,
@@ -795,6 +801,79 @@ impl From<HistoryRowIn> for RowIn {
 
 fn rows_in(rows: Vec<HistoryRowIn>) -> Vec<RowIn> {
     rows.into_iter().map(RowIn::from).collect()
+}
+
+/// A row's heavy parts as `shot_heavy` holds them (PLAN A5).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HistoryHeavyRow {
+    pub id: String,
+    pub profile_json: Option<String>,
+    pub brew_series_json: Option<String>,
+}
+
+impl From<HeavyOut> for HistoryHeavyRow {
+    fn from(h: HeavyOut) -> HistoryHeavyRow {
+        HistoryHeavyRow {
+            id: h.id,
+            profile_json: h.profile_json,
+            brew_series_json: h.brew_series_json,
+        }
+    }
+}
+
+/// Step 8's import into a truth file (SPEC §11, S13): rows the file doesn't
+/// hold go in, every id joins `migration_source`, and the baseline and
+/// `late_ids` move, in one transaction.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HistoryLateImport {
+    pub rows: Vec<HistoryRowIn>,
+    pub source_ids: Vec<String>,
+    #[uniffi(default = None)]
+    pub late_ids: Option<Vec<String>>,
+    #[uniffi(default = None)]
+    pub late_baseline: Option<String>,
+}
+
+/// What a late import did: the write, and the rows left out because the
+/// file already held their id.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HistoryLateImported {
+    pub written: HistoryWritten,
+    pub present: Vec<String>,
+}
+
+impl From<LateImported> for HistoryLateImported {
+    fn from(l: LateImported) -> HistoryLateImported {
+        HistoryLateImported {
+            written: l.written.into(),
+            present: l.present,
+        }
+    }
+}
+
+/// What the flip writes into its copy (SPEC §11 step 5, S9, S13).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HistoryFlipInit {
+    pub generation: u32,
+    pub source_seq: u64,
+    pub source_count: u64,
+    pub migration_source: Vec<String>,
+    pub late_baseline: String,
+    #[uniffi(default = None)]
+    pub p3_migration: Option<String>,
+}
+
+impl From<HistoryFlipInit> for FlipInit {
+    fn from(f: HistoryFlipInit) -> FlipInit {
+        FlipInit {
+            generation: f.generation,
+            source_seq: f.source_seq,
+            source_count: f.source_count,
+            migration_source: f.migration_source,
+            late_baseline: f.late_baseline,
+            p3_migration: f.p3_migration,
+        }
+    }
 }
 
 /// What a write changed (SPEC §10). `order` holds the moved sort keys'
@@ -1481,6 +1560,17 @@ impl HistoryDb {
         self.with(|s| s.release_holds())
     }
 
+    /// Removes the rows of `ids` still held that no walk needs, and returns
+    /// the ids it removed (SPEC "From R1w"): the shell deletes the details
+    /// of exactly those after this, so a row an upsert brought back keeps
+    /// its curve.
+    ///
+    /// # Errors
+    /// A store error class.
+    pub fn delete_held(&self, ids: Vec<String>) -> HResult<Vec<String>> {
+        self.with(|s| s.delete_held(&ids))
+    }
+
     /// Begins a restore: the current `write_seq` (M3).
     ///
     /// # Errors
@@ -1668,6 +1758,159 @@ impl HistoryDb {
     pub fn copy_to(&self, dest: String, journal: HistoryJournalMode) -> HResult<()> {
         self.with(|s| s.copy_to(std::path::Path::new(&dest), None, journal.into()))
     }
+
+    /// The flip's copy (SPEC §11 step 5): this index into `dest`, then on
+    /// the copy, in one transaction, `role = 'authority'`, the generation,
+    /// `migration = copying`, `migration_source` and the baselines. The copy
+    /// is closed when this returns; open it as `authority` to go on.
+    ///
+    /// # Errors
+    /// As [`HistoryDb::copy_to`]; `Refused` from a file that isn't an index.
+    pub fn flip_copy_to(
+        &self,
+        dest: String,
+        journal: HistoryJournalMode,
+        init: HistoryFlipInit,
+    ) -> HResult<()> {
+        self.with(|s| {
+            s.flip_copy_to(
+                std::path::Path::new(&dest),
+                None,
+                journal.into(),
+                &init.into(),
+            )
+        })
+    }
+
+    /// Verify's pass (SPEC §11 step 7): `migration` from `copying` to
+    /// `done`, then a checkpoint. Does nothing on a file already `done`.
+    ///
+    /// # Errors
+    /// `Refused` on an index or a file with no `copying` migration.
+    pub fn set_migration_done(&self, done_at_ms: i64) -> HResult<()> {
+        self.with(|s| s.set_migration_done(done_at_ms))
+    }
+
+    /// `PRAGMA integrity_check`, whole: the problems it reports, empty when
+    /// none. Reads every page: only at the flip.
+    ///
+    /// # Errors
+    /// A store error class.
+    pub fn integrity_check(&self) -> HResult<Vec<String>> {
+        self.with(|s| s.integrity_check())
+    }
+
+    /// Every id in `migration_source`, sorted.
+    ///
+    /// # Errors
+    /// A store error class.
+    pub fn migration_source_ids(&self) -> HResult<Vec<String>> {
+        self.with(|s| s.migration_source_ids())
+    }
+
+    /// Which of `ids` `migration_source` doesn't hold (step 8).
+    ///
+    /// # Errors
+    /// A store error class.
+    pub fn not_in_migration_source(&self, ids: Vec<String>) -> HResult<Vec<String>> {
+        self.with(|s| s.not_in_migration_source(&ids))
+    }
+
+    /// The file's size in bytes, by its pages.
+    ///
+    /// # Errors
+    /// A store error class.
+    pub fn size_bytes(&self) -> HResult<u64> {
+        self.with(|s| s.size_bytes())
+    }
+
+    /// A `meta` value by key (`late_baseline`, `p3_migration`).
+    ///
+    /// # Errors
+    /// A store error class.
+    pub fn meta_value(&self, key: String) -> HResult<Option<String>> {
+        self.with(|s| s.meta_value(&key))
+    }
+
+    /// `shot_heavy` for `ids`; an id with none is left out (PLAN A5).
+    ///
+    /// # Errors
+    /// A store error class.
+    pub fn heavy(&self, ids: Vec<String>) -> HResult<Vec<HistoryHeavyRow>> {
+        self.with(|s| s.heavy(&ids))
+            .map(|v| v.into_iter().map(Into::into).collect())
+    }
+
+    /// The ids of the rows whose profile is stored.
+    ///
+    /// # Errors
+    /// A store error class.
+    pub fn ids_with_profile(&self) -> HResult<Vec<String>> {
+        self.with(|s| s.ids_with_profile())
+    }
+
+    /// The flip's step 6: heavy parts into `shot_heavy` for rows the file
+    /// holds, in one transaction; returns the ids it doesn't hold. Truth
+    /// file only.
+    ///
+    /// # Errors
+    /// `Refused` on an index; a store error class.
+    pub fn put_heavy(&self, rows: Vec<HistoryHeavyRow>) -> HResult<Vec<String>> {
+        let rows: Vec<(String, Heavy)> = rows
+            .into_iter()
+            .map(|r| {
+                (
+                    r.id,
+                    Heavy {
+                        profile_json: r.profile_json,
+                        brew_series_json: r.brew_series_json,
+                    },
+                )
+            })
+            .collect();
+        self.with(|s| s.put_heavy(&rows))
+    }
+
+    /// `meta.late_ids`: rows that arrived with no series (step 9).
+    ///
+    /// # Errors
+    /// A store error class.
+    pub fn late_ids(&self) -> HResult<Vec<String>> {
+        self.with(|s| s.late_ids())
+    }
+
+    /// Series written with no row write: `write_seq` moves, so the backup
+    /// mark does (REVIEW-466 note 1). Returns the new `write_seq`.
+    ///
+    /// # Errors
+    /// A store error class.
+    pub fn note_details_written(&self, at_ms: i64) -> HResult<u64> {
+        self.with(|s| s.note_details_written(at_ms))
+    }
+
+    /// Step 8's import into a truth file, in one transaction.
+    ///
+    /// # Errors
+    /// `Refused` on an index or for a row with no id; a store error class.
+    pub fn import_late(&self, import: HistoryLateImport) -> HResult<HistoryLateImported> {
+        let imp = LateRows {
+            rows: rows_in(import.rows),
+            source_ids: import.source_ids,
+            late_ids: import.late_ids,
+            late_baseline: import.late_baseline,
+        };
+        self.with(|s| s.import_late_rows(&imp)).map(Into::into)
+    }
+}
+
+/// Caps every history file opened from now on at `pages` pages (0: no
+/// cap), so a write that grows it fails with a real `SQLITE_FULL` (feature
+/// `test-seeds`; never in the APK).
+#[cfg(feature = "test-seeds")]
+#[uniffi::export]
+pub fn history_max_pages_for_test(pages: u32) {
+    de1_history::store::faults::MAX_PAGES_FOR_TEST
+        .store(pages, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Whether a change moves `query`'s list: its count or its order.

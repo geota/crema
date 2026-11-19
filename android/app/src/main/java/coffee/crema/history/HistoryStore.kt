@@ -3,6 +3,10 @@ package coffee.crema.history
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
+import coffee.crema.core.HistoryDbException
+import coffee.crema.core.HistoryHeavy
+import coffee.crema.core.HistoryLateImport
+import coffee.crema.core.HistoryRowIn
 import coffee.crema.core.ShotSummary
 import coffee.crema.persist.SafeFile
 import coffee.crema.persist.SafeLoad
@@ -65,6 +69,13 @@ import java.util.zip.GZIPOutputStream
  * If the migration can't finish, the app runs on the legacy backend: today's
  * `shots.json`, with its cap, retried at the next two launches and then at most
  * once a day.
+ *
+ * From #310 A5 (SQLite SPEC §11 stage 2), when [stage2Enabled], the store's
+ * first open runs the flip ([HistoryFlip]): a verified copy of the rows,
+ * `history-sqlite/history.db`, becomes the truth, and `shots.db` the old
+ * copy, never written again. The memory above stays as it is; the rows load
+ * from, and write to, `history.db` ([HistoryAuthority]), and an older
+ * build's writes to the P3 stores come in as late rows ([HistoryLate]).
  */
 
 /** How the history's store is (SPEC §2 `history.health`). */
@@ -150,7 +161,8 @@ class HistoryStore(
     private val file get() = File(context.filesDir, FILE_NAME)
     private val markerFile get() = File(context.filesDir, MARKER_NAME)
     private val snapshotFile get() = File(context.filesDir, SNAPSHOT_NAME)
-    private val pendingFile get() = File(context.filesDir, PENDING_NAME)
+    /** The pending journal: P3a's `history-pending.jsonl`, or after the flip stage 2's `history-sqlite/pending.jsonl` (#310 A5). */
+    private val pendingFile get() = if (onStage2) stage2.pending else File(context.filesDir, PENDING_NAME)
     private val dbFile: File
         get() = runCatching { context.getDatabasePath(NEXT_DB_NAME) }.getOrNull()
             ?: File(context.filesDir.parentFile, "databases/$NEXT_DB_NAME")
@@ -161,10 +173,67 @@ class HistoryStore(
     private val index: HistoryIndex = HistoryIndex(File(context.filesDir, SQLITE_DIR), { tables }, indexVersionCode) { refreshReads() }
     private val tables = HistoryTables(json, index)
 
-    /** Loads, saves and deletes run on IO and may overlap; one at a time. */
-    private val lock = Mutex()
+    // ── Stage 2 (#310 A5, SQLite SPEC §11): `history.db` is the truth after the flip ──
 
-    private enum class Mode { UNOPENED, SQL, LEGACY, BLOCKED }
+    private val stage2 = Stage2Files(context.filesDir, json)
+
+    /** `history.db` while the rows are in it this session ([Mode.AUTH]). */
+    @Volatile private var auth: HistoryAuthority? = null
+
+    /** The marker says `done`: the rows are `history.db`'s, and `shots.db` is the old copy, never written. */
+    @Volatile private var onStage2 = false
+
+    /** The open found `history.db` written by a newer build (`min_reader_v` or `min_writer_v` above ours): "update the app". */
+    @Volatile var tooNew = false
+        private set
+
+    /** Why this session's flip didn't pass, if it ran and failed: Settings shows it. */
+    @Volatile var flipError: String? = null
+        private set
+
+    /** The flip runs at most once per store: at its first open (SPEC §11, M2). */
+    private var flipTried = false
+
+    /** Steps 8 and 9 after the flip: late rows an older build wrote to the P3 stores. */
+    private val late by lazy { HistoryLate(context.filesDir, dbFile, tables, series, json) }
+
+    /**
+     * Loads, saves and deletes run on IO and may overlap; one at a time, and
+     * across every store in this process over the same files (REVIEW-475 R1,
+     * keyed by `filesDir`): a view model made
+     * again while the old one's store lives on shares the same files (the
+     * journals, `shots.db`, `history.db`), so the single-writer rules hold
+     * only if the two stores take turns. Nothing under it waits on another
+     * store, so it can't deadlock.
+     */
+    private val lock: Mutex = LOCKS.computeIfAbsent(context.filesDir.absolutePath) { Mutex() }
+
+    /**
+     * [block] under [lock], run and released on IO. The lock is asked for on
+     * [LOCK_QUEUE], one thread for every store, so saves still queue in the
+     * order they were launched (a launch on Main hands its request to the
+     * queue at once, and the `Mutex` is FIFO), and a waiter the lock passes
+     * to resumes there, never on Main. With one lock for every store over
+     * these files (REVIEW-475 R1), a waiter that had to resume on Main would
+     * hang a Main thread that waits on another store. Not cancellable once
+     * asked for.
+     */
+    private suspend fun <T> lockedOnIo(block: suspend () -> T): T = withContext(NonCancellable + LOCK_QUEUE) {
+        lock.lock()
+        withContext(Dispatchers.IO) {
+            try {
+                block()
+            } finally {
+                lock.unlock()
+            }
+        }
+    }
+
+    /** [SQL]: the rows are `shots.db`'s (P3a, stage 1). [AUTH]: `history.db`'s (stage 2, #310 A5). */
+    private enum class Mode { UNOPENED, SQL, AUTH, LEGACY, BLOCKED }
+
+    /** The rows are in a SQLite store this session, `shots.db` or `history.db`: the store's memory holds every row. */
+    private val inSqlite: Boolean get() = mode == Mode.SQL || mode == Mode.AUTH
 
     @Volatile private var mode = Mode.UNOPENED
 
@@ -283,7 +352,10 @@ class HistoryStore(
     // ── Open, migrate, load ──────────────────────────────────────────────────
 
     /** Whether the rows are in SQLite this session. */
-    val usesSql: Boolean get() = mode == Mode.SQL
+    val usesSql: Boolean get() = inSqlite
+
+    /** Whether the rows are in `history.db` this session (#310 A5). */
+    val onHistoryDb: Boolean get() = mode == Mode.AUTH
 
     /** The cap the store keeps, for a restore's plan: none from P3a, or legacy's. */
     val capacity: Int? get() = if (mode == Mode.LEGACY) LEGACY_MAX_SHOTS else null
@@ -325,16 +397,25 @@ class HistoryStore(
      */
     suspend fun loadAll(): HistoryLoad = withContext(Dispatchers.IO) {
         holdOpen?.await()
-        lock.withLock {
+        var flip = false
+        val first = lock.withLock {
             guarded {
                 openLocked(force = false)
-                loadOpened()
+                flip = flipDue()
+                if (flip) HistoryLoad(emptyList(), 0, health) else loadOpened()
             }.also { refreshReads() }
         }
+        if (!flip) return@withContext first
+        // The flip (#310 A5): its own steps take the lock, a batch at a time, so a
+        // capture still lands in shots.db meanwhile (M9). Then the rows, from
+        // whichever store is the truth now.
+        runFlip()
+        lock.withLock { guarded { loadOpened() }.also { refreshReads() } }
     }
 
     private fun loadOpened(): HistoryLoad = when (mode) {
         Mode.SQL -> sqlLoad()
+        Mode.AUTH -> authLoad()
         Mode.LEGACY -> HistoryLoad(legacyLoad(), 0, health)
         else -> HistoryLoad(emptyList(), 0, health)
     }
@@ -355,6 +436,7 @@ class HistoryStore(
         lock.withLock {
             if (health == HistoryHealth.LOST) return@withLock HistoryLoad(emptyList(), 0, health)
             closeDb()
+            closeAuth()
             mode = Mode.UNOPENED
             guarded {
                 openLocked(force = true)
@@ -366,6 +448,16 @@ class HistoryStore(
     /** Open for a save or a delete that came before any load (tests plant rows this way). */
     private fun ensureOpenLocked() {
         if (mode == Mode.UNOPENED) openLocked(force = false)
+        // Another store in this process flipped (a view model made again while this one's store
+        // lived on): shots.db is the old copy now, and this store's writes go to stage 2's journal,
+        // which history.db takes in order at the next open (rule 3, #310 A5).
+        if (mode == Mode.SQL && stage2Enabled && STAGE2_IN_PROCESS == stage2.marker.absolutePath) {
+            closeDb()
+            onStage2 = true
+            mode = Mode.BLOCKED
+            health = HistoryHealth.UNAVAILABLE
+            lastError = "The shot history moved to SQLite in another part of the app: restart to see it."
+        }
     }
 
     private fun openLocked(force: Boolean) {
@@ -373,6 +465,26 @@ class HistoryStore(
         if (legacyOnlyForTest) {
             toLegacy()
             return
+        }
+        // Stage 2 first (#310 A5): once the marker says done, shots.db is the old copy, and P3a's
+        // open would write it (its late rows, its journal). It is never opened through P3a's helper.
+        if (stage2Enabled) {
+            when (val s = stage2.state()) {
+                is Stage2State.Done -> {
+                    onStage2 = true
+                    if (s.rebuilt) rebuildStage2Marker(s.generation)
+                    openAuth(s.generation)
+                    return
+                }
+                // Which file is the truth can't be told now: neither store is opened, so neither is
+                // written, and nothing is persisted (REVIEW-475 N3).
+                is Stage2State.Unreadable -> {
+                    tooNew = s.tooNew
+                    unavailable(s.error)
+                    return
+                }
+                is Stage2State.NotDone -> stage2Marker = s.marker
+            }
         }
         when (val read = readMarkerOutcome()) {
             // An I/O error says nothing about the marker: never read it as "not migrated".
@@ -846,9 +958,13 @@ class HistoryStore(
         val db = db().readableDatabase
         val bad = mutableListOf<String>()
         val all = tables.lightRows(db, bad)
+        return landRows(all, bad, tables.idsWithProfile(db), snapshotFile)
+    }
+
+    /** [all] (newest first) into memory: every row's, the profiles, and the snapshot's day. */
+    private fun landRows(all: List<DbRow>, bad: List<String>, profiled: Set<String>, snapshot: File): HistoryLoad {
         unreadableRows = bad
         if (bad.isNotEmpty()) persistLine("${bad.size} rows couldn't be read and stay in the store as they are")
-        val profiled = tables.idsWithProfile(db)
         // A row with no summary that reads: unknown, so it's neither manual nor "no telemetry".
         val rows = all.map { r -> r.shot.toRow(r.summary ?: unknownSeriesSummary(r.shot)) }
         seen.clear(); deleting.clear(); pendingHidden.clear(); dirtySummary.clear()
@@ -863,7 +979,7 @@ class HistoryStore(
         // A curve on disk is known from the summary; the file isn't read until it's wanted.
         for (r in rows) if (r.summarisedCurve) onDisk += r.id
         bumpVersion()
-        snapshotDay = snapshotFile.takeIf { it.exists() }?.lastModified()?.let { localDateOf(it, ZoneId.systemDefault()) }
+        snapshotDay = snapshot.takeIf { it.exists() }?.lastModified()?.let { localDateOf(it, ZoneId.systemDefault()) }
         val (view, hidden) = splitView(rows)
         return HistoryLoad(view, hidden.size, health)
     }
@@ -875,13 +991,445 @@ class HistoryStore(
         bumpVersion()
     }
 
+
+    // ── Stage 2: the flip and history.db (#310 A5, SQLite SPEC §11) ──────────
+
+    /** The stage-2 marker as this open read it, when it isn't `done`: a failed flip's backoff. */
+    private var stage2Marker: Stage2Marker? = null
+
+    /**
+     * Whether this open runs the flip: stage 2 is on in this build, it hasn't
+     * run in this store, the rows are in `shots.db` and it opened `ok`, none
+     * waits in P3a's journal, and a failed flip's backoff has passed (the
+     * next two launches, then at most daily).
+     */
+    private fun flipDue(): Boolean {
+        if (!stage2Enabled || flipTried || mode != Mode.SQL || health != HistoryHealth.OK) return false
+        flipTried = true
+        if (journaled.isNotEmpty() || File(context.filesDir, PENDING_NAME).exists()) {
+            flipError = "Rows wait in the pending journal: the move into SQLite waits for them."
+            return false
+        }
+        var m = stage2Marker
+        if (m?.state == STAGE2_FLIPPING) {
+            // The last try stopped part-way (a kill, an out-of-memory): a failure for the backoff,
+            // so a flip that dies every time doesn't run at every launch.
+            val failures = m.failures + 1
+            m = m.copy(state = STAGE2_FAILED, failures = failures, nextTryAtMs = if (failures < 3) 0L else m.atMs + DAY_MS, lastError = "The last try stopped part-way.")
+            stage2Marker = m
+            runCatching { stage2.writeMarker(m) }
+        }
+        return !(m?.state == STAGE2_FAILED && now() < m.nextTryAtMs)
+    }
+
+    /** [HistoryFlip]'s way into this store: `shots.db` under the lock, the index's diff, and the switch. */
+    private val flipHost = object : FlipHost {
+        override suspend fun <T> locked(block: (SQLiteDatabase) -> T): T? = withContext(Dispatchers.IO) {
+            lock.withLock { if (mode == Mode.SQL) block(db().readableDatabase) else null }
+        }
+
+        override suspend fun fullDiff(): IndexDiffReport? = syncIndex(force = true)
+
+        override fun switchTo(outcome: FlipOutcome.Done) = switchToAuth(outcome)
+
+        override fun freeSpace(): Long = this@HistoryStore.freeSpace()
+    }
+
+    /** The flip, once, at this store's first open. Never throws but a [SimulatedCrash]. */
+    private suspend fun runFlip() {
+        // Before anything is copied: a boot that finds a file that won't open knows it is this
+        // try's leftover, not a truth whose records were lost (M8, REVIEW-475 N3).
+        val prev = stage2Marker
+        val flipping = Stage2Marker(STAGE2_FLIPPING, failures = prev?.failures ?: 0, nextTryAtMs = prev?.nextTryAtMs ?: 0L, lastError = prev?.lastError, atMs = now())
+        try {
+            stage2.writeMarker(flipping)
+        } catch (e: Exception) {
+            flipError = "The move into SQLite couldn't start: ${e.message}"
+            return
+        }
+        stage2Marker = flipping
+        val flip = HistoryFlip(flipHost, stage2, tables, index, context.filesDir, dbFile, json)
+        when (val out = flip.run()) {
+            is FlipOutcome.Done -> {
+                flipError = null
+                persistLine("the history moved to ${stage2.db(out.generation).name} (${out.captured.size} shots captured meanwhile)")
+            }
+            is FlipOutcome.Failed -> lock.withLock {
+                // A failure after the file said done (a done-record or marker write that threw): the
+                // flip passed all the same, and shots.db must not take another write (rule 3).
+                val done = flip.doneGeneration ?: (stage2.state() as? Stage2State.Done)?.generation
+                if (done != null) {
+                    persistLine("the flip failed after its copy was done (${out.why}): on to ${stage2.db(done).name}")
+                    closeDb()
+                    onStage2 = true
+                    stage2Marker = null
+                    rebuildStage2Marker(done)
+                    openAuth(done)
+                } else {
+                    flipFailed(out.why)
+                }
+            }
+        }
+        flip.leftover?.let { persistLine("flip: $it") }
+    }
+
+    /** A flip that didn't pass (SPEC §11, Failure): `shots.db` stays the truth, and the marker keeps the backoff. */
+    private fun flipFailed(why: String) {
+        persistLine("the move to ${Stage2Files.DB_NAME} failed: $why")
+        flipError = why
+        val failures = (stage2Marker?.failures ?: 0) + 1
+        val next = if (failures < 3) 0L else now() + DAY_MS
+        val m = Stage2Marker(STAGE2_FAILED, failures = failures, nextTryAtMs = next, lastError = why, atMs = now())
+        runCatching { stage2.writeMarker(m) }.onFailure { persistLine("stage 2 marker: ${it.message}") }
+        stage2Marker = m
+    }
+
+    /**
+     * The flip passed (under the lock, after the marker): the store moves to
+     * `history.db`. Shots captured during the flip are read from `shots.db`
+     * as committed, before its helper closes, and go in at once (M9), then
+     * step 8 reads every id once more, whatever the prefilter says.
+     *
+     * The captures' import runs without [SqliteHistorySource.lock]: no
+     * source exists for this file yet, so no walk can be open on it and no
+     * other writer can reach it. [attachAuth] makes the source; every write
+     * after that takes its lock. Keep the import before it (REVIEW-475 N5).
+     */
+    private fun switchToAuth(o: FlipOutcome.Done) {
+        // Read before the helper closes. A read that fails leaves them to step 8, which reads
+        // every id of shots.db at once below, and at each boot until it can.
+        val captured = if (o.captured.isEmpty()) emptyMap() else runCatching { tables.rawFull(db().readableDatabase, o.captured) }.getOrElse { emptyMap() }
+        closeDb()
+        // From the marker on, nothing writes shots.db again (rule 3): whatever fails here leaves the
+        // store on stage 2, unavailable at worst, never back on shots.db.
+        onStage2 = true
+        stage2Marker = null
+        try {
+            if (captured.isNotEmpty()) {
+                val rows = captured.map { (_, r) -> HistoryRowIn(r.first, HistoryHeavy(r.second, r.third), pulled = true) }
+                o.db.now { it.importLate(HistoryLateImport(rows, emptyList(), null, null)) }
+            }
+            attachAuth(o.generation, o.db, forceLate = true)
+        } catch (e: SimulatedCrash) {
+            throw e
+        } catch (e: Throwable) {
+            closeAuth()
+            runCatching { o.db.now { it.closeAll() } }
+            unavailable("The shot history moved to SQLite and couldn't be opened just now: ${e.message ?: e.javaClass.simpleName}")
+        }
+    }
+
+    /** The marker said `done` for [generation]: open it, or say why not. Never flips, never opens `shots.db` through P3a's helper. */
+    private fun openAuth(generation: Int) {
+        closeDb()
+        val f = stage2.db(generation)
+        if (!f.exists()) {
+            lostAuth("The shot history's database (${f.name}) is missing.")
+            return
+        }
+        val db = try {
+            HistoryAuthority.openTakingOver(f)
+        } catch (e: HistoryDbException.TooNew) {
+            tooNew = true
+            unavailable("The shot history was written by a newer version of Crema: update the app.")
+            return
+        } catch (e: HistoryDbException) {
+            when (e) {
+                is HistoryDbException.Corrupt, is HistoryDbException.Foreign, is HistoryDbException.WrongRole -> {
+                    // Damaged or not ours: renamed aside, never deleted, and lost until the user chooses.
+                    val moved = stage2.quarantine(f)
+                    lostAuth("The shot history's database was damaged and has been kept aside${if (moved) "" else " (it couldn't be moved)"}.")
+                }
+                is HistoryDbException.CantOpen -> if (f.exists()) unavailable(e.message ?: "the shot history's database wouldn't open") else lostAuth("The shot history's database is missing.")
+                else -> unavailable(e.message ?: e.javaClass.simpleName)
+            }
+            return
+        }
+        val problem = runCatching {
+            val info = db.now { it.info() }
+            when {
+                db.now { it.migrationState() } != STAGE2_DONE -> "doesn't hold a finished copy"
+                info.generation.toInt() != generation -> "is generation ${info.generation}, not $generation"
+                else -> null
+            }
+        }.getOrElse { "couldn't be read: ${it.message}" }
+        if (problem != null) {
+            runCatching { db.now { it.closeAll() } }
+            lostAuth("The shot history's database $problem.")
+            return
+        }
+        attachAuth(generation, db, forceLate = false)
+    }
+
+    /** [db] is open and checked: late rows, the stage-2 journal, then the store reads and writes it. */
+    private fun attachAuth(generation: Int, db: HistoryDbBridge, forceLate: Boolean) {
+        HistoryAuthority.hold(stage2.db(generation), db)
+        STAGE2_IN_PROCESS = stage2.marker.absolutePath
+        val source = SqliteHistorySource.open(db, json, details)
+        val a = HistoryAuthority(generation, db, source, tables)
+        tooNew = runCatching { !db.now { it.health() }.writable }.getOrDefault(false)
+        auth = a
+        mode = Mode.AUTH
+        health = HistoryHealth.OK
+        lastError = if (tooNew) "The shot history was written by a newer version of Crema: update the app to change it." else null
+        lostChoices = null
+        runCatching { lastLate = late.run(a, force = forceLate) }.onFailure { persistLine("late rows: ${it.message}") }
+        runCatching { mergePendingAuth(a) }.onFailure { persistLine("pending journal: ${it.message}") }
+    }
+
+    /** Stage 2's journal, merged now `history.db` is back, in order, as P3a merges its own. */
+    private fun mergePendingAuth(a: HistoryAuthority) {
+        if (!stage2.pending.exists()) return
+        for (e in journalEntries()) {
+            e.delete?.let { id -> a.deleteNow(listOf(id)) }
+            val row = e.put ?: continue
+            val held = a.db.now { it.get(listOf(row.id)) }.firstOrNull()?.let { r ->
+                runCatching { tables.decodeRow(r.rowJson) }.getOrNull()?.let { d ->
+                    val (p, b) = a.heavy(row.id)
+                    d.copy(shot = d.shot.copy(profile = p, brewSeries = b))
+                }
+            }
+            val fill = e.fillProfile?.takeIf { held?.shot?.profile == null }
+            a.write(listOf(row.copy(samples = emptyList()) to journaledSummary(row, held)), fill?.let { mapOf(row.id to it) }.orEmpty())
+        }
+        if (!stage2.pending.delete()) runCatching { SafeFile.write(stage2.pending, "", keepBackup = false) }
+        journaled = emptySet()
+    }
+
+    /** The rows from `history.db`, as [sqlLoad] reads `shots.db`'s. */
+    private fun authLoad(): HistoryLoad {
+        val a = auth ?: return HistoryLoad(emptyList(), 0, health)
+        val bad = mutableListOf<String>()
+        val all = a.loadRows(bad)
+        return landRows(all, bad, a.idsWithProfile(), stage2.snapshot)
+    }
+
+    private fun closeAuth() {
+        val a = auth ?: return
+        auth = null
+        a.close()
+    }
+
+    /** Lost on stage 2 (SPEC §11): `history.db` gone, foreign or damaged. Nothing is written or migrated, and P3a's files are left alone. */
+    private fun lostAuth(why: String) {
+        closeAuth()
+        mode = Mode.BLOCKED
+        health = HistoryHealth.LOST
+        lastError = why
+        lostChoices = authChoices()
+    }
+
+    /** The marker or done-record was missing: both written again from what the files say (S9). */
+    private fun rebuildStage2Marker(generation: Int) {
+        // Each on its own: a done-record that won't write still leaves the marker (REVIEW-475 N2).
+        runCatching {
+            if ((stage2.readDone() as? coffee.crema.persist.SafeLoad.Loaded)?.value?.state != STAGE2_DONE) stage2.writeDone(generation, now())
+        }.onFailure { persistLine("stage 2 done-record rebuild: ${it.message}") }
+        runCatching {
+            stage2.writeMarker(Stage2Marker(STAGE2_DONE, generation = generation, atMs = now()))
+        }.onFailure { persistLine("stage 2 marker rebuild: ${it.message}") }
+    }
+
+    /** The app's view of a shot's details for the SQLite source: its series, by the store's rules. */
+    private val details = object : ShotDetails {
+        override fun full(row: ShotRow): StoredShot = loadFull(row)
+
+        override fun hasCurve(row: ShotRow): Boolean = this@HistoryStore.hasCurve(row)
+
+        override fun rowFor(shot: StoredShot): ShotRow = this@HistoryStore.rowFor(shot)
+
+        override fun write(shots: List<StoredShot>): Int {
+            var failed = 0
+            for (s in shots) if (s.samples.isNotEmpty() && !series.write(s.id, s.samples)) failed++
+            noteDetailsWritten()
+            return failed
+        }
+
+        override fun delete(ids: Collection<String>) {
+            for (id in ids) series.deleteGz(id)
+        }
+    }
+
+    /** Series landed with no row write: the backup mark moves (REVIEW-466 note 1). */
+    private fun noteDetailsWritten() {
+        val a = auth?.takeIf { mode == Mode.AUTH } ?: return
+        runCatching { a.db.now { it.noteDetailsWritten(now()) } }.onFailure { persistLine("details mark: ${it.message}") }
+    }
+
+    /**
+     * Where a backup walks the shots (#310 A5, R1a): on `history.db`, its
+     * export walk, which holds a delete made during it (S6), each row read
+     * whole through [full]. Null on `shots.db` and the legacy backend: the
+     * snapshot's own rows.
+     */
+    internal fun backupSource(full: (ShotRow) -> StoredShot): HistorySource? {
+        val a = auth?.takeIf { mode == Mode.AUTH } ?: return null
+        val src = a.source
+        return object : HistorySource {
+            override fun openWalk(): ShotWalk {
+                val walk = src.openWalk()
+                return object : ShotWalk by walk {
+                    override fun full(row: ShotRow): StoredShot = full(row)
+                }
+            }
+
+            override fun writeMark(): String? = src.writeMark()
+
+            override suspend fun beginRestore(): ShotsRestore = src.beginRestore()
+        }
+    }
+
+    /**
+     * A restore's wipe on `history.db` (M3): of [named], only rows made at or
+     * before [beginSeq] that the backup doesn't hold, read in pages by `rid`.
+     * A shot made during the restore is never in it. On `shots.db` the named
+     * rows, as P3a always did.
+     */
+    suspend fun restoreRemove(named: List<String>, backupIds: Set<String>, beginSeq: ULong?) {
+        if (named.isEmpty()) return
+        val a = auth?.takeIf { mode == Mode.AUTH }
+        if (a == null || beginSeq == null) return delete(named)
+        val want = named.filterNot { it in backupIds }.toHashSet()
+        val wipe = ArrayList<String>()
+        var after = Long.MIN_VALUE
+        while (true) {
+            val page = withContext(Dispatchers.IO) { a.db.now { it.idsCreatedBefore(beginSeq, after, 500u) } }
+            if (page.isEmpty()) break
+            page.mapNotNullTo(wipe) { r -> r.id.takeIf { it in want } }
+            after = page.last().rid
+            if (page.size < 500) break
+        }
+        delete(wipe)
+    }
+
+    /** A restore begins (M3): `history.db`'s `write_seq` now, or null on `shots.db`. */
+    suspend fun restoreBegin(): ULong? = withContext(Dispatchers.IO) {
+        auth?.takeIf { mode == Mode.AUTH }?.let { a -> runCatching { a.db.now { it.restoreBegin() } }.getOrNull() }
+    }
+
+    /** What a lost `history.db` can be rebuilt from: the rows snapshot, and the old copy (`shots.db`). */
+    private fun authChoices(): LostChoices {
+        val snap = listOf(stage2.snapshot, stage2.previousSnapshot).firstOrNull { it.exists() }?.let { f ->
+            runCatching {
+                val b = HistoryDbBridge.openNow(f, HistoryDbBridge.options(coffee.crema.core.HistoryRole.AUTHORITY))
+                try {
+                    f.lastModified() to b.now { it.count(HistoryDbBridge.ALL) }.toInt()
+                } finally {
+                    runCatching { b.now { it.closeAll() } }
+                }
+            }.getOrNull()
+        }
+        val old = runCatching { ReadOnlyShots.open(dbFile)?.use { dbFile.lastModified() to it.ids().size } }.getOrNull()
+        return LostChoices(snap?.first, snap?.second, old?.first, old?.second)
+    }
+
+    /**
+     * Lost on stage 2: a new `history-<n>.db` from [fill] (S9), never over
+     * the damaged one. Its `migration_source` is every id the P3 stores hold
+     * now and its late-row baseline is now, so step 8 brings only what an
+     * older build writes after the choice, and "start empty" stays empty.
+     * Then the done-record and the marker name it.
+     */
+    private suspend fun recoverAuth(fill: (HistoryDbBridge) -> Unit): HistoryLoad = withContext(Dispatchers.IO) {
+        lock.withLock {
+            try {
+                closeAuth()
+                val g = stage2.nextGeneration()
+                val f = stage2.db(g)
+                val ids = LinkedHashSet<String>()
+                ReadOnlyShots.open(dbFile)?.use { ro ->
+                    ids += ro.ids()
+                    ro.meta(HistoryTables.META_MIGRATION)?.let { t -> runCatching { json.decodeFromString(MigrationRecord.serializer(), t) }.getOrNull() }?.let { ids += it.sourceIds }
+                }
+                val jsonBytes = runCatching { File(context.filesDir, FILE_NAME).takeIf { it.exists() }?.readBytes() }.getOrNull()
+                jsonBytes?.let { b -> runCatching { json.decodeFromString(ListSerializer(StoredShot.serializer()), b.toString(Charsets.UTF_8)) }.getOrNull() }?.let { rows -> rows.mapTo(ids) { it.id } }
+                val baseline = LateBaseline.now(context.filesDir, dbFile, jsonBytes?.let(LateBaseline::sha256))
+                stage2.dir.mkdirs()
+                val b = HistoryDbBridge.createRecoveryNow(
+                    f,
+                    HistoryDbBridge.options(coffee.crema.core.HistoryRole.AUTHORITY, generation = g.toUInt()),
+                    coffee.crema.core.HistoryRecovery(ids.toList(), json.encodeToString(LateBaseline.serializer(), baseline)),
+                )
+                try {
+                    fill(b)
+                } finally {
+                    runCatching { b.now { it.closeAll() } }
+                }
+                stage2.writeDone(g, now())
+                stage2.writeMarker(Stage2Marker(STAGE2_DONE, generation = g, atMs = now()))
+                mode = Mode.UNOPENED
+                lostChoices = null
+                openAuth(g)
+            } catch (e: SimulatedCrash) {
+                throw e
+            } catch (e: Exception) {
+                lostAuth(e.message ?: "The history couldn't be rebuilt")
+            }
+            if (mode == Mode.AUTH) authLoad() else HistoryLoad(emptyList(), 0, health)
+        }
+    }
+
+    /** Rows and their heavy parts into a recovery file, a batch per transaction. */
+    private fun fillFrom(b: HistoryDbBridge, rows: Sequence<HistoryRowIn>) {
+        for (chunk in rows.chunked(250)) b.now { it.upsert(chunk) }
+    }
+
+    /** The rows a truth file (a snapshot) holds, with their heavy parts. */
+    private fun rowsOf(f: File): List<HistoryRowIn> {
+        val b = HistoryDbBridge.openNow(f, HistoryDbBridge.options(coffee.crema.core.HistoryRole.AUTHORITY))
+        try {
+            val out = ArrayList<HistoryRowIn>()
+            var after = Long.MIN_VALUE
+            while (true) {
+                val page = b.now { it.idsCreatedBefore(ULong.MAX_VALUE, after, 500u) }
+                if (page.isEmpty()) break
+                val ids = page.map { it.id }
+                val heavy = b.now { it.heavy(ids) }.associateBy { it.id }
+                for (r in b.now { it.get(ids) }) out += HistoryRowIn(r.rowJson, heavy[r.id]?.let { HistoryHeavy(it.profileJson, it.brewSeriesJson) })
+                after = page.last().rid
+                if (page.size < 500) break
+            }
+            return out
+        } finally {
+            runCatching { b.now { it.closeAll() } }
+        }
+    }
+
+    /** The rows snapshot, once a day after the first write, through the online backup API, keeping one previous copy. */
+    private fun authSnapshot() {
+        val a = auth ?: return
+        val today = LocalDate.now()
+        if (snapshotDay == today) return
+        snapshotDay = today
+        runCatching {
+            val seq = a.db.now { it.writeSeq() }
+            if (seq == snapshotSeq) return
+            if (stage2.snapshot.exists()) {
+                for (suffix in QuarantineHandler.SIBLINGS) File(stage2.previousSnapshot.path + suffix).delete()
+                for (suffix in QuarantineHandler.SIBLINGS) {
+                    val from = File(stage2.snapshot.path + suffix)
+                    if (from.exists() && !from.renameTo(File(stage2.previousSnapshot.path + suffix))) error("couldn't keep the previous snapshot")
+                }
+            }
+            a.db.now { it.copyTo(stage2.snapshot.path, coffee.crema.core.HistoryJournalMode.WAL) }
+            snapshotSeq = seq
+        }.onFailure { persistLine("rows snapshot: ${it.message}") }
+    }
+
+    /** This session's late-row step (steps 8 and 9): what it read and brought in. */
+    @Volatile internal var lastLate: HistoryLate.Report? = null
+        private set
+
+    /** `history.db`'s `write_seq` at the last snapshot: one with nothing new is skipped. */
+    @Volatile private var snapshotSeq: ULong? = null
+
     // ── Rows past the cap ────────────────────────────────────────────────────
 
     /** The rows the store holds that aren't in [viewIds]: past the cap, newest first. */
     // No app callers from #310 A3b (REVIEW-470 N3): every reader and edit goes through [rows], [row] and [update].
     @androidx.annotation.VisibleForTesting
     fun hiddenRows(viewIds: Set<String>): List<ShotRow> {
-        if (mode != Mode.SQL) return emptyList()
+        if (!inSqlite) return emptyList()
         val cached = hiddenCache
         if (cached != null && cached.first == version && cached.second == viewIds) return cached.third
         val rows = stored.values.filter { it.id !in viewIds && it.id !in deleting }.sortedWith(ORDER)
@@ -902,6 +1450,8 @@ class HistoryStore(
     suspend fun bytesOf(ids: Collection<String>): Long = withContext(Dispatchers.IO) {
         when (mode) {
             Mode.SQL -> runCatching { tables.bytesOf(db().readableDatabase, ids) }.getOrDefault(0L) + ids.sumOf { series.gzFile(it).length() }
+            // history.db: about the row's own bytes and its curve's (the heavy parts aside).
+            Mode.AUTH -> ids.sumOf { id -> series.gzFile(id).length() + (stored[id]?.let { tables.rowJson(it.light(), it.summary).length.toLong() } ?: 0L) }
             Mode.LEGACY -> ids.sumOf { series.gzFile(it).length() + series.jsonFile(it).length() + series.legacyFile(it).length() }
             else -> 0L
         }
@@ -910,17 +1460,17 @@ class HistoryStore(
     /** Every row id the store holds (SQL), in view or not. */
     // No app callers from #310 A3b (REVIEW-470 N3): every reader and edit goes through [rows], [row] and [update].
     @androidx.annotation.VisibleForTesting
-    fun storedIds(): Set<String> = if (mode == Mode.SQL) stored.keys - deleting else emptySet()
+    fun storedIds(): Set<String> = if (inSqlite) stored.keys - deleting else emptySet()
 
     /** Every row the store holds (SQL). */
     // No app callers from #310 A3b (REVIEW-470 N3): every reader and edit goes through [rows], [row] and [update].
     @androidx.annotation.VisibleForTesting
-    fun storedRows(): List<ShotRow> = if (mode == Mode.SQL) stored.values.filter { it.id !in deleting } else emptyList()
+    fun storedRows(): List<ShotRow> = if (inSqlite) stored.values.filter { it.id !in deleting } else emptyList()
 
     /** The stored row [id], hidden or not. */
     // No app callers from #310 A3b (REVIEW-470 N3): every reader and edit goes through [rows], [row] and [update].
     @androidx.annotation.VisibleForTesting
-    fun storedRow(id: String): ShotRow? = if (mode == Mode.SQL && id !in deleting) stored[id] else null
+    fun storedRow(id: String): ShotRow? = if (inSqlite && id !in deleting) stored[id] else null
 
     /**
      * Whether shot [id] has a machine curve: one staged to be written, or one
@@ -930,7 +1480,7 @@ class HistoryStore(
      */
     fun hasCurve(id: String): Boolean {
         if (staged[id]?.samples?.isNotEmpty() == true) return true
-        if (mode != Mode.SQL && mode != Mode.LEGACY) return false
+        if (!inSqlite && mode != Mode.LEGACY) return false
         val row = stored[id] ?: return false
         // A curve the last read couldn't reach is still a curve: nothing may fill over it (#419 N5).
         return (row.summarisedCurve || id in unreadNow) && series.exists(id)
@@ -944,7 +1494,7 @@ class HistoryStore(
 
     /** Whether shot [id] has its profile (the recipe the DE1 ran), staged or stored. */
     fun hasProfile(id: String): Boolean = staged[id]?.profile != null || when (mode) {
-        Mode.SQL -> id in withProfile
+        Mode.SQL, Mode.AUTH -> id in withProfile
         Mode.LEGACY -> legacyHeavy[id]?.first != null
         else -> false
     }
@@ -976,7 +1526,7 @@ class HistoryStore(
     // No app callers from #310 A3b (REVIEW-470 N3): every reader and edit goes through [rows], [row] and [update].
     @androidx.annotation.VisibleForTesting
     fun updateHidden(id: String, transform: (ShotRow) -> ShotRow): Boolean {
-        if (mode != Mode.SQL || id in deleting) return false
+        if (!inSqlite || id in deleting) return false
         // A save handed in and not yet written is the newest version (#310 A3a).
         val prev = pendingHidden[id] ?: latest[id] ?: stored[id] ?: return false
         val next = transform(prev)
@@ -993,12 +1543,10 @@ class HistoryStore(
     // No app callers from #310 A3b (REVIEW-470 N3): every reader and edit goes through [rows], [row] and [update].
     @androidx.annotation.VisibleForTesting
     suspend fun flushHidden(id: String) = withContext(NonCancellable) {
-        lock.withLock {
-            withContext(Dispatchers.IO) {
-                val row = pendingHidden.remove(id) ?: return@withContext
-                if (mode != Mode.SQL || id in deleting) return@withContext
-                writeLocked(listOf(row))
-            }
+        lockedOnIo {
+            val row = pendingHidden.remove(id) ?: return@lockedOnIo
+            if (!inSqlite || id in deleting) return@lockedOnIo
+            writeLocked(listOf(row))
         }
     }
 
@@ -1218,6 +1766,7 @@ class HistoryStore(
         }
         val heavy = when (mode) {
             Mode.SQL -> sqlHeavy(row, missingCurves) ?: return staging
+            Mode.AUTH -> authHeavy(row, missingCurves)
             Mode.LEGACY -> legacyHeavy(row, missingCurves)
             Mode.BLOCKED, Mode.UNOPENED -> throw HistoryReadException("The shot history can't be read just now")
         }
@@ -1241,6 +1790,22 @@ class HistoryStore(
             throw HistoryReadException("Couldn't read shot ${row.id}: ${e.message}")
         } ?: return null
         val heavy = Heavy(readSamples(row, missingCurves), full.shot.profile, full.shot.brewSeries)
+        beforeCacheForTest?.invoke(row.id)
+        synchronized(recent) { if (writeGen[row.id] == gen) recent[row.id] = heavy }
+        return heavy
+    }
+
+    /** [row]'s heavy parts from `history.db`'s `shot_heavy` and its series (#310 A5). */
+    private fun authHeavy(row: ShotRow, missingCurves: MutableSet<String>?): Heavy {
+        synchronized(recent) { recent[row.id] }?.let { return it }
+        val gen = writeGen[row.id]
+        val a = auth ?: throw HistoryReadException("The shot history can't be read just now")
+        val (profile, brew) = try {
+            a.heavy(row.id)
+        } catch (e: Exception) {
+            throw HistoryReadException("Couldn't read shot ${row.id}: ${e.message}")
+        }
+        val heavy = Heavy(readSamples(row, missingCurves), profile, brew)
         beforeCacheForTest?.invoke(row.id)
         synchronized(recent) { if (writeGen[row.id] == gen) recent[row.id] = heavy }
         return heavy
@@ -1317,8 +1882,42 @@ class HistoryStore(
      */
     fun loadFull(row: ShotRow, missingCurves: MutableSet<String>? = null): StoredShot {
         readShot(row.id, missingCurves)?.let { return row.joined(it) }
-        if (row.id in deleted || row.id in deleting) return row.light()
+        if (row.id in deleted || row.id in deleting) {
+            // On history.db a row deleted during a backup walk is held, its heavy parts and curve
+            // kept until the walk ends (S6): the walk reads it whole (#310 A5).
+            heldWhole(row, missingCurves)?.let { return it }
+            return row.light()
+        }
         throw HistoryReadException("Couldn't read shot ${row.id} just now")
+    }
+
+    /** [row], deleted and still held by an open walk on `history.db`, whole; null when it isn't held. */
+    private fun heldWhole(row: ShotRow, missingCurves: MutableSet<String>?): StoredShot? {
+        val a = auth?.takeIf { mode == Mode.AUTH } ?: return null
+        val (profile, brew) = runCatching { a.heavy(row.id) }.getOrElse { throw HistoryReadException("Couldn't read shot ${row.id}: ${it.message}") }
+        val samples = when (val read = series.read(row.id)) {
+            is SeriesRead.Found -> read.samples
+            is SeriesRead.Unavailable -> throw HistoryReadException("Couldn't read the curve of shot ${row.id}: ${read.error}")
+            SeriesRead.Corrupt -> emptyList<TelemetrySample>().also { missingCurves?.add(row.id) }
+            SeriesRead.Absent -> {
+                // Released already (the walk ended), or never had one.
+                if (row.summarisedCurve) return null
+                emptyList()
+            }
+        }
+        return row.withHeavy(samples, profile, brew)
+    }
+
+    /**
+     * Rows a Visualizer pull brought, not yet written (REVIEW-475 N5): on
+     * `history.db` they go in as pulled, so the core stores a pulled
+     * duplicate once (N8) whatever memory's own dedupe saw.
+     */
+    private val pulled: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** [ids] came from a Visualizer pull ([coffee.crema.ui.LibraryController.insertPulledShots]). */
+    fun markPulled(ids: Collection<String>) {
+        pulled += ids
     }
 
     /** Rows deleted this session: a walk that listed one before its delete takes it light. */
@@ -1328,22 +1927,22 @@ class HistoryStore(
 
     /** A restore's step 7, first half: these shots' series files, before any row names them. Returns how many failed. */
     suspend fun writeSeriesOf(shots: List<StoredShot>): Int = withContext(NonCancellable) {
-        lock.withLock {
-            withContext(Dispatchers.IO) {
-                var failed = 0
-                for (shot in shots) {
-                    if (shot.samples.isEmpty()) continue
-                    if (series.write(shot.id, shot.samples)) {
-                        onDisk += shot.id
-                        written += series.gzFile(shot.id).name
-                        seriesWritten[shot.id] = shot.samples
-                        wrote(shot.id)
-                    } else {
-                        failed++
-                    }
+        lockedOnIo {
+            var failed = 0
+            for (shot in shots) {
+                if (shot.samples.isEmpty()) continue
+                if (series.write(shot.id, shot.samples)) {
+                    onDisk += shot.id
+                    written += series.gzFile(shot.id).name
+                    seriesWritten[shot.id] = shot.samples
+                    wrote(shot.id)
+                } else {
+                    failed++
                 }
-                failed
             }
+            // history.db: a curve with no row write still moves the backup mark (REVIEW-466 note 1).
+            if (shots.any { it.samples.isNotEmpty() }) noteDetailsWritten()
+            failed
         }
     }
 
@@ -1383,16 +1982,14 @@ class HistoryStore(
         // again now could put back a row a change since ([updateHidden]) has replaced.
         if (!accepted) accept(rows)
         return withContext(NonCancellable) {
-            lock.withLock {
-                withContext(Dispatchers.IO) {
-                    ensureOpenLocked()
-                    when (mode) {
-                        Mode.SQL -> upsertLocked(rows)
-                        Mode.LEGACY -> if (openAtCall) legacySaveLocked(rows) else SaveFloor.admit(file, WHAT).let { false }
-                        Mode.BLOCKED -> journalLocked(rows)
-                        Mode.UNOPENED -> false
-                    }.also { refreshReads() }
-                }
+            lockedOnIo {
+                ensureOpenLocked()
+                when (mode) {
+                    Mode.SQL, Mode.AUTH -> upsertLocked(rows)
+                    Mode.LEGACY -> if (openAtCall) legacySaveLocked(rows) else SaveFloor.admit(file, WHAT).let { false }
+                    Mode.BLOCKED -> journalLocked(rows)
+                    Mode.UNOPENED -> false
+                }.also { refreshReads() }
             }
         }
     }
@@ -1417,16 +2014,14 @@ class HistoryStore(
         val openAtCall = SafeFile.savesOpen(file) && !SafeFile.savesHeld(file)
         if (mode == Mode.LEGACY && !SaveFloor.admit(file, WHAT)) return false
         return withContext(NonCancellable) {
-            lock.withLock {
-                withContext(Dispatchers.IO) {
-                    ensureOpenLocked()
-                    when (mode) {
-                        Mode.SQL -> upsertLocked(ids?.mapNotNull(::row) ?: pendingLocked())
-                        Mode.LEGACY -> if (openAtCall) legacySaveLocked(rows()) else SaveFloor.admit(file, WHAT).let { false }
-                        Mode.BLOCKED -> journalLocked(ids?.mapNotNull(::row) ?: pendingLocked())
-                        Mode.UNOPENED -> false
-                    }.also { refreshReads() }
-                }
+            lockedOnIo {
+                ensureOpenLocked()
+                when (mode) {
+                    Mode.SQL, Mode.AUTH -> upsertLocked(ids?.mapNotNull(::row) ?: pendingLocked())
+                    Mode.LEGACY -> if (openAtCall) legacySaveLocked(rows()) else SaveFloor.admit(file, WHAT).let { false }
+                    Mode.BLOCKED -> journalLocked(ids?.mapNotNull(::row) ?: pendingLocked())
+                    Mode.UNOPENED -> false
+                }.also { refreshReads() }
             }
         }
     }
@@ -1456,45 +2051,51 @@ class HistoryStore(
         if (ids.isEmpty()) return
         forget(ids)
         withContext(NonCancellable) {
-            lock.withLock {
-                withContext(Dispatchers.IO) {
-                    ensureOpenLocked()
-                    when (mode) {
-                        Mode.SQL -> {
-                            tables.write(db().writableDatabase) { tables.delete(this, ids) }
-                            for (id in ids) {
-                                series.deleteGz(id)
-                                forgetMemory(id)
-                            }
-                            bumpVersion()
-                            // A journal line for one of these would bring it back at the next launch (M3).
-                            retireJournal(ids.toSet())
-                        }
-                        Mode.LEGACY -> for (id in ids) {
-                            series.deleteAll(id)
-                            written.removeAll(listOf(series.gzFile(id).name, series.jsonFile(id).name, series.legacyFile(id).name))
+            lockedOnIo {
+                ensureOpenLocked()
+                when (mode) {
+                    Mode.SQL -> {
+                        tables.write(db().writableDatabase) { tables.delete(this, ids) }
+                        for (id in ids) {
+                            series.deleteGz(id)
                             forgetMemory(id)
-                            legacyHeavy.remove(id)
                         }
-                        // The store is out of reach: the delete waits in the journal with the rows made meanwhile (S1).
-                        Mode.BLOCKED -> {
-                            for (id in ids) {
-                                latest.remove(id)
-                                // Gone for what reads the store now, not only at the next launch (REVIEW-467 N2).
-                                stored.remove(id)
-                                seen.remove(id)
-                                pendingHidden.remove(id)
-                                staged.remove(id)
-                                journaledStage.remove(id)
-                            }
-                            journalDeletes(ids)
-                        }
-                        Mode.UNOPENED -> Unit
+                        bumpVersion()
+                        // A journal line for one of these would bring it back at the next launch (M3).
+                        retireJournal(ids.toSet())
                     }
-                    deleting.removeAll(ids.toSet())
-                    bumpVersion()
-                    refreshReads()
+                    // history.db (#310 A5): rows first, then their series, through the source,
+                    // which holds a row an open backup walk still needs (S6).
+                    Mode.AUTH -> {
+                        checkNotNull(auth) { "the shot history's database is closed" }.deleteNow(ids.toList())
+                        for (id in ids) forgetMemory(id)
+                        bumpVersion()
+                        retireJournal(ids.toSet())
+                    }
+                    Mode.LEGACY -> for (id in ids) {
+                        series.deleteAll(id)
+                        written.removeAll(listOf(series.gzFile(id).name, series.jsonFile(id).name, series.legacyFile(id).name))
+                        forgetMemory(id)
+                        legacyHeavy.remove(id)
+                    }
+                    // The store is out of reach: the delete waits in the journal with the rows made meanwhile (S1).
+                    Mode.BLOCKED -> {
+                        for (id in ids) {
+                            latest.remove(id)
+                            // Gone for what reads the store now, not only at the next launch (REVIEW-467 N2).
+                            stored.remove(id)
+                            seen.remove(id)
+                            pendingHidden.remove(id)
+                            staged.remove(id)
+                            journaledStage.remove(id)
+                        }
+                        journalDeletes(ids)
+                    }
+                    Mode.UNOPENED -> Unit
                 }
+                deleting.removeAll(ids.toSet())
+                bumpVersion()
+                refreshReads()
             }
         }
     }
@@ -1587,11 +2188,34 @@ class HistoryStore(
 
     private fun writeRows(writes: List<Write>, profiles: Map<String, JsonObject> = emptyMap(), curveless: Set<String> = emptySet()) {
         if (fault(MigrationFault.DISK_FULL) != null) throw android.database.sqlite.SQLiteFullException("disk full (test)")
-        tables.write(db().writableDatabase) {
-            // A part a row doesn't carry stays as stored: a light row never clears a profile or a brew series.
-            for (w in writes) tables.upsert(this, w.shot, w.summary)
-            for ((id, profile) in profiles) tables.putProfile(this, id, profile)
+        if (mode == Mode.AUTH) {
+            // history.db: the rows and their heavy parts in one transaction, under the source's lock (M10, #310 A5).
+            val dups = checkNotNull(auth) { "the shot history's database is closed" }
+                .write(writes.map { it.shot to it.summary }, profiles, pulled = writes.mapNotNullTo(HashSet()) { w -> w.row.id.takeIf { it in pulled } })
+            if (dups.isNotEmpty()) {
+                // Another row already holds its Visualizer id: not stored, so not in memory either (N8).
+                persistLine("${dups.size} pulled shots were already here under another id: kept once")
+                for (id in dups) {
+                    latest.remove(id)
+                    staged.remove(id)
+                    pulled.remove(id)
+                }
+                bumpVersion()
+                writeRowsLanded(writes.filterNot { it.row.id in dups }, curveless, profiles.keys)
+                return
+            }
+        } else {
+            tables.write(db().writableDatabase) {
+                // A part a row doesn't carry stays as stored: a light row never clears a profile or a brew series.
+                for (w in writes) tables.upsert(this, w.shot, w.summary)
+                for ((id, profile) in profiles) tables.putProfile(this, id, profile)
+            }
         }
+        writeRowsLanded(writes, curveless, profiles.keys)
+    }
+
+    /** [writes] landed: memory says so, after the store has them. */
+    private fun writeRowsLanded(writes: List<Write>, curveless: Set<String>, profiled: Set<String> = emptySet()) {
         for (w in writes) {
             val id = w.row.id
             wrote(id)
@@ -1610,8 +2234,9 @@ class HistoryStore(
             }
             dirtySummary.remove(id)
             journaled = journaled - id
+            pulled.remove(id)
         }
-        withProfile += profiles.keys
+        withProfile += profiled
         bumpVersion()
         // These rows landed: an older journal line for one would undo them at the next launch (M3).
         retireJournal(writes.mapTo(HashSet()) { it.row.id })
@@ -1736,6 +2361,7 @@ class HistoryStore(
 
     /** After the first save each day: every row with its profile, gzip JSON lines, keeping the last one as `.bak`. */
     private fun maybeSnapshot() {
+        if (mode == Mode.AUTH) return authSnapshot()
         val today = LocalDate.now()
         if (snapshotDay == today) return
         snapshotDay = today
@@ -1785,10 +2411,15 @@ class HistoryStore(
     }
 
     /** Lost: start a new, empty store. The old copy stays, and isn't merged in as late rows. */
-    suspend fun startEmpty(): HistoryLoad = rebuild { _ -> }
+    suspend fun startEmpty(): HistoryLoad = if (onStage2) recoverAuth { } else rebuild { _ -> }
 
     /** Lost: rebuild the store from the rows snapshot. */
-    suspend fun restoreSnapshot(): HistoryLoad = rebuild { w ->
+    suspend fun restoreSnapshot(): HistoryLoad = if (onStage2) {
+        recoverAuth { b ->
+            val f = listOf(stage2.snapshot, stage2.previousSnapshot).firstOrNull { it.exists() } ?: throw MigrationFailed("There's no rows snapshot")
+            fillFrom(b, rowsOf(f).asSequence())
+        }
+    } else rebuild { w ->
         val snap = readSnapshot() ?: throw MigrationFailed("The rows snapshot couldn't be read")
         for ((row, summary) in snap.second) {
             tables.putFull(w, row, summary ?: summaryOf(row.copy(samples = (series.read(row.id) as? SeriesRead.Found)?.samples ?: emptyList()), json))
@@ -1796,7 +2427,20 @@ class HistoryStore(
     }
 
     /** Lost: copy the old copy again, as the first migration did. */
-    suspend fun recoverOldCopy(): HistoryLoad = withContext(Dispatchers.IO) {
+    suspend fun recoverOldCopy(): HistoryLoad = if (onStage2) {
+        // The old copy after the flip is shots.db, read read-only (S12), never written.
+        recoverAuth { b ->
+            val ro = ReadOnlyShots.open(dbFile) ?: throw MigrationFailed("The old copy (shots.db) is missing")
+            ro.use {
+                val ids = it.ids().sorted()
+                for (chunk in ids.chunked(250)) {
+                    fillFrom(b, it.rows(chunk).values.asSequence().map { (rowJson, h) -> HistoryRowIn(rowJson, HistoryHeavy(h.profileJson, h.brewSeriesJson)) })
+                }
+            }
+        }
+    } else recoverOldCopyP3()
+
+    private suspend fun recoverOldCopyP3(): HistoryLoad = withContext(Dispatchers.IO) {
         lock.withLock {
             closeDb()
             eraseStore(markerFile)
@@ -1888,13 +2532,16 @@ class HistoryStore(
         private set
 
     private fun refreshReads() {
-        val reader = index.reader()
+        // On history.db the list reads the truth itself, with its own notices (#310 A5).
+        val a = auth?.takeIf { mode == Mode.AUTH }
+        val reader = if (a != null) a.db.takeIf { !it.isClosed } else index.reader()
         val why = when {
-            mode != Mode.SQL -> "the rows aren't in shots.db (${mode.name.lowercase()})"
+            !inSqlite -> "the rows aren't in SQLite (${mode.name.lowercase()})"
             health != HistoryHealth.OK -> "the store is ${health.name.lowercase()}"
             journaled.isNotEmpty() -> "${journaled.size} rows wait in the pending journal"
             unreadableRows.isNotEmpty() -> "${unreadableRows.size} rows this build can't read"
             !liveSet -> "the live libraries aren't in the index yet"
+            reader == null && a != null -> "the shot history's database is closed"
             reader == null -> if (index.lastError != null) "the index failed: ${index.lastError}" else "the index is stale or closed"
             else -> null
         }
@@ -1903,7 +2550,7 @@ class HistoryStore(
         reads.value = when {
             why != null || reader == null -> null
             current != null && current.bridge === reader -> current
-            else -> HistoryIndexReads(reader, index.notices, ::decodeIndexRow)
+            else -> HistoryIndexReads(reader, a?.notices ?: index.notices, ::decodeIndexRow)
         }
     }
 
@@ -1914,7 +2561,12 @@ class HistoryStore(
      * `pending` are left alone.
      */
     suspend fun setIndexLive(live: coffee.crema.core.HistoryLive) = withShots { shots ->
-        if (shots != null && index.setLive(live)) liveSet = true
+        val a = auth?.takeIf { mode == Mode.AUTH }
+        if (a != null) {
+            if (runCatching { a.setLive(live) }.onFailure { persistLine("live libraries: ${it.message}") }.isSuccess) liveSet = true
+        } else if (shots != null && index.setLive(live)) {
+            liveSet = true
+        }
         refreshReads()
     }
 
@@ -1928,6 +2580,24 @@ class HistoryStore(
     @androidx.annotation.VisibleForTesting
     internal fun quarantineForTest(aside: File) {
         helper?.handler?.markQuarantinedForTest(aside)
+    }
+
+    /** Test seam: [id]'s `row_json` as the truth file holds it now (`shots.db` or `history.db`), or null (#310 A5). */
+    @androidx.annotation.VisibleForTesting
+    internal fun truthRowJsonForTest(id: String): String? = when (mode) {
+        Mode.AUTH -> auth?.db?.now { it.get(listOf(id)) }?.firstOrNull()?.rowJson
+        Mode.SQL -> tables.rawRows(db().readableDatabase, listOf(id))[id]
+        else -> null
+    }
+
+    /** Test seam: every file this store has open closed, as a process exit leaves them (#310 A5). */
+    @androidx.annotation.VisibleForTesting
+    internal suspend fun closeForTest() = withContext(Dispatchers.IO) {
+        lock.withLock {
+            closeDb()
+            closeAuth()
+            index.closeAll()
+        }
     }
 
     /** Test seam: close the index as a process death would, so another store (or the test) can open the file. */
@@ -2043,16 +2713,24 @@ class HistoryStore(
      *  and the SQLite history's files ([eraseSqliteHistory]), the index closed first (S11). Returns the names of what
      *  stayed, empty when everything went, so Erase all data can say so (#428). */
     suspend fun erase(): List<String> =
-        lock.withLock {
+        lockedOnIo {
             // The index first, under the core's lock (S11), and no store here opens it again until
             // this returns (REVIEW-446 note 4): nothing writes or makes a file this is about to remove.
-            withContext(Dispatchers.IO) { index.erasing { eraseLocked() } }
+            index.erasing { eraseLocked() }
         }
 
     private fun eraseLocked(): List<String> {
         val stayed = mutableListOf<String>()
         fun gone(name: String, ok: Boolean) { if (!ok) stayed += name }
         closeDb()
+        // history.db under the core's lock first (S11), and any other store's in this process:
+        // nothing writes a file this is about to remove.
+        closeAuth()
+        HistoryAuthority.closeEveryHeld()
+        STAGE2_IN_PROCESS = null
+        onStage2 = false
+        tooNew = false
+        stage2Marker = null
         gone(FILE_NAME, eraseStore(file))
         seriesDir.listFiles()?.forEach { gone("$SERIES_DIR/${it.name}", eraseStore(it)) }
         // False also when there's none: what's left on disk tells.
@@ -2227,6 +2905,26 @@ class HistoryStore(
         /** Test seam: the steps that fail or stop, process-wide. */
         @androidx.annotation.VisibleForTesting
         internal val faults: MutableSet<MigrationFault> = Collections.synchronizedSet(mutableSetOf())
+
+        /**
+         * Stage 2 (#310 A5): the flip runs at the first open, and a `done`
+         * marker opens `history.db`. Off, a build reads and writes `shots.db`
+         * as stage 1 does, whatever the marker says: an older build's view.
+         */
+        @Volatile internal var stage2Enabled = STAGE2_IN_BUILD
+
+        /** [lock]: one for every store in the process over one `filesDir` (REVIEW-475 R1). */
+        private val LOCKS = ConcurrentHashMap<String, Mutex>()
+
+        /** Where [lockedOnIo] asks for the lock: one thread, so requests keep their order. */
+        @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+        private val LOCK_QUEUE = Dispatchers.IO.limitedParallelism(1)
+
+        /** A store in this process is on `history.db` (its marker's path): no store here writes that `shots.db` again. */
+        @Volatile internal var STAGE2_IN_PROCESS: String? = null
+
+        /** Whether this build ships stage 2. */
+        const val STAGE2_IN_BUILD = false
 
         /** Test seam: every migration fails, so the legacy backend runs (its own tests). */
         @androidx.annotation.VisibleForTesting
