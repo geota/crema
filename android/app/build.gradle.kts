@@ -1,3 +1,4 @@
+import java.time.Duration
 import java.util.Properties
 import javax.inject.Inject
 import net.mullvad.androidrust.CargoBuildTask
@@ -654,6 +655,9 @@ tasks.withType<Test>().configureEach {
     }
     // A save refused by the load floor fails the test that made it (SaveFloor).
     systemProperty("crema.strictSaves", "true")
+    // A hang fails the run instead of holding CI for hours (#310 A5: a store-lock
+    // deadlock hung the android job for over two; the suite takes about 21 minutes).
+    timeout.set(Duration.ofMinutes(40))
 }
 
 // ---------------------------------------------------------------------------
