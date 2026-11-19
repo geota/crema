@@ -66,7 +66,9 @@ import {
 	type OwnerInfo,
 	type OnceName,
 	type ReadName,
+	type RecoverKind,
 	type Reply,
+	type SnapshotFile,
 	type Request,
 	type RpcMessage,
 	type Stage,
@@ -198,6 +200,11 @@ const SKIP: Write = { kind: 'upsert', rows: [] };
 
 const noop = () => {};
 
+/** A request sent once, to the owner it names, and never resent: a walk call, a recovery (W5c). */
+function sentOnce(req: Request): boolean {
+	return req.op === 'once' || req.op === 'recover';
+}
+
 export class HistoryDbClient {
 	readonly tab: string;
 	readonly #o: ClientOptions;
@@ -328,6 +335,42 @@ export class HistoryDbClient {
 	}
 
 	/**
+	 * Stage 2 (W5c, S9): the `lost` banner's choice, into a new `history-<n>.db`
+	 * (`kind`; `from` names the snapshot). Sent once to the owner this tab
+	 * knows, whatever its file's health, and never resent: a resend could make
+	 * a second file. Resolves to the new file's generation.
+	 */
+	recover(kind: RecoverKind, from?: string, known?: string[]): Promise<{ generation: number }> {
+		if (this.#stopped) return Promise.reject(new HistoryDbError('stopped', 'the history store is stopped'));
+		if (this.#o.stage !== 2) return Promise.reject(new HistoryDbError('stage1', 'recovery files are stage 2’s'));
+		const owner = this.#status.owner;
+		if (!owner) return Promise.reject(new HistoryDbError('unavailable', this.#status.message ?? 'the history store did not answer'));
+		// Never to an owner this tab refuses: it has another file (REVIEW-476 B1).
+		if (!acceptsOwner(this.#o.stage, this.#o.expect, owner)) {
+			return Promise.reject(new HistoryDbError('otherFile', `the owner has ${owner.file} open`));
+		}
+		const req = this.#header({ op: 'recover', kind, ...(from ? { from } : {}), ...(known?.length ? { known } : {}) });
+		return new Promise((resolve, reject) => {
+			const p: Pending = { req, firstAt: this.#now(), sentAt: 0, to: owner.tab, resolve: resolve as (v: unknown) => void, reject };
+			this.#pending.set(req.id, p);
+			this.#transmit(p);
+		});
+	}
+
+	/** Stage 2 (W5c): the daily rows snapshot; `copied: false` when nothing moved since the last. */
+	snapshot(): Promise<{ copied: boolean }> {
+		if (this.#stopped) return Promise.reject(new HistoryDbError('stopped', 'the history store is stopped'));
+		if (this.#o.stage !== 2) return Promise.reject(new HistoryDbError('stage1', 'the rows snapshot is stage 2’s'));
+		return this.#send(this.#header({ op: 'snapshot' })) as Promise<{ copied: boolean }>;
+	}
+
+	/** Stage 2 (W5c): the rows snapshots there are, for the `lost` banner. */
+	snapshotInfo(): Promise<SnapshotFile[]> {
+		if (this.#stopped) return Promise.reject(new HistoryDbError('stopped', 'the history store is stopped'));
+		return this.#send(this.#header({ op: 'snapshotInfo' })) as Promise<SnapshotFile[]>;
+	}
+
+	/**
 	 * Stage 2 (W5): late rows by the id rule (SPEC §11 step 8): each imported
 	 * only if neither `migration_source` nor `history.db` has its id, once.
 	 * Idempotent, so resent like a read, and rejected after 30 s.
@@ -341,7 +384,7 @@ export class HistoryDbClient {
 	/** Refuse every once-only call that went to an owner `gone` says is gone. */
 	#dropOnce(gone: (to: string | undefined) => boolean): void {
 		for (const p of [...this.#pending.values()]) {
-			if (p.req.op !== 'once' || !gone(p.to)) continue;
+			if (!sentOnce(p.req) || !gone(p.to)) continue;
 			this.#settle(p);
 			p.reject(new HistoryDbError('ownerChanged', 'the owner changed while the call was in flight'));
 		}
@@ -497,7 +540,7 @@ export class HistoryDbClient {
 	/** Resend every read, then the whole outbox in seq order (M11). */
 	#resendAll(): void {
 		// A once-only call is never resent (#310 R1w).
-		for (const p of this.#pending.values()) if (p.req.op !== 'write' && p.req.op !== 'once') this.#transmit(p);
+		for (const p of this.#pending.values()) if (p.req.op !== 'write' && !sentOnce(p.req)) this.#transmit(p);
 		for (const p of this.#outbox) this.#transmit(p);
 	}
 
@@ -505,6 +548,13 @@ export class HistoryDbClient {
 		if (r.to !== this.tab) return;
 		const p = this.#pending.get(r.id);
 		if (!p) return;
+		// A recovery's answer comes from an owner that has moved to the new file.
+		if (p.req.op === 'recover' && r.owner.tab === p.to) {
+			this.#settle(p);
+			if (r.ok) p.resolve(r.value);
+			else p.reject(new HistoryDbError(r.error.code, r.error.message));
+			return;
+		}
 		if (!acceptsOwner(this.#o.stage, this.#o.expect, r.owner)) {
 			// M1: never use an owner of another build or stage; keep waiting for one we can.
 			this.#cannotUse('otherBuild', r.owner);
@@ -514,7 +564,7 @@ export class HistoryDbClient {
 			// That Worker let go: the request goes to whoever owns now. A
 			// once-only call doesn't: what it named went with the owner.
 			if (r.owner.tab === this.tab) this.#setStatus({ ownerHere: false });
-			if (p.req.op === 'once') this.#dropOnce((to) => to === p.to);
+			if (sentOnce(p.req)) this.#dropOnce((to) => to === p.to);
 			return;
 		}
 		this.#answered(r.owner);
@@ -771,7 +821,7 @@ export class HistoryDbClient {
 			}
 			if (now - p.sentAt < ANSWER_MS) continue;
 			// A once-only call waits for its answer, or its 30 s, never a resend.
-			if (p.req.op === 'once') continue;
+			if (sentOnce(p.req)) continue;
 			// Answered with an error or `gap`, or late at an owner that answers
 			// other calls (busy): this one again, alone. Late with no owner heard
 			// from for 5 s: the owner can't answer.

@@ -39,7 +39,10 @@ import {
 import type { StoredShot } from './model';
 
 /** What the adapter uses of a stage-2 client. */
-export type SqliteClient = Pick<HistoryDbClient, 'read' | 'write' | 'status' | 'onStatus' | 'onChange' | 'importLate'>;
+export type SqliteClient = Pick<
+	HistoryDbClient,
+	'read' | 'write' | 'status' | 'onStatus' | 'onChange' | 'importLate' | 'recover' | 'snapshot' | 'snapshotInfo'
+>;
 
 /** How long `open` waits for the owner to answer before the store is `unavailable`. */
 export const OPEN_WAIT_MS = 15_000;
@@ -69,7 +72,10 @@ export function unavailableClient(why: string): SqliteClient {
 		onChange: () => () => {},
 		read: refuse,
 		write: refuse,
-		importLate: refuse
+		importLate: refuse,
+		recover: refuse,
+		snapshot: refuse,
+		snapshotInfo: async () => []
 	} as SqliteClient;
 }
 
@@ -187,7 +193,10 @@ export class SqliteRows {
 	}
 
 	/** Details first, then the rows, in this tab's write order (M11). */
-	async putShots(shots: readonly ShotWrite[], summarize: (shot: StoredShot) => ShotSummary): Promise<{ seq: number; written: WrittenDetails }> {
+	async putShots(
+		shots: readonly ShotWrite[],
+		summarize: (shot: StoredShot) => ShotSummary
+	): Promise<{ seq: number; written: WrittenDetails; duplicates: { id: string; existingId: string }[] }> {
 		const written: WrittenDetails = new Map();
 		const keep = shots.filter((w) => w.details && !w.fill).map((w) => detailsOf(w.shot));
 		const fill = shots.filter((w) => w.details && w.fill).map((w) => detailsOf(w.shot));
@@ -199,7 +208,7 @@ export class SqliteRows {
 			if (part.length === 0) continue;
 			for (const [id, d] of await this.#details.put(part, how)) kept.set(id, d);
 		}
-		const rows: { rowJson: string }[] = [];
+		const rows: { rowJson: string; pulled?: boolean }[] = [];
 		for (const w of shots) {
 			let summary: ShotSummary;
 			if (w.details) {
@@ -211,11 +220,22 @@ export class SqliteRows {
 				if (!w.summary) throw new Error(`No summary for a row-only write of ${w.shot.id}`);
 				summary = w.summary;
 			}
-			rows.push({ rowJson: JSON.stringify(rowOf(w.shot, summary)) });
+			rows.push({ rowJson: JSON.stringify(rowOf(w.shot, summary)), ...(w.pulled ? { pulled: true } : {}) });
 		}
-		if (rows.length === 0) return { seq: await this.writeSeq(), written };
+		if (rows.length === 0) return { seq: await this.writeSeq(), written, duplicates: [] };
 		const a = await this.#c.write({ kind: 'upsert', rows });
-		return { seq: this.#check(a) ?? (await this.writeSeq()), written };
+		const seq = this.#check(a) ?? (await this.writeSeq());
+		// N8: a pulled row another row already holds wasn't stored. Its
+		// details, written first under its own id, belong to no row: they go,
+		// if still no row has that id.
+		const duplicates = a.outcome === 'done' ? (a.written.duplicates ?? []) : [];
+		if (duplicates.length > 0) {
+			const ids = duplicates.map((d) => d.id);
+			const still = new Set(await this.#read<string[]>('existing', ids));
+			await this.#details.delete(ids.filter((id) => !still.has(id))).catch(() => {});
+			for (const id of ids) written.delete(id);
+		}
+		return { seq, written, duplicates };
 	}
 
 	/** The rows, then the details of the ids no row has now (S6, REVIEW-468 W5-2). */

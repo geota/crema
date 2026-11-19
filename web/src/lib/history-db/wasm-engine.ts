@@ -111,6 +111,14 @@ export function wasmEngine(): Engine {
 				)) as HistoryDb;
 				return wrap(db);
 			}),
+		createRecovery: (o) =>
+			guard(async () => {
+				await ready();
+				const db = (await HistoryDb.createRecovery(
+					JSON.stringify({ place: 'db', file: o.file, generation: o.generation, journal: o.journal, recovery: o.recovery })
+				)) as HistoryDb;
+				return wrap(db);
+			}),
 		async readRepairDone(pool: Pool, generation: number) {
 			const base = pool === 'db' ? DB_POOL_DIR : INDEX_POOL_DIR;
 			const dir = await directory(generation === 0 ? base : `${base}-${generation}`);

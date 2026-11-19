@@ -331,6 +331,13 @@ struct CopyArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SetRecoveryArgs {
+    generation: u32,
+    recovery: RecoveryJson,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct LateArgs {
     rows: Vec<RowJson>,
     #[serde(default)]
@@ -946,6 +953,19 @@ impl HistoryDb {
                 .as_ref()
                 .map_err(|_| StoreError::Refused("bad rows".into()))?;
             s.settle_late(&rows_in(rows.clone())).map(WrittenJson::from)
+        })
+    }
+
+    /// Makes this copy of a rows snapshot the recovery file of
+    /// `{generation, recovery}` (S9).
+    #[wasm_bindgen(js_name = setRecovery)]
+    pub fn set_recovery(&self, json: &str) -> Promise {
+        let a = parse::<SetRecoveryArgs>(json);
+        self.slot(move |s| {
+            let a = a
+                .as_ref()
+                .map_err(|_| StoreError::Refused("bad recovery args".into()))?;
+            s.set_recovery(a.generation, &a.recovery.clone().into())
         })
     }
 
