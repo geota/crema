@@ -208,6 +208,27 @@ class HistoryStore(
      */
     private val lock: Mutex = LOCKS.computeIfAbsent(context.filesDir.absolutePath) { Mutex() }
 
+    /**
+     * [block] under [lock], run and released on IO. The lock is asked for on
+     * [LOCK_QUEUE], one thread for every store, so saves still queue in the
+     * order they were launched (a launch on Main hands its request to the
+     * queue at once, and the `Mutex` is FIFO), and a waiter the lock passes
+     * to resumes there, never on Main. With one lock for every store over
+     * these files (REVIEW-475 R1), a waiter that had to resume on Main would
+     * hang a Main thread that waits on another store. Not cancellable once
+     * asked for.
+     */
+    private suspend fun <T> lockedOnIo(block: suspend () -> T): T = withContext(NonCancellable + LOCK_QUEUE) {
+        lock.lock()
+        withContext(Dispatchers.IO) {
+            try {
+                block()
+            } finally {
+                lock.unlock()
+            }
+        }
+    }
+
     /** [SQL]: the rows are `shots.db`'s (P3a, stage 1). [AUTH]: `history.db`'s (stage 2, #310 A5). */
     private enum class Mode { UNOPENED, SQL, AUTH, LEGACY, BLOCKED }
 
@@ -1522,12 +1543,10 @@ class HistoryStore(
     // No app callers from #310 A3b (REVIEW-470 N3): every reader and edit goes through [rows], [row] and [update].
     @androidx.annotation.VisibleForTesting
     suspend fun flushHidden(id: String) = withContext(NonCancellable) {
-        lock.withLock {
-            withContext(Dispatchers.IO) {
-                val row = pendingHidden.remove(id) ?: return@withContext
-                if (!inSqlite || id in deleting) return@withContext
-                writeLocked(listOf(row))
-            }
+        lockedOnIo {
+            val row = pendingHidden.remove(id) ?: return@lockedOnIo
+            if (!inSqlite || id in deleting) return@lockedOnIo
+            writeLocked(listOf(row))
         }
     }
 
@@ -1908,24 +1927,22 @@ class HistoryStore(
 
     /** A restore's step 7, first half: these shots' series files, before any row names them. Returns how many failed. */
     suspend fun writeSeriesOf(shots: List<StoredShot>): Int = withContext(NonCancellable) {
-        lock.withLock {
-            withContext(Dispatchers.IO) {
-                var failed = 0
-                for (shot in shots) {
-                    if (shot.samples.isEmpty()) continue
-                    if (series.write(shot.id, shot.samples)) {
-                        onDisk += shot.id
-                        written += series.gzFile(shot.id).name
-                        seriesWritten[shot.id] = shot.samples
-                        wrote(shot.id)
-                    } else {
-                        failed++
-                    }
+        lockedOnIo {
+            var failed = 0
+            for (shot in shots) {
+                if (shot.samples.isEmpty()) continue
+                if (series.write(shot.id, shot.samples)) {
+                    onDisk += shot.id
+                    written += series.gzFile(shot.id).name
+                    seriesWritten[shot.id] = shot.samples
+                    wrote(shot.id)
+                } else {
+                    failed++
                 }
-                // history.db: a curve with no row write still moves the backup mark (REVIEW-466 note 1).
-                if (shots.any { it.samples.isNotEmpty() }) noteDetailsWritten()
-                failed
             }
+            // history.db: a curve with no row write still moves the backup mark (REVIEW-466 note 1).
+            if (shots.any { it.samples.isNotEmpty() }) noteDetailsWritten()
+            failed
         }
     }
 
@@ -1965,16 +1982,14 @@ class HistoryStore(
         // again now could put back a row a change since ([updateHidden]) has replaced.
         if (!accepted) accept(rows)
         return withContext(NonCancellable) {
-            lock.withLock {
-                withContext(Dispatchers.IO) {
-                    ensureOpenLocked()
-                    when (mode) {
-                        Mode.SQL, Mode.AUTH -> upsertLocked(rows)
-                        Mode.LEGACY -> if (openAtCall) legacySaveLocked(rows) else SaveFloor.admit(file, WHAT).let { false }
-                        Mode.BLOCKED -> journalLocked(rows)
-                        Mode.UNOPENED -> false
-                    }.also { refreshReads() }
-                }
+            lockedOnIo {
+                ensureOpenLocked()
+                when (mode) {
+                    Mode.SQL, Mode.AUTH -> upsertLocked(rows)
+                    Mode.LEGACY -> if (openAtCall) legacySaveLocked(rows) else SaveFloor.admit(file, WHAT).let { false }
+                    Mode.BLOCKED -> journalLocked(rows)
+                    Mode.UNOPENED -> false
+                }.also { refreshReads() }
             }
         }
     }
@@ -1999,16 +2014,14 @@ class HistoryStore(
         val openAtCall = SafeFile.savesOpen(file) && !SafeFile.savesHeld(file)
         if (mode == Mode.LEGACY && !SaveFloor.admit(file, WHAT)) return false
         return withContext(NonCancellable) {
-            lock.withLock {
-                withContext(Dispatchers.IO) {
-                    ensureOpenLocked()
-                    when (mode) {
-                        Mode.SQL, Mode.AUTH -> upsertLocked(ids?.mapNotNull(::row) ?: pendingLocked())
-                        Mode.LEGACY -> if (openAtCall) legacySaveLocked(rows()) else SaveFloor.admit(file, WHAT).let { false }
-                        Mode.BLOCKED -> journalLocked(ids?.mapNotNull(::row) ?: pendingLocked())
-                        Mode.UNOPENED -> false
-                    }.also { refreshReads() }
-                }
+            lockedOnIo {
+                ensureOpenLocked()
+                when (mode) {
+                    Mode.SQL, Mode.AUTH -> upsertLocked(ids?.mapNotNull(::row) ?: pendingLocked())
+                    Mode.LEGACY -> if (openAtCall) legacySaveLocked(rows()) else SaveFloor.admit(file, WHAT).let { false }
+                    Mode.BLOCKED -> journalLocked(ids?.mapNotNull(::row) ?: pendingLocked())
+                    Mode.UNOPENED -> false
+                }.also { refreshReads() }
             }
         }
     }
@@ -2038,53 +2051,51 @@ class HistoryStore(
         if (ids.isEmpty()) return
         forget(ids)
         withContext(NonCancellable) {
-            lock.withLock {
-                withContext(Dispatchers.IO) {
-                    ensureOpenLocked()
-                    when (mode) {
-                        Mode.SQL -> {
-                            tables.write(db().writableDatabase) { tables.delete(this, ids) }
-                            for (id in ids) {
-                                series.deleteGz(id)
-                                forgetMemory(id)
-                            }
-                            bumpVersion()
-                            // A journal line for one of these would bring it back at the next launch (M3).
-                            retireJournal(ids.toSet())
-                        }
-                        // history.db (#310 A5): rows first, then their series, through the source,
-                        // which holds a row an open backup walk still needs (S6).
-                        Mode.AUTH -> {
-                            checkNotNull(auth) { "the shot history's database is closed" }.deleteNow(ids.toList())
-                            for (id in ids) forgetMemory(id)
-                            bumpVersion()
-                            retireJournal(ids.toSet())
-                        }
-                        Mode.LEGACY -> for (id in ids) {
-                            series.deleteAll(id)
-                            written.removeAll(listOf(series.gzFile(id).name, series.jsonFile(id).name, series.legacyFile(id).name))
+            lockedOnIo {
+                ensureOpenLocked()
+                when (mode) {
+                    Mode.SQL -> {
+                        tables.write(db().writableDatabase) { tables.delete(this, ids) }
+                        for (id in ids) {
+                            series.deleteGz(id)
                             forgetMemory(id)
-                            legacyHeavy.remove(id)
                         }
-                        // The store is out of reach: the delete waits in the journal with the rows made meanwhile (S1).
-                        Mode.BLOCKED -> {
-                            for (id in ids) {
-                                latest.remove(id)
-                                // Gone for what reads the store now, not only at the next launch (REVIEW-467 N2).
-                                stored.remove(id)
-                                seen.remove(id)
-                                pendingHidden.remove(id)
-                                staged.remove(id)
-                                journaledStage.remove(id)
-                            }
-                            journalDeletes(ids)
-                        }
-                        Mode.UNOPENED -> Unit
+                        bumpVersion()
+                        // A journal line for one of these would bring it back at the next launch (M3).
+                        retireJournal(ids.toSet())
                     }
-                    deleting.removeAll(ids.toSet())
-                    bumpVersion()
-                    refreshReads()
+                    // history.db (#310 A5): rows first, then their series, through the source,
+                    // which holds a row an open backup walk still needs (S6).
+                    Mode.AUTH -> {
+                        checkNotNull(auth) { "the shot history's database is closed" }.deleteNow(ids.toList())
+                        for (id in ids) forgetMemory(id)
+                        bumpVersion()
+                        retireJournal(ids.toSet())
+                    }
+                    Mode.LEGACY -> for (id in ids) {
+                        series.deleteAll(id)
+                        written.removeAll(listOf(series.gzFile(id).name, series.jsonFile(id).name, series.legacyFile(id).name))
+                        forgetMemory(id)
+                        legacyHeavy.remove(id)
+                    }
+                    // The store is out of reach: the delete waits in the journal with the rows made meanwhile (S1).
+                    Mode.BLOCKED -> {
+                        for (id in ids) {
+                            latest.remove(id)
+                            // Gone for what reads the store now, not only at the next launch (REVIEW-467 N2).
+                            stored.remove(id)
+                            seen.remove(id)
+                            pendingHidden.remove(id)
+                            staged.remove(id)
+                            journaledStage.remove(id)
+                        }
+                        journalDeletes(ids)
+                    }
+                    Mode.UNOPENED -> Unit
                 }
+                deleting.removeAll(ids.toSet())
+                bumpVersion()
+                refreshReads()
             }
         }
     }
@@ -2702,10 +2713,10 @@ class HistoryStore(
      *  and the SQLite history's files ([eraseSqliteHistory]), the index closed first (S11). Returns the names of what
      *  stayed, empty when everything went, so Erase all data can say so (#428). */
     suspend fun erase(): List<String> =
-        lock.withLock {
+        lockedOnIo {
             // The index first, under the core's lock (S11), and no store here opens it again until
             // this returns (REVIEW-446 note 4): nothing writes or makes a file this is about to remove.
-            withContext(Dispatchers.IO) { index.erasing { eraseLocked() } }
+            index.erasing { eraseLocked() }
         }
 
     private fun eraseLocked(): List<String> {
@@ -2904,6 +2915,10 @@ class HistoryStore(
 
         /** [lock]: one for every store in the process over one `filesDir` (REVIEW-475 R1). */
         private val LOCKS = ConcurrentHashMap<String, Mutex>()
+
+        /** Where [lockedOnIo] asks for the lock: one thread, so requests keep their order. */
+        @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+        private val LOCK_QUEUE = Dispatchers.IO.limitedParallelism(1)
 
         /** A store in this process is on `history.db` (its marker's path): no store here writes that `shots.db` again. */
         @Volatile internal var STAGE2_IN_PROCESS: String? = null
