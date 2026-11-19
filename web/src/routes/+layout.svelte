@@ -49,6 +49,7 @@
 	import { installStorageNotices } from '#lib/shell/storage-notices.js';
 	import { installVisualizerNotices } from '#lib/shell/visualizer-notices.js';
 	import { startHistoryDb, stopHistoryDb } from '#lib/history-db/start.js';
+	import { useStage2Seam } from '#lib/history-source/stage2.js';
 	import {
 		freezeCremaWrites,
 		installResetListener,
@@ -213,8 +214,10 @@
 			void checkRestoreMarker();
 			// Temporary backup files a closed tab left (#310 P2w).
 			void sweepBackupTemp();
-			// The SQLite history's owner and client (#310 W1). Nothing reads it yet.
+			// The SQLite history's owner and client (#310 W1): its stage, the
+			// flip when it may run (W5), and on stage 2 the backup seam on it.
 			startHistoryDb({ canReload: () => canReloadNow(reloadInputs()) });
+			void useStage2Seam().catch(() => {});
 		});
 		// Keep the cached Visualizer Premium flag (it gates the edit sync's
 		// Premium-only PATCH fields) fresh: re-probe at most once per 24 h.

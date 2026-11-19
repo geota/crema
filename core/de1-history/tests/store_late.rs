@@ -8,7 +8,7 @@ mod common;
 use common::test;
 
 use common::{create, dir, file, int, reopen, row, rows_in, stored_rows};
-use de1_history::store::{Heavy, LateImport, OpenOptions, Role, RowIn, Store, StoreError};
+use de1_history::store::{Heavy, LateRows, OpenOptions, Role, RowIn, Store, StoreError};
 use serde_json::json;
 
 fn heavy(p: &str, s: &str) -> Heavy {
@@ -90,7 +90,7 @@ fn an_index_holds_no_heavy_parts_and_takes_no_late_rows() {
         Err(StoreError::Refused(_))
     ));
     assert!(matches!(
-        index.import_late(&LateImport::default()),
+        index.import_late_rows(&LateRows::default()),
         Err(StoreError::Refused(_))
     ));
 }
@@ -109,7 +109,7 @@ fn a_late_row_goes_in_once_and_never_over_a_row_the_file_holds() {
         .expect("writes");
     let before = store.write_seq();
     let out = store
-        .import_late(&LateImport {
+        .import_late_rows(&LateRows {
             rows: vec![
                 RowIn::new(row("late", 2, json!({}))),
                 // The file holds "kept" as edited since: the older copy never lands.
@@ -145,7 +145,7 @@ fn a_late_row_goes_in_once_and_never_over_a_row_the_file_holds() {
     // Again, as after a crash that cut the first run short: nothing changes.
     let seq = store.write_seq();
     let again = store
-        .import_late(&LateImport {
+        .import_late_rows(&LateRows {
             rows: vec![RowIn::new(row("late", 2, json!({ "notes": "older" })))],
             source_ids: Vec::new(),
             late_ids: None,
@@ -171,7 +171,7 @@ fn a_pulled_late_row_whose_visualizer_copy_is_held_is_skipped() {
         )]))
         .expect("writes");
     let out = store
-        .import_late(&LateImport {
+        .import_late_rows(&LateRows {
             rows: vec![RowIn {
                 row_json: row("theirs", 2, json!({ "visualizerId": "v-1" })),
                 heavy: None,
@@ -205,7 +205,7 @@ fn a_fault_inside_the_late_import_leaves_nothing_of_it() {
     for point in ["upsert.row", "late.source", "late.commit"] {
         store.faults().fail_at(point, 0);
         let seq = store.write_seq();
-        let out = store.import_late(&LateImport {
+        let out = store.import_late_rows(&LateRows {
             rows: vec![RowIn::new(row("late", 2, json!({})))],
             source_ids: ids(&["late"]),
             late_ids: Some(ids(&["late"])),
@@ -278,4 +278,29 @@ fn a_details_write_moves_write_seq_and_nothing_else() {
     assert_eq!(seq, before + 1);
     assert_eq!(store.write_seq(), seq);
     assert_eq!(stored_rows(&store), rows, "no row changed");
+}
+
+#[test]
+fn a_brew_log_is_never_in_late_ids_on_either_import() {
+    let d = dir();
+    let mut store = create(&file(&d, "history.db"));
+    let brew = row(
+        "brew",
+        2,
+        json!({ "brewMethod": "v60", "summary": { "sampleCount": 0 } }),
+    );
+    let shot = row("shot", 3, json!({ "summary": { "sampleCount": 0 } }));
+    store
+        .import_late_rows(&LateRows {
+            rows: vec![RowIn::new(brew), RowIn::new(shot)],
+            source_ids: Vec::new(),
+            late_ids: Some(ids(&["brew", "shot"])),
+            late_baseline: None,
+        })
+        .expect("imports");
+    assert_eq!(
+        store.late_ids().expect("reads"),
+        ids(&["shot"]),
+        "Android's import, as web's"
+    );
 }

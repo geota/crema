@@ -52,6 +52,9 @@ pub const POINTS: &[&str] = &[
     "flip.promote.commit",
     "flip.promote.committed",
     "flip.done.commit",
+    // Late rows (SPEC §11 steps 8 and 9).
+    "late.commit",
+    "late.committed",
 ];
 
 /// Every store opened while this is above 0 caps its file at that many

@@ -34,9 +34,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use de1_history::store::{
     self, Applied, CoffeeFacet, Destination, Duplicate, ExportWalk, Facets, FileInfo, FlipInit,
-    FtsCheck, FtsStatus, Health, Heavy, HeavyOut, IndexState, IndexWrite, JournalMode, LateImport,
-    LateImported, Maintained, OpenOptions, Page, Recovery, RidId, RidRow, Role, RowIn, RowOut,
-    Store, StoreError, SyncPage, SyncRow, Write, Written,
+    FtsCheck, FtsStatus, Health, Heavy, HeavyOut, IndexState, IndexWrite, JournalMode,
+    LateImported, LateRows, Maintained, OpenOptions, Page, Recovery, RidId, RidRow, Role, RowIn,
+    RowOut, Store, StoreError, SyncPage, SyncRow, Write, Written,
 };
 use de1_history::{
     Anchor, BeanScope, ChangeKinds, ChangeSet, Cursor, Dir, Live, LiveBean, LiveMethod, Sort,
@@ -1893,13 +1893,13 @@ impl HistoryDb {
     /// # Errors
     /// `Refused` on an index or for a row with no id; a store error class.
     pub fn import_late(&self, import: HistoryLateImport) -> HResult<HistoryLateImported> {
-        let imp = LateImport {
+        let imp = LateRows {
             rows: rows_in(import.rows),
             source_ids: import.source_ids,
             late_ids: import.late_ids,
             late_baseline: import.late_baseline,
         };
-        self.with(|s| s.import_late(&imp)).map(Into::into)
+        self.with(|s| s.import_late_rows(&imp)).map(Into::into)
     }
 }
 

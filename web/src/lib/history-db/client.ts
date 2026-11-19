@@ -327,6 +327,17 @@ export class HistoryDbClient {
 		});
 	}
 
+	/**
+	 * Stage 2 (W5): late rows by the id rule (SPEC §11 step 8): each imported
+	 * only if neither `migration_source` nor `history.db` has its id, once.
+	 * Idempotent, so resent like a read, and rejected after 30 s.
+	 */
+	importLate(rows: { rowJson: string }[]): Promise<{ imported: string[]; known: string[]; duplicates: string[] }> {
+		if (this.#stopped) return Promise.reject(new HistoryDbError('stopped', 'the history store is stopped'));
+		if (this.#o.stage !== 2) return Promise.reject(new HistoryDbError('stage1', 'late rows are stage 2’s'));
+		return this.#send(this.#header({ op: 'importLate', rows })) as Promise<{ imported: string[]; known: string[]; duplicates: string[] }>;
+	}
+
 	/** Refuse every once-only call that went to an owner `gone` says is gone. */
 	#dropOnce(gone: (to: string | undefined) => boolean): void {
 		for (const p of [...this.#pending.values()]) {

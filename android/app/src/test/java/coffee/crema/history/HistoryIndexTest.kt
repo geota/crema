@@ -10,6 +10,7 @@ import coffee.crema.ui.coreJson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -535,23 +536,30 @@ class HistoryIndexTest {
         assertExact(s, "after the diff")
     }
 
-    /** REVIEW-446 note 4: another store's write while this one erases makes nothing in history-sqlite/. */
+    /**
+     * REVIEW-446 note 4: another store's write while this one erases makes
+     * nothing in history-sqlite/. From REVIEW-475 R1 the stores share one
+     * lock, so the write waits for the erase to finish.
+     */
     @Test fun `a write from another store during an erase doesn't make the index again`() = runBlocking {
         val other = store()
         other.boot()
         other.save(fresh("o", 2))
         val eraser = store()
         eraser.loadAll()
+        var write: kotlinx.coroutines.Job? = null
         HistoryStore.duringEraseForTest = {
             HistoryStore.duringEraseForTest = null
-            runBlocking(Dispatchers.IO) {
-                other.closeIndexForTest()
+            // The erase has closed every index in the process (S11); the other store's write comes now.
+            write = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
                 other.save(listOf(StoredShot(id = "during-erase", completedAtMs = 1_900_000_000_000L, durationMs = 1)))
             }
+            Thread.sleep(200)
+            assertFalse(write!!.isCompleted, "the write waits for the erase: the stores share one lock")
             assertFalse(sqliteDir.exists(), "nothing made history-sqlite/ again mid-erase")
         }
         assertEquals(emptyList(), eraser.erase(), "nothing stayed")
-        assertFalse(sqliteDir.exists())
+        write!!.join()
     }
 
     private suspend fun edit(s: HistoryStore, id: String, notes: String) {

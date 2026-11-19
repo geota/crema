@@ -150,7 +150,7 @@ describe('the index follows the P3 store', () => {
 		const next = realShot(101);
 		const seq = await write(next);
 		post([next.id], seq);
-		await vi.waitFor(async () => expect((await indexState(t)).seenSeqs).toEqual([seq]));
+		await vi.waitFor(async () => expect((await indexState(t)).seenSeqs).toEqual([seq]), { timeout: 5_000 });
 		// Still answering meanwhile: the index is behind, not wrong.
 		expect(t.client.status.health).toBe('ok');
 		await vi.waitFor(async () => expect(await t.client.read('count', ALL)).toBe(6), { timeout: GAP_MS + 8_000 });

@@ -197,8 +197,16 @@ class HistoryStore(
     /** Steps 8 and 9 after the flip: late rows an older build wrote to the P3 stores. */
     private val late by lazy { HistoryLate(context.filesDir, dbFile, tables, series, json) }
 
-    /** Loads, saves and deletes run on IO and may overlap; one at a time. */
-    private val lock = Mutex()
+    /**
+     * Loads, saves and deletes run on IO and may overlap; one at a time, and
+     * across every store in this process over the same files (REVIEW-475 R1,
+     * keyed by `filesDir`): a view model made
+     * again while the old one's store lives on shares the same files (the
+     * journals, `shots.db`, `history.db`), so the single-writer rules hold
+     * only if the two stores take turns. Nothing under it waits on another
+     * store, so it can't deadlock.
+     */
+    private val lock: Mutex = LOCKS.computeIfAbsent(context.filesDir.absolutePath) { Mutex() }
 
     /** [SQL]: the rows are `shots.db`'s (P3a, stage 1). [AUTH]: `history.db`'s (stage 2, #310 A5). */
     private enum class Mode { UNOPENED, SQL, AUTH, LEGACY, BLOCKED }
@@ -2893,6 +2901,9 @@ class HistoryStore(
          * as stage 1 does, whatever the marker says: an older build's view.
          */
         @Volatile internal var stage2Enabled = STAGE2_IN_BUILD
+
+        /** [lock]: one for every store in the process over one `filesDir` (REVIEW-475 R1). */
+        private val LOCKS = ConcurrentHashMap<String, Mutex>()
 
         /** A store in this process is on `history.db` (its marker's path): no store here writes that `shots.db` again. */
         @Volatile internal var STAGE2_IN_PROCESS: String? = null
