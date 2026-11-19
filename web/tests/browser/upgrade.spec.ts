@@ -5,9 +5,11 @@
  * (`pnpm build`, served as Pages serves it, with its service worker), a
  * profile shaped that way is opened and relaunched:
  *
- * - P3's migration to `crema-history`, then the flip to `history.db`: every
- *   shot, every field and every curve there, with the count, a search and the
- *   stats the stage-1 index gave;
+ * - P3's migration to `crema-history` at the first launch, then the flip to
+ *   `history.db` at the next (two launches, by design: the flip needs a
+ *   migrated P3 store, and runs before the store boots): every shot, every
+ *   field and every curve there, with the count, a search and the stats the
+ *   stage-1 index gave;
  * - the pre-P3 store and the P3 store left as they were;
  * - a launch after that changes nothing;
  * - the same with a shot captured during the first launch, and with the tab
@@ -16,6 +18,9 @@
  * `history.db` is read through the build's own history Worker, driven by its
  * protocol from a page of the same origin with the app closed, so nothing of
  * the test's own touches the files.
+ *
+ * 0.10.0 caps the pre-P3 store at 300 rows, so 300 is the real case; 5,000
+ * is a stress case no 0.10.0 profile holds.
  *
  * Runs with `pnpm test:pwa`, after `pnpm build`.
  */
