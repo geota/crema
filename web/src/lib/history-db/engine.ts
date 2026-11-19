@@ -55,6 +55,17 @@ export interface Engine {
 	 * pools in memory under names of their own.
 	 */
 	placeOf?(pool: Pool, file: string): { place: string; file: string };
+	/**
+	 * Creates the recovery file `file` in `crema-db` (S9): `authority`,
+	 * `migration` `done`, `migration_source` and the late-row baseline from
+	 * `recovery`. A file there that holds anything is refused, untouched.
+	 */
+	createRecovery?(o: {
+		file: string;
+		generation: number;
+		journal: Journal;
+		recovery: { migrationSource: string[]; lateBaseline: string };
+	}): Promise<EngineDb>;
 }
 
 /** `e` as an {@link EngineError}. */

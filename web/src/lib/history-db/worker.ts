@@ -56,6 +56,15 @@ serveWorker({
 	flip: {
 		source: () => p3Source(),
 		writeDoneRecord,
+		async readDoneRecord() {
+			const root = await navigator.storage.getDirectory();
+			try {
+				return await (await (await root.getFileHandle(DONE_RECORD_NAME)).getFile()).text();
+			} catch (e) {
+				if ((e as DOMException)?.name === 'NotFoundError') return null;
+				throw e;
+			}
+		},
 		estimate: async () => (navigator.storage?.estimate ? navigator.storage.estimate() : null),
 		log: (line) => console.info(`history-flip: ${line}`)
 	}

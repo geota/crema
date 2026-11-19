@@ -152,7 +152,7 @@
 					Daily copy ({dateOf(snap.at)}, {snap.rows} shots; curves from the archive where it has them)
 				</button>
 			{/each}
-			{#if snapshots.length > 1}
+			{#if snapshots.length > 1 && !history.onStage2}
 				<button type="button" class="hs-btn" disabled={busy} onclick={() => void run(() => history.recoverSnapshot('all'), 'History restored from every daily copy.')}>
 					Recover from all copies (merged, newest first; curves from the archive where it has them)
 				</button>

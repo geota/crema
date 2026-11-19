@@ -190,6 +190,12 @@ export interface ShotWrite {
 	summary?: ShotSummary;
 	/** With `details`: only fill, so a heavy part the store holds stays ({@link fillHeavy}). */
 	fill?: boolean;
+	/**
+	 * A row pulled from Visualizer and not stored yet: on stage 2 the core
+	 * skips it when another row already holds its `visualizerId` (N8). P3
+	 * ignores it.
+	 */
+	pulled?: boolean;
 }
 
 /** The details as they ended up, for rows whose heavy parts were written. */

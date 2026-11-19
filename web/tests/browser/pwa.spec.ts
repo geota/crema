@@ -277,7 +277,10 @@ test('the service worker counts the open windows for the history flip (#310 M2)'
 		await expectShell(second);
 		expect(await count(page)).toBe(2);
 		await second.close();
-		expect(await count(page)).toBe(1);
+		// clients.matchAll() may still list a just-closed window for a moment (WebKit). A
+		// stale count only ever refuses a flip (it retries at the next boot), so wait for
+		// it to settle rather than read it once.
+		await expect.poll(() => count(page), { timeout: 10_000 }).toBe(1);
 	} finally {
 		await site.close();
 	}

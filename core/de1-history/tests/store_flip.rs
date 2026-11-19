@@ -319,6 +319,52 @@ fn p3_migration_is_written_only_into_the_truth() {
 }
 
 #[test]
+fn a_restored_rows_snapshot_becomes_the_next_generation_and_its_snapshots_move_forward() {
+    use de1_history::store::Recovery;
+    let d = dir();
+    let mut t = truth_after_flip(&d, 4);
+    t.upsert(&rows_in(&[row("after", 90, json!({}))]))
+        .expect("writes");
+    let snap = file(&d, "history-snapshot.db");
+    t.copy_to(&snap, None, common::journal())
+        .expect("snapshots");
+    drop(t);
+    // `lost`, then "restore the rows snapshot": a copy of it, as generation 2.
+    let rec = file(&d, "history-2.db");
+    reopen_truth(&snap)
+        .copy_to(&rec, None, common::journal())
+        .expect("copies");
+    let mut r = reopen_truth(&rec);
+    let init = Recovery {
+        migration_source: vec!["p3-only".into()],
+        late_baseline: r#"{"writeSeq":7,"rows":5}"#.into(),
+    };
+    r.set_recovery(2, &init).expect("adopts");
+    assert_eq!(r.info().generation, 2);
+    assert_eq!(r.migration_state().expect("reads").as_deref(), Some("done"));
+    assert_eq!(
+        r.late_baseline().expect("reads").as_deref(),
+        Some(r#"{"writeSeq":7,"rows":5}"#)
+    );
+    assert!(
+        r.migration_source_ids()
+            .expect("reads")
+            .contains(&"p3-only".to_owned())
+    );
+    assert_eq!(int(&r, "SELECT count(*) FROM shot"), 5);
+    // Its own snapshot may replace the old one: a newer generation.
+    r.copy_to(&snap, None, common::journal())
+        .expect("snapshots the recovery file");
+    // An index copy isn't a truth: refused.
+    let mut idx =
+        Store::open(file(&d, "history-index.db"), OpenOptions::new(Role::Index)).expect("opens");
+    assert!(matches!(
+        idx.set_recovery(3, &init),
+        Err(StoreError::Refused(_))
+    ));
+}
+
+#[test]
 fn step_9_fills_only_the_summary_and_never_brings_a_row_back() {
     let d = dir();
     let mut t = truth_after_flip(&d, 2);

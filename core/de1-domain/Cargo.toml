@@ -12,7 +12,8 @@ de1-protocol = { path = "../de1-protocol" }
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-typeshare = "1.0.5"
+# The #[typeshare] attribute only: the macro crate, without the runtime crate's chrono (RUSTSEC-2026-0543).
+typeshare = { package = "typeshare-annotation", version = "1.0.5" }
 # Dependency-free, size-conscious regex engine (~10× smaller wasm footprint
 # than the full `regex` crate — no Unicode tables / SIMD). Used only by
 # `profile_roast` to port the built-in roast-suitability heuristic. The

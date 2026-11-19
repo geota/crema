@@ -89,7 +89,9 @@ export class FakeLocks {
 					}
 					const queuedSame = this.queue.some((q) => q.name === name);
 					if (this.#free(name, mode) && !queuedSame) {
-						later(grant);
+						// Granted now, as the browser does: a second request in the same
+						// tick must see it held (two exclusive holders were possible).
+						grant();
 						return;
 					}
 					if (options.ifAvailable) {

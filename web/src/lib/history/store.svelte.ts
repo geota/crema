@@ -143,6 +143,8 @@ import { HistoryDbTooNew, SqliteRows, sqliteJournal, type RowJournal, type Sqlit
 import type { DetailsStore } from '#lib/history-source/details.js';
 import type { JournalStorage } from '#lib/history-db/pending.js';
 import { historyStage, stagedBootActive } from '#lib/history-db/start.js';
+import { dbFileName, readMarker as readSqliteMarker } from '#lib/history-db/marker.js';
+import { MARKER_KEY } from '#lib/history-db/names.js';
 import {
 	STORE_MARKER_KEY,
 	markerSaysDone,
@@ -318,6 +320,13 @@ export interface Stage2 {
 	details: DetailsStore;
 	/** `localStorage`, for stage 2's pending journal (M5). */
 	storage: JournalStorage;
+	/**
+	 * After a recovery into `history-<n>.db` (S9): writes the marker for it,
+	 * and gives the client of that file (W5c). Without it, recovery isn't offered.
+	 */
+	restage?(generation: number): Promise<Stage2>;
+	/** The file this client serves (`history.db`, `history-<n>.db`): a marker naming another is followed (W5c). */
+	file?: string;
 }
 
 /** P3's journal, `crema.history.pending`. */
@@ -563,6 +572,8 @@ export class HistoryStore {
 	 * going out, so nothing may swap it for the store's until it lands (#420 N1).
 	 */
 	private writingDetails = new Set<string>();
+	/** Rows pulled from Visualizer not stored yet: on stage 2 the core skips one another row holds (N8). */
+	private pulled = new Set<string>();
 	/** Ids removed from memory whose delete hasn't landed: another tab's news mustn't bring them back. */
 	private removing = new Set<string>();
 	private snapshotting = false;
@@ -1619,14 +1630,80 @@ export class HistoryStore {
 
 	// ── Other tabs ─────────────────────────────────────────────────────────
 
-	private listenToTabs(): void {
-		if (this.stage2) {
-			// Every write to `history.db`, this tab's own too, as its owner posts it (SPEC §10).
-			this.stage2.client.onChange((c) => {
-				for (const id of [...c.upserted, ...c.deleted]) this.heard.add(id);
-				if (this.loadedFlag && this.mode === 'idb' && this.deletesPaused === 0) this.applyHeard();
-			});
+	/** Stage 2: every write to `history.db`, this tab's own too, as its owner posts it (SPEC §10). */
+	private listenToClient(s2: Stage2): void {
+		this.unlistenClient?.();
+		const offChange = s2.client.onChange((c) => {
+			if (this.stage2 !== s2) return;
+			for (const id of [...c.upserted, ...c.deleted]) this.heard.add(id);
+			if (this.loadedFlag && this.mode === 'idb' && this.deletesPaused === 0) this.applyHeard();
+		});
+		// Another tab's recovery moved the history to a new file: follow it (REVIEW-476 B1).
+		const offStatus = s2.client.onStatus(() => {
+			if (this.stage2 === s2) this.maybeFollow();
+		});
+		const onStorage = (e: StorageEvent) => {
+			if (e.key === MARKER_KEY && this.stage2 === s2) this.maybeFollow();
+		};
+		if (typeof window !== 'undefined') window.addEventListener('storage', onStorage);
+		this.unlistenClient = () => {
+			offChange();
+			offStatus();
+			if (typeof window !== 'undefined') window.removeEventListener('storage', onStorage);
+		};
+	}
+
+	private following: Promise<unknown> | null = null;
+
+	/**
+	 * The marker names another file than this tab's (another tab's recovery,
+	 * W5c): while this tab can't use what it has (`lost`, or an owner it
+	 * refuses), it moves to that file, writing the shots only it holds there.
+	 */
+	private maybeFollow(): void {
+		const s2 = this.stage2;
+		if (!s2?.restage || !s2.file || this.following || this.recovering) return;
+		const m = readSqliteMarker(s2.storage);
+		if (m?.state !== 'done' || dbFileName(m.generation) === s2.file) return;
+		const stuck = this.healthState === 'lost' || this.healthState === 'unavailable' || s2.client.status.health !== 'ok';
+		if (!stuck) return;
+		this.following = this.moveTo(m.generation)
+			.catch((e) => console.warn('[history] couldn’t follow the recovered history', e))
+			.finally(() => (this.following = null));
+	}
+
+	/** This tab onto `history-<n>.db`, which a recovery made (S9). */
+	private async moveTo(generation: number): Promise<boolean> {
+		const s2 = this.stage2;
+		if (!s2?.restage) return false;
+		const afterLoss = this.healthState === 'lost';
+		const next = await s2.restage(generation);
+		this.stage2 = next;
+		const db = new SqliteRows(next.client, next.details);
+		this.sqlite = db;
+		this.db = db as unknown as HistoryDb;
+		this.journal = sqliteJournal(next.storage);
+		this.listenToClient(next);
+		const mine = afterLoss ? this.forgetLostStore() : new Set<string>();
+		this.mode = 'booting';
+		this.healthState = 'loading';
+		this.oldCopyInfo = null;
+		if (!(await this.openSqlite(db))) return false;
+		await this.loadFromDb(afterLoss ? { mine, afterLoss: true } : {});
+		this.recordHeldJournal(db);
+		await this.flushed();
+		if (afterLoss) {
+			this.lastFill = { restored: 0, notRestored: 0 };
+			await this.fillFromArchive();
+			this.lastRecoveryState = { ...this.lastFill };
 		}
+		return this.health === 'ok';
+	}
+	private recovering = false;
+	private unlistenClient: (() => void) | null = null;
+
+	private listenToTabs(): void {
+		if (this.stage2) this.listenToClient(this.stage2);
 		const make = this.stage2 ? null : this.opts.channel === undefined ? defaultChannel : this.opts.channel;
 		this.channel = make ? make() : null;
 		if (this.channel) {
@@ -1860,7 +1937,13 @@ export class HistoryStore {
 			const shot = byId.get(id);
 			if (!shot) continue;
 			const details = this.dirtyDetails.has(id) || !this.summaries.has(id);
-			writes.push({ shot, details, summary: this.summaries.get(id), ...(details && this.fills.has(id) ? { fill: true } : {}) });
+			writes.push({
+				shot,
+				details,
+				summary: this.summaries.get(id),
+				...(details && this.fills.has(id) ? { fill: true } : {}),
+				...(this.pulled.has(id) && !this.stored.has(id) ? { pulled: true } : {})
+			});
 		}
 		for (const w of writes) {
 			if (!w.details) continue;
@@ -1870,9 +1953,18 @@ export class HistoryStore {
 		}
 		const writing = writes.filter((w) => w.details).map((w) => w.shot.id);
 		try {
-			const result = await this.db.putShots(writes, summarize);
+			const result = (await this.db.putShots(writes, summarize)) as Awaited<ReturnType<HistoryDb['putShots']>> & {
+				duplicates?: { id: string; existingId: string }[];
+			};
 			for (const id of writing) this.writingDetails.delete(id);
-			this.afterWrite(writes, result.seq, result.written);
+			for (const w of writes) this.pulled.delete(w.shot.id);
+			const dups = new Set((result.duplicates ?? []).map((d) => d.id));
+			if (dups.size > 0) this.dropDuplicates(dups);
+			this.afterWrite(
+				writes.filter((w) => !dups.has(w.shot.id)),
+				result.seq,
+				result.written
+			);
 		} catch (e) {
 			for (const id of writing) this.writingDetails.delete(id);
 			for (const w of writes) {
@@ -1946,6 +2038,22 @@ export class HistoryStore {
 		this.settleLateRecord();
 		this.maybeSnapshot();
 		if (this.dirtyRowIds().length > 0) this.scheduleFlush();
+	}
+
+	/**
+	 * N8: pulled rows the store didn't take, because another row (another
+	 * tab's pull of the same Visualizer shot) holds their `visualizerId`. They
+	 * were never stored: they leave memory, and the stored row comes in with
+	 * its change notice. Nothing is deleted from the store.
+	 */
+	private dropDuplicates(ids: ReadonlySet<string>): void {
+		this.shots = this.shots.filter((s) => !ids.has(s.id));
+		for (const id of ids) {
+			this.forget(id);
+			this.dirtyDetails.delete(id);
+		}
+		this.journal.drop([...ids]);
+		this.settleView();
 	}
 
 	/** The late rows' record, once every late row is stored with its details. */
@@ -2099,8 +2207,21 @@ export class HistoryStore {
 
 	/** After the first save each day: every row, outside the database. */
 	private maybeSnapshot(): void {
-		// Stage 2's rows snapshot is `history-snapshot.db` (SPEC §11), not P3's.
-		if (!this.db || this.sqlite) return;
+		if (!this.db) return;
+		// Stage 2's rows snapshot is `history-snapshot.db`, the owner's online
+		// copy (SPEC §11): after the first write each day, skipped when nothing moved.
+		if (this.stage2) {
+			const today = dayOf(this.now());
+			if (this.snapshotTried === today) return;
+			this.snapshotTried = today;
+			const client = this.stage2.client;
+			void client.snapshot().catch((e) => {
+				console.warn('[history] the rows snapshot failed; tried again after the next write', e);
+				// Tried again after the next write.
+				if (this.snapshotTried === today) this.snapshotTried = null;
+			});
+			return;
+		}
 		// One already running (yesterday's, say): this save's turn comes when it ends.
 		if (this.snapshotting) {
 			this.snapshotAgain = true;
@@ -2727,10 +2848,51 @@ export class HistoryStore {
 		});
 	}
 
+	/** On `history.db` (stage 2, #310 W5): the `lost` banner offers its own choices. */
+	get onStage2(): boolean {
+		return this.sqlite !== null;
+	}
+
+	/**
+	 * Stage 2's `lost` choices (SPEC §11, S9): the owner writes a new
+	 * `history-<n>.db` (empty, the old copy's rows, or a rows snapshot) with
+	 * its baseline, and the done-record; then the marker names it, and this tab
+	 * opens it, writing the shots only this tab held into it. The damaged file
+	 * stays where it is. Nothing is deleted.
+	 */
+	private async recoverStage2(kind: 'empty' | 'oldCopy' | 'snapshot', from?: string): Promise<RecoveryResult> {
+		if (this.healthState !== 'lost') return this.healthState === 'ok' ? 'reopened' : false;
+		const s2 = this.stage2;
+		if (!s2?.restage || this.recovering) return false;
+		this.recovering = true;
+		try {
+			// P3's journal ids: the new file never imports them, so "start empty"
+			// stays empty and a shot deleted here stays deleted (REVIEW-476 N1).
+			const known = readPending()
+				.map((r) => r.id)
+				.filter((id): id is string => typeof id === 'string');
+			let generation: number;
+			try {
+				({ generation } = await s2.client.recover(kind, from, known));
+			} catch (e) {
+				// Another tab's recovery came first: its file is the history now.
+				const m = readSqliteMarker(s2.storage);
+				if (m?.state !== 'done' || dbFileName(m.generation) === s2.file) throw e;
+				generation = m.generation;
+			}
+			await this.following;
+			if (this.stage2 !== s2) return this.health === 'ok' ? 'reopened' : false;
+			return await this.moveTo(generation);
+		} finally {
+			this.recovering = false;
+		}
+	}
+
+
 	/** Lost: start again with no shots. */
 	startEmpty(): Promise<RecoveryResult> {
 		// Stage 2 recovers into a new `history-<n>.db` (S9), not into P3's store.
-		if (this.sqlite) return Promise.resolve(false);
+		if (this.sqlite) return this.recoverStage2('empty');
 		return this.recoverWith(async (db) => {
 			await db.setMeta(META_MIGRATION, this.oldCopyRecord());
 			return 0;
@@ -2740,7 +2902,7 @@ export class HistoryStore {
 	/** Lost: the old copy, as it was when it moved. */
 	recoverOldCopy(): Promise<RecoveryResult> {
 		// Stage 2 recovers into a new `history-<n>.db` (S9), not into P3's store.
-		if (this.sqlite) return Promise.resolve(false);
+		if (this.sqlite) return this.recoverStage2('oldCopy');
 		return this.recoverWith(async (db) => {
 			const result = await copyLegacy(this.migrationDeps(db), coerceStoredShot);
 			if (result.kind !== 'done') {
@@ -2760,8 +2922,9 @@ export class HistoryStore {
 	 * restore can still give each its curve.
 	 */
 	async recoverSnapshot(name?: string | 'all'): Promise<RecoveryResult> {
-		// Stage 2 recovers into a new `history-<n>.db` (S9), not into P3's store.
-		if (this.sqlite) return false;
+		// Stage 2 recovers into a new `history-<n>.db` (S9), not into P3's store:
+		// one snapshot file, never a merge of them.
+		if (this.sqlite) return this.recoverStage2('snapshot', name === 'all' ? undefined : name);
 		if (this.healthState !== 'lost') return this.recoverWith(async () => false);
 		const snap =
 			name === 'all' ? await readAllRowsSnapshots(this.opts.snapshotRoot) : await readRowsSnapshot(this.opts.snapshotRoot, name);
@@ -2794,6 +2957,7 @@ export class HistoryStore {
 
 	/** The daily copies there are to recover, newest first, with their dates and row counts. */
 	snapshotInfo(): Promise<SnapshotInfo[]> {
+		if (this.stage2) return this.stage2.client.snapshotInfo().catch(() => []);
 		return listRowsSnapshots(this.opts.snapshotRoot);
 	}
 
@@ -3229,6 +3393,9 @@ export class HistoryStore {
 		if (idx < 0) return;
 		const next = edit(this.shots[idx]);
 		if (next === null || next === this.shots[idx]) return;
+		// Edited here before its first write: this tab's own now, never dropped
+		// as another tab's duplicate (REVIEW-476 N5).
+		this.pulled.delete(id);
 		this.shots = [...this.shots.slice(0, idx), next, ...this.shots.slice(idx + 1)];
 		this.persist();
 	}
@@ -3498,6 +3665,7 @@ export class HistoryStore {
 	insertPulled(shot: StoredShot): boolean {
 		if (this.freeSlots === 0) return false;
 		this.shots = newestFirst([shot, ...this.shots]);
+		if (shot.visualizerId) this.pulled.add(shot.id);
 		if (this.mode === 'legacy') {
 			if (shot.record.samples.length > 0) {
 				void putSeries(shot.id, shot.record.samples).catch(seriesSaveFailed);
