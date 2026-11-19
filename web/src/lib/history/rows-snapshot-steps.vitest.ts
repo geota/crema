@@ -8,8 +8,12 @@ import { expect, it } from 'vitest';
 import { realShot } from '#lib/testing/real-shots.js';
 import { summarize } from './summary';
 import { rowOf } from './history-db';
+import { gzipSync } from 'fflate';
 import {
+	INFLATE_SLICE,
+	INFLATE_STEP_MAX,
 	SNAPSHOT_CHUNK,
+	inflateLines,
 	readRowsSnapshot,
 	resetSnapshotStepsForTest,
 	snapshotStepsForTest,
@@ -19,7 +23,7 @@ import {
 import { memoryFs } from './archive-test-kit';
 import { initTestWasm } from '#lib/testing/test-init.js';
 
-/** 64 KB, and the one 512-byte slice that takes a step past it. */
+/** 64 KB, and the one slice that takes a step past it: 128 KB, which a step's worst case stays under. */
 const STEP_BYTES = 128 * 1024;
 
 it('2,000 rows are written, verified, pruned and read back in steps of at most 100 rows and 64 KB', async () => {
@@ -62,4 +66,21 @@ it('a copy that inflates 100 times over is read back in steps of about 64 KB out
 	const { maxBytes } = snapshotStepsForTest();
 	expect(maxBytes).toBeGreaterThan(0);
 	expect(maxBytes).toBeLessThanOrEqual(STEP_BYTES);
+});
+
+it('a step is bounded whatever the data: deflate’s best ratio, and every slice boundary (CI flake, 137,972 bytes)', async () => {
+	expect(INFLATE_STEP_MAX).toBeLessThanOrEqual(STEP_BYTES);
+	// A run of one byte inflates 1032 times over: the worst a slice can give.
+	const worst = gzipSync(new Uint8Array(4_000_000).fill(0x20), { level: 9 });
+	// Text that inflates hundreds of times over, at every offset a slice can start from.
+	const text = new TextEncoder().encode(`${'{"profile":"turbo","notes":"x"}\n'.repeat(60_000)}`);
+	for (const lead of [0, 1, 7, 31, INFLATE_SLICE - 1]) {
+		for (const data of [worst, gzipSync(new Uint8Array([...new Uint8Array(lead).fill(0x41), ...text]), { level: 9 })]) {
+			resetSnapshotStepsForTest();
+			await inflateLines(data);
+			const { maxBytes } = snapshotStepsForTest();
+			expect(maxBytes).toBeGreaterThan(0);
+			expect(maxBytes).toBeLessThanOrEqual(INFLATE_STEP_MAX);
+		}
+	}
 });
