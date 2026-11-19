@@ -571,7 +571,7 @@ mod tests {
     #[test]
     fn blocked_expiry_retries_every_tick_until_it_can_send() {
         let mut p = ready();
-        p.machine_state(MachineState::Refill, SubState::Refill);
+        p.machine_state(MachineState::Refill, SubState::RefillStopped);
         p.set_machine_info(Some(1300), Some(1));
         let actions = run(&mut p, T0 + 60 * MIN, T0 + 70 * MIN);
         // Reported once, then retried silently.
@@ -597,7 +597,7 @@ mod tests {
     fn refill_sleeps_directly_on_firmware_1357_and_up() {
         let mut p = ready();
         p.set_machine_info(Some(1357), Some(1));
-        p.machine_state(MachineState::Refill, SubState::Refill);
+        p.machine_state(MachineState::Refill, SubState::RefillStopped);
         assert_eq!(
             p.tick(T0 + 60 * MIN, false),
             IdleSleepAction::Sleep { attempt: 1 }
@@ -613,7 +613,7 @@ mod tests {
         ] {
             let mut p = ready();
             p.set_machine_info(build, model);
-            p.machine_state(MachineState::Idle, SubState::Refill);
+            p.machine_state(MachineState::Idle, SubState::RefillStopped);
             assert_eq!(
                 p.tick(T0 + 60 * MIN, false),
                 IdleSleepAction::Blocked {

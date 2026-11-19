@@ -197,7 +197,8 @@
 		if (!app || resetBusy) return;
 		if (
 			!(await confirmDialog({
-				message: 'Reset the 8 DE1 machine settings to factory defaults?',
+				message:
+					'Reset the 7 DE1 machine settings to factory defaults? Your flow calibration stays as it is.',
 				confirmLabel: 'Reset',
 				danger: true
 			}))
@@ -634,7 +635,7 @@
 	<StRow
 		title="Reset machine settings to factory"
 		needsConnection={!connected}
-		sub="Re-applies fan threshold, idle temp, heater flows, refill kit auto mode, flow estimate, steam purge. Does NOT touch profiles, history, or app preferences."
+		sub="Re-applies fan threshold, idle temp, heater flows, warmup timeout, refill kit auto mode, steam purge. Keeps your flow calibration (reset it in Calibration → Flow). Does NOT touch profiles, history, or app preferences."
 	>
 		{#snippet control()}
 			<StButton

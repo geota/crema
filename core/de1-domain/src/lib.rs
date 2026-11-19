@@ -327,7 +327,7 @@ pub use settings_import::{ImportedDe1AppSettings, import_settings_tdb};
 pub use shot::{
     ABORTED_MAX_DURATION_MS, ABORTED_MAX_WEIGHT_G, MAX_SHOT_SAMPLES, STORAGE_SAMPLE_CAP,
     SampleOverlays, ShotDisposition, ShotEvent, ShotMetrics, ShotMonitor, ShotPeaks, ShotPhase,
-    ShotRecord, TimedSample, downsample_indices, shot_disposition,
+    ShotRecord, TimedSample, aborted_max_weight_g, downsample_indices, shot_disposition,
 };
 pub use shot_capture::{
     AsRunShot, CompletedShot, ShotCaptureContext, assemble_stored_shot, parse_shot_capture_context,

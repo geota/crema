@@ -24,11 +24,10 @@ import type {
 	MachineState,
 	ScaleCapabilities,
 	MmrRegister,
-	CalTarget,
-	SubState
+	CalTarget
 } from '#lib/core/index.js';
 import type { HotWaterTarget } from '#lib/core/crema-core.js';
-import { StopReason } from '#lib/core/crema-core.js';
+import { StopReason, SubState } from '#lib/core/crema-core.js';
 import { MaintenanceFailure, ScaleLinkDeadReason } from '#lib/core/crema-core.js';
 import type { De1State, De1Diagnostics } from '#lib/ble/de1.js';
 import { EMPTY_DE1_DIAGNOSTICS } from '#lib/ble/de1.js';
@@ -805,6 +804,14 @@ function appendLog(log: readonly LogLine[], text: string): readonly LogLine[] {
 }
 
 /**
+ * Display text for a substate: its variant name, except substate `0x11`,
+ * which is the refill kit giving up on a refill (decaid `ac3e433d`).
+ */
+export function substateLabel(substate: SubState): string {
+	return substate === SubState.RefillStopped ? 'Refill stopped' : substate;
+}
+
+/**
  * Fold one core `Event` into a snapshot, returning the next snapshot.
  *
  * A faithful, pure port of the Android shell's `MainViewModel.applyEvent`:
@@ -817,7 +824,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 		case 'MachineStateChanged': {
 			const stateName = event.content.state;
 			const substate = event.content.substate;
-			const machineState = `${stateName} / ${substate}`;
+			const machineState = `${stateName} / ${substateLabel(substate)}`;
 			// A drop to a resting state (Idle / Sleep) ends any shot in progress,
 			// but the finished curve STAYS on screen — it is reset only when the
 			// next shot starts (`ShotStarted`) or on connect/disconnect. Clearing

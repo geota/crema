@@ -1620,7 +1620,8 @@ data class EventShotCompletedInner (
 	/// as an aborted pull (behind an undo), or skip it entirely as a
 	/// cleaning run. Classified at the core boundary
 	/// ([`de1_domain::shot_disposition`]) from the duration, the final
-	/// weight, and the active profile's beverage type (latched from
+	/// weight, the live stop-at-weight target at completion, and the
+	/// active profile's beverage type (latched from
 	/// profile uploads / [`set_active_profile`]
 	/// (crate::CremaCore::set_active_profile)). `serde(default)`
 	/// (= `Record`) so a version-skewed consumer parsing an older
@@ -2885,6 +2886,10 @@ enum class FirmwareBuildStatus(val string: String) {
 	/// whatever its number.
 	@SerialName("RolledBack")
 	RolledBack("RolledBack"),
+	/// A build Decent made for another app, on none of its channels (1359,
+	/// Decenza's). Not "newer than known", and nothing to update from.
+	@SerialName("VendorBuild")
+	VendorBuild("VendorBuild"),
 	/// Above the newest released build and not a known rolled-back one —
 	/// released after this table was written.
 	@SerialName("NewerThanKnown")
@@ -5755,6 +5760,11 @@ sealed class FlashBlocker {
 	@Serializable
 	@SerialName("Refilling")
 	object Refilling: FlashBlocker()
+	/// The refill kit gave up on a refill (substate `0x11`): the tank still
+	/// needs water.
+	@Serializable
+	@SerialName("RefillStopped")
+	object RefillStopped: FlashBlocker()
 	/// The machine reports an error substate.
 	@Serializable
 	@SerialName("MachineError")
@@ -6956,8 +6966,12 @@ enum class SubState(val string: String) {
 	CleanSoak("CleanSoak"),
 	@SerialName("CleanGroup")
 	CleanGroup("CleanGroup"),
-	@SerialName("Refill")
-	Refill("Refill"),
+	/// The refill kit gave up on a refill (de1app's "Have we given up on a
+	/// refill?"): the tank still needs water. Not the `Refill` machine
+	/// state, which shares the value `0x11`. Earlier builds called this
+	/// `Refill`; the alias keeps reading that name (decaid `ac3e433d`).
+	@SerialName("RefillStopped")
+	RefillStopped("RefillStopped"),
 	@SerialName("PausedSteam")
 	PausedSteam("PausedSteam"),
 	@SerialName("UserNotPresent")

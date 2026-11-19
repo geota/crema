@@ -406,7 +406,8 @@ pub enum Event {
         /// as an aborted pull (behind an undo), or skip it entirely as a
         /// cleaning run. Classified at the core boundary
         /// ([`de1_domain::shot_disposition`]) from the duration, the final
-        /// weight, and the active profile's beverage type (latched from
+        /// weight, the live stop-at-weight target at completion, and the
+        /// active profile's beverage type (latched from
         /// profile uploads / [`set_active_profile`]
         /// (crate::CremaCore::set_active_profile)). `serde(default)`
         /// (= `Record`) so a version-skewed consumer parsing an older

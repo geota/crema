@@ -117,7 +117,12 @@ pub enum SubState {
     CleanFillGroup = 14,
     CleanSoak = 15,
     CleanGroup = 16,
-    Refill = 17,
+    /// The refill kit gave up on a refill (de1app's "Have we given up on a
+    /// refill?"): the tank still needs water. Not the `Refill` machine
+    /// state, which shares the value `0x11`. Earlier builds called this
+    /// `Refill`; the alias keeps reading that name (decaid `ac3e433d`).
+    #[serde(alias = "Refill")]
+    RefillStopped = 17,
     PausedSteam = 18,
     UserNotPresent = 19,
     Puffing = 20,
@@ -230,7 +235,7 @@ impl SubState {
             CleanFillGroup => "CleanFillGroup",
             CleanSoak => "CleanSoak",
             CleanGroup => "CleanGroup",
-            Refill => "Refill",
+            RefillStopped => "RefillStopped",
             PausedSteam => "PausedSteam",
             UserNotPresent => "UserNotPresent",
             Puffing => "Puffing",
@@ -316,7 +321,7 @@ impl TryFrom<u8> for SubState {
             14 => CleanFillGroup,
             15 => CleanSoak,
             16 => CleanGroup,
-            17 => Refill,
+            17 => RefillStopped,
             18 => PausedSteam,
             19 => UserNotPresent,
             20 => Puffing,
@@ -401,7 +406,8 @@ pub const SLEEP_IN_REFILL_MIN_FIRMWARE: u32 = 1357;
 /// would be latched by the firmware and fire after the next refill instead of
 /// putting the machine to sleep — so the caller should skip it.
 ///
-/// True when the machine is in Refill (the top-level state or the substate)
+/// True when the machine is in Refill (the top-level state, or the
+/// refill-stopped substate)
 /// and either the firmware build is unknown or below
 /// [`SLEEP_IN_REFILL_MIN_FIRMWARE`], or the machine is a Bengle (`model ≥ 128`)
 /// — decaid `f8cd9553` restricts sleep-from-refill to classic DE1 hardware
@@ -414,7 +420,7 @@ pub fn sleep_request_latches_in_refill(
     firmware_build: Option<u32>,
     machine_model: Option<u32>,
 ) -> bool {
-    let in_refill = state == MachineState::Refill || substate == SubState::Refill;
+    let in_refill = state == MachineState::Refill || substate == SubState::RefillStopped;
     if !in_refill {
         return false;
     }
@@ -427,6 +433,13 @@ pub fn sleep_request_latches_in_refill(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Substate 0x11 is the refill kit giving up (decaid `ac3e433d`).
+    #[test]
+    fn substate_0x11_is_refill_stopped() {
+        assert_eq!(SubState::try_from(0x11), Ok(SubState::RefillStopped));
+        assert_eq!(SubState::RefillStopped.variant_name(), "RefillStopped");
+    }
 
     mod machine_state {
         use super::*;
@@ -613,7 +626,7 @@ mod tests {
         fn refill_on_old_or_unknown_firmware_latches() {
             for (state, sub) in [
                 (MachineState::Refill, SubState::Ready),
-                (MachineState::Idle, SubState::Refill),
+                (MachineState::Idle, SubState::RefillStopped),
             ] {
                 assert!(sleep_request_latches_in_refill(
                     state,
@@ -629,13 +642,13 @@ mod tests {
         fn refill_on_1357_or_newer_does_not_latch() {
             assert!(!sleep_request_latches_in_refill(
                 MachineState::Refill,
-                SubState::Refill,
+                SubState::RefillStopped,
                 Some(1357),
                 Some(2)
             ));
             assert!(!sleep_request_latches_in_refill(
                 MachineState::Idle,
-                SubState::Refill,
+                SubState::RefillStopped,
                 Some(1358),
                 None
             ));
@@ -645,7 +658,7 @@ mod tests {
         fn bengle_never_sleeps_from_refill() {
             assert!(sleep_request_latches_in_refill(
                 MachineState::Refill,
-                SubState::Refill,
+                SubState::RefillStopped,
                 Some(1400),
                 Some(128)
             ));

@@ -894,12 +894,12 @@ export interface CremaCore {
 	 */
 	setHeaterVoltage(volts: 120 | 230): Promise<CoreOutput>;
 	/**
-	 * Reset 8 machine settings to factory baseline — mirrors reaprime's
-	 * `DELETE /api/v1/machine/settings/reset`. Emits 8 sequential MMR
+	 * Reset 7 machine settings to factory baseline — mirrors reaprime's
+	 * `DELETE /api/v1/machine/settings/reset`. Emits 7 sequential MMR
 	 * writes (fan threshold, hot-water idle temp, heater phase 1/2 flows,
-	 * espresso warmup timeout, refill kit auto, flow-calibration
-	 * multiplier, steam purge mode). Profiles, shot history, and app
-	 * preferences are untouched.
+	 * espresso warmup timeout, refill kit auto, steam purge mode). The
+	 * flow calibration, profiles, shot history, and app preferences are
+	 * untouched.
 	 */
 	resetMachineDefaults(): Promise<CoreOutput>;
 	/** Set the cup-warmer temperature (Bengle models only). Celsius is the canonical unit (see docs/25 §7). */

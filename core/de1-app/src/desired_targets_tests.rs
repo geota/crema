@@ -275,3 +275,72 @@ fn a_pick_mid_shot_moves_the_hot_water_basis_at_once() {
     assert_eq!(armed(&core), Some(36.0));
     assert_eq!(core.hot_water_target().and_then(|t| t.basis_g), Some(30.0));
 }
+
+/// Run the shot `shot_running` opened to completion with the cup at `g`
+/// grams, and return its disposition once the drip settle finalizes.
+fn finish_at(core: &mut CremaCore, g: f32) -> de1_domain::ShotDisposition {
+    core.on_notification(Source::ScaleWeight, &bookoo(g / 2.0), 400);
+    // A steady cup, long enough for the smoothed weight to settle on it.
+    for t in (600..=1_500).step_by(100) {
+        core.on_notification(Source::ScaleWeight, &bookoo(g), t);
+    }
+    core.on_notification(Source::De1State, &[2, 0], 1_600);
+    let out = core.on_tick(6_000);
+    out.events
+        .iter()
+        .find_map(|e| match e {
+            Event::ShotCompleted {
+                disposition,
+                final_weight,
+                ..
+            } => {
+                assert!(
+                    final_weight.is_some_and(|w| (w - g).abs() < 0.5),
+                    "{final_weight:?}"
+                );
+                Some(*disposition)
+            }
+            _ => None,
+        })
+        .expect("a ShotCompleted event")
+}
+
+/// Decenza #2221: a 1.5 s group rinse that drips 6 g onto the scale is
+/// under a third of a 32 g target, so it is discarded, not saved as a shot.
+#[test]
+fn a_rinse_light_against_its_target_is_discarded() {
+    let mut core = with_scale();
+    shot_running(&mut core, &profile("p", 32.0, 0));
+    assert_eq!(
+        finish_at(&mut core, 6.0),
+        de1_domain::ShotDisposition::DiscardAborted
+    );
+}
+
+/// The live target judges: 32 g lowered to 22 g mid-shot and stopped at 9 g
+/// is over a third of 22 g, so it is kept.
+#[test]
+fn the_aborted_rule_judges_the_live_target() {
+    let mut core = with_scale();
+    let p = profile("p", 32.0, 0);
+    shot_running(&mut core, &p);
+    core.set_desired_profile(Some(&p), &dial(22.0), Duration::from_millis(300));
+    assert_eq!(
+        finish_at(&mut core, 9.0),
+        de1_domain::ShotDisposition::Record
+    );
+}
+
+/// No weight target keeps the 5 g floor: 6 g is kept, 4 g discarded.
+#[test]
+fn no_weight_target_keeps_the_five_gram_floor() {
+    for (g, want) in [
+        (6.0, de1_domain::ShotDisposition::Record),
+        (4.0, de1_domain::ShotDisposition::DiscardAborted),
+    ] {
+        let mut core = with_scale();
+        core.set_stop_on_weight(false);
+        shot_running(&mut core, &profile("p", 32.0, 0));
+        assert_eq!(finish_at(&mut core, g), want, "{g} g");
+    }
+}

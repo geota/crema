@@ -79,6 +79,14 @@ class FirmwareBuildCopyTest {
     }
 
     @Test
+    fun build1359IsDecenzasVendorBuild() {
+        val c = firmwareCardCopy(report(FirmwareBuildStatus.VendorBuild, 1359), connected = true)
+        assertEquals("Build 1359 · Decenza build", c.title)
+        assertContains(c.note, "isn’t on Decent’s channels")
+        assertFalse(c.offerUpdate)
+    }
+
+    @Test
     fun aBuildAboveTheNewestKnown() {
         val c = firmwareCardCopy(report(FirmwareBuildStatus.NewerThanKnown, 1370), connected = true)
         assertEquals("Build 1370 · newer than Crema knows", c.title)

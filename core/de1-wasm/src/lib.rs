@@ -3941,12 +3941,12 @@ impl CremaBridge {
             .map_err(|e| e.to_string())
     }
 
-    /// Reset 8 machine settings to factory baseline — mirrors reaprime's
+    /// Reset 7 machine settings to factory baseline — mirrors reaprime's
     /// `DELETE /api/v1/machine/settings/reset`. Returns a JSON-encoded
-    /// [`CoreOutput`] with 8 sequential MMR writes (fan threshold,
+    /// [`CoreOutput`] with 7 sequential MMR writes (fan threshold,
     /// hot-water idle temp, heater phase 1/2 flows, espresso warmup
-    /// timeout, refill kit auto, flow-calibration multiplier, steam
-    /// purge mode). Profiles, history, and app preferences are
+    /// timeout, refill kit auto, steam purge mode). The flow
+    /// calibration, profiles, history, and app preferences are
     /// untouched.
     ///
     /// Errors are surfaced as a thrown `Error` — today the core's
@@ -4365,9 +4365,9 @@ mod tests {
     }
 
     #[test]
-    fn reset_machine_defaults_returns_eight_write_characteristic_commands() {
+    fn reset_machine_defaults_returns_seven_write_characteristic_commands() {
         // The bridge's `reset_machine_defaults` mirrors reaprime's
-        // settings-reset endpoint — the JSON should carry exactly 8
+        // settings-reset endpoint — the JSON should carry exactly 7
         // `WriteCharacteristic` commands targeting `De1MmrWrite`.
         let bridge = CremaBridge::new();
         let json = bridge
@@ -4375,7 +4375,7 @@ mod tests {
             .expect("infallible without a firmware lockout");
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let commands = parsed["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 8);
+        assert_eq!(commands.len(), 7);
         for cmd in commands {
             assert_eq!(cmd["type"], "WriteCharacteristic");
             assert_eq!(cmd["content"]["target"], "De1MmrWrite");
