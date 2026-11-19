@@ -11,6 +11,7 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -78,6 +79,21 @@ class BleManagerCloseTest {
         m.close()
         m.connect(Handle("AA:BB:CC:DD:EE:02"))
         assertFalse(t.connectAttempted.await(500, TimeUnit.MILLISECONDS))
+    }
+
+    @Test
+    fun aScaleManagerHeldForAFirmwareFlashConnectsNothingUntilReleased() {
+        // Decenza 270b89df: no scale link competes with a DE1 flash.
+        val t = RecordingTransport()
+        val m = scale(t)
+        m.heldForFirmwareFlash = true
+        m.connect(Handle("AA:BB:CC:DD:EE:04"), "BOOKOO_SC")
+        assertEquals(ReconnectKicker.Result.IGNORED_IDLE, m.kickReconnect(ReconnectTrigger.FOREGROUND))
+        assertFalse(t.connectAttempted.await(500, TimeUnit.MILLISECONDS))
+        m.heldForFirmwareFlash = false
+        m.connect(Handle("AA:BB:CC:DD:EE:04"), "BOOKOO_SC")
+        assertTrue(t.connectAttempted.await(5, TimeUnit.SECONDS), "released: the reconnect reaches the transport")
+        m.close()
     }
 
     @Test

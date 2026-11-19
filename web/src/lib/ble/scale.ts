@@ -141,6 +141,15 @@ export class ScaleManager {
 	/** Whether a scale write has landed since {@link lastQueryAt}. */
 	private wroteSinceQuery = false;
 
+	/**
+	 * A DE1 firmware flash runs: {@link connect} and {@link connectKnown}
+	 * refuse and {@link kick} is ignored, so no scale link competes with the
+	 * flash for the radio (Decenza 270b89df). Set and cleared by the app
+	 * (`#lib/ble/scale-flash-pause.js`), which drops the link first and
+	 * reconnects after.
+	 */
+	heldForFirmwareFlash = false;
+
 	/** The pending {@link RESYNC_DELAY_MS} wait before a re-query, if any. */
 	private resyncTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -163,6 +172,7 @@ export class ScaleManager {
 	 * identifies it and reports the exact per-model UUIDs.
 	 */
 	async connect(): Promise<void> {
+		if (this.#refuseForFlash()) return;
 		this.setState('connecting');
 		// Tear down any previous device first. Without this a re-connect leaks
 		// the old `BleDevice` — its `gattserverdisconnected` handler and every
@@ -195,6 +205,11 @@ export class ScaleManager {
 			this.callbacks.onStatus(`Scale connection failed: ${describeError(error)}`);
 			return;
 		}
+		// A firmware flash started while the chooser was open.
+		if (this.#refuseForFlash()) {
+			this.setState('idle');
+			return;
+		}
 		await this.attach(device);
 	}
 
@@ -203,10 +218,17 @@ export class ScaleManager {
 	 * reconnect over `navigator.bluetooth.getDevices()` (no chooser).
 	 */
 	async connectKnown(known: BluetoothDevice): Promise<void> {
+		if (this.#refuseForFlash()) return;
 		this.setState('connecting');
 		this.dropDevice();
 		this.callbacks.onStatus(`Reconnecting to the last scale (${known.name ?? known.id})…`);
 		await this.attach(new BleDevice(known));
+	}
+
+	#refuseForFlash(): boolean {
+		if (!this.heldForFirmwareFlash) return false;
+		this.callbacks.onStatus('Scale waits for the firmware update');
+		return true;
 	}
 
 	/** The current scale's Web Bluetooth device (for `forget()`), or null. */
@@ -429,6 +451,7 @@ export class ScaleManager {
 
 	/** Attempt a pending reconnect NOW — the scale twin of `De1Manager.kick`. */
 	kick(trigger: ReconnectTrigger): KickResult {
+		if (this.heldForFirmwareFlash) return 'ignored-idle';
 		return this.device?.kick(trigger) ?? 'ignored-idle';
 	}
 

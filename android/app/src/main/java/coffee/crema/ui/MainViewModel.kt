@@ -817,7 +817,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         scope = viewModelScope,
         uiState = { _ui.value },
         appendLog = { appendLog(it) },
-        setFlashActive = { active -> bgConnection.setFirmwareFlashActive(active) },
+        setFlashActive = { active ->
+            bgConnection.setFirmwareFlashActive(active)
+            // Scale Bluetooth stands down for the flash (Decenza 270b89df).
+            connection.setFirmwareFlashActive(active)
+        },
         afterRelease = { session.afterFirmwareRelease() },
         restoreRunning = { restoreState() == coffee.crema.restore.RestoreState.RUNNING },
     )

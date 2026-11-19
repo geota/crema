@@ -17,6 +17,7 @@
 
 import { askStoragePersist } from '#lib/history/storage-persist.svelte.js';
 import { StopLane } from '#lib/ble/stop-lane.js';
+import { ScaleFlashPause } from '#lib/ble/scale-flash-pause.js';
 import { refreshStopTargetsProjection, setHotWaterTarget } from './ui-state.svelte';
 import {
 	loadCore,
@@ -291,6 +292,46 @@ export class CremaApp {
 	private readonly scale: ScaleManager;
 	/** Reconnect the last DE1 / scale on launch; a user action cancels its wait. */
 	readonly #launch = new LaunchReconnect();
+	/** The scale a firmware flash dropped, to bring back when it ends. */
+	#scaleBeforeFlash: BluetoothDevice | null = null;
+	/** Scale Bluetooth stands down while a DE1 firmware flash runs (Decenza 270b89df). */
+	readonly #scaleFlashPause = new ScaleFlashPause({
+		scaleWanted: () => {
+			const s = this.state.current.scaleState;
+			return (
+				s === 'connecting' ||
+				s === 'subscribing' ||
+				s === 'ready' ||
+				s === 'reconnecting' ||
+				this.#launch.isPending('scale')
+			);
+		},
+		standDown: () => {
+			this.#launch.cancel('scale');
+			this.scale.heldForFirmwareFlash = true;
+			const live = this.scale.bluetoothDevice();
+			if (live === null) return;
+			this.#scaleBeforeFlash = live;
+			// Not a user disconnect: the scale stays remembered for the next launch.
+			this.clearScaleHeartbeat();
+			this.#clearScaleReadout();
+			void this.scale.disconnect().catch((e: unknown) => {
+				this.state.log(`Scale: disconnect for the firmware update failed: ${describeError(e)}`);
+			});
+		},
+		bringBack: () => {
+			const device = this.#scaleBeforeFlash;
+			this.#scaleBeforeFlash = null;
+			const reconnect =
+				device !== null
+					? this.scale.connectKnown(device)
+					: this.reconnectLastOnLaunch(currentBluetooth(), 'scale');
+			void reconnect.catch((e: unknown) => {
+				this.state.log(`Scale: reconnect after the firmware update failed: ${describeError(e)}`);
+			});
+		},
+		log: (line) => this.state.log(line)
+	});
 	/**
 	 * Notices a core reset after a panic (batch 03's bridge recovery) and
 	 * offers a reload: a fresh core has lost the shell's behaviour settings
@@ -628,7 +669,14 @@ export class CremaApp {
 			installedBuild: () =>
 				this.state.current.de1MachineInfo[MmrRegister.FirmwareVersion] ?? null,
 			log: (line) => this.state.log(line),
-			keepAlive: { set: setFirmwareWakeLock },
+			keepAlive: {
+				set: (active) => {
+					setFirmwareWakeLock(active);
+					// The scale manager's hold lifts first, so the reconnect can run.
+					if (!active) this.scale.heldForFirmwareFlash = false;
+					this.#scaleFlashPause.onFlashActive(active);
+				}
+			},
 			onRelease: () => this.afterFirmwareRelease(),
 			machineId: () => this.state.current.de1Diagnostics.deviceId ?? null,
 			linkUp: () => this.state.current.de1State === 'ready',
@@ -1334,11 +1382,18 @@ export class CremaApp {
 	 * A silent no-op elsewhere. A user Connect / Disconnect meanwhile cancels
 	 * the wait for that device.
 	 */
-	async reconnectLastOnLaunch(bluetooth: Bluetooth | undefined = currentBluetooth()): Promise<void> {
+	async reconnectLastOnLaunch(
+		bluetooth: Bluetooth | undefined = currentBluetooth(),
+		/** Only this device (the scale, after a firmware flash). */
+		only?: DeviceKind
+	): Promise<void> {
 		await this.#launch.run({
 			bluetooth,
 			isIdle: (kind) => {
+				if (only !== undefined && kind !== only) return false;
 				if (this.#userTookOver[kind]) return false;
+				// A firmware flash holds scale connects: it reconnects when it ends.
+				if (kind === 'scale' && this.#scaleFlashPause.holdConnect()) return false;
 				const s = kind === 'de1' ? this.state.current.de1State : this.state.current.scaleState;
 				return s === 'idle' || s === 'disconnected' || s === 'failed';
 			},
@@ -1410,6 +1465,8 @@ export class CremaApp {
 	/** Connect a Bookoo scale — call from a button handler. */
 	async connectScale(): Promise<void> {
 		if (refuseConnect()) return;
+		// Held while a firmware flash runs; the last scale reconnects after it.
+		if (this.#scaleFlashPause.holdConnect()) return;
 		this.#launch.cancel('scale');
 		this.#userTookOver.scale = true;
 		await this.scale.connect();
@@ -1427,6 +1484,11 @@ export class CremaApp {
 		// disconnect.
 		this.clearScaleHeartbeat();
 		await this.scale.disconnect();
+		this.#clearScaleReadout();
+	}
+
+	/** Clear every scale-derived field (a disconnect). */
+	#clearScaleReadout(): void {
 		this.scaleLowBatteryWarned = false;
 		this.state.patch({
 			scaleWeight: null,
