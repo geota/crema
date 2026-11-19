@@ -34,6 +34,8 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class HistorySyncReadsTest {
+    /** P3a's `shots.db` read directly: stage 1, a history that hasn't flipped (#310 A5). */
+    @get:org.junit.Rule val stage2 = coffee.crema.history.Stage2Rule(enabled = false)
     /** A hang fails this test, with every thread's stack, instead of holding the run (#310 A5). */
     @get:org.junit.Rule val hang = HangWatch()
 

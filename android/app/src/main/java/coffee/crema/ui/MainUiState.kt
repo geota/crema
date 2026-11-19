@@ -176,6 +176,8 @@ data class MainUiState(
     val historyLost: coffee.crema.history.LostChoices? = null,
     /** Why the history's store wouldn't open, or its migration failed (Settings). */
     val historyError: String? = null,
+    /** Why the move to `history.db` didn't finish this launch (#310 A5), or null: Settings says so, and it tries again at the next launches. */
+    val historyFlipError: String? = null,
     /** Shots whose row or curve couldn't be saved: a lasting banner while any remain. */
     val historyUnsaved: Set<String> = emptySet(),
     /** How full the device is (#310 P6a): a notice when getting full, a lasting banner when nearly full. */

@@ -47,6 +47,14 @@ fun StorageBackupsRows(vm: MainViewModel, ui: MainUiState, ds: DriveSync.UiState
         }
     }
 
+    // The move into the new history store didn't finish this launch (#310 A5): the current one stays the truth, and it tries again.
+    ui.historyFlipError?.takeIf { ui.historyHealth == coffee.crema.history.HistoryHealth.OK }?.let { why ->
+        CremaSettingsRow(
+            "Shot history storage",
+            "Moving the shot history into its new store didn't finish, so Crema keeps using the current one. It tries again at the next launches, then once a day. Last error: $why",
+        ) {}
+    }
+
     CremaSettingsRow(
         "Raw captures to keep",
         "BLE sessions whose raw Bluetooth capture stays, for replays and bug reports. A session holding a pinned shot keeps its capture whatever the limit. Off records none.",

@@ -28,13 +28,19 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class ManualBrewDateVmTest {
+    /** P3a's `shots.db` read directly: stage 1, a history that hasn't flipped (#310 A5). */
+    @get:org.junit.Rule val stage2 = coffee.crema.history.Stage2Rule(enabled = false)
+
     @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
 
     private val store = ViewModelStore()
     private val now = 1_700_000_000_000
     private val hour = 3_600_000L
 
-    @After fun tearDown() { store.clear(); VmHarness.idle() }
+    @After fun tearDown() {
+        store.clear()
+        VmHarness.idle()
+    }
 
     private fun vm(): MainViewModel = VmHarness.build(store).also {
         VmHarness.idle()

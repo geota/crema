@@ -513,7 +513,7 @@ class LibraryController(
                     rows.with(merged.rows)
                 }
             }
-            updateUi { it.copy(historyLoaded = true, historyHealth = load.health, historyLost = historyStore.lostChoices, historyError = historyStore.lastError) }
+            updateUi { it.copy(historyLoaded = true, historyHealth = load.health, historyLost = historyStore.lostChoices, historyError = historyStore.lastError, historyFlipError = historyStore.flipError) }
             historySettled = when (load.health) {
                 // A damaged shots.json moved as nothing: its rows, pinned ones too, weren't read.
                 HistoryHealth.OK -> !historyStore.sourceDamaged
@@ -1622,6 +1622,10 @@ class LibraryController(
     /** Sharing a restored Visualizer line wanted and didn't get: for the report. */
     @Volatile var restoreHeldSharing: List<String> = emptyList()
         private set
+
+    /** Test seam: the history's store (#310 A5). */
+    @get:androidx.annotation.VisibleForTesting
+    internal val historyStoreForTest: HistoryStore get() = historyStore
 
     /** `history.db`'s `write_seq` when this restore's step 7 began (M3), or null on `shots.db`. */
     @Volatile private var restoreSeq: ULong? = null

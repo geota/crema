@@ -34,6 +34,9 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class ShotSeriesStoreTest {
+    /** P3a's `shots.db` read directly: stage 1, a history that hasn't flipped (#310 A5). */
+    @get:org.junit.Rule val stage2 = coffee.crema.history.Stage2Rule(enabled = false)
+
     @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
 
     private val app = ApplicationProvider.getApplicationContext<Application>()
