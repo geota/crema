@@ -2590,6 +2590,24 @@ class HistoryStore(
         else -> null
     }
 
+    /** Test seam: every id the truth file holds now (`shots.db` or `history.db`), as [truthRowJsonForTest] reads them (#482). */
+    @androidx.annotation.VisibleForTesting
+    internal fun truthIdsForTest(): Set<String> = when (mode) {
+        Mode.AUTH -> auth?.db?.let { d ->
+            buildSet {
+                var after = Long.MIN_VALUE
+                while (true) {
+                    val page = d.now { it.idsCreatedBefore(ULong.MAX_VALUE, after, 500u) }
+                    if (page.isEmpty()) break
+                    d.now { it.get(page.map { p -> p.id }) }.forEach { add(it.id) }
+                    after = page.last().rid
+                }
+            }
+        }.orEmpty()
+        Mode.SQL -> db().readableDatabase.rawQuery("SELECT id FROM shots", null).use { c -> buildSet { while (c.moveToNext()) add(c.getString(0)) } }
+        else -> emptySet()
+    }
+
     /** Test seam: every file this store has open closed, as a process exit leaves them (#310 A5). */
     @androidx.annotation.VisibleForTesting
     internal suspend fun closeForTest() = withContext(Dispatchers.IO) {

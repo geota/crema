@@ -1,7 +1,6 @@
 package coffee.crema.ui
 
 import android.app.Application
-import android.database.sqlite.SQLiteDatabase
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
@@ -47,7 +46,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * #310 P6a on the real ViewModel and `shots.db`: the cap is gone. Row 301
+ * #310 P6a on the real ViewModel and its store: the cap is gone. Row 301
  * survives a save and a reload; a brew backdated at the design size lands in
  * its place; a full disk loses nothing and says so; Free up space deletes only
  * what the user confirmed, never a pinned shot, and leaves bag weights alone;
@@ -57,12 +56,11 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class HistoryNoCapVmTest {
-    /** P3a's `shots.db` read directly: stage 1, a history that hasn't flipped (#310 A5). */
-    @get:org.junit.Rule val stage2 = coffee.crema.history.Stage2Rule(enabled = false)
+    /** The ViewModel the test runs now: the helpers read its store's truth file. */
+    private var current: MainViewModel? = null
 
     private var store = ViewModelStore()
     private val app get() = ApplicationProvider.getApplicationContext<Application>()
-    private val dbFile get() = app.getDatabasePath(HistoryStore.NEXT_DB_NAME)
     private val day = 86_400_000L
     private val now = 1_790_000_000_000L
 
@@ -84,7 +82,7 @@ class HistoryNoCapVmTest {
         coffee.crema.visualizer.VisualizerSync.holdLoadForTest = null
     }
 
-    private fun vm(): MainViewModel = VmHarness.build(store).also { VmHarness.idle(); VmHarness.awaitStartupLoaded(it) }
+    private fun vm(): MainViewModel = VmHarness.build(store).also { current = it; VmHarness.idle(); VmHarness.awaitStartupLoaded(it) }
 
     private fun relaunch(): MainViewModel {
         store.clear()
@@ -99,14 +97,7 @@ class HistoryNoCapVmTest {
         runBlocking { assertTrue(HistoryStore(app, coreJson).save(rows)) }
     }
 
-    private fun dbIds(): Set<String> {
-        val db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY)
-        try {
-            return db.rawQuery("SELECT id FROM shots", null).use { c -> buildSet { while (c.moveToNext()) add(c.getString(0)) } }
-        } finally {
-            db.close()
-        }
-    }
+    private fun dbIds(): Set<String> = VmHarness.truthIds(checkNotNull(current))
 
     private fun light(n: Int, start: Long = now, step: Long = 60_000L, prefix: String = "r") =
         List(n) { i -> StoredShot(id = "$prefix$i", completedAtMs = start - i * step, durationMs = 28_000, brewMethod = "pourover", doseG = 15f) }
@@ -533,7 +524,7 @@ class HistoryNoCapVmTest {
         }
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
         coffee.crema.visualizer.VisualizerSync.holdLoadForTest = gate
-        val vm = VmHarness.build(store)
+        val vm = VmHarness.build(store).also { current = it }
         VmHarness.idleUntil("the rows") { vm.historyLoad.isCompleted && VmHarness.library(vm).rowsReady }
         val library = VmHarness.library(vm)
         val plan = vm.viewModelScope.async { library.planFreeUp(cutoff) }

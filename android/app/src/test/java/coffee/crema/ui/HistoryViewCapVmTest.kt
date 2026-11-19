@@ -2,7 +2,6 @@ package coffee.crema.ui
 
 import coffee.crema.history.withHeavy
 import android.app.Application
-import android.database.sqlite.SQLiteDatabase
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
 import coffee.crema.history.HistoryFixtures
@@ -14,8 +13,6 @@ import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.Stores
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -37,12 +34,11 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class HistoryViewCapVmTest {
-    /** P3a's `shots.db` read directly: stage 1, a history that hasn't flipped (#310 A5). */
-    @get:org.junit.Rule val stage2 = coffee.crema.history.Stage2Rule(enabled = false)
+    /** The ViewModel the test runs now: the helpers read its store's truth file. */
+    private var current: MainViewModel? = null
 
     private var store = ViewModelStore()
     private val app get() = ApplicationProvider.getApplicationContext<Application>()
-    private val dbFile get() = app.getDatabasePath(HistoryStore.NEXT_DB_NAME)
 
     @Before fun reset() {
         SafeFile.resetForTest()
@@ -56,7 +52,7 @@ class HistoryViewCapVmTest {
         VmHarness.idle()
     }
 
-    private fun vm(): MainViewModel = VmHarness.build(store).also { VmHarness.idle(); VmHarness.awaitStartupLoaded(it) }
+    private fun vm(): MainViewModel = VmHarness.build(store).also { current = it; VmHarness.idle(); VmHarness.awaitStartupLoaded(it) }
 
     /** A new launch: the old ViewModel goes, a new one loads. */
     private fun relaunch(): MainViewModel {
@@ -73,24 +69,9 @@ class HistoryViewCapVmTest {
         runBlocking { assertTrue(HistoryStore(app, coreJson).save(rows)) }
     }
 
-    private fun <T> withDb(block: (SQLiteDatabase) -> T): T {
-        val db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY)
-        try {
-            return block(db)
-        } finally {
-            db.close()
-        }
-    }
+    private fun dbIds(): Set<String> = VmHarness.truthIds(checkNotNull(current))
 
-    private fun dbIds(): Set<String> = withDb { db ->
-        db.rawQuery("SELECT id FROM shots", null).use { c -> buildSet { while (c.moveToNext()) add(c.getString(0)) } }
-    }
-
-    private fun dbField(id: String, key: String): String? = withDb { db ->
-        db.rawQuery("SELECT row_json FROM shots WHERE id = ?", arrayOf(id)).use { c ->
-            if (!c.moveToFirst()) null else coreJson.parseToJsonElement(c.getString(0)).jsonObject[key]?.jsonPrimitive?.content
-        }
-    }
+    private fun dbField(id: String, key: String): String? = VmHarness.truthField(checkNotNull(current), id, key)
 
     private fun rows(n: Int, samplesPer: Int = 0) = HistoryFixtures.rows(n, samplesPer).map { it.copy(pinned = false) }
 
@@ -193,7 +174,7 @@ class HistoryViewCapVmTest {
         plant(planted)
         var vm: MainViewModel? = null
         VmHarness.holdingStartupLoad { release ->
-            vm = VmHarness.build(store)
+            vm = VmHarness.build(store).also { current = it }
             VmHarness.idle()
             assertFalse(vm!!.ui.value.historyLoaded, "History shows a skeleton, not the empty state")
             vm!!.addManualBrew(

@@ -1,6 +1,8 @@
 package coffee.crema.ui
 
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import android.app.Application
 import android.os.Looper
 import androidx.lifecycle.ViewModelProvider
@@ -152,6 +154,13 @@ internal object VmHarness {
     /** The VM's [LibraryController], found by type. */
     /** The history's rows, newest first: the store's (#310 A3b). The UI state holds no list of them. */
     fun rows(vm: MainViewModel): List<coffee.crema.history.ShotRow> = library(vm).historyRows()
+
+    /** Every id the VM's history store holds on its truth file: `history.db` on stage 2, `shots.db` on stage 1 (#482). */
+    fun truthIds(vm: MainViewModel): Set<String> = library(vm).historyStoreForTest.truthIdsForTest()
+
+    /** [key] of [id]'s row as the VM's history store holds it on its truth file, or null (#482). */
+    fun truthField(vm: MainViewModel, id: String, key: String): String? =
+        library(vm).historyStoreForTest.truthRowJsonForTest(id)?.let { coreJson.parseToJsonElement(it).jsonObject[key]?.jsonPrimitive?.content }
 
     fun library(vm: MainViewModel): LibraryController {
         val field = MainViewModel::class.java.declaredFields.singleOrNull { it.type == LibraryController::class.java }

@@ -1,7 +1,6 @@
 package coffee.crema.ui
 
 import android.app.Application
-import android.database.sqlite.SQLiteDatabase
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
 import coffee.crema.MainSources
@@ -11,8 +10,6 @@ import coffee.crema.persist.SafeFile
 import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.Stores
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -24,7 +21,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * #310 A3a on the real ViewModel and `shots.db`: sync and upload read the
+ * #310 A3a on the real ViewModel and its store: sync and upload read the
  * history's store, never the view. A row the view doesn't hold (as A3b's
  * windowed view will leave most rows) is still in the backlog, a pull still
  * finds it, and an upload still binds it, and the bind reads as "still here",
@@ -34,12 +31,11 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class SyncReadsStoreVmTest {
-    /** P3a's `shots.db` read directly: stage 1, a history that hasn't flipped (#310 A5). */
-    @get:org.junit.Rule val stage2 = coffee.crema.history.Stage2Rule(enabled = false)
+    /** The ViewModel the test runs now: the helpers read its store's truth file. */
+    private var current: MainViewModel? = null
 
     private var store = ViewModelStore()
     private val app get() = ApplicationProvider.getApplicationContext<Application>()
-    private val dbFile get() = app.getDatabasePath(HistoryStore.NEXT_DB_NAME)
     private val now = 1_790_000_000_000L
 
     @Before fun reset() {
@@ -54,7 +50,7 @@ class SyncReadsStoreVmTest {
         VmHarness.idle()
     }
 
-    private fun vm(): MainViewModel = VmHarness.build(store).also { VmHarness.idle(); VmHarness.awaitStartupLoaded(it) }
+    private fun vm(): MainViewModel = VmHarness.build(store).also { current = it; VmHarness.idle(); VmHarness.awaitStartupLoaded(it) }
 
     /** Machine shots with no curve: each counts as "no telemetry" for Visualizer. */
     private fun plant(n: Int): List<StoredShot> {
@@ -64,25 +60,9 @@ class SyncReadsStoreVmTest {
         return rows
     }
 
-    private fun dbField(id: String, key: String): String? {
-        val db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY)
-        try {
-            return db.rawQuery("SELECT row_json FROM shots WHERE id = ?", arrayOf(id)).use { c ->
-                if (!c.moveToFirst()) null else coreJson.parseToJsonElement(c.getString(0)).jsonObject[key]?.jsonPrimitive?.content
-            }
-        } finally {
-            db.close()
-        }
-    }
+    private fun dbField(id: String, key: String): String? = VmHarness.truthField(checkNotNull(current), id, key)
 
-    private fun dbCount(): Int {
-        val db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY)
-        try {
-            return db.rawQuery("SELECT COUNT(*) FROM shots", null).use { c -> c.moveToFirst(); c.getInt(0) }
-        } finally {
-            db.close()
-        }
-    }
+    private fun dbCount(): Int = VmHarness.truthIds(checkNotNull(current)).size
 
     @Test
     fun `a row the view doesn't hold is still synced, bound, and not gone`() {
