@@ -193,7 +193,8 @@ proptest! {
     #[test]
     fn merge_changes_and_removes_nothing_here(d in device(), b in backup(), revive in any::<bool>()) {
         let p = plan(&d, &b, RestoreMode::Merge, revive);
-        prop_assume!(p.verdict != Verdict::Refused);
+        // A refused plan is a pass, not a reject: about 1 in 6 are, past proptest's 1,024-reject cap at the nightly's 10,000 cases.
+        if p.verdict == Verdict::Refused { return Ok(()); }
         let after = apply(&d, &b, &p);
         for (id, was) in &d.beans {
             prop_assert_eq!(after.beans.get(id), Some(was), "bean {} changed", id);
@@ -219,7 +220,8 @@ proptest! {
     #[test]
     fn merge_past_the_cap_adds_what_fits_and_evicts_nothing(d in device(), b in backup()) {
         let p = plan(&d, &b, RestoreMode::Merge, false);
-        prop_assume!(p.verdict != Verdict::Refused);
+        // A refused plan is a pass, not a reject: about 1 in 6 are, past proptest's 1,024-reject cap at the nightly's 10,000 cases.
+        if p.verdict == Verdict::Refused { return Ok(()); }
         let live_before = d.shots.values().filter(|s| !s.deleted).count();
         // What Merge may add: rows not here at all, and with "bring back" off,
         // no tombstones.
@@ -241,7 +243,8 @@ proptest! {
     #[test]
     fn replace_leaves_exactly_the_backups_rows(d in device(), b in backup()) {
         let p = plan(&d, &b, RestoreMode::Replace, false);
-        prop_assume!(p.verdict != Verdict::Refused);
+        // A refused plan is a pass, not a reject: about 1 in 6 are, past proptest's 1,024-reject cap at the nightly's 10,000 cases.
+        if p.verdict == Verdict::Refused { return Ok(()); }
         let after = apply(&d, &b, &p);
         if b.carries_beans {
             let want: BTreeSet<&String> = b.beans.iter().collect();
@@ -270,7 +273,7 @@ proptest! {
     ) {
         let mode = if replace { RestoreMode::Replace } else { RestoreMode::Merge };
         let first = plan(&d, &b, mode, revive);
-        prop_assume!(first.verdict != Verdict::Refused);
+        if first.verdict == Verdict::Refused { return Ok(()); }
         let once = apply(&d, &b, &first);
         let second = plan(&once, &b, mode, revive);
         prop_assert!(second.verdict != Verdict::Refused);
