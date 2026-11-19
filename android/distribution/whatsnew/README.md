@@ -31,3 +31,14 @@ To add a language, drop in another `whatsnew-<locale>` file.
 a separate, permanent `fastlane/metadata/android/<locale>/changelogs/<versionCode>.txt`
 per release (not this mutable "current" file). Copy this text there too
 before tagging.
+
+## Publishing to production
+
+- **A tag uploads the AAB** to the track and status in the repo variables
+  `PLAY_TRACK` and `PLAY_STATUS`. Today that's `alpha` (closed testing) and
+  `completed`, so testers get it right away.
+- **Production is promoted by hand**: Play Console → Test and release →
+  Closed testing → the release → Promote release → Production. Use a staged
+  rollout (for example 20%), send it for review, then widen it.
+- **One upload per versionCode.** Testers also get production releases, so
+  there's no need to upload to several tracks.
