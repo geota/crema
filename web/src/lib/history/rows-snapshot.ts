@@ -37,8 +37,18 @@ export const SNAPSHOT_CHUNK = 100;
  * 7 MB out, and tasks of 139 ms at 6×). A step ends at the first slice past it.
  */
 const INFLATE_STEP = 64 * 1024;
-/** Compressed bytes pushed at once, so a step goes only a slice past {@link INFLATE_STEP}. */
-const INFLATE_SLICE = 512;
+/**
+ * Compressed bytes pushed at once. Deflate inflates at most 1032 times over
+ * (a run of one byte), and fflate's `Gunzip` hands out each push's output at
+ * once, so one slice of 63 bytes gives at most 65,016 bytes. A step is then
+ * under {@link INFLATE_STEP} before its last slice and at most 130,551 bytes
+ * after it, whatever the data. At 512 bytes a slice could give 528 KB, and
+ * where the slices fell in a copy (its header's time moves them) decided the
+ * step: up to 137,972 bytes once on CI.
+ */
+export const INFLATE_SLICE = 63;
+/** The most a step inflates: {@link INFLATE_STEP} less a byte, then one slice at deflate's ratio. */
+export const INFLATE_STEP_MAX = INFLATE_STEP - 1 + 1032 * INFLATE_SLICE;
 /** How many daily copies are kept. */
 export const SNAPSHOTS_KEPT = 3;
 /** The Web Lock a tab holds while it checks, writes, verifies and prunes the copies. */
@@ -135,7 +145,7 @@ async function step(): Promise<void> {
  * {@link INFLATE_STEP}, into its non-empty lines. The text is decoded and
  * split as it comes out, so no step decodes or splits the whole copy.
  */
-async function inflateLines(bytes: Uint8Array): Promise<string[]> {
+export async function inflateLines(bytes: Uint8Array): Promise<string[]> {
 	const lines: string[] = [];
 	const dec = new TextDecoder();
 	let carry = '';
