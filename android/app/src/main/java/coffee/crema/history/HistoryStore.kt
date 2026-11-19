@@ -2924,7 +2924,7 @@ class HistoryStore(
         @Volatile internal var STAGE2_IN_PROCESS: String? = null
 
         /** Whether this build ships stage 2. */
-        const val STAGE2_IN_BUILD = true
+        const val STAGE2_IN_BUILD = false
 
         /** Test seam: every migration fails, so the legacy backend runs (its own tests). */
         @androidx.annotation.VisibleForTesting
