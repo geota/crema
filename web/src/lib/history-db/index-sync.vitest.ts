@@ -154,7 +154,8 @@ describe('the index follows the P3 store', () => {
 		// Still answering meanwhile: the index is behind, not wrong.
 		expect(t.client.status.health).toBe('ok');
 		await vi.waitFor(async () => expect(await t.client.read('count', ALL)).toBe(6), { timeout: GAP_MS + 8_000 });
-		expect(await indexState(t)).toEqual(expect.objectContaining({ sourceSeq: seq, seenSeqs: [] }));
+		// The diff's rows can land a moment before its seq bookkeeping does.
+		await vi.waitFor(async () => expect(await indexState(t)).toEqual(expect.objectContaining({ sourceSeq: seq, seenSeqs: [] })), { timeout: 5_000 });
 	}, 20_000);
 
 	it('an older build’s write, with no seq in its notice, is caught at the next boot', async () => {
