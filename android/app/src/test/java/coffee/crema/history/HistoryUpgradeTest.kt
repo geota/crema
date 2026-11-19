@@ -20,6 +20,7 @@ import org.robolectric.annotation.Config
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -29,8 +30,8 @@ import kotlin.test.assertTrue
  * this build: P3a's migration into `shots.db`, then, in the same open, the
  * flip into `history.db` (web takes two launches; Android's store opens once
  * per process and flips at its first open). The old copies, `shots.json` with
- * its series and the new `shots.db`, are left as they are, and a second launch
- * changes nothing.
+ * its `.bak` and series and the new `shots.db`, are left as they are, a shot
+ * only the `.bak` holds doesn't come back, and a second launch changes nothing.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
@@ -66,16 +67,25 @@ class HistoryUpgradeTest {
     /** A launch as the app runs it: the rows, then the index's boot check. */
     private suspend fun HistoryStore.boot(): HistoryLoad = loadAll().also { syncIndex() }
 
-    /** 0.10.0's files: `shots.json`, a few rows' series inline, the rest in `.json` files. */
+    /**
+     * 0.10.0's files: `shots.json` with only the fields that build had, a few
+     * rows' series inline, the rest in `.json` files, and the `.bak` its last
+     * save kept, from before a shot was deleted (that shot's series pruned).
+     */
     private fun plant(n: Int): List<StoredShot> {
-        val rows = HistoryFixtures.rows(n, samplesPer = 6)
-        HistoryFixtures.plantOldBuild(app, rows, inline = setOf(rows[1].id, rows[2].id))
+        val rows = HistoryFixtures.as0100(HistoryFixtures.rows(n, samplesPer = 6))
+        val deleted = HistoryFixtures.as0100(HistoryFixtures.rows(1, samplesPer = 6, start = 1_700_000_000_000L)).single().copy(id = "deleted-in-0_10_0")
+        HistoryFixtures.plantOldBuild(app, rows, inline = setOf(rows[1].id, rows[2].id), previous = rows + deleted)
+        val text = File(filesDir, HistoryStore.FILE_NAME).readText()
+        for (key in HistoryFixtures.NOT_IN_0100) assertFalse("\"$key\"" in text, "0.10.0 never wrote $key")
+        assertTrue(File(filesDir, HistoryStore.FILE_NAME + ".bak").exists())
         return rows
     }
 
-    /** `shots.json` and every `.json` series: 0.10.0's old copy, by name and bytes. */
+    /** `shots.json`, its `.bak` and every `.json` series: 0.10.0's old copy, by name and bytes. */
     private fun oldCopy(): Map<String, List<Byte>> =
-        HistoryFixtures.filesUnder(filesDir).filterKeys { it == HistoryStore.FILE_NAME || (it.startsWith("shot-series") && it.endsWith(".json")) }
+        HistoryFixtures.filesUnder(filesDir)
+            .filterKeys { it == HistoryStore.FILE_NAME || it == HistoryStore.FILE_NAME + ".bak" || (it.startsWith("shot-series") && it.endsWith(".json")) }
             .mapValues { it.value.toList() }
 
     private fun shotsDbBytes(): Map<String, List<Byte>> =

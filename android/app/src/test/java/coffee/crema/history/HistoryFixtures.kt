@@ -119,18 +119,40 @@ internal object HistoryFixtures {
      * Write [rows] as a build before P3a left them: `shots.json` with the rows
      * whose ids are in [inline] carrying their samples, the others' series in
      * `shot-series/<name>.json`, and those in [legacyName] under the name
-     * before F10's encoding.
+     * before F10's encoding. With [previous], the list the save before wrote
+     * is `shots.json.bak`, as 0.10.0's [coffee.crema.persist.SafeFile] kept it;
+     * its series files are [rows]' only, as that build pruned the rest.
      */
-    fun plantOldBuild(context: Context, rows: List<StoredShot>, inline: Set<String> = emptySet(), legacyName: Set<String> = emptySet()) {
+    fun plantOldBuild(
+        context: Context,
+        rows: List<StoredShot>,
+        inline: Set<String> = emptySet(),
+        legacyName: Set<String> = emptySet(),
+        previous: List<StoredShot>? = null,
+    ) {
         val dir = File(context.filesDir, "shot-series").apply { mkdirs() }
         for (row in rows) {
             if (row.samples.isEmpty() || row.id in inline) continue
             val name = if (row.id in legacyName) row.id.replace(Regex("[^A-Za-z0-9._-]"), "_") + ".json" else HistoryStore.seriesFileName(row.id)
             File(dir, name).writeText(coreJson.encodeToString(ListSerializer(TelemetrySample.serializer()), row.samples))
         }
+        fun listJson(list: List<StoredShot>) =
+            coreJson.encodeToString(ListSerializer(StoredShot.serializer()), list.map { if (it.id in inline) it else it.copy(samples = emptyList()) })
         val file = File(context.filesDir, HistoryStore.FILE_NAME)
-        file.writeText(coreJson.encodeToString(ListSerializer(StoredShot.serializer()), rows.map { if (it.id in inline) it else it.copy(samples = emptyList()) }))
+        if (previous != null) File(file.path + ".bak").writeText(listJson(previous))
+        file.writeText(listJson(rows))
     }
+
+    /**
+     * [rows] as 0.10.0 wrote them: without the fields that build never had
+     * (`bagDebitG`, `stopEstimated`, `visualizerUpdatedAt`, `pinned`), so
+     * `shots.json` holds none of their keys.
+     */
+    fun as0100(rows: List<StoredShot>): List<StoredShot> =
+        rows.map { it.copy(bagDebitG = null, stopEstimated = false, visualizerUpdatedAt = null, pinned = false) }
+
+    /** The keys [as0100] leaves out: none is in a `shots.json` 0.10.0 wrote. */
+    val NOT_IN_0100 = listOf("bagDebitG", "stopEstimated", "visualizerUpdatedAt", "pinned")
 
     /**
      * What a build before P3a does on a save (`HistoryStore.save` then): rewrite
