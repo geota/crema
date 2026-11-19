@@ -37,13 +37,14 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class HistoryViewCapVmTest {
+    /** P3a's `shots.db` read directly: stage 1, a history that hasn't flipped (#310 A5). */
+    @get:org.junit.Rule val stage2 = coffee.crema.history.Stage2Rule(enabled = false)
+
     private var store = ViewModelStore()
     private val app get() = ApplicationProvider.getApplicationContext<Application>()
     private val dbFile get() = app.getDatabasePath(HistoryStore.NEXT_DB_NAME)
 
     @Before fun reset() {
-        // These read P3a's `shots.db` directly: stage 1, a history that hasn't flipped (#310 A5). Stage2VmTest covers history.db.
-        coffee.crema.history.HistoryStore.stage2Enabled = false
         SafeFile.resetForTest()
         Stores.resetForTest()
         SaveFloor.resetForTest()
@@ -51,7 +52,6 @@ class HistoryViewCapVmTest {
     }
 
     @After fun tearDown() {
-        coffee.crema.history.HistoryStore.stage2Enabled = coffee.crema.history.HistoryStore.STAGE2_IN_BUILD
         store.clear()
         VmHarness.idle()
     }

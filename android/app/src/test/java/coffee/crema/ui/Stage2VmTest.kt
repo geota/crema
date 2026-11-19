@@ -32,6 +32,8 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class Stage2VmTest {
+    @get:org.junit.Rule val stage2 = coffee.crema.history.Stage2Rule(enabled = true)
+
     private var store = ViewModelStore()
     private val app get() = ApplicationProvider.getApplicationContext<Application>()
     private val shotsDb get() = app.getDatabasePath(HistoryStore.NEXT_DB_NAME)
@@ -47,7 +49,6 @@ class Stage2VmTest {
     @After fun tearDown() {
         store.clear()
         VmHarness.idle()
-        HistoryStore.stage2Enabled = HistoryStore.STAGE2_IN_BUILD
     }
 
     private fun vm(): MainViewModel = VmHarness.build(store).also { VmHarness.idle(); VmHarness.awaitStartupLoaded(it) }

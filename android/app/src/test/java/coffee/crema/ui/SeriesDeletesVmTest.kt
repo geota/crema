@@ -29,10 +29,8 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class SeriesDeletesVmTest {
-    @org.junit.Before fun stage1() {
-        // These read P3a's `shots.db` directly: stage 1, a history that hasn't flipped (#310 A5). Stage2VmTest covers history.db.
-        coffee.crema.history.HistoryStore.stage2Enabled = false
-    }
+    /** P3a's `shots.db` read directly: stage 1, a history that hasn't flipped (#310 A5). */
+    @get:org.junit.Rule val stage2 = coffee.crema.history.Stage2Rule(enabled = false)
 
     @org.junit.Before fun openStoreSaves() = coffee.crema.persist.SafeFile.openAllForTest()
 
@@ -42,7 +40,6 @@ class SeriesDeletesVmTest {
     private val rowsFile get() = File(app.filesDir, "shots.json")
 
     @After fun tearDown() {
-        coffee.crema.history.HistoryStore.stage2Enabled = coffee.crema.history.HistoryStore.STAGE2_IN_BUILD
         store.clear()
         VmHarness.idle()
         seriesDir.deleteRecursively()

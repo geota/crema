@@ -41,6 +41,9 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class HistoryIndexTest {
+    /** P3a's `shots.db` read directly: stage 1, a history that hasn't flipped (#310 A5). */
+    @get:org.junit.Rule val stage2 = coffee.crema.history.Stage2Rule(enabled = false)
+
     private val app = ApplicationProvider.getApplicationContext<Application>()
     private val filesDir get() = app.filesDir
     private val sqliteDir get() = File(filesDir, HistoryStore.SQLITE_DIR)
@@ -51,8 +54,6 @@ class HistoryIndexTest {
     private fun store(versionCode: Long = 7) = HistoryStore(app, coreJson, versionCode).also { stores += it }
 
     @Before fun clean() {
-        // P3a's `shots.db` (stage 1): a store that hasn't flipped, or an older build (#310 A5).
-        HistoryStore.stage2Enabled = false
         SafeFile.openAllForTest()
         HistoryStore.faults.clear()
         IndexFault.entries.forEach { HistoryIndex.FAULTS.remove(it) }
@@ -62,7 +63,6 @@ class HistoryIndexTest {
     }
 
     @After fun tidy() {
-        HistoryStore.stage2Enabled = HistoryStore.STAGE2_IN_BUILD
         HistoryStore.faults.clear()
         HistoryIndex.FAULTS.clear()
         HistoryStore.afterDiffBatchForTest = null

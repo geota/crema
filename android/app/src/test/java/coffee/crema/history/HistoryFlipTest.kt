@@ -45,6 +45,9 @@ class HistoryFlipTest {
 
     private fun store() = HistoryStore(app, coreJson, 7).also { stores += it }
 
+    /** Each test starts with stage 2 off and turns it on itself; the rule puts the build's value back. */
+    @get:org.junit.Rule val stage2 = Stage2Rule(enabled = false)
+
     @Before fun clean() {
         SafeFile.openAllForTest()
         HistoryStore.stage2Enabled = false
@@ -57,7 +60,6 @@ class HistoryFlipTest {
     }
 
     @After fun tidy() {
-        HistoryStore.stage2Enabled = HistoryStore.STAGE2_IN_BUILD
         HistoryStore.faults.clear()
         HistoryFlip.FAULTS.clear()
         HistoryIndex.FAULTS.clear()

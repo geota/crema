@@ -78,6 +78,9 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
 class HistorySourceTest {
+    /** P3a's `shots.db` read directly: stage 1, a history that hasn't flipped (#310 A5). */
+    @get:org.junit.Rule val stage2 = coffee.crema.history.Stage2Rule(enabled = false)
+
     private val app = ApplicationProvider.getApplicationContext<Application>()
     private val json = coreJson
     private val tables = HistoryTables(coreJson)
@@ -85,8 +88,6 @@ class HistorySourceTest {
     private val bridges = mutableListOf<HistoryDbBridge>()
 
     @Before fun clean() {
-        // P3a's `shots.db` (stage 1): a store that hasn't flipped, or an older build (#310 A5).
-        HistoryStore.stage2Enabled = false
         SafeFile.openAllForTest()
         HistoryStore.faults.clear()
         runBlocking { HistoryStore(app, json).erase() }
@@ -98,7 +99,6 @@ class HistorySourceTest {
     }
 
     @After fun tidy() {
-        HistoryStore.stage2Enabled = HistoryStore.STAGE2_IN_BUILD
         SqliteHistorySource.faultHook = null
         runBlocking { bridges.forEach { it.closeAll() } }
         root.deleteRecursively()
