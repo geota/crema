@@ -11,7 +11,8 @@ authors.workspace = true
 # Optional: `serde` derives on the public capability descriptor, behind the
 # `serde` feature — enabled by de1-app for the JSON FFI surface.
 serde = { workspace = true, optional = true }
-typeshare = "1.0.5"
+# The #[typeshare] attribute only: the macro crate, without the runtime crate's chrono (RUSTSEC-2026-0543).
+typeshare = { package = "typeshare-annotation", version = "1.0.5" }
 
 [features]
 # Adds `serde::{Serialize, Deserialize}` to [`ScaleCapabilities`] — enabled by
