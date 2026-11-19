@@ -15,7 +15,8 @@ thiserror.workspace = true
 # `cfg_attr`, so a feature-gated rename emits the wrong snake_case (review #01 F24).
 # Every workspace consumer enabled the old `serde` feature anyway.
 serde = { workspace = true }
-typeshare = "1.0.5"
+# The #[typeshare] attribute only: the macro crate, without the runtime crate's chrono (RUSTSEC-2026-0543).
+typeshare = { package = "typeshare-annotation", version = "1.0.5" }
 
 [lints]
 workspace = true
