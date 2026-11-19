@@ -7,6 +7,8 @@ import coffee.crema.core.HistoryRole
 import coffee.crema.persist.KeptAsideNotices
 import coffee.crema.persist.SafeFile
 import coffee.crema.ui.coreJson
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
@@ -1042,5 +1044,27 @@ class HistoryFlipTest {
         val next = store()
         assertEquals(1_503, next.boot().view.size)
         next.closeForTest()
+    }
+
+    @Test fun `R1 P4 - a stale store's writes racing a takeover all land`() = runBlocking {
+        flipped(shots("base", 2))
+        val lost = ArrayList<String>()
+        repeat(12) { round ->
+            val first = store()
+            first.boot()
+            val rows = shots("r$round", 25, start = 1_900_000_000_000L + round * 10_000_000L)
+            val job = async(Dispatchers.IO) { for (r in rows) first.save(listOf(r)) }
+            kotlinx.coroutines.delay((round % 4).toLong() * 3)
+            val second = store()
+            second.boot()
+            job.await()
+            first.closeForTest()
+            second.closeForTest()
+            val next = store()
+            next.boot()
+            for (r in rows) if (next.truthRowJsonForTest(r.id) == null) lost += r.id
+            next.closeForTest()
+        }
+        assertEquals(emptyList(), lost, "every shot of the old store lands, in history.db or through stage 2's journal")
     }
 }
