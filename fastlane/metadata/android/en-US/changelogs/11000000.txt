@@ -1,0 +1,5 @@
+• No more 300-shot limit: History keeps every shot, with storage notices and Free up space. It moves to a new database on first launch, with nothing to do.
+• Pin a shot to keep it, and choose how many raw captures and Drive copies to keep.
+• Restore any Drive backup, and see what a restore will change first.
+• Pick a logged brew's date and time, and change it later.
+• Many fixes to saves, backups, Visualizer sync and the weight stop.

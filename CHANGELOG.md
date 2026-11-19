@@ -7,8 +7,27 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-11-19
+
 ### Added
 
+- **No limit on shot history** — History now keeps every shot, where it used
+  to keep the newest 300, and nothing is removed on its own. A backdated brew,
+  an import, a restore and a Visualizer pull keep every shot too. Crema watches
+  the space instead: on Android, under 500 MB free brings one notice with Back
+  up and Free up space, and under 100 MB a lasting banner; on the web they come
+  at 80% and 95% of the browser's storage. **Free up space**, in Settings →
+  Storage and backups and on those notices, deletes shots older than a point
+  you choose (6 months to 5 years back on Android, any date on the web). It
+  offers a backup first and deletes nothing if that backup doesn't finish,
+  then says how many shots go and about how much space they free, and asks.
+  Pinned shots stay, and so do shots with an upload or edit still on its way
+  to Visualizer; on Android, so does any shot the backup couldn't hold whole.
+  It never touches Visualizer's copies or a bag's weight. If the disk is full
+  when a shot finishes, the shot is held and a lasting banner offers Free up
+  space and Download (Share this shot on Android); it saves once there's room.
+  On the web, past 5,000 shots, Settings says History may be slower. Android
+  and web. (#310)
 - **Pour averages in shot detail** — a shot's detail now shows its average
   pressure, flow and head temperature over the pour, from first flow to the
   end of flow, beside the peaks. The preheat is left out, so the numbers aren't
@@ -16,16 +35,16 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   are worked out when you open the shot, so old shots show them too; a shot
   with no recorded telemetry shows nothing. Android and web.
 - **Pin a shot** — pin a shot from its detail to keep it safe: its raw
-  Bluetooth capture stays whatever the limit, and any cleanup skips it, the
-  300-shot history limit included: pinned shots don't count toward it. A small
-  mark shows on the row, History has a Pinned filter, and deleting a pinned shot
-  says so. Pins move with backups, and between the apps. Android and web.
+  Bluetooth capture stays whatever the limit, and Free up space and every
+  other cleanup skip it. A small mark shows on the row, History has a Pinned
+  filter, and deleting a pinned shot says so. Pins move with backups, and
+  between the apps. Android and web.
 - **Storage and backups settings** — choose how many raw captures to keep (Off,
   10, 50, 100, 300 or All; on Android these are Bluetooth sessions), and see the
-  storage used, your pinned shots and the last backup. On Android you also
-  choose how many automatic Google Drive copies to keep (1, 3, 5 or 10), daily
-  or weekly backups, and Wi-Fi only, and an automatic backup with nothing new
-  in it no longer uploads. Lowering a limit says what it will delete first.
+  storage used, your pinned shots and the last backup, and Free up space. On
+  Android you also choose how many automatic Google Drive copies to keep (1,
+  3, 5 or 10), daily or weekly backups, and Wi-Fi only, and an automatic backup
+  with nothing new in it no longer uploads. Lowering a limit says what it will delete first.
   Existing installs keep today's limits; new ones keep 50 captures and 3 Drive
   copies. Android's 14-day limit on captures is gone. Android and web.
 - **Pick any Drive backup to restore** — Restore from Drive now lists every
@@ -40,9 +59,7 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   now has a When field with a date and time picker in place of "Logged N min
   ago", defaulting to now, as on the web. Both apps can change the date of a
   manually logged brew from its detail; machine shots and guided sessions keep
-  theirs. A date in the future is refused. A brew older than a full history of
-  300 is refused when logging, so it can't vanish on save. Tablet, phone and
-  web.
+  theirs. A date in the future is refused. Tablet, phone and web.
 - **Scale flow on the History chart** — a shot with scale data now draws a thin
   Scale flow line beside the machine's flow, and the legends name it. The line
   stays off Brew's small Last shot chart. Android's tablet History chart gains a
@@ -111,19 +128,35 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **Web shot history moves to its own database** — on its first start after
-  updating, the web app copies your shot history from browser storage into a
-  database of its own, checks every shot and curve against the original, and
-  only then uses it. The original stays where it was, untouched. Saves now
-  write only the shots that changed, so a full browser storage no longer drops
-  your oldest shots: History still shows the newest 300, and older ones are
-  kept on the device for a later update to show again. Backups include them.
-  If storage is full when a shot finishes, the shot is kept aside and a banner
-  says its curve isn't saved yet, with Download. If the database ever goes
-  missing, a banner lets you choose how to get your history back, and nothing
-  happens without your choice. Settings shows where the history is kept, and
-  whether the browser has promised not to clear Crema's data. Other open tabs
-  see each saved shot at once. Web only. (#310)
+- **Shot history moves to its own database** — after updating, both apps move
+  your shot history into a SQLite database, `history.db`, check every shot and
+  curve against the original, and only then use it. Android does it in one
+  launch. The web first copies your history from browser storage into a
+  database of its own, and moves it to `history.db` at the next launch. The
+  old copies stay where they were, untouched, and there's nothing for you to
+  do. Saves now write only the shots that changed. If a move can't finish,
+  Crema keeps using the history where it is, tries again at the next launches
+  and then once a day, and Settings → Storage and backups says so; until the
+  first move lands, that's the old storage with its 300-shot limit. If the
+  database ever goes missing, a banner offers each way back, the day's copy of
+  your history, the old copy or starting empty, and nothing happens without
+  your choice. On the web, Settings shows where the history is kept and
+  whether the browser has promised not to clear Crema's data, and other open
+  tabs see each saved shot at once. Erase all data and the web's factory reset
+  remove the new database too. Android and web. (#310)
+- **History opens quickly however long it gets** — at launch History reads only
+  each shot's row, and a shot's curve loads when you open it, so a long history
+  doesn't slow the start. A row's small chart draws from a summary kept with
+  it. The list holds only the rows near the screen, read a page at a time,
+  with a placeholder row until its page lands, and filters, sort and stats stay
+  quick at thousands of shots. A shot's chart shows a placeholder while its
+  curve loads, and says so if it can't be read. Compare, uploads, exports and
+  backups read each shot whole, so none goes out without its curve. A star or
+  a note redraws only its own row. Android and web. (#310)
+- **Live shot cards grouped by channel** — the Flow card shows the machine's
+  flow with the volume poured, and the Weight card the scale's weight with its
+  flow in g/s, each in the chart's colours. The two flows used to share a card.
+  Android and web.
 - **Android restores read a backup a piece at a time** — a backup from a file
   or Google Drive is copied to the app's cache and read in small pieces, not
   loaded whole, so a large one restores without running out of memory: up to
@@ -226,6 +259,19 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   zero by its weight, a hand that lifts again leaves the zero where it was, and
   a re-tare that lands takes over from both. A load of 5 g or less still reads
   as coffee. Web, tablet and phone.
+- **A scale that drops out mid-shot no longer stops it early** — after a gap in
+  the scale's readings, the readings from before it could make the coffee look
+  as if it were pouring far faster, so the weight stop came several grams
+  early. A hand or spoon on the cup just after the scale came back, or while it
+  settled after the tare, could do the same. Crema now starts its flow estimate
+  again from a return that doesn't follow the pour, and leaves a short touch out
+  of it. Android and web.
+- **A new shot starts fresh after lost Bluetooth reports** — when the link
+  dropped, or the machine's reports between two pours went missing, Crema could
+  take the next shot for the last one, carry on its poured volume, stop clock
+  and tare, and stop it early. A pour heard going back to an earlier step of the
+  profile is now a new shot, and a stop Crema owes the machine still goes out.
+  Android and web.
 - **The weight stop follows the yield on screen** — dialling the yield, then
   tapping Reset or picking another profile, used to leave the web's
   stop-at-weight on the old dial until a reload. The stop now comes from the
@@ -263,12 +309,6 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   stored roast, opened, frozen or defrosted day as midnight UTC, so in the
   Americas it showed the day before (a bag roasted on Nov 8 read "Nov 7 · 0d
   ago"). The day is now read as local. Web.
-- **A full history says when a new shot pushes the oldest out.** History keeps
-  the newest 300 shots (pinned shots don't count), and a shot or brew saved on a
-  full history dropped the oldest without a word; restore and import already
-  said so. Erase all data and the web's factory reset also remove what a later
-  version's history storage keeps, so going back to this version leaves nothing
-  behind. Android and web. (#310)
 - **Pulls from Visualizer finish on Android too** — a pull walks every page,
   paced under Visualizer's limits, and each shot lands as it arrives, so one
   that stops keeps what it got and the next picks up only what's left. A rate
@@ -376,7 +416,6 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   saved, waiting if the machine is busy. A row that can't be read, in shots or
   the bean library, is kept in `<key>.skipped` and offered as a saved copy,
   rather than dropped by the next save. If it can't be kept, saves stop instead.
-  Only full storage now drops your oldest shots: a refused save no longer does.
   Web.
 - **Android can't save a store before it has loaded** — a save that came before
   a store's load carried defaults, and could replace your data. Every store now
@@ -416,13 +455,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   shot costs that shot, not the backup. One shot that throws no longer stops the
   web's upload queue or catch-up uploads. Android and web.
 
-- **A Visualizer pull no longer removes shots or tags** — at the 300-shot cap a
-  pull used to push out your oldest rows, including brew logs and shots that
-  never reached Visualizer. It now leaves the history alone, skips the new shots
-  that don't fit, keeps going, and says how many it left out. Re-sync shots
-  fetches them once there's room. On the web, a pull no longer empties a shot's
-  tags on a free account, and remote tags only fill a shot that has none. Android
-  and web.
+- **A Visualizer pull no longer removes shots or tags** — at the old 300-shot
+  limit a pull used to push out your oldest rows, brew logs and shots that never
+  reached Visualizer included; it now keeps every shot. On the web, a pull no
+  longer empties a shot's tags on a free account, and remote tags only fill a
+  shot that has none. Android and web.
 - **A damaged shot history keeps every curve on the web** — when the rows
   couldn't be read, the next load deleted every saved curve and raw capture, so
   the kept-aside rows could never get them back (#325). A curve or capture now
@@ -465,12 +502,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 - **History stays in date order** — a pulled, restored or backdated row used
   to land at the top of the list on the web, and on Android when imported,
   restored or logged minutes ago. It could then seed the next log as the last
-  brew, count among a bag's latest doses, and push out newer rows at the 300
-  limit. Rows now go in by date, and an out-of-order history is put right when
-  it loads. A shot or brew made on the device always stays, even with its clock
-  behind the history. Restore and import report the shots they kept and say
-  when older ones were dropped. On the web, the 300 counts visible shots only,
-  and a shot with no date stays at the end. Tablet, phone and web.
+  brew and count among a bag's latest doses. Rows now go in by date, and an
+  out-of-order history is put right when it loads. On the web, a shot with no
+  date stays at the end. Tablet, phone and web.
 - **Web: logged-brew fields fit at phone width** — in Log a brew, When takes a
   full row so the time can be read, and the steppers stay inside their cards.
   The fields stack below 380 px. A logged brew's detail uses two columns, so a
@@ -1662,3 +1696,4 @@ shot state machine, and domain model.
 [0.0.8]: https://github.com/geota/crema/releases/tag/v0.0.8
 [0.0.9]: https://github.com/geota/crema/releases/tag/v0.0.9
 [0.10.0]: https://github.com/geota/crema/releases/tag/v0.10.0
+[0.11.0]: https://github.com/geota/crema/releases/tag/v0.11.0
