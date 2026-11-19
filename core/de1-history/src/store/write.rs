@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use super::error::{Fail, Result, StoreError};
 use super::faults::Faults;
-use super::{Store, TxState, change_set};
+use super::{Role, Store, TxState, change_set};
 use crate::change::{ChangeKinds, ChangeSet};
 use crate::derive::{DERIVE_V, Derived, derive_live, derive_row, derive_value, row_id};
 use crate::query::Live;
@@ -91,6 +91,10 @@ pub enum Write {
     Delete(Vec<String>),
     /// [`Store::set_live`].
     SetLive(Live),
+    /// The P3 store's own late-row bookkeeping (its `meta.migration`), kept
+    /// in this file after the flip (S13): `meta.p3_migration`, opaque. Only
+    /// on an `authority` file.
+    P3Migration(String),
 }
 
 /// What [`Store::apply`] did with a client's write (M11).
@@ -569,6 +573,25 @@ fn write_in(
             kinds: set_live_in(tx, st, live)?,
             ..Outcome::default()
         }),
+        Write::P3Migration(text) => {
+            let role: Option<String> = tx
+                .prepare_cached("SELECT value FROM meta WHERE key = 'role'")?
+                .query_row([], |r| r.get(0))
+                .optional()?;
+            if role.as_deref() != Some(Role::Authority.as_str()) {
+                return Err(StoreError::Refused(
+                    "p3_migration lives in the truth file only".into(),
+                )
+                .into());
+            }
+            st.next();
+            tx.prepare_cached(
+                "INSERT INTO meta (key, value) VALUES ('p3_migration', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            )?
+            .execute([text])?;
+            Ok(Outcome::default())
+        }
     }
 }
 

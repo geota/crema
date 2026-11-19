@@ -11,7 +11,7 @@
     "wasm:history": "../scripts/history-wasm-build.sh",
     "wasm:history:test": "../scripts/history-wasm-build.sh --test",
     "dev": "vite dev",
-    "build": "pnpm wasm && pnpm wasm:history && vite build",
+    "build": "pnpm wasm && pnpm wasm:history && vite build && node ../scripts/sw-window-count.mjs",
     "preview": "vite preview",
     "prepare": "svelte-kit sync || echo ''; git config core.hooksPath .githooks 2>/dev/null || true",
     "test": "vitest run",

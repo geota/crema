@@ -98,7 +98,14 @@ export const READS = [
 	'restoreBegin',
 	'idsCreatedBefore',
 	/** Stage 1 (W2): how the owner's index upkeep stands (`SyncStats`), for diagnostics. */
-	'indexSync'
+	'indexSync',
+	// Stage 2 (W5): a `meta` value (the P3 store's own late-row record), the
+	// flip's source ids, the late rows still waiting for samples, and which
+	// ids have a row (held ones too), for a delete's details.
+	'metaValue',
+	'migrationSourceIds',
+	'lateIds',
+	'existing'
 ] as const;
 export type ReadName = (typeof READS)[number];
 
@@ -116,7 +123,9 @@ export type OnceName = (typeof ONCE)[number];
 export type Write =
 	| { kind: 'upsert'; rows: { rowJson: string; pulled?: boolean }[] }
 	| { kind: 'delete'; ids: string[] }
-	| { kind: 'setLive'; live: unknown };
+	| { kind: 'setLive'; live: unknown }
+	/** Stage 2: the P3 store's own late-row record, kept in `history.db` (S13). */
+	| { kind: 'p3Migration'; text: string };
 
 interface Header {
 	t: 'req';
@@ -154,7 +163,13 @@ export type Request =
 	/** A walk call (stage 2): sent once, to the owner that has the walk. */
 	| (Header & { op: 'once'; name: OnceName; arg?: unknown })
 	/** The owner tab's drain of the pending journal (M5): insert each row whose id is absent. */
-	| (Header & { op: 'drain'; entries: JournalEntry[] });
+	| (Header & { op: 'drain'; entries: JournalEntry[] })
+	/**
+	 * Stage 2 (W5, SPEC §11 step 8): late rows the page read from P3's own
+	 * journal or the pre-P3 store, inserted by the id rule (never an id
+	 * `migration_source` or `history.db` has). Idempotent, so resent like a read.
+	 */
+	| (Header & { op: 'importLate'; rows: { rowJson: string }[] });
 
 /**
  * One pending-journal entry, as the drain sends it (M5, REVIEW-456 F2). A

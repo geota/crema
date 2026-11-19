@@ -41,7 +41,7 @@ pub use export::{ExportWalk, RidId};
 pub use faults::Faults;
 pub use fts::{FtsCheck, FtsStatus, Maintained};
 pub use index::{ABSENT_BATCH_ROWS, AbsentError, AbsentStep, IndexState, IndexWrite};
-pub use late::{HeavyOut, LateImport, LateImported};
+pub use late::{HeavyOut, LateImport, LateImported, LateRows};
 pub use read::{CoffeeFacet, Destination, Facets, Page, RidRow, RowOut, SyncPage, SyncRow};
 pub use write::{Applied, Duplicate, Heavy, RowIn, Write, Written};
 

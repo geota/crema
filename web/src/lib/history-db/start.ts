@@ -16,12 +16,15 @@ import { INDEX_FILE } from './names.js';
 import { chooseStage, type StageChoice } from './stage.js';
 import { opfsDoneRecordReader } from './marker.js';
 import { serviceWorkerWindowCount } from '#lib/pwa/window-count.js';
+import { HistoryDb } from '#lib/history/history-db.js';
+import { idbDetails } from '#lib/history-source/details.js';
+import type { Stage2 } from '#lib/history/store.svelte.js';
+import { unavailableClient } from '#lib/history/sqlite-rows.js';
 
 /**
- * Whether this build may flip to stage 2 and boot on it (#310 W5). Off until
- * the stage-2 store writes `history.db` (W5b): a flip with the P3 store still
- * the app's truth would leave edits behind. The flip itself (`stage.ts`,
- * `flip.ts`) is tested on its own meanwhile.
+ * Whether this build may flip to stage 2 and boot on it (#310 W5): the
+ * history store writes `history.db` on stage 2 (`sqlite-rows.ts`). Turned on
+ * in a commit of its own, so it can be reverted alone.
  */
 export const HISTORY_FLIP_ENABLED = false;
 
@@ -95,8 +98,12 @@ function clientFor(choice: Pick<StageChoice, 'stage' | 'target' | 'expect'>, opt
 	});
 }
 
-/** Starts this tab's history store, once. Null where the browser can't run it. */
+/** Starts this tab's history store, once. Null where the browser can't run it, or until the staged boot chose. */
 export function startHistoryDb(opts: StartOptions = {}): HistoryDbClient | null {
+	if (stagedBootActive()) {
+		void bootHistoryDb(opts);
+		return client;
+	}
 	if (client || !supported()) return client;
 	client = clientFor(
 		{
@@ -110,31 +117,59 @@ export function startHistoryDb(opts: StartOptions = {}): HistoryDbClient | null 
 	return client;
 }
 
+/** Whether this tab boots through `stage.ts` (#310 W5): the flag is on and the browser can run the store. */
+export function stagedBootActive(): boolean {
+	return HISTORY_FLIP_ENABLED && supported();
+}
+
+let booting: Promise<{ client: HistoryDbClient | null; choice: StageChoice } | null> | null = null;
+
 /**
- * W5's boot: the stage this tab runs on, flipping first when it may
- * (`stage.ts`), then the client for it. Only with {@link HISTORY_FLIP_ENABLED}.
+ * W5's boot, once per tab: the stage this tab runs on, flipping first when it
+ * may (`stage.ts`), then the client for it. Whoever asks first starts it, the
+ * shell or the history store; the shell's options are used when it asks
+ * first (it always does in the app).
  */
-export async function bootHistoryDb(opts: StartOptions = {}): Promise<{ client: HistoryDbClient | null; choice: StageChoice } | null> {
-	if (client || !supported() || !HISTORY_FLIP_ENABLED) return null;
-	const choice = await chooseStage({
-		storage: localStorage,
-		locks: navigator.locks as unknown as LockManagerLike,
-		doneRecord: opfsDoneRecordReader(),
-		windowCount: () => serviceWorkerWindowCount(),
-		makeWorker,
-		channel,
-		now: () => Date.now(),
-		build: __APP_VERSION__,
-		journal: HISTORY_JOURNAL,
-		allowFlip: true,
-		log: (line) => console.info(`history-stage: ${line}`)
-	});
-	if (client) return null;
-	// The truth couldn't be told this boot: no client, the store is unavailable (REVIEW-473).
-	if (choice.unavailable) return { client: null, choice };
-	client = clientFor(choice, opts);
-	client.start();
-	return { client, choice };
+export function bootHistoryDb(opts: StartOptions = {}): Promise<{ client: HistoryDbClient | null; choice: StageChoice } | null> {
+	if (!stagedBootActive()) return Promise.resolve(null);
+	booting ??= (async () => {
+		const choice = await chooseStage({
+			storage: localStorage,
+			locks: navigator.locks as unknown as LockManagerLike,
+			doneRecord: opfsDoneRecordReader(),
+			windowCount: () => serviceWorkerWindowCount(),
+			makeWorker,
+			channel,
+			now: () => Date.now(),
+			build: __APP_VERSION__,
+			journal: HISTORY_JOURNAL,
+			allowFlip: true,
+			log: (line) => console.info(`history-stage: ${line}`)
+		});
+		// The truth couldn't be told this boot: no client, the store is unavailable (REVIEW-473).
+		if (choice.unavailable) return { client: null, choice };
+		client = clientFor(choice, opts);
+		client.start();
+		return { client, choice };
+	})();
+	return booting;
+}
+
+/**
+ * For the history store (`HistoryStoreOptions.stage2`): stage 2's client and
+ * details once this tab's boot chose stage 2, or null on stage 1. The
+ * details are written without `crema-history`'s `meta`, which is the old copy
+ * after the flip (rule 3).
+ */
+export async function historyStage(): Promise<Stage2 | null> {
+	const booted = await bootHistoryDb();
+	if (!booted || booted.choice.stage !== 2) return null;
+	return {
+		// Stage 2 with its truth unknown this boot: the store is unavailable, shots to the journal.
+		client: booted.client ?? unavailableClient(booted.choice.unavailable ?? 'unknown'),
+		details: idbDetails(new HistoryDb({ expectExisting: () => true }), { bump: false }),
+		storage: localStorage
+	};
 }
 
 /** This tab's history store, if it started. */

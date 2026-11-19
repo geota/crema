@@ -108,6 +108,12 @@ pub enum WriteJson {
         /// The live library.
         live: Live,
     },
+    /// `p3Migration`: the P3 store's own late-row bookkeeping, kept in the
+    /// truth file after the flip (S13).
+    P3Migration {
+        /// Its JSON, opaque.
+        text: String,
+    },
 }
 
 impl From<WriteJson> for Write {
@@ -116,6 +122,7 @@ impl From<WriteJson> for Write {
             WriteJson::Upsert { rows } => Write::Upsert(rows_in(rows)),
             WriteJson::Delete { ids } => Write::Delete(ids),
             WriteJson::SetLive { live } => Write::SetLive(live),
+            WriteJson::P3Migration { text } => Write::P3Migration(text),
         }
     }
 }

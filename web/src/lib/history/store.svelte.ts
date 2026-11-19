@@ -118,6 +118,7 @@ import {
 	META_MIGRATION,
 	detailsOf,
 	keepHeavy,
+	rowOf as rowOfShot,
 	lightOf,
 	shotOfRow,
 	withDetails,
@@ -138,6 +139,10 @@ import {
 	type MigrationDeps
 } from './migrate';
 import { clearLight, heldSampleCount, lightSummary, markLight, markLoaded } from './light-rows';
+import { HistoryDbTooNew, SqliteRows, sqliteJournal, type RowJournal, type SqliteClient } from './sqlite-rows';
+import type { DetailsStore } from '#lib/history-source/details.js';
+import type { JournalStorage } from '#lib/history-db/pending.js';
+import { historyStage, stagedBootActive } from '#lib/history-db/start.js';
 import {
 	STORE_MARKER_KEY,
 	markerSaysDone,
@@ -296,7 +301,30 @@ export interface HistoryStoreOptions {
 	readyTimeoutMs?: number;
 	/** Listen for the tab coming back into view. On by default. */
 	visibility?: boolean;
+	/**
+	 * Stage 2 (#310 W5): resolves once this tab's boot has chosen its stage,
+	 * to `history.db`'s client and the details store when it is stage 2, or
+	 * null on stage 1 (the P3 store, `crema-history`). The store waits for it
+	 * before it opens anything: while a flip runs, a capture waits in P3's
+	 * journal (M9), and every other writer waits for `ready`.
+	 */
+	stage2?: () => Promise<Stage2 | null>;
 }
+
+/** What the store runs on after the flip (SPEC §11 stage 2). */
+export interface Stage2 {
+	client: SqliteClient;
+	/** `crema-history`'s `details`, written without touching `rows` or `meta`. */
+	details: DetailsStore;
+	/** `localStorage`, for stage 2's pending journal (M5). */
+	storage: JournalStorage;
+}
+
+/** P3's journal, `crema.history.pending`. */
+const p3Journal: RowJournal = {
+	add: (shot) => addPending(shot),
+	drop: (ids) => dropPending(ids)
+};
 
 let testDefaults: HistoryStoreOptions = {};
 /** Test seam: the options {@link getHistoryStore} and `new HistoryStore()` start from. */
@@ -499,6 +527,11 @@ export class HistoryStore {
 	private mode: 'booting' | 'idb' | 'legacy' | 'blocked' = 'booting';
 	private readonly opts: HistoryStoreOptions;
 	private db: HistoryDb | null = null;
+	/** Stage 2: `history.db` behind `db` (#310 W5), or null on the P3 store. */
+	private sqlite: SqliteRows | null = null;
+	private stage2: Stage2 | null = null;
+	/** Where a row the store can't take waits: P3's journal, or stage 2's. */
+	private journal: RowJournal = p3Journal;
 	private resolveReady: () => void = () => {};
 	/** Settles once the rows have loaded, on either backend. */
 	readonly ready: Promise<void>;
@@ -616,10 +649,100 @@ export class HistoryStore {
 			this.enterLegacySync();
 			return;
 		}
-		void this.boot().catch((e) => {
+		const run = this.opts.stage2 ? this.bootStaged(this.opts.stage2) : this.boot();
+		void run.catch((e) => {
 			if (e instanceof TestKill) return;
 			this.block('unavailable', errorText(e));
 		});
+	}
+
+	/** Waits for the stage this tab boots on (#310 W5), then opens its store. */
+	private async bootStaged(stage2: () => Promise<Stage2 | null>): Promise<void> {
+		const s2 = await stage2();
+		if (!s2) return this.boot();
+		return this.bootSqlite(s2);
+	}
+
+	/**
+	 * Stage 2 (#310 W5, SPEC §11): the rows in `history.db`, through `SqliteRows`
+	 * behind `db`, so every write path is the one P3 tested. Before the rows
+	 * load, what P3's own journal holds and this tab doesn't is imported by the
+	 * id rule (step 8, S13): never an id `history.db` has or had. P3's journal
+	 * is read only. Other tabs' writes arrive as `history.db`'s change notices.
+	 */
+	private async bootSqlite(s2: Stage2): Promise<void> {
+		this.stage2 = s2;
+		const db = new SqliteRows(s2.client, s2.details);
+		this.sqlite = db;
+		this.db = db as unknown as HistoryDb;
+		this.journal = sqliteJournal(s2.storage);
+		this.listenToTabs();
+		const slow = setTimeout(() => {
+			if (!this.loadedFlag) this.slowFlag = true;
+		}, SLOW_LOAD_MS);
+		try {
+			if (!(await this.openSqlite(db))) return;
+			await this.loadFromDb();
+			this.recordHeldJournal(db);
+		} finally {
+			clearTimeout(slow);
+		}
+	}
+
+	/**
+	 * P3's journal entries this tab held in memory went in whole, with their
+	 * curves, through the first write. Once that has landed, and before any
+	 * later write such as a delete, they go through the id rule too, which
+	 * finds them present and records them in `migration_source`: then the
+	 * entry, still in P3's key, never brings back a shot deleted after
+	 * (REVIEW-474 N2).
+	 */
+	private recordHeldJournal(db: SqliteRows): void {
+		const rows = this.heldJournal;
+		this.heldJournal = [];
+		if (rows.length === 0) return;
+		this.writeChain = this.writeChain.then(async () => {
+			try {
+				await db.importLate(rows);
+			} catch {
+				// Next boot: the entry is still in P3's key, and the row is in history.db.
+			}
+		});
+	}
+	/** P3 journal rows this tab held in memory at the stage-2 open (N2). */
+	private heldJournal: RowRecord[] = [];
+
+	/** Opens `history.db` and takes P3's journal in; false when blocked (lost, too new, unavailable). */
+	private async openSqlite(db: SqliteRows): Promise<boolean> {
+		try {
+			await db.open();
+		} catch (e) {
+			if (e instanceof HistoryDbLost) {
+				this.block('lost', e.message);
+			} else {
+				this.block('unavailable', e instanceof HistoryDbTooNew ? e.message : errorText(e));
+			}
+			return false;
+		}
+		// P3's journal, as late rows: shots this tab holds in memory are written
+		// whole below, with their curves, rather than as a journal's light row.
+		const mine = new Set(this.shots.map((s) => s.id));
+		const late: RowRecord[] = [];
+		this.heldJournal = [];
+		for (const raw of readPending()) {
+			const shot = typeof raw.id === 'string' ? coerceStoredShot(raw) : null;
+			if (!shot) continue;
+			if (mine.has(shot.id)) this.heldJournal.push(rowOfShot(shot, summarize(shot)));
+			else late.push(rowOfShot(shot, summarize(shot)));
+		}
+		if (late.length > 0) {
+			try {
+				await db.importLate(late);
+			} catch {
+				// Next boot: the journal stays as it is.
+			}
+		}
+		return true;
 	}
 
 	private idb(): IDBFactory | undefined {
@@ -1111,7 +1234,8 @@ export class HistoryStore {
 		// The journal: rows a write couldn't take before.
 		const journal: StoredShot[] = [];
 		const journalHeld: string[] = [];
-		for (const raw of readPending()) {
+		// Stage 2 took P3's journal in by the id rule before the load, and never writes it.
+		for (const raw of this.sqlite ? [] : readPending()) {
 			const shot = typeof raw.id === 'string' ? coerceStoredShot(raw) : null;
 			if (!shot) continue;
 			if (held.has(shot.id)) {
@@ -1121,7 +1245,7 @@ export class HistoryStore {
 			journal.push(shot);
 			held.add(shot.id);
 		}
-		dropPending(journalHeld);
+		if (!this.sqlite) dropPending(journalHeld);
 		const lateAdd = (late?.add ?? []).filter((s) => !held.has(s.id));
 		for (const s of [...journal, ...lateAdd]) this.dirtyDetails.add(s.id);
 		const fills = new Map((late?.fill ?? []).map((s) => [s.id, s]));
@@ -1496,7 +1620,14 @@ export class HistoryStore {
 	// ── Other tabs ─────────────────────────────────────────────────────────
 
 	private listenToTabs(): void {
-		const make = this.opts.channel === undefined ? defaultChannel : this.opts.channel;
+		if (this.stage2) {
+			// Every write to `history.db`, this tab's own too, as its owner posts it (SPEC §10).
+			this.stage2.client.onChange((c) => {
+				for (const id of [...c.upserted, ...c.deleted]) this.heard.add(id);
+				if (this.loadedFlag && this.mode === 'idb' && this.deletesPaused === 0) this.applyHeard();
+			});
+		}
+		const make = this.stage2 ? null : this.opts.channel === undefined ? defaultChannel : this.opts.channel;
 		this.channel = make ? make() : null;
 		if (this.channel) {
 			this.channel.onmessage = (event) => {
@@ -1655,7 +1786,8 @@ export class HistoryStore {
 	}
 
 	private post(ids: readonly string[], seq: number): void {
-		if (!this.channel || ids.length === 0) return;
+		// Stage 2: the owner posts every write's change set itself.
+		if (this.sqlite || !this.channel || ids.length === 0) return;
 		try {
 			this.channel.postMessage({ type: 'rows', from: this.tabId, ids: [...ids], seq } satisfies ChannelMessage);
 		} catch {
@@ -1802,7 +1934,7 @@ export class HistoryStore {
 				return full;
 			});
 		}
-		dropPending(writes.map((w) => w.shot.id));
+		this.journal.drop(writes.map((w) => w.shot.id));
 		this.post(
 			writes.map((w) => w.shot.id),
 			seq
@@ -1868,7 +2000,7 @@ export class HistoryStore {
 				await this.lostNow(e);
 				return;
 			}
-			for (const w of writes) if (!this.stored.has(w.shot.id)) addPending(w.shot);
+			for (const w of writes) if (!this.stored.has(w.shot.id)) this.journal.add(w.shot, w.summary ?? summarize(w.shot));
 		}
 		const lost = withHeavy
 			.filter((w) => (heldSampleCount(w.shot) ?? 0) > 0 || (w.shot.brewSeries?.samples.length ?? 0) > 0 || w.shot.profile != null)
@@ -1896,7 +2028,7 @@ export class HistoryStore {
 			(s) => !this.stored.has(s.id) && this.written.get(s.id) !== s && !(this.movedAway && this.known.has(s.id))
 		);
 		for (const s of fresh) {
-			if (addPending(s)) this.written.set(s.id, s);
+			if (this.journal.add(s, this.summaries.get(s.id) ?? summarize(s))) this.written.set(s.id, s);
 		}
 		const ids = fresh.map((s) => s.id);
 		if (unsaved) this.markUnsaved(ids);
@@ -1923,7 +2055,7 @@ export class HistoryStore {
 			this.removing.add(id);
 		}
 		this.clearUnsaved(ids);
-		dropPending(ids);
+		this.journal.drop(ids);
 		this.settleView();
 		const db = this.db;
 		let result = true;
@@ -1967,7 +2099,8 @@ export class HistoryStore {
 
 	/** After the first save each day: every row, outside the database. */
 	private maybeSnapshot(): void {
-		if (!this.db) return;
+		// Stage 2's rows snapshot is `history-snapshot.db` (SPEC §11), not P3's.
+		if (!this.db || this.sqlite) return;
 		// One already running (yesterday's, say): this save's turn comes when it ends.
 		if (this.snapshotting) {
 			this.snapshotAgain = true;
@@ -2388,6 +2521,14 @@ export class HistoryStore {
 	/** Try the store again (Settings, Try again; or the tab coming back). */
 	async retryOpen(): Promise<boolean> {
 		if (this.healthState !== 'unavailable') return this.healthState === 'ok';
+		if (this.sqlite) {
+			if (!(await this.openSqlite(this.sqlite))) return false;
+			this.mode = 'booting';
+			this.healthState = 'loading';
+			await this.loadFromDb();
+			this.recordHeldJournal(this.sqlite);
+			return this.health === 'ok';
+		}
 		const db = this.newDb(() => markerSaysDone());
 		try {
 			await db.open();
@@ -2437,6 +2578,8 @@ export class HistoryStore {
 	 * time: a message and a click can both ask.
 	 */
 	private reopenIfRecovered(): Promise<boolean> {
+		// Stage 2 recovers into a new `history-<n>.db` (S9), not into P3's store.
+		if (this.sqlite) return Promise.resolve(false);
 		this.reopenRun ??= this.reopenNow().finally(() => (this.reopenRun = null));
 		return this.reopenRun;
 	}
@@ -2586,6 +2729,8 @@ export class HistoryStore {
 
 	/** Lost: start again with no shots. */
 	startEmpty(): Promise<RecoveryResult> {
+		// Stage 2 recovers into a new `history-<n>.db` (S9), not into P3's store.
+		if (this.sqlite) return Promise.resolve(false);
 		return this.recoverWith(async (db) => {
 			await db.setMeta(META_MIGRATION, this.oldCopyRecord());
 			return 0;
@@ -2594,6 +2739,8 @@ export class HistoryStore {
 
 	/** Lost: the old copy, as it was when it moved. */
 	recoverOldCopy(): Promise<RecoveryResult> {
+		// Stage 2 recovers into a new `history-<n>.db` (S9), not into P3's store.
+		if (this.sqlite) return Promise.resolve(false);
 		return this.recoverWith(async (db) => {
 			const result = await copyLegacy(this.migrationDeps(db), coerceStoredShot);
 			if (result.kind !== 'done') {
@@ -2613,6 +2760,8 @@ export class HistoryStore {
 	 * restore can still give each its curve.
 	 */
 	async recoverSnapshot(name?: string | 'all'): Promise<RecoveryResult> {
+		// Stage 2 recovers into a new `history-<n>.db` (S9), not into P3's store.
+		if (this.sqlite) return false;
 		if (this.healthState !== 'lost') return this.recoverWith(async () => false);
 		const snap =
 			name === 'all' ? await readAllRowsSnapshots(this.opts.snapshotRoot) : await readRowsSnapshot(this.opts.snapshotRoot, name);
@@ -4102,7 +4251,8 @@ let store: HistoryStore | undefined;
 export function getHistoryStore(): HistoryStore {
 	if (!store) {
 		clearLight();
-		store = new HistoryStore();
+		// The app's store waits for this tab's stage (#310 W5); tests set their own.
+		store = new HistoryStore(stagedBootActive() ? { stage2: historyStage } : {});
 	}
 	return store;
 }
