@@ -209,9 +209,23 @@ fun PhoneBrewScreen(
                     RunningBody(ui = ui, live = live, active = active, modifier = Modifier.weight(1f))
                 }
             } else {
+                // The status card (machine error → can't start → maintenance
+                // due), under the tiles, at rest only: not while a mode runs.
+                val status = if (mode != null) null else brewStatusOf(
+                    ui.machineError, ui.shotStartError, ui.maintenanceReadout, ui.maintenanceDismissed,
+                )
                 RestingBody(
                     ui = ui,
                     live = vm.live,
+                    status = status,
+                    onOpenMaintenance = { onNav("settings") },
+                    onDismissStatus = {
+                        when (status) {
+                            is BrewStatus.StartBlocked -> vm.dismissShotStartError()
+                            is BrewStatus.MaintenanceDue -> vm.dismissMaintenance()
+                            else -> Unit
+                        }
+                    },
                     active = active,
                     connected = connected,
                     scaleConnected = scaleConnected,
@@ -230,6 +244,8 @@ fun PhoneBrewScreen(
             // ── Foot: mode cluster + Coffee/Stop ─────────────────────────────
             LiveReadouts(vm.live) { live ->
                 ModeCluster(
+                    // A temporary message's card sits just above this row.
+                    modifier = Modifier.messageAnchor(MessageAnchorSlot.Controls),
                     machineStateName = ui.machineStateName,
                     modeElapsedMs = live.modeElapsedMs,
                     targets = rememberModeTargets(ui),
@@ -838,6 +854,10 @@ private fun RestingBody(
     historyRow: (String) -> coffee.crema.history.ShotRow? = { null },
     /** A bag's newest machine shot, from the store (#310 A3b). */
     lastMachineShotOf: (String) -> coffee.crema.history.ShotRow? = { null },
+    /** The status card under the tiles, or null. */
+    status: BrewStatus? = null,
+    onOpenMaintenance: () -> Unit = {},
+    onDismissStatus: () -> Unit = {},
 ) {
     val tel = CremaTheme.telemetry
     Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1109,6 +1129,9 @@ private fun RestingBody(
                 )
             }
         }
+        status?.let {
+            BrewStatusCard(it, onOpenMaintenance = onOpenMaintenance, onDismiss = onDismissStatus)
+        }
     }
 }
 
@@ -1322,6 +1345,7 @@ private fun ModeCluster(
     /** Live steam-boiler reading + wire substate — drive the pill glyphs. */
     steamTemp: Float?,
     machineSubstate: String?,
+    modifier: Modifier = Modifier,
 ) {
     val tel = CremaTheme.telemetry
     // Live pill subs (were hardcoded): resting = the *target* the firmware
@@ -1335,7 +1359,7 @@ private fun ModeCluster(
     // share the group signal (as does the Coffee button).
     val steamHot = steamAtTemperature(steamTemp, targets.steamTempC)
     val groupHot = groupAtTemperature(machineSubstate)
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ModePill(
             "Steam",
             if (steaming) modeRunningSub(modeElapsedMs, targets.steamTimeoutS)

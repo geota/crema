@@ -98,7 +98,6 @@ import coffee.crema.core.ExitMetric
 import coffee.crema.core.MachineState
 import coffee.crema.core.ModeTargets
 import coffee.crema.core.StopReason
-import coffee.crema.core.MaintenanceReadout
 import coffee.crema.core.Roaster
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.rankProfilesForPicker
@@ -117,7 +116,12 @@ import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.StopTargetsView
 import coffee.crema.ui.components.CremaAnchoredPopup
 import coffee.crema.ui.components.CremaCard
+import coffee.crema.ui.components.BrewStatus
+import coffee.crema.ui.components.BrewStatusCard
 import coffee.crema.ui.components.DialInCard
+import coffee.crema.ui.components.MessageAnchorSlot
+import coffee.crema.ui.components.brewStatusOf
+import coffee.crema.ui.components.messageAnchor
 import coffee.crema.ui.components.EmptyBagBanner
 import coffee.crema.ui.components.CremaFreshnessChip
 import coffee.crema.ui.components.CremaHeaderBlock
@@ -165,10 +169,6 @@ fun BrewScreen(
     val running = ui.shotInProgress
     val espressoActive = ui.machineStateName == MachineState.Espresso
     var quickOpen by remember { mutableStateOf(false) }
-    // Maintenance categories the user dismissed *this session* (per-category,
-    // re-shown on relaunch). Lets the slim banner be cleared so the chart gets
-    // its height back — mirrors the PWA's session-only maintenance dismiss.
-    var maintDismissed by remember { mutableStateOf(setOf<String>()) }
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CremaNavigationRail(
@@ -217,15 +217,6 @@ fun BrewScreen(
                     else onNav("beans")
                 },
             )
-            // Slim amber maintenance banner — modelled on the PWA MachineErrorBanner.
-            // Shown when any maintenance counter is past its interval (descale →
-            // clean → filter, most-urgent first); hidden when all ok or no readout.
-            BrewHeadBanner(
-                readout = ui.maintenanceReadout,
-                dismissed = maintDismissed,
-                onDismiss = { cat -> maintDismissed = maintDismissed + cat },
-                onOpenWater = { onNav("settings") },
-            )
             EmptyBagBanner(ui, onSelectBag = vm::setActiveBean, Modifier.padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 4.dp))
             Row(
                 modifier = Modifier
@@ -247,6 +238,12 @@ fun BrewScreen(
                     // water / flush), fed by the VM's mode clock — the steaming
                     // countdown the web head pill shows (issue: steam timer).
                     val mode = modeLabel(ui.machineStateName)
+                    // The status card (machine error → can't start → maintenance
+                    // due) takes the Last shot / Dial-in slot, at rest only: a
+                    // shot or a mode needs the column's height.
+                    val status = if (running || mode != null) null else brewStatusOf(
+                        ui.machineError, ui.shotStartError, ui.maintenanceReadout, ui.maintenanceDismissed,
+                    )
                     LiveReadouts(vm.live) { live ->
                         TimerCard(
                             running = running || mode != null,
@@ -315,7 +312,7 @@ fun BrewScreen(
                         // Stop conditions and Last shot stay anchored to the
                         // column's bottom edge exactly where Phase leaves them.
                         Spacer(Modifier.weight(1f))
-                    } else if (dialInShot != null) {
+                    } else if (dialInShot != null && status == null) {
                         // Same wrap-plus-spacer treatment while the dial-in card
                         // owns the bottom slot — Limits + card stay anchored.
                         Spacer(Modifier.weight(1f))
@@ -342,7 +339,20 @@ fun BrewScreen(
                             volumeUnit = ui.volumeUnit,
                         )
                     }
-                    if (!running && ui.lastShot != null) {
+                    if (status != null) {
+                        // Dismissing it brings Last shot / Dial-in back.
+                        BrewStatusCard(
+                            status = status,
+                            onOpenMaintenance = { onNav("settings") },
+                            onDismiss = {
+                                when (status) {
+                                    is BrewStatus.StartBlocked -> vm.dismissShotStartError()
+                                    is BrewStatus.MaintenanceDue -> vm.dismissMaintenance()
+                                    is BrewStatus.MachineError -> Unit
+                                }
+                            },
+                        )
+                    } else if (!running && ui.lastShot != null) {
                         LastShotCard(
                             last = ui.lastShot!!,
                             dose = active?.dose ?: 18f,
@@ -437,6 +447,8 @@ fun BrewScreen(
                     // then Espresso (vm.startShot). Stop is a direct Idle request,
                     // and also cancels a start still pending (05 F2).
                     onCoffee = { if (espressoActive || ui.shotStarting) vm.stopShot() else vm.startShot() },
+                    // A temporary message's strip sits on top of this bar.
+                    modifier = Modifier.messageAnchor(MessageAnchorSlot.Controls),
                 )
             }
             if (quickOpen) {
@@ -564,67 +576,6 @@ private fun BrewHeader(
             onEdit = onEditBean,
         )
         QuickControlsPill(onClick = onOpenQuick)
-    }
-}
-
-// ── Maintenance banner (PWA MachineErrorBanner, amber) ──────────────────────
-// A slim full-width amber strip shown when any maintenance counter is overdue.
-// Picks the most-urgent due item (descale → clean → filter) for the headline;
-// tapping it routes to Settings (the Water & maintenance section). Hidden when
-// every counter is ok or the readout hasn't been computed yet.
-@Composable
-private fun BrewHeadBanner(
-    readout: MaintenanceReadout?,
-    dismissed: Set<String>,
-    onDismiss: (String) -> Unit,
-    onOpenWater: () -> Unit,
-) {
-    if (readout == null) return
-    // Most-urgent due item the user hasn't dismissed this session (descale →
-    // clean → filter). Each carries its category key so the ✕ clears just that
-    // one; a different category that comes due later still surfaces.
-    val (category, message) = when {
-        !readout.descaleOk && "descale" !in dismissed -> "descale" to "Descale due"
-        !readout.cleanOk && "clean" !in dismissed -> "clean" to "Clean due"
-        !readout.filterOk && "filter" !in dismissed -> "filter" to "Filter due"
-        else -> return
-    }
-    val amber = Color(0xFFDBA764)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 4.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(amber.copy(alpha = 0.14f))
-            .border(1.dp, amber.copy(alpha = 0.40f), RoundedCornerShape(10.dp))
-            .clickable(onClick = onOpenWater)
-            .padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        PhIcon("wrench", sizeDp = 16, tint = amber)
-        Text(
-            message,
-            style = MaterialTheme.typography.labelLarge,
-            color = amber,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            "Maintenance",
-            style = MaterialTheme.typography.labelSmall,
-            color = amber.copy(alpha = 0.85f),
-        )
-        // Dismiss ✕ — clears the banner for this session so it stops taking
-        // height from the chart. Its own clickable consumes the tap, so it
-        // doesn't also route to Settings like the banner body does.
-        Box(
-            modifier = Modifier
-                .clip(CircleShape)
-                .clickable { onDismiss(category) }
-                .padding(4.dp),
-        ) {
-            PhIcon("x", sizeDp = 14, tint = amber.copy(alpha = 0.85f))
-        }
     }
 }
 
@@ -1872,8 +1823,9 @@ private fun BrewFoot(
     onHotWater: () -> Unit,
     onFlush: () -> Unit,
     onCoffee: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column {
+    Column(modifier) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 10.dp),

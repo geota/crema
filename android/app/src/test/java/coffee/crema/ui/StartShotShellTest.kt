@@ -51,12 +51,17 @@ class StartShotShellTest {
         idle(bridge)
         vm.startShot()
         VmHarness.idle()
+        // The refusal is Brew's "Can't start shot" card, not a message.
         assertTrue(
-            vm.ui.value.userMessages.any { "Require scale to start" in it },
-            "${vm.ui.value.userMessages}",
+            vm.ui.value.shotStartError?.contains("Require scale to start") == true,
+            "${vm.ui.value.shotStartError}",
         )
+        assertFalse(vm.ui.value.userMessages.any { "Require scale to start" in it }, "${vm.ui.value.userMessages}")
         assertFalse(bridge.shotStarting())
         assertFalse(vm.ui.value.shotStarting)
+        // Picking a profile clears it, as the ✕ does.
+        vm.setActiveProfile(vm.ui.value.profiles.first { it.segments.size <= 20 }.id)
+        assertEquals(null, vm.ui.value.shotStartError)
     }
 
     @Test

@@ -1,5 +1,7 @@
 package coffee.crema.ui.phone.components
 
+import coffee.crema.ui.components.MessageAnchorSlot
+import coffee.crema.ui.components.messageAnchor
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -63,7 +65,8 @@ val CremaPhoneDestinations = listOf(
 
 @Composable
 fun CremaBottomNav(active: String, onNav: (String) -> Unit) {
-    Column {
+    // A temporary message sits just above the bottom navigation.
+    Column(Modifier.messageAnchor(MessageAnchorSlot.Nav)) {
         // Proto .pf-nav: hairline above a surface-container-low bar.
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         NavigationBar(

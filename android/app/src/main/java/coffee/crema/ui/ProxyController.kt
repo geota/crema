@@ -188,6 +188,8 @@ class ProxyController(
     /** Returns once the VM's prefs are loaded: a role change persisted before
      *  then would be overwritten by the load. */
     private val prefsReady: suspend () -> Unit = {},
+    /** This device's own shot start was refused (the Brew status card). */
+    private val startRefused: ((String) -> Unit)? = null,
 ) {
 
     /** The proxy slice of the UI snapshot — the VM mirrors this into MainUiState. */
@@ -268,6 +270,7 @@ class ProxyController(
         actions = machineActions,
         notify = { notify(it) },
         hostName = { deviceLabel() },
+        startRefused = { reason -> startRefused?.invoke(reason) ?: notify(reason) },
     )
 
     /** A primary's entry for relayed controls (wired into [RelayHub]). */
