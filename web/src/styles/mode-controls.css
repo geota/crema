@@ -3,19 +3,15 @@
    Ported from `handoff-mode-controls-chips/styles/mode-controls.css`
    (Variant A only; Variants B-G in the reference are not used here).
 
-   Three surfaces:
+   Two surfaces:
 
      1. `.mc-actionrow`   — the row of three chips between the dashboard's
                             main grid and the foot (Brew page).
      2. `.mc-chip`        — a single chip; class-driven states for active /
                             disabled, with mode-specific color tint.
-     3. `.mc-head-status` — a colored pill in the dashboard header, between
-                            the profile-info block (left) and the Edit /
-                            Switch buttons (right). Now carries errors and
-                            maintenance only (`MachineErrorBanner`); the
-                            service-mode banner it was built for moved into
-                            the left column as `ModeCard`, where it costs no
-                            layout height.
+
+   The header status pill that used to live here is gone: errors and
+   maintenance are `BrewStatusCard`, the running mode is `ModeCard`.
 
    The mode tokens (`--mc-steam`, `--mc-water`, `--mc-flush`) are scoped to
    `:root` so they're available to both surfaces and to any future per-mode
@@ -179,198 +175,6 @@
 .mc-chip-cancel > :is(i, svg) {
 	font-size: 10px;
 	color: rgba(var(--tint-rgb), 0.7);
-}
-
-/* ── Header status pill ────────────────────────────────────────────── */
-
-.mc-head-status {
-	display: inline-flex;
-	align-items: center;
-	gap: 14px;
-	padding: 7px 8px 7px 12px;
-	border-radius: 999px;
-	background: rgba(var(--tint-rgb), 0.08);
-	border: 1px solid rgba(var(--tint-rgb), 0.1);
-}
-.mc-head-status.is-steam {
-	background: rgba(196, 78, 63, 0.12);
-	border-color: rgba(196, 78, 63, 0.5);
-}
-.mc-head-status.is-water {
-	background: rgba(74, 111, 165, 0.12);
-	border-color: rgba(74, 111, 165, 0.5);
-}
-.mc-head-status.is-flush {
-	background: rgba(107, 140, 95, 0.12);
-	border-color: rgba(107, 140, 95, 0.5);
-}
-/* Machine-error variant — used by MachineErrorBanner. Same skeleton as
-   the service-mode pills (so error + mode banners read with one visual
-   language), red-tinted to surface a firmware fault. The danger token
-   flips per theme so contrast holds on both backgrounds. */
-.mc-head-status.is-error {
-	background: rgba(var(--danger-rgb), 0.12);
-	border-color: rgba(var(--danger-rgb), 0.5);
-}
-/* Maintenance / advisory variant — used by MachineErrorBanner when the
-   caller opts into the yellow palette. Same skeleton; the warning token
-   flips per theme. Reserved for "needs attention but not a fault" cues
-   (filter due, descale due, clean due). */
-.mc-head-status.is-warning {
-	background: rgba(var(--warning-rgb), 0.12);
-	border-color: rgba(var(--warning-rgb), 0.5);
-}
-
-.mc-head-status-icon {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 26px;
-	height: 26px;
-	border-radius: 50%;
-	background: rgba(var(--tint-rgb), 0.08);
-	flex: 0 0 auto;
-}
-.mc-head-status-icon > :is(i, svg) {
-	font-size: 14px;
-}
-/* Icon color uses the full mode token (not a lighter custom hex) so the
-   icon reads on the 15-% mode-color wash in both themes — the previous
-   light blue / sage hexes only had contrast against the dark page bg. */
-.mc-head-status.is-steam .mc-head-status-icon {
-	background: var(--mc-steam-15);
-	color: var(--mc-steam);
-}
-.mc-head-status.is-water .mc-head-status-icon {
-	background: var(--mc-water-15);
-	color: var(--mc-water);
-}
-.mc-head-status.is-flush .mc-head-status-icon {
-	background: var(--mc-flush-15);
-	color: var(--mc-flush);
-}
-.mc-head-status.is-error .mc-head-status-icon {
-	background: rgba(var(--danger-rgb), 0.16);
-	color: var(--danger);
-}
-.mc-head-status.is-warning .mc-head-status-icon {
-	background: rgba(var(--warning-rgb), 0.16);
-	color: var(--warning);
-}
-
-.mc-head-status-text {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	min-width: 0;
-}
-.mc-head-status-name {
-	font-family: var(--font-sans);
-	font-size: 13px;
-	font-weight: 600;
-	color: var(--fg-1);
-	letter-spacing: 0.01em;
-}
-.mc-head-status-meta {
-	font-family: var(--font-mono);
-	font-size: 12px;
-	color: rgba(var(--tint-rgb), 0.65);
-	font-variant-numeric: tabular-nums;
-}
-
-.mc-head-status-bar {
-	width: 96px;
-	height: 4px;
-	background: rgba(var(--tint-rgb), 0.12);
-	border-radius: 999px;
-	overflow: hidden;
-	flex: 0 0 auto;
-}
-.mc-head-status-bar > div {
-	height: 100%;
-	border-radius: 999px;
-	transition: width 500ms var(--ease, cubic-bezier(0.32, 0.72, 0, 1));
-}
-.mc-head-status.is-steam .mc-head-status-bar > div {
-	background: var(--mc-steam);
-}
-.mc-head-status.is-water .mc-head-status-bar > div {
-	background: var(--mc-water);
-}
-.mc-head-status.is-flush .mc-head-status-bar > div {
-	background: var(--mc-flush);
-}
-
-.mc-head-status-cancel {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	padding: 6px 12px 6px 10px;
-	border-radius: 999px;
-	background: rgba(var(--danger-rgb), 0.18);
-	border: 1px solid rgba(var(--danger-rgb), 0.45);
-	/* `--danger` is the full danger red — readable on the 18-% danger wash
-	   in both themes. The previous `#e89c90` light pink only had contrast
-	   on the dark page bg. */
-	color: var(--danger);
-	font-family: var(--font-sans);
-	font-size: 12px;
-	font-weight: 600;
-	cursor: pointer;
-}
-.mc-head-status-cancel:hover {
-	background: rgba(var(--danger-rgb), 0.28);
-}
-.mc-head-status-cancel > :is(i, svg) {
-	font-size: 11px;
-}
-
-/* The banner's labelled action ("Switch bag"), in the warning palette. */
-.mc-head-status-action {
-	flex: none;
-	min-height: 32px;
-	padding: 0 12px;
-	border: 1px solid rgba(var(--warning-rgb), 0.5);
-	border-radius: 8px;
-	background: rgba(var(--warning-rgb), 0.16);
-	color: var(--warning);
-	font: inherit;
-	font-size: 12px;
-	font-weight: 600;
-	cursor: pointer;
-}
-.mc-head-status-action:hover {
-	background: rgba(var(--warning-rgb), 0.28);
-}
-
-/* At phone width the banner is Android's strip: a full-width rounded card with
-   the title over the text, so a long line doesn't squeeze into a pill. */
-.pbrew .mc-head-status {
-	display: flex;
-	width: 100%;
-	gap: 10px;
-	padding: 8px 8px 8px 12px;
-	border-radius: 10px;
-}
-.pbrew .mc-head-status-text {
-	flex: 1;
-	min-width: 0;
-	flex-direction: column;
-	align-items: flex-start;
-	gap: 2px;
-}
-.pbrew .mc-head-status-meta {
-	font-family: var(--font-sans);
-	white-space: normal;
-}
-
-/* Header layout when a mode pill is present — push it into the
-   right-aligned middle slot between profile-l and actions-r. */
-.crema-dash-head.has-status .crema-dash-head-mid {
-	display: inline-flex;
-	align-items: center;
-	margin-left: auto;
-	margin-right: 14px;
 }
 
 /* ── Reduced motion (cohort review 07 #12) ───────────────────────────────

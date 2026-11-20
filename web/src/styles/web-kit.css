@@ -877,7 +877,6 @@ summary:focus-visible,
 .bh-icon.is-open { background: rgba(var(--copper-rgb), 0.16); color: var(--fg-accent); }
 .bh-icon > :is(i, svg) { font-size: 15px; }
 .bh-divider { width: 1px; align-self: stretch; background: rgba(var(--tint-rgb), 0.12); margin: 2px 4px; flex: 0 0 auto; }
-.bh-status { flex: 0 1 auto; align-self: center; min-width: 0; }
 .bh-actions { align-self: center; flex: 0 0 auto; }
 
 .hpick { position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; width: min(340px, 80vw); display: flex; flex-direction: column; max-height: 380px; background: var(--bg-surface); border: 1px solid rgba(var(--tint-rgb), 0.12); border-radius: 12px; box-shadow: var(--shadow-lg); overflow: hidden; }

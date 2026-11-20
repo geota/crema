@@ -5,7 +5,7 @@
  * native `alert()` blocks the main thread, can't be styled, and reads
  * out-of-place in a PWA. `toast.error(msg)` / `.info(msg)` / `.success(msg)`
  * enqueue a transient notice that {@link ToastHost} (mounted once in the root
- * layout) renders bottom-right and auto-dismisses.
+ * layout) renders just above the brew controls and auto-dismisses.
  *
  * Runes-in-module: the queue is module-level `$state`, exposed via a getter so
  * the host tracks it reactively (a `$state` binding can't be exported and stay
@@ -23,6 +23,8 @@ export interface Toast {
 	readonly kind: ToastKind;
 	/** The message body. */
 	readonly message: string;
+	/** How long it stays, in ms, for the countdown line; `0` = pinned. */
+	readonly durationMs: number;
 	/** Optional action button (e.g. "Undo") — runs, then dismisses. */
 	readonly action?: { readonly label: string; readonly run: () => void };
 }
@@ -64,7 +66,8 @@ function show(
 	onDismiss?: () => void
 ): number {
 	const id = nextId++;
-	items = [...items, { id, kind, message, ...(action ? { action } : {}) }];
+	const shown = Math.max(0, durationMs);
+	items = [...items, { id, kind, message, durationMs: shown, ...(action ? { action } : {}) }];
 	if (onDismiss) dismissHooks.set(id, onDismiss);
 	// `durationMs <= 0` pins the toast until dismissed manually.
 	if (durationMs > 0 && typeof setTimeout !== 'undefined') {

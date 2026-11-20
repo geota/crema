@@ -2,13 +2,13 @@
  * `#lib/components/shared/toast-inset` — keeps the toast stack off the
  * controls that must stay reachable (final cohort review 07, new finding 1).
  *
- * The toast host is fixed to the bottom-right corner, which on Brew is where
- * the Coffee button, Flush and the other foot actions live. A pinned toast
- * (the update offer, the engine-reset notice) sat on the start button until
- * dismissed. A component that owns such a band attaches {@link keepToastsAbove}
- * to it; the host then lifts its stack above the band's top edge, whatever the
- * band's height at the current width (the Brew foot is about 100 px on a
- * landscape tablet and about 200 px at phone width).
+ * Temporary messages sit just above the brew controls: on wide, a strip on
+ * top of Brew's bottom bar; at phone width, a card just above Steam / Water /
+ * Flush. A pinned toast (the update offer, the engine-reset notice) must
+ * never cover the Coffee button. A component that owns such a band attaches
+ * {@link keepToastsAbove} to it; the host then sits on the band's top edge,
+ * whatever the band's height at the current width (the Brew foot is about
+ * 100 px on a landscape tablet and about 200 px at phone width).
  *
  * Runes-in-module, like the toast queue: the inset is module-level `$state`,
  * read through a getter so the host tracks it.
