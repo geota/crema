@@ -50,7 +50,9 @@ import kotlinx.coroutines.sync.withLock
  * that may duplicate a stored shot) are the shared HTTP retry policy's job
  * (`net/HttpClients.kt`, applied by [DecentClient]), so each [DecentApi] call
  * returns the FINAL answer. An auth failure flags the account for
- * re-linking; a permanent rejection joins [DecentState.rejectedShotIds] and
+ * re-linking, but only when the token it was sent with is still the linked
+ * one (a 401 for a login replaced mid-upload leaves the new login alone;
+ * decaid `e6a440e1`); a permanent rejection joins [DecentState.rejectedShotIds] and
  * leaves the backlog; any other failure is recorded and reported.
  *
  * A 403 — the serial is not on the account (de1app `5b09f6aa`) — is neither:
@@ -538,7 +540,9 @@ class DecentSync(
             onShotUploaded(shot.id, result.id ?: "uploaded:${now()}", if (fromLive) machine else null)
             persist {
                 it.copy(
-                    needsReauth = false,
+                    // Only the login this went out with is known good: a
+                    // success from a replaced one says nothing about the newer.
+                    needsReauth = if (it.token == token) false else it.needsReauth,
                     lastUpload = DecentLastUpload(now(), ok = true, message = "Uploaded", url = url),
                     rejectedShotIds = it.rejectedShotIds - shot.id,
                 ).logged("push", shot)
@@ -548,8 +552,17 @@ class DecentSync(
             throw c
         } catch (e: DecentError.Auth) {
             persist {
-                it.copy(needsReauth = true, lastUpload = DecentLastUpload(now(), ok = false, message = e.message ?: "auth"))
-                    .logged("skip", shot, e.message)
+                // Only a 401 for the login that is still linked flags it: one
+                // for a login the user has since replaced (or signed out of)
+                // while this upload ran says nothing about the new one, and the
+                // shot stays in the backlog for it. decaid e6a440e1
+                // (`decent_proxy_service.dart:178-196`) checks the same.
+                if (it.token == token) {
+                    it.copy(needsReauth = true, lastUpload = DecentLastUpload(now(), ok = false, message = e.message ?: "auth"))
+                        .logged("skip", shot, e.message)
+                } else {
+                    it.logged("skip", shot, e.message)
+                }
             }
             return Outcome.Failed(e)
         } catch (e: DecentError.Rejected) {
@@ -606,7 +619,9 @@ class DecentSync(
                         val e = o.error
                         streak++
                         stopped = when {
-                            e is DecentError.Auth -> "Decent login needs re-linking"
+                            // A 401 for a login replaced mid-drain leaves the
+                            // account unflagged: the next shot goes with the new one.
+                            e is DecentError.Auth && persisted.needsReauth -> "Decent login needs re-linking"
                             e.offline -> "Offline"
                             streak >= FAILURE_STREAK_LIMIT -> "$streak uploads failed in a row"
                             else -> null

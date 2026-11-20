@@ -218,6 +218,16 @@ class ScaleBleManager(
     @Volatile
     var autoReconnectEnabled: Boolean = true
 
+    /**
+     * A DE1 firmware flash runs: [connect] refuses and [kickReconnect] is
+     * ignored, so no scale link competes with the flash for the radio
+     * (Decenza 270b89df). Set and cleared by
+     * [coffee.crema.ui.ConnectionController.setFirmwareFlashActive], which
+     * drops the link first and reconnects after.
+     */
+    @Volatile
+    var heldForFirmwareFlash: Boolean = false
+
     /** Set when a user-initiated [disconnect] begins, so the reconnect [session]
      *  loop knows a drop was intentional (don't reconnect). */
     @Volatile
@@ -269,6 +279,10 @@ class ScaleBleManager(
      * [CremaBridge.connectScale] to pick the codec.
      */
     fun connect(device: BleTransport.DeviceHandle, advertisedName: String) {
+        if (heldForFirmwareFlash) {
+            onStatus("Scale waits for the firmware update")
+            return
+        }
         this.device = device
         this.advertisedName = advertisedName
         userInitiated = false
@@ -283,7 +297,7 @@ class ScaleBleManager(
 
     /** Attempt a reconnect NOW — the scale twin of [De1BleManager.kickReconnect]. */
     fun kickReconnect(trigger: ReconnectTrigger): ReconnectKicker.Result {
-        if (userInitiated || !autoReconnectEnabled) return ReconnectKicker.Result.IGNORED_IDLE
+        if (userInitiated || !autoReconnectEnabled || heldForFirmwareFlash) return ReconnectKicker.Result.IGNORED_IDLE
         return kicker.kick(trigger)
     }
 

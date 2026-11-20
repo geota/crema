@@ -202,6 +202,104 @@ class FirmwareFlashDriverTest {
         assertEquals(listOf(true), keep, "keep-alive set once, not per status")
     }
 
+    /** The scale side of [coffee.crema.ui.ScaleFlashPause], recorded. */
+    private class ScalePort(var wanted: Boolean = true) : coffee.crema.ui.ScaleFlashPause.Port {
+        val events = mutableListOf<String>()
+        override fun scaleWanted() = wanted
+        override fun standDown() { events += "standDown" }
+        override fun bringBack() { events += "bringBack" }
+        override fun log(line: String) {}
+    }
+
+    /** A driver whose keep-alive feeds the scale pause, as MainViewModel wires it (Decenza 270b89df). */
+    private fun TestScope.scaleDriver(core: FlashCorePort, io: FlashIoPort, port: ScalePort): Pair<FirmwareFlashDriver, coffee.crema.ui.ScaleFlashPause> {
+        val pause = coffee.crema.ui.ScaleFlashPause(port)
+        return FirmwareFlashDriver(core, io, backgroundScope, clock = { testScheduler.currentTime }, onStatus = {}, keepAlive = pause::onFlashActive) to pause
+    }
+
+    @Test
+    fun theScaleStandsDownForTheFlashAndComesBackWhenItIsVerified() = runTest {
+        val core = ScriptedCore(mutableMapOf(
+            "start" to ArrayDeque(listOf(FlashStep(listOf(write(WriteTarget.De1MmrWrite, 1)), status(FlashPhase.Uploading)))),
+            "ack" to ArrayDeque(listOf(FlashStep(emptyList(), status(FlashPhase.Verifying)))),
+            "tick" to ArrayDeque(listOf(FlashStep(emptyList(), status(FlashPhase.AwaitingPowerCycle)))),
+        ))
+        val port = ScalePort()
+        val (d, pause) = scaleDriver(core, FakeIo(), port)
+        d.start(ByteArray(32), ok)
+        runCurrent()
+        assertEquals(listOf("standDown"), port.events)
+        assertTrue(pause.paused)
+        // A connect asked for mid-flash (a tap, a foreground kick) is held.
+        assertTrue(pause.holdConnect())
+        advanceTimeBy(TICK_MS + 1); runCurrent()
+        assertFalse(pause.paused)
+        assertEquals(listOf("standDown", "bringBack"), port.events)
+        assertFalse(pause.holdConnect())
+    }
+
+    @Test
+    fun theScaleComesBackWhenTheFlashFails() = runTest {
+        val core = ScriptedCore(mutableMapOf(
+            "start" to ArrayDeque(listOf(FlashStep(listOf(write(WriteTarget.De1MmrWrite, 1)), status(FlashPhase.Uploading)))),
+            "failed" to ArrayDeque(listOf(FlashStep(emptyList(), status(FlashPhase.Failed, locks = false)))),
+        ))
+        val port = ScalePort()
+        val (d, pause) = scaleDriver(core, FakeIo(failWrites = true), port)
+        d.start(ByteArray(32), ok)
+        advanceTimeBy(100); runCurrent()
+        assertFalse(pause.paused)
+        assertEquals(listOf("standDown", "bringBack"), port.events)
+    }
+
+    @Test
+    fun theScaleComesBackWhenTheFlashIsCancelled() = runTest {
+        val core = ScriptedCore(mutableMapOf(
+            "start" to ArrayDeque(listOf(FlashStep(listOf(write(WriteTarget.De1MmrWrite, 1)), status(FlashPhase.Uploading)))),
+            "cancel" to ArrayDeque(listOf(FlashStep(emptyList(), status(FlashPhase.Cancelled, locks = false)))),
+        ))
+        val port = ScalePort()
+        val (d, pause) = scaleDriver(core, FakeIo().apply { hold = CompletableDeferred() }, port)
+        d.start(ByteArray(32), ok)
+        runCurrent()
+        assertTrue(pause.paused)
+        d.cancel()
+        runCurrent()
+        assertFalse(pause.paused)
+        assertEquals(listOf("standDown", "bringBack"), port.events)
+    }
+
+    @Test
+    fun aFlashRestoredAfterARestartPausesTheScaleUntilItEnds() = runTest {
+        // The process died mid-erase: the restored hold pauses the scale the
+        // new process connected at launch, and lets go when the hold ends.
+        val core = ScriptedCore(mutableMapOf(
+            "restoreHold" to ArrayDeque(listOf(FlashStep(emptyList(), status(FlashPhase.Erasing)))),
+            "tick" to ArrayDeque(listOf(FlashStep(emptyList(), status(FlashPhase.AwaitingPowerCycle)))),
+        ))
+        val port = ScalePort()
+        val (d, pause) = scaleDriver(core, FakeIo(), port)
+        d.restoreEraseHold(1358u, 5_000)
+        runCurrent()
+        assertTrue(pause.paused)
+        advanceTimeBy(TICK_MS + 1); runCurrent()
+        assertFalse(pause.paused)
+        assertEquals(listOf("standDown", "bringBack"), port.events)
+    }
+
+    @Test
+    fun aScaleNobodyWantedStaysAwayAfterTheFlash() = runTest {
+        val core = ScriptedCore(mutableMapOf(
+            "start" to ArrayDeque(listOf(FlashStep(listOf(write(WriteTarget.De1MmrWrite, 1)), status(FlashPhase.Uploading)))),
+            "failed" to ArrayDeque(listOf(FlashStep(emptyList(), status(FlashPhase.Failed, locks = false)))),
+        ))
+        val port = ScalePort(wanted = false)
+        val (d, _) = scaleDriver(core, FakeIo(failWrites = true), port)
+        d.start(ByteArray(32), ok)
+        advanceTimeBy(100); runCurrent()
+        assertEquals(listOf("standDown"), port.events)
+    }
+
     @Test
     fun aFailedWriteIsTriedOnceReportedAndTheQueueDropped() = runTest {
         val core = ScriptedCore(mutableMapOf(

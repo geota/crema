@@ -277,6 +277,90 @@ describe('uploadShotToDecent outcomes', () => {
 	});
 });
 
+describe('a 401 for a login replaced mid-upload (decaid e6a440e1)', () => {
+	/** A fetch that holds its answer until `release`, while the test signs in again. */
+	function heldFetch(status: number): { fetchFn: FetchLike; started: Promise<void>; release: () => void } {
+		let release: () => void = () => {};
+		let started: () => void = () => {};
+		const gate = new Promise<void>((r) => (release = r));
+		const sent = new Promise<void>((r) => (started = r));
+		const fetchFn: FetchLike = async () => {
+			posts += 1;
+			started();
+			await gate;
+			return new Response(status === 200 ? '{"id":"77"}' : '', { status });
+		};
+		return { fetchFn, started: sent, release };
+	}
+
+	it('does not flag the newer login; the shot waits for a retry', async () => {
+		writeDecentAccount(linked);
+		const held = heldFetch(401);
+		const run = uploadShotToDecent('a', { fetchFn: held.fetchFn, appVersion: 't' });
+		await held.started;
+		// The user signs in again while the old request is still out.
+		writeDecentAccount({ ...linked, token: 'tok-2' });
+		held.release();
+		expect(await run).toMatchObject({ kind: 'failed', error: { _tag: 'DecentAuthError' } });
+		const account = readDecentAccount();
+		expect(account.needsReauth).toBe(false);
+		expect(account.retryShotIds).toEqual(['a']);
+		// The retry goes out with the new login.
+		expect(await uploadShotToDecent('a', { fetchFn: ok, appVersion: 't' })).toMatchObject({ kind: 'uploaded' });
+		expect(readDecentAccount().retryShotIds).toEqual([]);
+	});
+
+	it('still flags the login that is current when its own request gets a 401', async () => {
+		writeDecentAccount(linked);
+		const held = heldFetch(401);
+		const run = uploadShotToDecent('a', { fetchFn: held.fetchFn, appVersion: 't' });
+		await held.started;
+		held.release();
+		await run;
+		expect(readDecentAccount().needsReauth).toBe(true);
+	});
+
+	it('does not flag or park anything after a sign-out mid-upload', async () => {
+		writeDecentAccount(linked);
+		const held = heldFetch(401);
+		const run = uploadShotToDecent('a', { fetchFn: held.fetchFn, appVersion: 't' });
+		await held.started;
+		writeDecentAccount({ ...DEFAULT_DECENT_ACCOUNT });
+		held.release();
+		await run;
+		expect(readDecentAccount()).toMatchObject({ needsReauth: false, retryShotIds: [] });
+	});
+
+	it('a success from the replaced login does not clear the newer login\'s flag', async () => {
+		writeDecentAccount(linked);
+		const held = heldFetch(200);
+		const run = uploadShotToDecent('a', { fetchFn: held.fetchFn, appVersion: 't' });
+		await held.started;
+		writeDecentAccount({ ...linked, token: 'tok-2', needsReauth: true });
+		held.release();
+		expect(await run).toMatchObject({ kind: 'uploaded' });
+		expect(readDecentAccount().needsReauth).toBe(true);
+	});
+
+	it('a backlog drain carries on past a stale 401 with the new login', async () => {
+		writeDecentAccount(linked);
+		shots.set('b', shot('b', 30_000, { completedAt: 1_700_000_100_000, machine: { serialNumber: '6262' } }));
+		let calls = 0;
+		const fetchFn: FetchLike = async () => {
+			posts += 1;
+			calls += 1;
+			if (calls === 1) {
+				writeDecentAccount({ ...readDecentAccount(), token: 'tok-2' });
+				return new Response('', { status: 401 });
+			}
+			return new Response('{"id":"78"}', { status: 200 });
+		};
+		const r = await uploadUnsentDecentShots({ fetchFn });
+		expect(r).toMatchObject({ uploaded: 1, failed: 1, stopped: null });
+		expect(readDecentAccount().needsReauth).toBe(false);
+	});
+});
+
 describe('concurrency', () => {
 	it('POSTs once for concurrent uploads of the same shot', async () => {
 		writeDecentAccount(linked);
