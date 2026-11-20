@@ -138,6 +138,40 @@ fn a_stop_keeps_a_late_steam_a_rinse() {
     assert_eq!(steam_events(&events), 2, "the Idle ended the rinse");
 }
 
+/// A rinse cancelled before the machine reported anything lapses with its
+/// window: a group-head Steam minutes later is steam (review of #491).
+#[test]
+fn a_cancelled_rinse_that_never_started_lapses() {
+    let mut core = idle_core();
+    let _ = request_rinse(&mut core);
+    let _ = core.request_machine_state(MachineState::Idle);
+    let events = run(&mut core, &[(STEAM, 120_000), (IDLE, 130_000)]);
+    assert_eq!(
+        states(&events),
+        vec![MachineState::Steam, MachineState::Idle]
+    );
+    assert_eq!(steam_events(&events), 2, "{events:?}");
+}
+
+/// A Stop written while the rinse runs: the rinse's Steam reports stay a
+/// rinse until the machine reports Idle, then Steam is steam again.
+#[test]
+fn a_stop_written_while_the_rinse_runs_keeps_it_until_idle() {
+    let mut core = idle_core();
+    let _ = request_rinse(&mut core);
+    let _ = run(&mut core, &[(STEAM, 1_300)]);
+    let _ = core.request_machine_state(MachineState::Idle);
+    let events = run(&mut core, &[(STEAM, 20_000), (IDLE, 20_500)]);
+    assert_eq!(steam_events(&events), 0, "{events:?}");
+    assert_eq!(
+        states(&events),
+        vec![MachineState::Idle],
+        "Steam reads as the same SteamRinse"
+    );
+    let events = run(&mut core, &[(STEAM, 30_000), (IDLE, 40_000)]);
+    assert_eq!(steam_events(&events), 2, "{events:?}");
+}
+
 /// A disconnect forgets the rinse: the next link's Steam is steam.
 #[test]
 fn a_disconnect_forgets_the_rinse() {

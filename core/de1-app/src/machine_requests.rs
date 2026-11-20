@@ -130,8 +130,8 @@ enum SteamRinseIntent {
     /// Sleep report (the machine before it moves) keeps it, for
     /// [`STEAM_RINSE_ENTER_WINDOW`].
     Requested(Duration),
-    /// The rinse is running, or an Idle was asked for while it was pending:
-    /// `Steam` and `SteamRinse` keep it, any other state ends it.
+    /// The rinse is running: `Steam` and `SteamRinse` keep it, any other
+    /// state ends it.
     Underway,
 }
 
@@ -167,13 +167,14 @@ impl CremaCore {
     }
 
     /// A state write went out: a steam rinse starts its intent, an Idle
-    /// (a stop or a cancel) lets a late `Steam` still count as the rinse
-    /// until the machine reports another state, and any other request
-    /// supersedes it.
+    /// (a stop or a cancel) leaves it as it is — a pending one keeps its
+    /// window, so a late `Steam` still counts as the rinse but a cancelled
+    /// request that never started lapses — and any other request supersedes
+    /// it.
     fn note_state_written(&mut self, state: MachineState) {
         self.request_guard.steam_rinse = match (state, self.request_guard.steam_rinse) {
             (MachineState::SteamRinse, _) => Some(SteamRinseIntent::Requested(self.clock)),
-            (MachineState::Idle, Some(_)) => Some(SteamRinseIntent::Underway),
+            (MachineState::Idle, intent) => intent,
             _ => None,
         };
     }
