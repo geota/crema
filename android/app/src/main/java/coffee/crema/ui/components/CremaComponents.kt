@@ -2175,7 +2175,8 @@ fun CremaNavigationRail(
 ) {
     // Size by the rail's own measured height (not screenHeightDp) so split-screen,
     // freeform windows and a landscape phone all get the layout that fits.
-    BoxWithConstraints(Modifier.fillMaxHeight()) {
+    // The rail's edge is where a temporary message's strip starts.
+    BoxWithConstraints(Modifier.fillMaxHeight().messageAnchor(MessageAnchorSlot.Rail)) {
         val density = if (constraints.hasBoundedHeight) railDensity(maxHeight.value) else RailDensity.Regular
         when (density) {
             RailDensity.Regular -> RegularRail(active, onNav, machineConnected, scaleConnected, onConnect)

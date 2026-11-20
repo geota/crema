@@ -242,6 +242,9 @@ internal class MachineSessionController(
             ) }
             updateUi { it.copy(
                 shotInProgress = true,
+                // A shot runs (also one started on the machine): the last
+                // refused start no longer applies.
+                shotStartError = null,
                 shotFrame = 0,
                 // Fresh shot — the previous stop attribution no longer applies.
                 lastStopReason = null,

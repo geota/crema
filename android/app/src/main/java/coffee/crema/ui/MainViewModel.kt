@@ -739,6 +739,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         },
         prefsReady = { settings.ready.await() },
+        // The Brew status card says why a start was refused (web parity);
+        // the reason is logged, as a message would be.
+        startRefused = { reason ->
+            appendLog(reason)
+            _ui.update { it.copy(shotStartError = reason, status = reason) }
+        },
     )
 
     /**
@@ -1491,7 +1497,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Select the Brew header's active profile. (M1: display only — uploading the
      *  profile to the DE1 on Coffee is the M2 gated-start sequence.) Persisted
      *  (AppPrefs.activeProfileId) so the selection survives a restart. */
-    fun setActiveProfile(id: String) = machine.execute(MachineCommand.SetActiveProfile(id))
+    fun setActiveProfile(id: String) {
+        // Picking a profile resolves "Can't start shot" (web `selectFavorite`).
+        _ui.update { it.copy(shotStartError = null) }
+        machine.execute(MachineCommand.SetActiveProfile(id))
+    }
 
     // ── Library delegates (see [LibraryController]) ──────────────────────────
     // Thin pass-throughs so screens keep calling the same VM API.
@@ -2339,7 +2349,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * M2 v1 always uploads (no fingerprint-skip optimisation yet) and has no
      * pre-shot flush (no settings store on Android yet) — both are later refinements.
      */
-    fun startShot() = machine.execute(MachineCommand.StartShot)
+    fun startShot() {
+        // A new attempt replaces the last refusal (it sets a fresh one if
+        // it's refused too).
+        _ui.update { it.copy(shotStartError = null) }
+        machine.execute(MachineCommand.StartShot)
+    }
+
+    /** The ✕ on Brew's "Can't start shot" card. */
+    fun dismissShotStartError() = _ui.update { it.copy(shotStartError = null) }
+
+    /** The ✕ on Brew's "Maintenance due" card: every category due now stays
+     *  hidden for this session; one that comes due later still shows. */
+    fun dismissMaintenance() = _ui.update {
+        it.copy(maintenanceDismissed = it.maintenanceDismissed + coffee.crema.ui.components.dueMaintenance(it.maintenanceReadout))
+    }
 
     /** Scan for and connect to a DE1 — delegate of [ConnectionController.connect].
      *  Called from the UI once the BLE runtime permissions have been granted. */

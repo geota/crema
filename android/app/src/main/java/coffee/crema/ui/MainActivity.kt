@@ -37,10 +37,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
+import coffee.crema.ui.components.CremaMessageHost
+import coffee.crema.ui.components.LocalMessageAnchors
+import coffee.crema.ui.components.MessageAnchors
+import coffee.crema.ui.components.showDiscardMessage
+import coffee.crema.ui.components.showKeptAsideMessage
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -290,14 +292,13 @@ class MainActivity : ComponentActivity() {
                 // from the plain userMessages queue, which has no action slot.
                 LaunchedEffect(ui.discardToastMessage) {
                     val msg = ui.discardToastMessage ?: return@LaunchedEffect
+                    // Undo restores the shot; a timeout or the ✕ drops it.
                     snackbarScope.launch {
-                        val result = snackbarHostState.showSnackbar(
-                            message = msg,
-                            actionLabel = "Undo",
-                            duration = SnackbarDuration.Long,
+                        snackbarHostState.showDiscardMessage(
+                            msg,
+                            onUndo = viewModel::undoDiscardShot,
+                            onDrop = viewModel::consumeDiscardToast,
                         )
-                        if (result == SnackbarResult.ActionPerformed) viewModel.undoDiscardShot()
-                        else viewModel.consumeDiscardToast()
                     }
                 }
                 // An unreadable store file was kept aside at load: say so once, with
@@ -305,14 +306,11 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(ui.keptAsideNotice) {
                     val msg = ui.keptAsideNotice ?: return@LaunchedEffect
                     snackbarScope.launch {
-                        val result = snackbarHostState.showSnackbar(
-                            message = msg,
-                            actionLabel = "Share",
-                            withDismissAction = true,
-                            duration = SnackbarDuration.Indefinite,
+                        snackbarHostState.showKeptAsideMessage(
+                            msg,
+                            onShare = viewModel::shareKeptAside,
+                            onDismiss = viewModel::consumeKeptAsideNotice,
                         )
-                        if (result == SnackbarResult.ActionPerformed) viewModel.shareKeptAside()
-                        else viewModel.consumeKeptAsideNotice()
                     }
                 }
                 // "Keep screen on" (Settings → Display): hold FLAG_KEEP_SCREEN_ON
@@ -409,7 +407,13 @@ class MainActivity : ComponentActivity() {
                 // expanded view lives in the main window — a Dialog's window is torn
                 // down by the expand-to-landscape rotation, bouncing it closed.
                 var fullscreenChart by remember { mutableStateOf<ExpandedChart?>(null) }
-                CompositionLocalProvider(LocalChartExpander provides { c -> fullscreenChart = c }) {
+                // Where a temporary message sits: screens mark their bottom
+                // bar / rail; CremaMessageHost reads them.
+                val messageAnchors = remember { MessageAnchors() }
+                CompositionLocalProvider(
+                    LocalChartExpander provides { c -> fullscreenChart = c },
+                    LocalMessageAnchors provides messageAnchors,
+                ) {
                 Box(Modifier.fillMaxSize()) {
                 // ONE adaptive APK. The tablet rail layout is multi-pane (rail +
                 // list + detail, side-by-side cards) and only has room to breathe on
@@ -662,10 +666,9 @@ class MainActivity : ComponentActivity() {
                 }
                 }
                 }
-                SnackbarHost(
-                    hostState = snackbarHostState,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),
-                )
+                // Temporary messages, just above the brew controls (the
+                // anchors the screens mark), over everything but the dialogs.
+                CremaMessageHost(snackbarHostState, wide = !isCompact)
                 // Hub: a remote asks to pair (relay v4) — type the code it shows.
                 // Modal over any screen; dismiss = Cancel.
                 ui.pendingPairing?.let { prompt ->

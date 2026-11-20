@@ -62,6 +62,14 @@ data class MainUiState(
     /** Human-readable message for the machine fault core says to surface
      *  (`Event.MachineErrorChanged`), else null — the same copy as web. */
     val machineError: String? = null,
+    /** Why this device's last shot start was refused, while the Brew status
+     *  card shows it ("Can't start shot"); null once dismissed, a profile is
+     *  picked, or the next start or shot begins. A remote's refusals stay
+     *  messages. */
+    val shotStartError: String? = null,
+    /** Maintenance categories ("filter", "descale", "clean") whose Brew card
+     *  was dismissed this session; a relaunch shows them again. */
+    val maintenanceDismissed: Set<String> = emptySet(),
     /** The maintenance cycle (Descale / Clean / AirPurge) core is following
      *  (`Event.MaintenanceProgress`) — held for preheat on old firmware,
      *  requested, or running with the descale countdown; null when none is

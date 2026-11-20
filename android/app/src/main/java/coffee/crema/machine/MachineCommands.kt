@@ -82,11 +82,16 @@ class LocalMachine(
     private val notify: (String) -> Unit,
     /** This device's name, for a refusal a peer shows. */
     private val hostName: () -> String = { "The hub" },
+    /** Tell this device's user why their shot start was refused: the Brew
+     *  status card, where the shell has one, else [notify]. */
+    private val startRefused: (String) -> Unit = notify,
 ) : MachineCommands {
 
     override fun execute(cmd: MachineCommand, onOutcome: (CommandOutcome) -> Unit) {
         val outcome = run(cmd, origin = null)
-        if (outcome is CommandOutcome.Refused) notify(outcome.reason)
+        if (outcome is CommandOutcome.Refused) {
+            if (cmd == MachineCommand.StartShot) startRefused(outcome.reason) else notify(outcome.reason)
+        }
         onOutcome(outcome)
     }
 
