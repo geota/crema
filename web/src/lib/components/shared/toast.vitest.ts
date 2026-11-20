@@ -37,3 +37,13 @@ describe('toast onDismiss', () => {
 		}
 	});
 });
+
+describe('toast duration (the countdown line)', () => {
+	it('records each toast’s duration, and 0 for a pinned one', () => {
+		toast.info('Profile loaded');
+		toast.error('Upload failed');
+		toast.action('Shot discarded', 'Undo', () => undefined);
+		toast.action('Update ready', 'Reload', () => undefined, 0);
+		expect(getToasts().map((t) => t.durationMs)).toEqual([4000, 7000, 8000, 0]);
+	});
+});
