@@ -157,8 +157,7 @@ function refuseConnect(): boolean {
 /**
  * Thrown by {@link CremaApp.startShot} when the user taps Coffee without an
  * active profile selected. The brew dashboard catches it and surfaces a
- * transient "Select a profile first" banner (re-using the
- * `MachineErrorBanner` visual pattern); the DE1 is left untouched —
+ * transient "Select a profile first" status card (`BrewStatusCard`); the DE1 is left untouched —
  * without an active profile there are no bytes to load and no shot to start.
  */
 export class NoActiveProfileError extends Error {

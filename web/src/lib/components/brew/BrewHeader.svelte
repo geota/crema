@@ -5,15 +5,14 @@
 	 * `BrewHeader` — the brew dashboard's top strip. The bean lives as a second
 	 * block to the right of the Profile block:
 	 *
-	 *   [ Profile ▸ name · identity · specs ]  … status …  | [ Bean ▸ name · provenance · prep ]  [Quick Controls]
+	 *   [ Profile ▸ name · identity · specs ]  | [ Bean ▸ name · provenance · prep ]  [Quick Controls]
 	 *
 	 * Each block is a single tap target that opens a searchable
 	 * {@link HeaderPicker} of all items (pinned first), whose footer carries
 	 * Open-library / Add (+) / Edit (✎). Presentational + callbacks — all data +
-	 * wiring lives in `BrewDashboard.svelte`; the middle `status` snippet is
-	 * where the parent renders the mode pill / error / maintenance banner.
+	 * wiring lives in `BrewDashboard.svelte`. Errors and maintenance are not
+	 * here: they are `BrewStatusCard`, at the foot of the left column.
 	 */
-	import type { Snippet } from 'svelte';
 	import HeaderBlock from './HeaderBlock.svelte';
 	import HeaderPicker, { type PickerItem } from './HeaderPicker.svelte';
 
@@ -39,9 +38,8 @@
 		beanItems,
 		activeBeanId = null,
 		beanRank,
-		// Right cluster + middle
+		// Right cluster
 		quickSheetOpen = false,
-		status,
 		// Callbacks
 		onEditProfile,
 		onSelectProfile,
@@ -82,7 +80,6 @@
 		/** Relevance ranker for the bean dropdown — see `HeaderPicker.rank`. */
 		beanRank?: (query: string) => Map<string, number> | null;
 		quickSheetOpen?: boolean;
-		status?: Snippet;
 		onEditProfile?: () => void;
 		onSelectProfile: (id: string) => void;
 		onAddProfile?: () => void;
@@ -155,11 +152,6 @@
 			/>
 		{/snippet}
 	</HeaderBlock>
-
-	<!-- Middle banner slot: mode pill / error / maintenance. -->
-	{#if status}
-		<div class="bh-status">{@render status()}</div>
-	{/if}
 
 	<!-- Bean block (right of the divider). -->
 	<span class="bh-divider" aria-hidden="true"></span>

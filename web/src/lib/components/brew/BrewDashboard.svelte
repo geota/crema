@@ -64,7 +64,7 @@
 	} from '#lib/brew/hot-water.js';
 	import ModeChip from './ModeChip.svelte';
 	import ModeCard from './ModeCard.svelte';
-	import MachineErrorBanner from './MachineErrorBanner.svelte';
+	import BrewStatusCard from './BrewStatusCard.svelte';
 	import {
 		getSettingsStore,
 		convertWeight,
@@ -1547,23 +1547,22 @@
 	}
 
 	/**
-	 * Pre-shot banner shown when the user taps Coffee in an invalid state —
-	 * the most common case being "no active profile selected". Sits in the
-	 * same dashboard header slot as `MachineErrorBanner` (and uses the
-	 * same `.is-error` skeleton), but is **transient** rather than
-	 * substate-driven: the user clears it by selecting a profile or by
-	 * tapping the dismiss `✕` on the banner.
+	 * Shot-start blocker shown when the user taps Coffee in an invalid state —
+	 * the most common case being "no active profile selected". Shown in the
+	 * status card (`brewStatus`, after a machine fault) in the danger
+	 * palette, but **transient** rather than substate-driven: the user clears
+	 * it by selecting a profile or by tapping the card's `✕`.
 	 *
 	 * `null` means "no shot-start blocker active". A non-null string is
-	 * shown as the banner's body; the title is always "Can't start shot".
+	 * shown as the card's detail; the title is always "Can't start shot".
 	 */
 	let shotStartError = $state<string | null>(null);
 
-	// ── Maintenance advisory banner ──────────────────────────────────────
+	// ── Maintenance advisory ─────────────────────────────────────────────
 	// The maintenance store (`#lib/maintenance/index.js`) integrates flow into a
 	// litre counter and flags filter / descale / clean as `Ok = false`
-	// once the configured intervals are exceeded. Surface that as a yellow
-	// banner on the brew page so the user sees it without digging into
+	// once the configured intervals are exceeded. Surface that as a warning
+	// status card on the brew page so the user sees it without digging into
 	// Settings → Water; click routes them to the maintenance cards.
 	const maintenance = getMaintenanceStore();
 	const maintReadout = $derived(maintenance.readout);
@@ -1601,6 +1600,62 @@
 	function openMaintenance(): void {
 		void goto(resolve('settings#water'));
 	}
+
+	/** The props of the one {@link BrewStatusCard} Brew shows. */
+	type BrewStatus = {
+		title: string;
+		text: string;
+		variant: 'error' | 'warning';
+		onClick?: () => void;
+		linkLabel?: string;
+		action?: { label: string; onClick: () => void };
+		onDismiss?: () => void;
+	};
+	/**
+	 * The condition Brew's status card shows, or `null`. One at a time, in
+	 * this order: machine fault (the firmware clears it, so no ✕), shot-start
+	 * blocker, maintenance due, empty bag. Shown at rest only
+	 * ({@link showStatusCard}).
+	 */
+	const brewStatus = $derived.by<BrewStatus | null>(() => {
+		if (ui.machineError != null) {
+			return { title: 'Machine error', text: ui.machineError, variant: 'error' };
+		}
+		if (shotStartError != null) {
+			return {
+				title: "Can't start shot",
+				text: shotStartError,
+				variant: 'error',
+				onDismiss: () => (shotStartError = null)
+			};
+		}
+		if (maintVisibleText !== '') {
+			return {
+				title: 'Maintenance due',
+				text: maintVisibleText,
+				variant: 'warning',
+				onClick: openMaintenance,
+				linkLabel: 'Water & maintenance →',
+				onDismiss: dismissMaintenance
+			};
+		}
+		if (showEmptyBag && beanLibrary.activeBean) {
+			return {
+				title: 'Bag empty',
+				text: emptyBagBannerText(beanLibrary.activeBean.name),
+				variant: 'warning',
+				action: { label: 'Switch bag', onClick: () => (bagPickerOpen = true) }
+			};
+		}
+		return null;
+	});
+	/**
+	 * At rest only: no shot and no steam / water / flush running, so the wide
+	 * left column (which also holds the Phase or Mode card) never overflows.
+	 */
+	const showStatusCard = $derived(
+		brewStatus !== null && !ui.shotInProgress && modeState === 'idle'
+	);
 
 	/**
 	 * Whether a profile-sync upload is in flight — drives the "Syncing to
@@ -1722,40 +1777,6 @@
 
 <svelte:window onkeydown={onKeydown} onclick={onDocClick}></svelte:window>
 
-<!-- Shared by the phone and the wide layout, so both run the same handlers. -->
-{#snippet statusBanners()}
-	{#if ui.machineError != null}
-		<div class="crema-dash-head-mid"><MachineErrorBanner text={ui.machineError} /></div>
-	{:else if shotStartError != null}
-		<div class="crema-dash-head-mid">
-			<MachineErrorBanner
-				text={shotStartError}
-				title="Can't start shot"
-				onDismiss={() => shotStartError = null}
-			/>
-		</div>
-	{:else if maintVisibleText !== ''}
-		<div class="crema-dash-head-mid">
-			<MachineErrorBanner
-				text={maintVisibleText}
-				title="Maintenance due"
-				variant="warning"
-				onClick={openMaintenance}
-				onDismiss={dismissMaintenance}
-			/>
-		</div>
-	{/if}
-	{#if showEmptyBag && beanLibrary.activeBean}
-		<div class="crema-dash-head-mid">
-			<MachineErrorBanner
-				text={emptyBagBannerText(beanLibrary.activeBean.name)}
-				title="Bag empty"
-				variant="warning"
-				action={{ label: 'Switch bag', onClick: () => (bagPickerOpen = true) }}
-			/>
-		</div>
-	{/if}
-{/snippet}
 {#snippet liveChart()}
 	<LiveChart
 		compact={phoneLayout.current}
@@ -1895,7 +1916,6 @@
 				onAllProfiles={() => void goto(resolve('profiles'))}
 				onAllBeans={() => void goto(resolve('beans'))}
 			/>
-			{@render statusBanners()}
 			{#if modeBanner && !ui.shotInProgress}
 				<PhoneModeBanner
 					label={modeBanner.label}
@@ -2002,6 +2022,7 @@
 						onTare={tareOnTap ? tapTare : undefined}
 						{tarePulse}
 					/>
+					{#if showStatusCard && brewStatus}<BrewStatusCard {...brewStatus} />{/if}
 				{/if}
 			</div>
 			<div class="pbrew-foot" {@attach keepToastsAbove}>
@@ -2062,11 +2083,7 @@
 				onAddBean={() => void goto(resolve('beans/new'))}
 				onBeanLibrary={() => void goto(resolve('beans'))}
 				onOpenQuick={() => quickSheetOpen = true}
-			>
-				{#snippet status()}
-					{@render statusBanners()}
-				{/snippet}
-			</BrewHeader>
+			/>
 
 			<!-- Main grid: timer + targets | readouts + chart -->
 			<div class="crema-dash-main">
@@ -2105,7 +2122,11 @@
 									segments={activeProfile?.segments}
 								/>
 							{/if}
-							{#if showLastShot && lastShot}
+							<!-- The status card takes the Last shot / Dial-in slot while it
+							     shows; dismissing it brings that card back. -->
+							{#if showStatusCard && brewStatus}
+								<BrewStatusCard {...brewStatus} />
+							{:else if showLastShot && lastShot}
 								<LastShotCard shot={lastShot} dose={p.dose} stopReason={ui.lastStopReason} />
 							{:else if showDialIn && lastBeanShot}
 								<DialInCard
