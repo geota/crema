@@ -274,6 +274,7 @@ val NOT_SETTINGS: Map<String, String> = mapOf(
     "BackgroundConnectionController.setDe1Active(Boolean)" to "service gate input",
     "BackgroundConnectionController.setBrewSessionActive(Boolean)" to "service gate input",
     "BackgroundConnectionController.setFirmwareFlashActive(Boolean)" to "service gate input",
+    "ConnectionController.setFirmwareFlashActive(Boolean)" to "scale pause input (a firmware flash runs)",
     "BackgroundConnectionController.setForeground(Boolean)" to "service gate input",
     "BackgroundConnectionController.setBackgroundStartAllowed(Boolean)" to "service gate input",
 )

@@ -144,6 +144,48 @@ class ConnectionController(
     /** The scale keep-alive loop, running only while a scale is READY. */
     private var scaleHeartbeatJob: Job? = null
 
+    /** Scale Bluetooth stands down while a DE1 firmware flash runs (Decenza 270b89df). */
+    private val scaleFlashPause = ScaleFlashPause(object : ScaleFlashPause.Port {
+        override fun scaleWanted(): Boolean {
+            if (scale.isUserDisconnected) return false
+            val s = scale.state.value
+            return _state.value.rememberedScaleAddress != null ||
+                (s != ScaleBleManager.State.IDLE && s != ScaleBleManager.State.DISCONNECTED) ||
+                scale.reconnectPhase != ReconnectKicker.Phase.IDLE
+        }
+
+        override fun standDown() {
+            bleScanner.cancel(SCAN_LABEL_SCALE)
+            scaleScanSinceMs = null
+            scale.heldForFirmwareFlash = true
+            val s = scale.state.value
+            if (s == ScaleBleManager.State.IDLE || s == ScaleBleManager.State.DISCONNECTED) {
+                // No link to drop; a scan want (state SCANNING) is cancelled above.
+                if (scale.reconnectPhase == ReconnectKicker.Phase.IDLE) return
+            }
+            scale.disconnect()
+            _state.update { it.copy(scale = ScaleBleManager.State.DISCONNECTED) }
+            onScaleSessionClosed()
+        }
+
+        override fun bringBack() {
+            if (_state.value.rememberedScaleAddress != null) directOrScanScale() else connectScale()
+        }
+
+        override fun log(line: String) = appendLog(line)
+    })
+
+    /**
+     * A DE1 firmware flash started or ended (the flash driver's keep-alive,
+     * which follows the core's flash phases): pause scale Bluetooth for it,
+     * and bring the scale back after. See [ScaleFlashPause].
+     */
+    fun setFirmwareFlashActive(active: Boolean) {
+        // The manager's own hold lifts first, so the reconnect below can run.
+        if (!active) scale.heldForFirmwareFlash = false
+        scaleFlashPause.onFlashActive(active)
+    }
+
     /** Debounces the kick paths that start a fresh connect (no session to kick). */
     private val kickDebouncer = KickDebouncer(nowMs)
 
@@ -366,8 +408,10 @@ class ConnectionController(
         onDe1SessionClosed()
     }
 
-    /** Scan for and connect to a scale. Independent of the DE1. */
+    /** Scan for and connect to a scale. Independent of the DE1. Held while
+     *  a firmware flash runs ([ScaleFlashPause]). */
     fun connectScale() {
+        if (scaleFlashPause.holdConnect()) return
         scale.markScanning()
         // AND6: scan for EVERY supported scale's advertised-name prefix (the
         // core-owned registry), not a hardcoded Bookoo rule — the web shell does
@@ -546,6 +590,8 @@ class ConnectionController(
     private fun kickScale(trigger: ReconnectTrigger) {
         val st = _state.value
         if (st.rememberedScaleAddress == null) return
+        // A firmware flash holds scale connects; it reconnects when it ends.
+        if (scaleFlashPause.paused) return
         val action = planKick(
             remembered = true,
             userDisconnected = scale.isUserDisconnected,
@@ -576,6 +622,7 @@ class ConnectionController(
      * scale can still arrive mid-shot, where the #15 fix arms SAW late.
      */
     fun kickScaleReconnect() {
+        if (scaleFlashPause.holdConnect()) return
         val s = scale.state.value
         val stale = s == ScaleBleManager.State.IDLE || s == ScaleBleManager.State.DISCONNECTED || s == ScaleBleManager.State.SCANNING
         if (!stale) return
@@ -590,6 +637,7 @@ class ConnectionController(
 
     /** Direct connect by the remembered address when possible, else the scan. */
     private fun directOrScanScale() {
+        if (scaleFlashPause.holdConnect()) return
         val st = _state.value
         runCatching {
             val name = st.rememberedScaleName

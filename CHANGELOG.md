@@ -45,7 +45,21 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 - **DE1 firmware 1359 is recognised** — the build Decent made for the Decenza
   app showed as "newer than Crema knows"; Settings → Machine now calls it a
   Decenza build, not on Decent's channels. Web, tablet and phone.
-||||||| a0914b63
+||||||| 17594adc
+||||||| original
+- **The scale steps aside during a firmware update** — while a DE1 firmware
+  update runs (15–25 minutes), Crema now drops the scale's Bluetooth link and
+  stops scanning for it and reconnecting to it, so the scale's weight stream
+  doesn't share the radio with the update. Connecting the scale meanwhile waits
+  for the update. The scale reconnects when the update ends, whether it
+  succeeded, failed or was cancelled, and after Crema restarts in the middle
+  of one. Android and web. (Decenza 270b89df)
+- **A slow upload can't sign out a newer Decent login** — if you signed in to
+  Decent again while a shot upload was still on its way, and the old login's
+  request then came back refused, Crema asked you to sign in again although the
+  new login was fine. Now only a refusal for the login that is still linked
+  does that; the shot goes again with the new login. Android and web. (decaid
+  e6a440e1)
 
 ## [0.11.0] — 2026-11-19
 

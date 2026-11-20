@@ -15,6 +15,7 @@ import coffee.crema.ui.UploadOutcome
 import coffee.crema.ui.UploadOutcomeKind
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -49,6 +50,8 @@ class DecentSyncTest {
     private class FakeApi : DecentApi {
         val answers = ArrayDeque<suspend () -> DecentUploadResult>()
         val posts = mutableListOf<Pair<String, Boolean>>()
+        /** The token each POST went out with. */
+        val tokens = mutableListOf<String>()
         var loginToken: String? = "token-123456"
         var machines: suspend () -> List<DecentMachine> = { listOf(DecentMachine("6262", "DE1PRO")) }
 
@@ -56,6 +59,7 @@ class DecentSyncTest {
         override suspend fun fetchMachines(email: String, token: String) = machines()
         override suspend fun uploadShot(email: String, token: String, recordJson: String, replace: Boolean): DecentUploadResult {
             posts += recordJson to replace
+            tokens += token
             val next = answers.removeFirstOrNull() ?: return DecentUploadResult("id-${posts.size}")
             return next()
         }
@@ -297,6 +301,83 @@ class DecentSyncTest {
         assertTrue(h.sync.state.value.needsReauth)
         assertFalse(h.sync.enabled)
         assertEquals(1, h.api.posts.size)
+    }
+
+    @Test
+    fun `a 401 for a login replaced mid-upload does not flag the new login`() = runTest {
+        // decaid e6a440e1: only the token that is still linked can be flagged.
+        val h = harness(listOf(shot("s1")))
+        val gate = CompletableDeferred<Unit>()
+        h.api.answers += { gate.await(); throw DecentError.Auth() }
+        val upload = async { h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = false) }
+        runCurrent()
+        // The user signs in again while the old request is still out.
+        h.api.loginToken = "token-new"
+        h.sync.signIn("a@b.c", "pw")
+        runCurrent()
+        assertEquals("token-new", h.store.state.token)
+        gate.complete(Unit)
+        assertTrue((upload.await() as DecentSync.Outcome.Failed).error is DecentError.Auth)
+        assertFalse(h.store.state.needsReauth)
+        assertTrue(h.sync.enabled)
+        // The shot is still in the backlog and goes with the new login.
+        assertEquals(listOf("s1"), h.sync.unsent(listOf(h.history.getValue("s1")).rows()).map { it.id })
+        val again = h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = false)
+        assertTrue(again is DecentSync.Outcome.Uploaded)
+        assertEquals(listOf("token-123456", "token-new"), h.api.tokens)
+    }
+
+    @Test
+    fun `a 401 after a sign-out mid-upload flags nothing`() = runTest {
+        val h = harness(listOf(shot("s1")))
+        val gate = CompletableDeferred<Unit>()
+        h.api.answers += { gate.await(); throw DecentError.Auth() }
+        val upload = async { h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = false) }
+        runCurrent()
+        h.sync.signOut()
+        runCurrent()
+        gate.complete(Unit)
+        upload.await()
+        assertFalse(h.store.state.needsReauth)
+        assertFalse(h.store.state.linked)
+    }
+
+    @Test
+    fun `a success from a replaced login does not clear the new login's flag`() = runTest {
+        val h = harness(listOf(shot("s1"), shot("s2")))
+        val gate = CompletableDeferred<Unit>()
+        h.api.answers += { gate.await(); DecentUploadResult("77") }
+        h.api.answers += { throw DecentError.Auth() }
+        val upload = async { h.sync.uploadNow(h.history.getValue("s1").row(), manual = true, replace = false) }
+        runCurrent()
+        h.api.loginToken = "token-new"
+        h.sync.signIn("a@b.c", "pw")
+        runCurrent()
+        // The new login's own request is refused: it needs signing in again.
+        h.sync.uploadNow(h.history.getValue("s2").row(), manual = true, replace = false)
+        assertTrue(h.store.state.needsReauth)
+        gate.complete(Unit)
+        assertTrue(upload.await() is DecentSync.Outcome.Uploaded)
+        assertTrue(h.store.state.needsReauth)
+    }
+
+    @Test
+    fun `a drain carries on past a 401 for a login replaced mid-drain`() = runTest {
+        val shots = listOf(shot("a", at = 1), shot("b", at = 2))
+        val h = harness(shots)
+        val gate = CompletableDeferred<Unit>()
+        h.api.answers += { gate.await(); throw DecentError.Auth() }
+        h.api.loginToken = "token-new"
+        val drain = async { h.sync.uploadUnsentNow(shots.rows()) }
+        runCurrent()
+        h.sync.signIn("a@b.c", "pw")
+        runCurrent()
+        gate.complete(Unit)
+        val r = drain.await()
+        assertNull(r.stopped)
+        assertEquals(1, r.uploaded)
+        assertEquals(1, r.failed)
+        assertFalse(h.store.state.needsReauth)
     }
 
     @Test

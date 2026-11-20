@@ -23,8 +23,10 @@
  * (`retryShotIds`) and retried by {@link retryPendingDecentUploads} when the
  * connection comes back and on the next launch. A permanent rejection is
  * remembered too (`rejectedShotIds`) so the backlog stops offering it; an
- * auth failure flags the account `needsReauth`. The server's id is bound to
- * the shot as `decentId`.
+ * auth failure flags the account `needsReauth`, but only when the login the
+ * request went out with is still the linked one (a 401 for a login replaced
+ * mid-upload parks the shot for retry instead; decaid e6a440e1). The
+ * server's id is bound to the shot as `decentId`.
  *
  * A 403 — the serial is not on the account (de1app 5b09f6aa) — is neither:
  * no retry, not parked, not rejected; the serial is remembered for the
@@ -179,12 +181,33 @@ function logFailure(shot: StoredShot, error: DecentUploadError): void {
 	});
 }
 
-/** Record a failure on the account + log, and answer `failed`. */
-function failed(shot: StoredShot, error: DecentUploadError): DecentUploadOutcome {
+/**
+ * Is the login a request was sent with still the linked one? `sentToken` is
+ * the stored (wrapped) token read when the request started; a sign-in since
+ * then stores a newly issued, newly wrapped token, and a sign-out clears it.
+ * decaid e6a440e1 (`decent_proxy_service.dart:178-196`) checks the same before
+ * acting on a 401.
+ */
+function isCurrentLogin(sentToken: string | null): boolean {
+	return sentToken !== null && readDecentAccount().token === sentToken;
+}
+
+/**
+ * Record a failure on the account + log, and answer `failed`. `sentToken`
+ * is the stored token the request went out with ({@link isCurrentLogin}).
+ */
+function failed(shot: StoredShot, error: DecentUploadError, sentToken: string | null): DecentUploadOutcome {
 	const lastUpload = { at: Date.now(), ok: false, message: error.message };
 	switch (error._tag) {
 		case 'DecentAuthError':
-			updateDecentAccount({ needsReauth: true, lastUpload });
+			if (isCurrentLogin(sentToken)) {
+				updateDecentAccount({ needsReauth: true, lastUpload });
+			} else if (isDecentLinked()) {
+				// A 401 for a login the user has since replaced (an upload can
+				// take a minute): the new login is not flagged; the shot waits
+				// for the next retry, which sends the new token.
+				setDecentShotState(shot.id, 'retry');
+			}
 			break;
 		case 'DecentNetworkError':
 			setDecentShotState(shot.id, 'retry');
@@ -266,14 +289,14 @@ async function runUpload(shotId: string, opts: DecentUploadOptions): Promise<Dec
 	try {
 		record = decentShotRecord(shot, target.machine, opts.appVersion ?? __APP_VERSION__, opts.samples);
 	} catch (e) {
-		if (e instanceof DecentRecordError) return failed(shot, e);
+		if (e instanceof DecentRecordError) return failed(shot, e, account.token);
 		throw e;
 	}
 
 	const result = await Effect.runPromise(
 		Effect.result(postWithRetry(creds, record, { replace: !!opts.replace, serial }, opts.fetchFn))
 	);
-	if (result._tag === 'Failure') return failed(shot, result.failure);
+	if (result._tag === 'Failure') return failed(shot, result.failure, account.token);
 
 	const id = result.success.id;
 	const url = decentShotViewUrl(target.machine.serialNumber, id);
@@ -282,7 +305,9 @@ async function runUpload(shotId: string, opts: DecentUploadOptions): Promise<Dec
 	history.bindDecentId(shotId, id ?? `uploaded:${Date.now()}`, target.fromLive ? target.machine : undefined);
 	setDecentShotState(shotId, 'clear');
 	updateDecentAccount({
-		needsReauth: false,
+		// Only the login this went out with is known good: a success from a
+		// replaced one says nothing about the newer login.
+		...(isCurrentLogin(account.token) ? { needsReauth: false } : {}),
 		lastUpload: { at: Date.now(), ok: true, message: 'Uploaded', ...(url ? { url } : {}) }
 	});
 	appendSyncLog({
@@ -522,7 +547,9 @@ async function drain(
 			out.failed += 1;
 			out.lastError = err.message;
 			if (err._tag === 'DecentAuthError') {
-				out.stopped = 'auth';
+				// A 401 for a login replaced mid-drain leaves the account
+				// unflagged: the next shot goes with the new login.
+				if (readDecentAccount().needsReauth) out.stopped = 'auth';
 			} else if (err._tag === 'DecentNetworkError' && err.status === null) {
 				// No HTTP status = no connection: every remaining shot would fail the same way.
 				out.stopped = 'offline';
