@@ -422,6 +422,9 @@ pub enum FlashBlocker {
     },
     /// The machine is refilling or out of water.
     Refilling,
+    /// The refill kit gave up on a refill (substate `0x11`): the tank still
+    /// needs water.
+    RefillStopped,
     /// The machine reports an error substate.
     MachineError,
     /// A shot or other flow is running.
@@ -2871,7 +2874,7 @@ mod core_tests {
                 },
             ),
             (&[17, 0], FlashBlocker::Refilling),
-            (&[2, 17], FlashBlocker::Refilling),
+            (&[2, 17], FlashBlocker::RefillStopped),
             (&[2, 202], FlashBlocker::MachineError),
             // Unknown might be a newer firmware's fault: don't flash on it.
             (&[2, 150], FlashBlocker::MachineError),

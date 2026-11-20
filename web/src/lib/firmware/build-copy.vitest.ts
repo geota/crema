@@ -22,12 +22,20 @@ describe('firmwareBuildReport (wasm bridge)', () => {
 		expect(status(1352)).toBe(FirmwareBuildStatus.BetweenStableAndNewest);
 		expect(status(1320)).toBe(FirmwareBuildStatus.OlderThanStable);
 		expect(status(1363)).toBe(FirmwareBuildStatus.RolledBack);
+		expect(status(1359)).toBe(FirmwareBuildStatus.VendorBuild);
 		expect(status(1370)).toBe(FirmwareBuildStatus.NewerThanKnown);
 		expect(status(null)).toBe(FirmwareBuildStatus.Unknown);
 	});
 });
 
 describe('firmwareCardCopy', () => {
+	it("1359 is Decent's build for Decenza, not newer than known", () => {
+		const c = copy(1359);
+		expect(c.title).toBe('Build 1359 · Decenza build');
+		expect(c.note).toContain("isn't on Decent's channels");
+		expect(c.offerUpdate).toBe(false);
+	});
+
 	it('1358 is the newest release, no update offered', () => {
 		const c = copy(1358);
 		expect(c.title).toBe('Build 1358 · newest');
@@ -74,7 +82,7 @@ describe('firmwareCardCopy', () => {
 	it('a build above the newest known one', () => {
 		const c = copy(1370);
 		expect(c.title).toBe('Build 1370 · newer than Crema knows');
-		expect(c.note).toContain('2026-10-11');
+		expect(c.note).toContain('2026-11-19');
 		expect(c.offerUpdate).toBe(false);
 	});
 

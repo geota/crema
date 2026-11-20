@@ -110,6 +110,7 @@ fun blockerText(b: FlashBlocker): String = when (b) {
     FlashBlocker.StateUnknown -> "The DE1 hasn’t reported its state yet."
     is FlashBlocker.MachineBusy -> "Wait until the DE1 is idle or asleep."
     FlashBlocker.Refilling -> "Refill the water tank first."
+    FlashBlocker.RefillStopped -> "The DE1 gave up refilling. Refill the water tank first."
     FlashBlocker.MachineError -> "The DE1 reports an error. Clear it first."
     FlashBlocker.ShotInProgress -> "Wait for the shot, steam or hot water to finish."
     FlashBlocker.GuidedBrewActive -> "Finish the guided brew first."

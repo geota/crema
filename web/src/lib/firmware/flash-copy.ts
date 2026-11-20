@@ -89,6 +89,8 @@ export function blockerText(b: FlashBlocker): string {
 			return 'Wait until the DE1 is idle or asleep.';
 		case 'Refilling':
 			return 'Refill the water tank first.';
+		case 'RefillStopped':
+			return 'The DE1 gave up refilling. Refill the water tank first.';
 		case 'MachineError':
 			return 'The DE1 reports an error. Clear it first.';
 		case 'ShotInProgress':

@@ -1889,11 +1889,11 @@ export class CremaApp {
 	}
 
 	/**
-	 * Reset 8 DE1 machine settings to factory baseline — fan threshold,
+	 * Reset 7 DE1 machine settings to factory baseline — fan threshold,
 	 * hot-water idle temp, heater phase 1/2 flows, espresso warmup
-	 * timeout, refill kit auto mode, flow-calibration multiplier, and
-	 * steam purge mode. Mirrors reaprime's `DELETE /api/v1/machine/
-	 * settings/reset`. Profiles, shot history, and app preferences are
+	 * timeout, refill kit auto mode, and steam purge mode. Mirrors
+	 * reaprime's `DELETE /api/v1/machine/settings/reset`. The flow
+	 * calibration, profiles, shot history, and app preferences are
 	 * untouched; only the DE1's MMR registers change. The Advanced
 	 * settings section gates this behind a native `window.confirm`
 	 * (blast radius: the user retunes their settings — non-damaging).

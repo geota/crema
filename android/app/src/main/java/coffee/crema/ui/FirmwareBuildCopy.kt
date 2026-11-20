@@ -76,6 +76,11 @@ fun firmwareCardCopy(r: FirmwareBuildReport, connected: Boolean): FirmwareCardCo
                 if (b > r.newestBuild) " Its number is higher, but it isn’t newer than build ${r.newestBuild}." else "",
             true,
         )
+        FirmwareBuildStatus.VendorBuild -> FirmwareCardCopy(
+            "Build $b · Decenza build",
+            "A build Decent made for the Decenza app; it isn’t on Decent’s channels. Decent’s newest is $newest.",
+            false,
+        )
         FirmwareBuildStatus.NewerThanKnown -> FirmwareCardCopy(
             "Build $b · newer than Crema knows",
             "Newer than build ${r.newestBuild}, the newest in Crema’s list (checked ${r.tableVerified}).",

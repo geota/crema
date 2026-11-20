@@ -44,6 +44,8 @@ mod scale_robustness_tests;
 #[cfg(test)]
 mod scale_trust_tests;
 pub mod shot_start;
+#[cfg(test)]
+mod steam_rinse_tests;
 mod stop_control;
 mod sweep;
 #[cfg(test)]
@@ -300,6 +302,9 @@ struct ShotMetricsAccumulator {
     /// down-step below `clean_weight`). Cleared when readings recover, so
     /// a lift-and-replace resumes tracking.
     cup_lifted: bool,
+    /// When `clean_weight` was last refreshed — tells a settle-window
+    /// average from one left over from earlier in the shot.
+    clean_at: Option<Duration>,
 }
 
 /// Settle-window stability band: readings within this span read as a cup
@@ -374,6 +379,7 @@ impl ShotMetricsAccumulator {
                 #[allow(clippy::cast_precision_loss)]
                 let avg = sum / self.settle.len() as f32;
                 self.clean_weight = Some(avg);
+                self.clean_at = Some(now);
             }
         }
     }
@@ -428,6 +434,7 @@ impl ShotMetricsAccumulator {
         self.final_weight = None;
         self.settle.clear();
         self.clean_weight = None;
+        self.clean_at = None;
         self.cup_lifted = false;
     }
 }
@@ -471,6 +478,13 @@ struct PostShotSettle {
     /// The stop was honoured on its first write, so the drip after it is the
     /// cup's and can train the drip model.
     learn_drip: bool,
+    /// When the settle began (the shot's Idle).
+    began: Duration,
+    /// The live stop-at-weight target when the shot ended (a mid-shot Quick
+    /// Controls change included), for the aborted rule's weight threshold
+    /// (`de1_domain::aborted_max_weight_g`, Decenza `2036c350`). Captured at
+    /// Idle, before a profile picked mid-shot takes over the targets.
+    stop_target_g: Option<f32>,
 }
 
 /// A profile's target yield with its Quick Controls: the dialled yield, else
@@ -2194,16 +2208,23 @@ impl CremaCore {
         ))
     }
 
-    /// Reset 8 machine settings to factory baseline (legacy reaprime
+    /// Reset 7 machine settings to factory baseline (legacy reaprime
     /// `DELETE /api/v1/machine/settings/reset`).
     ///
     /// Re-applies the documented baseline for: fan threshold, hot-water
     /// idle temp, heater phase 1/2 flows, espresso warmup timeout,
-    /// refill kit auto mode, flow-calibration multiplier, and steam
-    /// purge mode. Every value is the post-clamp, on-the-wire baseline
-    /// that reaprime ends up writing — see the `RESET_*` consts below.
+    /// refill kit auto mode, and steam purge mode. Every value is the
+    /// post-clamp, on-the-wire baseline that reaprime ends up writing —
+    /// see the `RESET_*` consts below.
     ///
-    /// Emits 8 [`Command::WriteCharacteristic`] entries in one
+    /// The flow-calibration multiplier (`CalibrationFlowMultiplier`,
+    /// `0x80383C`) is deliberately left alone: it holds the user's flow
+    /// calibration, which the firmware cannot restore once overwritten.
+    /// Calibration → Flow is the place to reset it on purpose. Ported
+    /// from decaid `98dc94bf` and `26a225a6` (GPL-3.0), whose reset
+    /// "leaves flow calibration and the refill level alone".
+    ///
+    /// Emits 7 [`Command::WriteCharacteristic`] entries in one
     /// [`CoreOutput`]; the shell submits them serially. Order matches
     /// reaprime's `Defaults.applySettingsDefaults`
     /// (`de1_controller.defaults.dart:39-51`) but is not functionally
@@ -2211,7 +2232,7 @@ impl CremaCore {
     ///
     /// No rollback on partial failure (matches reaprime). Profiles,
     /// shot history, and app preferences are untouched: this only
-    /// re-writes 8 MMR registers on the DE1 itself.
+    /// re-writes 7 MMR registers on the DE1 itself.
     ///
     /// **Fan threshold gotcha:** reaprime's source reads `55 °C` but
     /// MMR `fanThreshold` clamps `max: 50`, so `_writeMMRInt` silently
@@ -2245,9 +2266,8 @@ impl CremaCore {
         const RESET_ESPRESSO_WARMUP_TIMEOUT_RAW: u32 = 40;
         // Refill kit: 2 = auto, 4-byte LE.
         const RESET_REFILL_KIT_RAW: u32 = 2;
-        // Cal-flow-est: 1.0, wire `× 1000` = 1000, 4-byte LE.
-        // byte_len normalised to 4 (matches TCL + reaprime).
-        const RESET_CAL_FLOW_EST_RAW: u32 = 1000;
+        // No flow-calibration write: the reset keeps the user's
+        // calibration (decaid 26a225a6, 98dc94bf).
         // Steam purge mode (SteamTwoTapStop register, 0x803850): 0, 4-byte LE bool.
         const RESET_STEAM_PURGE_MODE_RAW: u32 = 0;
 
@@ -2255,9 +2275,9 @@ impl CremaCore {
             return Ok(out);
         }
 
-        // Eight independent MMR writes, in reaprime's source order. Each
+        // Seven independent MMR writes, in reaprime's source order. Each
         // tuple is (register, value, byte_len).
-        let writes: [(MmrRegister, u32, u8); 8] = [
+        let writes: [(MmrRegister, u32, u8); 7] = [
             (MmrRegister::FanThreshold, RESET_FAN_THRESHOLD_C, 4),
             (
                 MmrRegister::HotWaterIdleTemp,
@@ -2272,11 +2292,6 @@ impl CremaCore {
                 4,
             ),
             (MmrRegister::RefillKit, RESET_REFILL_KIT_RAW, 4),
-            (
-                MmrRegister::CalibrationFlowMultiplier,
-                RESET_CAL_FLOW_EST_RAW,
-                4,
-            ),
             (MmrRegister::SteamTwoTapStop, RESET_STEAM_PURGE_MODE_RAW, 4),
         ];
 
@@ -3470,6 +3485,7 @@ impl CremaCore {
         self.abandon_maintenance(&mut out);
         self.abandon_shot_start(&mut out);
         self.drop_held_request();
+        self.forget_steam_rinse();
         // An upload in flight cannot finish over a dead link: fail it now so
         // the reconnect's sync upload need not wait for its ack timeout. The
         // sync ignores the failure — it belongs to the generation just ended.
@@ -3716,6 +3732,9 @@ impl CremaCore {
                 return;
             }
         };
+        // A steam rinse this core asked for stays one when the firmware
+        // reports it as Steam (build 1359; Decenza `063464fb`).
+        let info = self.read_requested_rinse(info);
         if info.substate == SubState::Unknown
             && let Some(&byte) = data.get(1)
             && self.unknown_substates_reported.insert(byte)
@@ -4741,8 +4760,8 @@ impl CremaCore {
             None => blockers.push(FlashBlocker::StateUnknown),
             Some(info) => match info.state {
                 MachineState::Sleep | MachineState::Idle => {
-                    if info.substate == SubState::Refill {
-                        blockers.push(FlashBlocker::Refilling);
+                    if info.substate == SubState::RefillStopped {
+                        blockers.push(FlashBlocker::RefillStopped);
                     } else if info.substate.is_error() || info.substate == SubState::Unknown {
                         blockers.push(FlashBlocker::MachineError);
                     }
@@ -5756,6 +5775,7 @@ impl CremaCore {
             record,
             began_unseen,
             learn_drip,
+            stop_target_g,
             ..
         } = settle;
         // Drain the running peak / final-weight tracker into the event — one
@@ -5779,7 +5799,12 @@ impl CremaCore {
             final_weight,
             // Classified here so both shells act on the same rule (previously
             // each re-implemented the aborted thresholds + cleaning-profile lookup).
-            disposition: shot_disposition(duration_ms, final_weight, self.active_beverage_type),
+            disposition: shot_disposition(
+                duration_ms,
+                final_weight,
+                stop_target_g,
+                self.active_beverage_type,
+            ),
             ended_without_triggering_stop,
         });
         // The shell assembles the StoredShot from this on the event (F10).
@@ -5844,6 +5869,29 @@ impl CremaCore {
             let settle = self.post_shot_settle.take().expect("checked is_some above");
             self.finalize_shot_completed(settle, now, out);
         }
+    }
+
+    /// Water started while the last shot's drip settle was still open: end
+    /// the settle now, before the water (or its tare) reaches the scale, so
+    /// it never counts toward the shot's weight. Ported from Decenza
+    /// `6f81941b` (GPL-3.0, `endSettlingForHotWater`): a steady average seen
+    /// during the settle is the cup at rest — save it, and it still trains
+    /// the drip model; without one, save the last reading before the water
+    /// and learn nothing from a drip cut short.
+    fn end_settle_for_water(&mut self, now: Duration, out: &mut CoreOutput) {
+        let Some(mut settle) = self.post_shot_settle.take() else {
+            return;
+        };
+        let metrics = &mut self.shot_metrics;
+        let clean_in_settle = metrics.clean_at.is_some_and(|at| at >= settle.began);
+        match metrics.clean_weight {
+            Some(clean) if clean_in_settle => {
+                metrics.final_weight = Some(clean);
+                metrics.cup_lifted = false;
+            }
+            _ => settle.learn_drip = false,
+        }
+        self.finalize_shot_completed(settle, now, out);
     }
 
     fn map_shot_event(&mut self, event: ShotEvent, now: Duration, out: &mut CoreOutput) {
@@ -6025,6 +6073,8 @@ impl CremaCore {
                     last_rise: now,
                     began_unseen: self.shot_began_unseen,
                     learn_drip: !self.stop_retried_this_shot,
+                    began: now,
+                    stop_target_g: self.weight_intent(),
                 };
                 // Post-stop drip settle (geota/crema#64): crema's drip-compensated
                 // stop-at-weight halts the pump EARLY, so with a scale paired the
@@ -6101,6 +6151,9 @@ impl CremaCore {
     fn map_water_event(&mut self, event: WaterEvent, now: Duration, out: &mut CoreOutput) {
         match event {
             WaterEvent::Started(kind) => {
+                // Hot water or a flush right after a shot: the shot's settle
+                // ends first, before any tare below (Decenza `6f81941b`).
+                self.end_settle_for_water(now, out);
                 // Each session's volume counts from its own start, and its cup
                 // from its own gate.
                 self.volume_integrator.reset();
@@ -11845,8 +11898,8 @@ mod tests {
     }
 
     #[test]
-    fn reset_machine_defaults_emits_8_writes_with_known_baselines() {
-        // Pins the 8 MMR writes byte-for-byte against the documented
+    fn reset_machine_defaults_emits_7_writes_with_known_baselines() {
+        // Pins the 7 MMR writes byte-for-byte against the documented
         // baseline (post-clamp wire values, in reaprime's source order).
         let core = CremaCore::new();
         let out = core
@@ -11856,7 +11909,7 @@ mod tests {
         // Each tuple: (register address, byte-len byte, payload bytes).
         // Payload bytes are little-endian; addresses are big-endian on
         // the wire (mmr::write_request packs them at offsets 1..4).
-        let expected: [(u32, u8, &[u8]); 8] = [
+        let expected: [(u32, u8, &[u8]); 7] = [
             // Fan: 50 °C (post-clamp; reaprime's source says 55). 4-byte
             // LE: reaprime declares `MmrValueKind.int32` — raw °C in the
             // low byte, zero-pad the rest.
@@ -11871,9 +11924,6 @@ mod tests {
             (0x0080_3838, 4, &[0x28, 0x00, 0x00, 0x00]),
             // RefillKit: 2 (auto).
             (0x0080_385C, 4, &[0x02, 0x00, 0x00, 0x00]),
-            // CalFlowEst: 1.0 × 1000 = 1000 = 0x03E8. byte_len
-            // normalised to 4 (matches TCL + reaprime).
-            (0x0080_383C, 4, &[0xE8, 0x03, 0x00, 0x00]),
             // SteamPurgeMode (SteamTwoTapStop): 0.
             (0x0080_3850, 4, &[0x00, 0x00, 0x00, 0x00]),
         ];
@@ -11895,6 +11945,28 @@ mod tests {
             ];
             assert_eq!(&data[1..4], &addr_bytes, "write #{i} address");
             assert_eq!(&data[4..4 + payload.len()], *payload, "write #{i} payload");
+        }
+    }
+
+    #[test]
+    fn reset_machine_defaults_keeps_the_flow_calibration() {
+        // The reset must not touch CalibrationFlowMultiplier (0x80383C):
+        // that is the user's flow calibration, which the firmware cannot
+        // restore (decaid 26a225a6, 98dc94bf).
+        let core = CremaCore::new();
+        let out = core.reset_machine_defaults().expect("no lockout");
+        let addr = MmrRegister::CalibrationFlowMultiplier.address();
+        let cal = [
+            ((addr >> 16) & 0xFF) as u8,
+            ((addr >> 8) & 0xFF) as u8,
+            (addr & 0xFF) as u8,
+        ];
+        assert!(!out.commands.is_empty());
+        for cmd in &out.commands {
+            let Command::WriteCharacteristic { data, .. } = cmd else {
+                panic!("expected WriteCharacteristic, got {cmd:?}");
+            };
+            assert_ne!(&data[1..4], &cal, "reset wrote the flow calibration");
         }
     }
 

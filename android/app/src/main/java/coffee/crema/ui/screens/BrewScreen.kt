@@ -1099,7 +1099,7 @@ private fun TimerCard(
     elapsedMs: Long,
     phase: String?,
     modeLabel: String? = null,
-    /** Machine substate ("Heating", "Refill", …) — appended to the idle
+    /** Machine substate ("Heating", "RefillStopped", …) — appended to the idle
      *  eyebrow when informative. The compact foot dropped the "Idle /
      *  Heating" text (issue #35), so this is the substate's surface:
      *  "READY · HEATING" says the machine is still warming on every size. */
@@ -1114,10 +1114,10 @@ private fun TimerCard(
     val ss = (totalSec % 60).toInt()
     val tenth = ((totalSec % 1) * 10).toInt()
     // "Ready"/"NoState"/"Idle" add nothing over the READY eyebrow itself;
-    // anything else (Heating, Stabilising, Refill…) is worth surfacing.
+    // anything else (Heating, Stabilising, Refill stopped…) is worth surfacing.
     val informativeSub = substate?.takeIf {
         it.isNotBlank() && it != "Ready" && it != "NoState" && it != "Idle" && it != "Unknown"
-    }
+    }?.let(::substateLabel)
     val step = when {
         modeLabel != null -> modeLabel
         !running && !stateKnown -> "Syncing…"
@@ -2138,4 +2138,11 @@ private fun phaseTime(t: Float): String = when {
     t <= 0f -> "—"
     t < 1f -> fmt("%.1fs", t)
     else -> "${t.roundToInt()}s"
+}
+
+/** Readable text for a substate's variant name: substate 0x11 is the refill
+ *  kit giving up on a refill (decaid ac3e433d), not a refill in progress. */
+internal fun substateLabel(substate: String): String = when (substate) {
+    "RefillStopped" -> "Refill stopped"
+    else -> substate
 }

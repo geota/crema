@@ -269,7 +269,7 @@ mod tests {
             let p = builtin(title);
             assert_eq!(p.beverage_type, BeverageType::Cleaning, "{title}");
             assert_eq!(
-                shot_disposition(30_000, Some(0.0), p.beverage_type),
+                shot_disposition(30_000, Some(0.0), None, p.beverage_type),
                 ShotDisposition::SkipCleaning,
                 "{title}"
             );

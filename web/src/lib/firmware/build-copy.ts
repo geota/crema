@@ -86,6 +86,12 @@ export function firmwareCardCopy(r: FirmwareBuildReport, connected: boolean): Fi
 					(b > r.newestBuild ? ` Its number is higher, but it isn't newer than build ${r.newestBuild}.` : ''),
 				offerUpdate: true
 			};
+		case FirmwareBuildStatus.VendorBuild:
+			return {
+				title: `Build ${b} · Decenza build`,
+				note: `A build Decent made for the Decenza app; it isn't on Decent's channels. Decent's newest is ${newest}.`,
+				offerUpdate: false
+			};
 		case FirmwareBuildStatus.NewerThanKnown:
 			return {
 				title: `Build ${b} · newer than Crema knows`,

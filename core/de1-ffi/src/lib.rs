@@ -3967,11 +3967,11 @@ impl CremaBridge {
             .map_err(crema_err)
     }
 
-    /// Reset 8 machine settings to factory baseline — mirrors reaprime's
+    /// Reset 7 machine settings to factory baseline — mirrors reaprime's
     /// `DELETE /api/v1/machine/settings/reset`. Returns a [`CoreOutput`] (JSON)
-    /// with 8 sequential MMR writes (fan threshold, hot-water idle temp, heater
-    /// phase 1/2 flows, espresso warmup timeout, refill kit auto, flow-calibration
-    /// multiplier, steam purge mode). Profiles, history, and app preferences are
+    /// with 7 sequential MMR writes (fan threshold, hot-water idle temp, heater
+    /// phase 1/2 flows, espresso warmup timeout, refill kit auto, steam purge
+    /// mode). The flow calibration, profiles, history, and app preferences are
     /// untouched. `Result` shape mirrors [`set_heater_voltage`](Self::set_heater_voltage)
     /// for forward symmetry — the core is infallible here today.
     ///
@@ -4297,6 +4297,13 @@ mod tests {
             Some(1352),
             Some(1)
         ));
+        assert!(sleep_request_latches_in_refill(
+            "Idle".into(),
+            "RefillStopped".into(),
+            None,
+            None
+        ));
+        // The substate's old name still reads (decaid `ac3e433d` renamed it).
         assert!(sleep_request_latches_in_refill(
             "Idle".into(),
             "Refill".into(),

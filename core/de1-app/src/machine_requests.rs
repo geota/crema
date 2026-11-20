@@ -54,7 +54,7 @@
 use std::time::Duration;
 
 use de1_domain::{is_run_now_state, maintenance_request_allowed};
-use de1_protocol::{MachineState, requested_state};
+use de1_protocol::{MachineState, StateInfo, requested_state};
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
@@ -110,6 +110,79 @@ pub(crate) struct RequestGuard {
     held: Option<Held>,
     /// The deadline the last [`Event::WakeAt`] asked for.
     wake_sent: Option<Duration>,
+    /// A steam rinse this core asked for, so a `Steam` report is read as it.
+    steam_rinse: Option<SteamRinseIntent>,
+}
+
+/// How long a requested steam rinse may take to start: past this, a `Steam`
+/// report is steam again (the request was lost, or the machine refused it).
+pub const STEAM_RINSE_ENTER_WINDOW: Duration = Duration::from_secs(5);
+
+/// A steam rinse this core wrote, followed through its life so that a
+/// firmware answering it with `Steam` (DE1 build 1359, seen on hardware) is
+/// still a rinse: no steam session, no clog check, no post-steam purge.
+/// Ported from Decenza `063464fb` (GPL-3.0), which keeps the app's purge
+/// intent the same way. A `Steam` nobody asked for (the group head's) is
+/// steam as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SteamRinseIntent {
+    /// Written at this time; the machine hasn't entered it yet. An Idle or
+    /// Sleep report (the machine before it moves) keeps it, for
+    /// [`STEAM_RINSE_ENTER_WINDOW`].
+    Requested(Duration),
+    /// The rinse is running: `Steam` and `SteamRinse` keep it, any other
+    /// state ends it.
+    Underway,
+}
+
+impl CremaCore {
+    /// Read `info` as the steam rinse this core asked for, if one stands: a
+    /// `Steam` report becomes `SteamRinse`, before the sessions, monitors and
+    /// shells see it. Advances the intent on every state report.
+    pub(crate) fn read_requested_rinse(&mut self, mut info: StateInfo) -> StateInfo {
+        let intent = match self.request_guard.steam_rinse {
+            Some(SteamRinseIntent::Requested(at))
+                if self.clock >= at + STEAM_RINSE_ENTER_WINDOW =>
+            {
+                None
+            }
+            other => other,
+        };
+        let next = match (intent, info.state) {
+            (None, _) => None,
+            (Some(_), MachineState::Steam | MachineState::SteamRinse) => {
+                Some(SteamRinseIntent::Underway)
+            }
+            (
+                Some(requested @ SteamRinseIntent::Requested(_)),
+                MachineState::Idle | MachineState::Sleep,
+            ) => Some(requested),
+            (Some(_), _) => None,
+        };
+        self.request_guard.steam_rinse = next;
+        if next.is_some() && info.state == MachineState::Steam {
+            info.state = MachineState::SteamRinse;
+        }
+        info
+    }
+
+    /// A state write went out: a steam rinse starts its intent, an Idle
+    /// (a stop or a cancel) leaves it as it is — a pending one keeps its
+    /// window, so a late `Steam` still counts as the rinse but a cancelled
+    /// request that never started lapses — and any other request supersedes
+    /// it.
+    fn note_state_written(&mut self, state: MachineState) {
+        self.request_guard.steam_rinse = match (state, self.request_guard.steam_rinse) {
+            (MachineState::SteamRinse, _) => Some(SteamRinseIntent::Requested(self.clock)),
+            (MachineState::Idle, intent) => intent,
+            _ => None,
+        };
+    }
+
+    /// The link is gone: a rinse asked for on it is over.
+    pub(crate) fn forget_steam_rinse(&mut self) {
+        self.request_guard.steam_rinse = None;
+    }
 }
 
 /// The states the DE1 enters only from Idle, and in which water flows.
@@ -305,6 +378,7 @@ impl CremaCore {
         let session_open = self.session.is_some();
         if state == MachineState::Idle && session_open {
             out.commands.push(Command::Stop);
+            self.note_state_written(state);
             return true;
         }
         if state == MachineState::Sleep && session_open && initiator != Initiator::User {
@@ -332,6 +406,7 @@ impl CremaCore {
             self.drive_shot_settings(out, true);
         }
         push_requested_state(state, out);
+        self.note_state_written(state);
         if state == MachineState::HotWaterRinse {
             self.start_on_flush_written();
         }

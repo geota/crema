@@ -18,6 +18,35 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   say) now imports its telemetry instead of none, and a dose, yield, TDS or
   EY that de1app saved as 0 because nobody entered it now imports as blank,
   not 0. Android and web.
+- **Reset machine settings keeps your flow calibration** — Settings →
+  Advanced → Reset machine settings to factory wrote 1.0 to the flow
+  calibration, erasing a calibration the machine can't restore. It now resets
+  the other 7 settings and leaves the calibration alone; Calibration → Flow
+  still resets it on purpose. Web.
+- **A quick group rinse is no longer saved as a shot** — a short pull now
+  counts as aborted when it weighs under a third of its stop weight, not just
+  under 5 g, so a 1.5 s rinse that drips 6 g onto the scale against a 32 g
+  target is discarded, with the usual Undo. The stop weight is the one in
+  force when the shot ends, so a target lowered mid-shot counts; with no
+  weight target the 5 g rule stands. Web, tablet and phone.
+- **A steam rinse stays a rinse on DE1 firmware 1359** — that build answers
+  Crema's steam rinse as steam, so Crema opened a steam session, could report
+  a steam clog, and with the post-steam purge on flushed the group afterwards.
+  A rinse Crema asked for is now a rinse whatever the machine calls it; steam
+  from the group head is still steam. Web, tablet and phone.
+- **Hot water right after a shot no longer adds to the shot's weight** — hot
+  water or a flush started in the few seconds Crema waits for the last drips
+  now ends that wait first, so the water is never counted as coffee. Web,
+  tablet and phone.
+- **"Refill stopped" instead of "Refill"** — the machine status said "Refill"
+  when the DE1 reports that its refill kit gave up refilling; it now says
+  "Refill stopped", and a firmware update blocked by it says so. Web, tablet
+  and phone.
+- **DE1 firmware 1359 is recognised** — the build Decent made for the Decenza
+  app showed as "newer than Crema knows"; Settings → Machine now calls it a
+  Decenza build, not on Decent's channels. Web, tablet and phone.
+||||||| 17594adc
+||||||| original
 - **The scale steps aside during a firmware update** — while a DE1 firmware
   update runs (15–25 minutes), Crema now drops the scale's Bluetooth link and
   stops scanning for it and reconnecting to it, so the scale's weight stream

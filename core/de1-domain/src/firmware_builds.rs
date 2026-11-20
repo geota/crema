@@ -13,17 +13,28 @@
 //! above the newest released row reads as
 //! [`FirmwareBuildStatus::NewerThanKnown`].
 //!
-//! ## Decent's channels (verified 2026-10-11)
+//! ## Decent's channels (verified 2026-11-19)
 //!
 //! de1app delivers firmware inside its own app update, synced from
 //! `https://fast.decentespresso.com/download/sync/<channel>/fw/bootfwupdate.dat`.
-//! Probed 2026-10-11 (HEAD + a 64-byte header read): `de1plus` (stable) and
-//! `de1beta` both serve **1333**; only `de1nightly` serves **1358**. The de1app
+//! Probed 2026-10-11 and again 2026-11-19 (a 64-byte header read): `de1plus`
+//! (stable) and `de1beta` both serve **1333**; only `de1nightly` serves
+//! **1358**. The de1app
 //! repo agrees: its `stable` and `beta` branches still carry 1333 (`c8087ad0`),
 //! `main` carries 1358 (`25a66f66`). Other apps label differently — decaid's
 //! manifest calls 1352 and 1358 "stable"; Decenza ships 1352 as Stable and
 //! 1358 as Early access — but this table records *Decent's* channels, since
 //! that is where a user updating today gets firmware from.
+//!
+//! ## Vendor builds
+//!
+//! **1359** is a build Decent made for Decenza (delivered 2026-10-30; Decenza
+//! `6f81941b`, `resources/firmware/manifest.json`), never published in de1app
+//! or decaid and on none of Decent's channels. It answers a requested
+//! `SteamRinse` with `Steam` (see `de1-app`'s `machine_requests`). Its row is
+//! [`KnownBuildState::Vendor`]: it classifies as
+//! [`FirmwareBuildStatus::VendorBuild`], not "newer than known", and never
+//! counts as the newest build, so crema never offers it.
 //!
 //! ## Maintenance
 //!
@@ -37,11 +48,11 @@ use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
 /// Revision of [`KNOWN_FIRMWARE_BUILDS`]. Bump on every edit to the table.
-pub const KNOWN_FIRMWARE_BUILDS_REVISION: u32 = 1;
+pub const KNOWN_FIRMWARE_BUILDS_REVISION: u32 = 2;
 
 /// The date the table's channel columns were last checked against Decent's
 /// live update channels (ISO 8601).
-pub const KNOWN_FIRMWARE_BUILDS_VERIFIED: &str = "2026-10-11";
+pub const KNOWN_FIRMWARE_BUILDS_VERIFIED: &str = "2026-11-19";
 
 /// One of Decent's de1app update channels.
 #[typeshare]
@@ -62,6 +73,9 @@ pub enum KnownBuildState {
     Released,
     /// Published, then withdrawn — Decent reverted to an older build.
     RolledBack,
+    /// Made by Decent for another app and never on Decent's channels (1359,
+    /// for Decenza).
+    Vendor,
 }
 
 /// One row of [`KNOWN_FIRMWARE_BUILDS`].
@@ -69,18 +83,21 @@ pub enum KnownBuildState {
 pub struct KnownFirmwareBuild {
     /// The build number the DE1 reports at MMR `0x800010`.
     pub build: u32,
-    /// When de1app first shipped it (commit date, ISO 8601).
+    /// When de1app first shipped it (commit date, ISO 8601); for a vendor
+    /// build, when Decent delivered it.
     pub released: &'static str,
-    /// The de1app commit that shipped it.
+    /// The de1app commit that shipped it; empty for a vendor build, which
+    /// de1app never shipped.
     pub de1app_commit: &'static str,
     /// Decent channels serving this build on [`KNOWN_FIRMWARE_BUILDS_VERIFIED`].
     pub channels: &'static [DecentFirmwareChannel],
-    /// Released, or rolled back.
+    /// Released, rolled back, or a vendor build.
     pub state: KnownBuildState,
 }
 
 /// Decent's DE1 firmware builds from the current stable build up, plus the
-/// rolled-back 1363. Revision [`KNOWN_FIRMWARE_BUILDS_REVISION`].
+/// rolled-back 1363 and the vendor build 1359. Revision
+/// [`KNOWN_FIRMWARE_BUILDS_REVISION`].
 pub const KNOWN_FIRMWARE_BUILDS: &[KnownFirmwareBuild] = &[
     // Shipped 2022-11-14 (360f4def); restored 2024-01-18 when 1363 was
     // reverted (c8087ad0). Still what stable and beta serve.
@@ -133,6 +150,16 @@ pub const KNOWN_FIRMWARE_BUILDS: &[KnownFirmwareBuild] = &[
         channels: &[DecentFirmwareChannel::Nightly],
         state: KnownBuildState::Released,
     },
+    // Decent's special build for Decenza, delivered 2026-10-30 as
+    // fwupdate-1C5874E1-1359.dat (Decenza 6f81941b, manifest.json "early
+    // access"); not in de1app, not on any Decent channel.
+    KnownFirmwareBuild {
+        build: 1359,
+        released: "2026-10-30",
+        de1app_commit: "",
+        channels: &[],
+        state: KnownBuildState::Vendor,
+    },
     // Shipped 2023-09-18, reverted to 1333 on 2024-01-18 (c8087ad0). Its
     // number is higher than every 2026 build, but it is not newer.
     KnownFirmwareBuild {
@@ -163,6 +190,9 @@ pub enum FirmwareBuildStatus {
     /// A build Decent published and then withdrew (e.g. 1363). Not "newer",
     /// whatever its number.
     RolledBack,
+    /// A build Decent made for another app, on none of its channels (1359,
+    /// Decenza's). Not "newer than known", and nothing to update from.
+    VendorBuild,
     /// Above the newest released build and not a known rolled-back one —
     /// released after this table was written.
     NewerThanKnown,
@@ -238,6 +268,9 @@ pub fn classify_firmware_build(installed: Option<u32>) -> FirmwareBuildReport {
         Some(_) if row.is_some_and(|r| r.state == KnownBuildState::RolledBack) => {
             FirmwareBuildStatus::RolledBack
         }
+        Some(_) if row.is_some_and(|r| r.state == KnownBuildState::Vendor) => {
+            FirmwareBuildStatus::VendorBuild
+        }
         Some(b) if b > newest => FirmwareBuildStatus::NewerThanKnown,
         Some(b) if b == newest => FirmwareBuildStatus::Newest,
         Some(b) if b == stable => FirmwareBuildStatus::Stable,
@@ -276,8 +309,8 @@ mod tests {
 
     #[test]
     fn the_table_matches_decents_channels_on_the_verified_date() {
-        assert_eq!(KNOWN_FIRMWARE_BUILDS_REVISION, 1);
-        assert_eq!(KNOWN_FIRMWARE_BUILDS_VERIFIED, "2026-10-11");
+        assert_eq!(KNOWN_FIRMWARE_BUILDS_REVISION, 2);
+        assert_eq!(KNOWN_FIRMWARE_BUILDS_VERIFIED, "2026-11-19");
         assert_eq!(decent_channel_build(DecentFirmwareChannel::Stable), 1333);
         assert_eq!(decent_channel_build(DecentFirmwareChannel::Beta), 1333);
         assert_eq!(decent_channel_build(DecentFirmwareChannel::Nightly), 1358);
@@ -401,9 +434,23 @@ mod tests {
     }
 
     #[test]
+    fn build_1359_is_decenzas_vendor_build() {
+        let report = classify_firmware_build(Some(1359));
+        assert_eq!(report.status, FirmwareBuildStatus::VendorBuild);
+        assert_eq!(report.installed, Some(1359));
+        assert!(report.channels.is_empty());
+        // Never the newest: crema doesn't offer it.
+        assert_eq!(report.newest_build, 1358);
+        assert_eq!(
+            known_firmware_build(1359).map(|r| r.state),
+            Some(KnownBuildState::Vendor)
+        );
+    }
+
+    #[test]
     fn builds_above_the_newest_release_are_newer_than_known() {
         // Below the rolled-back 1363 and above it alike.
-        for build in [1359, 1362, 1364, 1400, u32::from(u16::MAX)] {
+        for build in [1360, 1362, 1364, 1400, u32::from(u16::MAX)] {
             let report = classify_firmware_build(Some(build));
             assert_eq!(
                 report.status,
@@ -424,8 +471,8 @@ mod tests {
         assert_eq!(json["stableBuild"], 1333);
         assert_eq!(json["betaBuild"], 1333);
         assert_eq!(json["nightlyBuild"], 1358);
-        assert_eq!(json["tableRevision"], 1);
-        assert_eq!(json["tableVerified"], "2026-10-11");
+        assert_eq!(json["tableRevision"], 2);
+        assert_eq!(json["tableVerified"], "2026-11-19");
 
         let json: serde_json::Value =
             serde_json::from_str(&classify_firmware_build_json(Some(1358))).unwrap();

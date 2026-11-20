@@ -23,18 +23,18 @@ class SleepRefillGateTest {
             MmrRegister.FirmwareVersion to 1352u,
             MmrRegister.MachineModel to 1u,
         )
-        val blocked = sleepLatchesInRefill(MachineState.Idle, "Refill", info) { st, sub, fw, model ->
+        val blocked = sleepLatchesInRefill(MachineState.Idle, "RefillStopped", info) { st, sub, fw, model ->
             calls += Call(st, sub, fw, model)
             true
         }
         assertTrue(blocked)
-        assertEquals(listOf(Call("Idle", "Refill", 1352u, 1u)), calls)
+        assertEquals(listOf(Call("Idle", "RefillStopped", 1352u, 1u)), calls)
     }
 
     @Test
     fun `core's verdict decides`() {
-        assertFalse(sleepLatchesInRefill(MachineState.Refill, "Refill", emptyMap()) { _, _, _, _ -> false })
-        assertTrue(sleepLatchesInRefill(MachineState.Refill, "Refill", emptyMap()) { _, _, fw, _ -> fw == null })
+        assertFalse(sleepLatchesInRefill(MachineState.Refill, "RefillStopped", emptyMap()) { _, _, _, _ -> false })
+        assertTrue(sleepLatchesInRefill(MachineState.Refill, "RefillStopped", emptyMap()) { _, _, fw, _ -> fw == null })
     }
 
     @Test

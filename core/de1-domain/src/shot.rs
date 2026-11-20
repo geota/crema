@@ -559,12 +559,30 @@ pub fn downsample_indices(len: u32, cap: u32) -> Vec<u32> {
 }
 
 /// A completed shot ran shorter than this AND landed less than
-/// [`ABORTED_MAX_WEIGHT_G`] in the cup ⇒ it was an aborted pull, not a
-/// shot. Decenza's `abortedshotclassifier.h:19-25` thresholds, validated
-/// there over 882 shots.
+/// [`aborted_max_weight_g`] in the cup ⇒ it was an aborted pull, not a
+/// shot. Decenza's `abortedshotclassifier.h` thresholds; the 5 g floor was
+/// validated there over 882 shots.
 pub const ABORTED_MAX_DURATION_MS: u32 = 10_000;
-/// See [`ABORTED_MAX_DURATION_MS`].
+/// The aborted rule's weight floor: it alone decides a shot with no weight
+/// target. See [`aborted_max_weight_g`].
 pub const ABORTED_MAX_WEIGHT_G: f32 = 5.0;
+
+/// The aborted rule's weight threshold: the larger of
+/// [`ABORTED_MAX_WEIGHT_G`] and a third of the weight the shot was set to
+/// stop at, read live at completion (a mid-shot Quick Controls change
+/// counts). No target (or a non-positive one) keeps the 5 g floor.
+///
+/// Ported from Decenza `2036c350` (#2221, GPL-3.0): a 1.5 s group rinse with
+/// no cup landed 6.4 g on the scale and was saved as a shot against a 32 g
+/// target. The one-third figure is Decenza's choice, not corpus-validated:
+/// low enough to keep a short shot stopped on purpose.
+#[must_use]
+pub fn aborted_max_weight_g(stop_target_g: Option<f32>) -> f32 {
+    match stop_target_g {
+        Some(t) if t.is_finite() && t > 0.0 => ABORTED_MAX_WEIGHT_G.max(t / 3.0),
+        _ => ABORTED_MAX_WEIGHT_G,
+    }
+}
 
 /// What the shell should do with a just-completed shot — decided at the
 /// core boundary so both shells classify identically (previously each
@@ -592,15 +610,19 @@ pub enum ShotDisposition {
 /// type at completion time (you can't switch profiles mid-pour); the
 /// cleaning check outranks the aborted thresholds — a short, dry
 /// backflush is still a cleaning run, not an aborted espresso.
+/// `stop_target_g` is the live stop-at-weight target at completion (`None`
+/// when weight stopping is off); see [`aborted_max_weight_g`].
 pub fn shot_disposition(
     duration_ms: u32,
     final_weight_g: Option<f32>,
+    stop_target_g: Option<f32>,
     beverage_type: crate::profile::BeverageType,
 ) -> ShotDisposition {
     if beverage_type == crate::profile::BeverageType::Cleaning {
         return ShotDisposition::SkipCleaning;
     }
-    if duration_ms < ABORTED_MAX_DURATION_MS && final_weight_g.unwrap_or(0.0) < ABORTED_MAX_WEIGHT_G
+    if duration_ms < ABORTED_MAX_DURATION_MS
+        && final_weight_g.unwrap_or(0.0) < aborted_max_weight_g(stop_target_g)
     {
         return ShotDisposition::DiscardAborted;
     }
@@ -846,17 +868,17 @@ mod tests {
     fn disposition_records_a_normal_shot() {
         use crate::profile::BeverageType;
         assert_eq!(
-            shot_disposition(27_000, Some(36.0), BeverageType::Espresso),
+            shot_disposition(27_000, Some(36.0), None, BeverageType::Espresso),
             ShotDisposition::Record
         );
         // Long enough alone clears the aborted rule, even with no scale.
         assert_eq!(
-            shot_disposition(10_000, None, BeverageType::Espresso),
+            shot_disposition(10_000, None, None, BeverageType::Espresso),
             ShotDisposition::Record
         );
         // Heavy enough alone clears it too, however short.
         assert_eq!(
-            shot_disposition(3_000, Some(5.0), BeverageType::Espresso),
+            shot_disposition(3_000, Some(5.0), None, BeverageType::Espresso),
             ShotDisposition::Record
         );
     }
@@ -865,25 +887,63 @@ mod tests {
     fn disposition_discards_a_short_light_pull() {
         use crate::profile::BeverageType;
         assert_eq!(
-            shot_disposition(9_999, Some(4.9), BeverageType::Espresso),
+            shot_disposition(9_999, Some(4.9), None, BeverageType::Espresso),
             ShotDisposition::DiscardAborted
         );
         // No scale paired reads as 0 g in the cup (Decenza's rule).
         assert_eq!(
-            shot_disposition(2_000, None, BeverageType::Manual),
+            shot_disposition(2_000, None, None, BeverageType::Manual),
             ShotDisposition::DiscardAborted
         );
+    }
+
+    #[test]
+    fn disposition_weight_threshold_scales_with_the_stop_target() {
+        use crate::profile::BeverageType;
+        // Decenza #2221: a 1.5 s rinse that drips 6 g against a 32 g target
+        // is under a third of it (10.67 g) → discarded.
+        assert_eq!(
+            shot_disposition(1_500, Some(6.0), Some(32.0), BeverageType::Espresso),
+            ShotDisposition::DiscardAborted
+        );
+        // With no target it clears the 5 g floor → recorded.
+        assert_eq!(
+            shot_disposition(1_500, Some(6.0), None, BeverageType::Espresso),
+            ShotDisposition::Record
+        );
+        // A small target never lowers the floor below 5 g.
+        assert_eq!(
+            shot_disposition(1_500, Some(4.9), Some(9.0), BeverageType::Espresso),
+            ShotDisposition::DiscardAborted
+        );
+        assert_eq!(
+            shot_disposition(1_500, Some(5.0), Some(9.0), BeverageType::Espresso),
+            ShotDisposition::Record
+        );
+        // Strict comparisons: exactly a third is kept, and 10 s is long enough.
+        assert_eq!(
+            shot_disposition(1_500, Some(10.0), Some(30.0), BeverageType::Espresso),
+            ShotDisposition::Record
+        );
+        assert_eq!(
+            shot_disposition(10_000, Some(6.0), Some(32.0), BeverageType::Espresso),
+            ShotDisposition::Record
+        );
+        // A non-positive or non-finite target is no target.
+        for t in [0.0, -3.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(aborted_max_weight_g(Some(t)), ABORTED_MAX_WEIGHT_G, "{t}");
+        }
     }
 
     #[test]
     fn disposition_skips_a_cleaning_run_even_when_short_and_dry() {
         use crate::profile::BeverageType;
         assert_eq!(
-            shot_disposition(2_000, None, BeverageType::Cleaning),
+            shot_disposition(2_000, None, None, BeverageType::Cleaning),
             ShotDisposition::SkipCleaning
         );
         assert_eq!(
-            shot_disposition(120_000, Some(200.0), BeverageType::Cleaning),
+            shot_disposition(120_000, Some(200.0), None, BeverageType::Cleaning),
             ShotDisposition::SkipCleaning
         );
     }
