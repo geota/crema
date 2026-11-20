@@ -9,6 +9,15 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **de1app shot imports keep their profile and frames** — a `.shot` file
+  from de1app's history now brings in the profile it was pulled with, steps
+  and all, where it used to bring only the profile's name. Its samples get
+  their profile frames back, so the chart shows where each step began; before,
+  every imported de1app shot, `.shot` or v2 JSON, sat in frame 0. A file that
+  lacks one target series (a v2 file from another app with no flow target,
+  say) now imports its telemetry instead of none, and a dose, yield, TDS or
+  EY that de1app saved as 0 because nobody entered it now imports as blank,
+  not 0. Android and web.
 - **Reset machine settings keeps your flow calibration** — Settings →
   Advanced → Reset machine settings to factory wrote 1.0 to the flow
   calibration, erasing a calibration the machine can't restore. It now resets
@@ -36,6 +45,7 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 - **DE1 firmware 1359 is recognised** — the build Decent made for the Decenza
   app showed as "newer than Crema knows"; Settings → Machine now calls it a
   Decenza build, not on Decent's channels. Web, tablet and phone.
+||||||| a0914b63
 
 ## [0.11.0] — 2026-11-19
 
