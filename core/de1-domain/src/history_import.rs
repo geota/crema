@@ -45,7 +45,11 @@ use de1_protocol::ShotSample;
 ///   absent.
 /// - [`ImportError::Json`] never (path is pure Tcl).
 pub fn import_legacy_tcl_shot(content: &str) -> Result<StoredShot, ImportError> {
-    let dict = TclDict::parse(content)?;
+    // de1app ends every `.shot` with `profile {…}`: the shot's whole v2
+    // profile as JSON. Cut it out before the Tcl pass, since a brace inside a
+    // JSON string is not balanced as Tcl (decaid 223a3512).
+    let (tcl_source, profile_json) = split_profile_block(content);
+    let dict = TclDict::parse(&tcl_source)?;
 
     // `clock` is Unix epoch seconds. The legacy app writes it as the
     // first field on every `.shot` file (de1plus/persistence.tcl).
@@ -57,9 +61,8 @@ pub fn import_legacy_tcl_shot(content: &str) -> Result<StoredShot, ImportError> 
         .map_err(|_| ImportError::Tcl("`clock` is not an integer".into()))?;
     let recorded_at = clock_s.saturating_mul(1000);
 
-    // Parallel time-series arrays. Every series uses the same length;
-    // pre-2026-05-22 reaprime takes `min(lengths)` defensively, Crema
-    // follows.
+    // Parallel time-series arrays, one value per sample. The sample count is
+    // the shortest series that is present (see `sample_count`).
     let elapsed = parse_tcl_double_list(dict.get("espresso_elapsed"));
     let pressure = parse_tcl_double_list(dict.get("espresso_pressure"));
     let flow = parse_tcl_double_list(dict.get("espresso_flow"));
@@ -68,7 +71,9 @@ pub fn import_legacy_tcl_shot(content: &str) -> Result<StoredShot, ImportError> 
     let temp_goal = parse_tcl_double_list(dict.get("espresso_temperature_goal"));
     let pressure_goal = parse_tcl_double_list(dict.get("espresso_pressure_goal"));
     let flow_goal = parse_tcl_double_list(dict.get("espresso_flow_goal"));
-    let frame_no = parse_tcl_double_list(dict.get("espresso_frame_number"));
+    // de1app records no frame number, only `espresso_state_change`, whose
+    // sign it flips at each frame change.
+    let state_change = parse_tcl_double_list(dict.get("espresso_state_change"));
     // The legacy TCL log carries the scale-derived channels alongside
     // the DE1 ones — Crema imports them so the chart can read the
     // weight-based resistance for legacy shots too.
@@ -76,19 +81,18 @@ pub fn import_legacy_tcl_shot(content: &str) -> Result<StoredShot, ImportError> 
     let scale_flow_weight = parse_tcl_double_list(dict.get("espresso_flow_weight"));
     let dispensed = parse_tcl_double_list(dict.get("espresso_water_dispensed"));
 
-    let count = [
-        elapsed.len(),
-        pressure.len(),
-        flow.len(),
-        temp_basket.len(),
-        temp_mix.len(),
-        temp_goal.len(),
-        pressure_goal.len(),
-        flow_goal.len(),
-    ]
-    .into_iter()
-    .min()
-    .unwrap_or(0);
+    let count = sample_count(
+        &elapsed,
+        &[
+            &pressure,
+            &flow,
+            &temp_basket,
+            &temp_mix,
+            &temp_goal,
+            &pressure_goal,
+            &flow_goal,
+        ],
+    );
 
     let samples = build_samples(
         count,
@@ -100,7 +104,7 @@ pub fn import_legacy_tcl_shot(content: &str) -> Result<StoredShot, ImportError> 
         &temp_goal,
         &pressure_goal,
         &flow_goal,
-        &frame_no,
+        &frames_from_state_change(&state_change, count),
         &scale_weight,
         &scale_flow_weight,
         &dispensed,
@@ -116,7 +120,9 @@ pub fn import_legacy_tcl_shot(content: &str) -> Result<StoredShot, ImportError> 
         .unwrap_or_else(|| TclDict::parse("").expect("empty TclDict parses"));
 
     let metadata = tcl_metadata(&settings);
-    let profile = tcl_profile(&settings, &metadata);
+    let profile = profile_json
+        .and_then(embedded_tcl_profile)
+        .or_else(|| tcl_profile(&settings, &metadata));
 
     // `clock` is the shot START; `completed_at` is the end — walk forward
     // by the recorded duration (the inverse of the exporter's walk back).
@@ -144,19 +150,18 @@ pub fn import_v2_json_shot(content: &str) -> Result<StoredShot, ImportError> {
 
     let recorded_at = raw.clock.saturating_mul(1000);
 
-    let count = [
-        raw.elapsed.len(),
-        raw.pressure.pressure.len(),
-        raw.flow.flow.len(),
-        raw.temperature.basket.len(),
-        raw.temperature.mix.len(),
-        raw.temperature.goal.len(),
-        raw.pressure.goal.len(),
-        raw.flow.goal.len(),
-    ]
-    .into_iter()
-    .min()
-    .unwrap_or(0);
+    let count = sample_count(
+        &raw.elapsed,
+        &[
+            &raw.pressure.pressure,
+            &raw.flow.flow,
+            &raw.temperature.basket,
+            &raw.temperature.mix,
+            &raw.temperature.goal,
+            &raw.pressure.goal,
+            &raw.flow.goal,
+        ],
+    );
 
     let samples = build_samples(
         count,
@@ -168,7 +173,7 @@ pub fn import_v2_json_shot(content: &str) -> Result<StoredShot, ImportError> {
         &raw.temperature.goal,
         &raw.pressure.goal,
         &raw.flow.goal,
-        &frames_from_state_change(&raw.state_change),
+        &frames_from_state_change(&raw.state_change, count),
         // v2 puts the scale-derived channels under `totals.weight` and
         // `flow.by_weight`; `totals.water_dispensed` carries the pump
         // volume integral. All three are sample-aligned to `elapsed`.
@@ -230,14 +235,18 @@ fn build_samples(
     temp_goal: &[f32],
     pressure_goal: &[f32],
     flow_goal: &[f32],
-    frame_no: &[f32],
+    frame_no: &[u8],
     scale_weight: &[f32],
     scale_flow_weight: &[f32],
     dispensed: &[f32],
 ) -> Vec<TimedSample> {
+    // `count` never exceeds `elapsed`; any other machine series may be
+    // absent, and reads as 0 (see `sample_count`).
+    let at = |series: &[f32], i: usize| series.get(i).copied().unwrap_or(0.0);
     let mut out = Vec::with_capacity(count);
-    for i in 0..count {
-        let elapsed_dur = duration_from_seconds(elapsed[i]);
+    for (i, &elapsed_s) in elapsed.iter().take(count).enumerate() {
+        let elapsed_dur = duration_from_seconds(elapsed_s);
+        let (pressure_i, flow_i) = (at(pressure, i), at(flow, i));
         // Build a ShotSample mirroring what the BLE decoder would have
         // produced live. The DE1 protocol fields the legacy app doesn't
         // record (sample_time, group_pressure_set_low, set_mix_temp /
@@ -249,18 +258,18 @@ fn build_samples(
             // from the sample index so downstream timing logic doesn't
             // divide by zero.
             sample_time: u16::try_from(i).unwrap_or(u16::MAX),
-            group_pressure: pressure[i],
-            group_flow: flow[i],
-            head_temp: temp_basket[i],
-            mix_temp: temp_mix[i],
+            group_pressure: pressure_i,
+            group_flow: flow_i,
+            head_temp: at(temp_basket, i),
+            mix_temp: at(temp_mix, i),
             // The legacy log records a single `temperature_goal` series
             // (no separate mix / head split). Fan it out to both target
             // fields so consumers that read either get a value.
-            set_head_temp: temp_goal[i],
-            set_mix_temp: temp_goal[i],
-            set_group_pressure: pressure_goal[i],
-            set_group_flow: flow_goal[i],
-            frame_number: frame_no.get(i).map_or(0, |f| frame_number_from_f32(*f)),
+            set_head_temp: at(temp_goal, i),
+            set_mix_temp: at(temp_goal, i),
+            set_group_pressure: at(pressure_goal, i),
+            set_group_flow: at(flow_goal, i),
+            frame_number: frame_no.get(i).copied().unwrap_or(0),
             steam_temp: 0.0,
         };
         // Overlay channels — each `Some(value)` only when the source
@@ -284,9 +293,9 @@ fn build_samples(
         // live `Event::Telemetry` path runs (see `de1_app::puck_resistance`
         // / `puck_resistance_weight`); kept inline to avoid de1-domain
         // depending back on de1-app.
-        let resistance = derive_resistance(pressure[i], flow[i]);
+        let resistance = derive_resistance(pressure_i, flow_i);
         let resistance_weight =
-            scale_flow_weight_i.and_then(|wf| derive_resistance(pressure[i], wf));
+            scale_flow_weight_i.and_then(|wf| derive_resistance(pressure_i, wf));
         out.push(TimedSample {
             elapsed: elapsed_dur,
             sample,
@@ -331,17 +340,62 @@ fn duration_from_seconds(s: f32) -> Duration {
     crate::duration::secs_clamped(s, crate::duration::MAX_IMPORTED_SHOT_TIME_S)
 }
 
-/// Profile frame indices from a v2 `state_change` series — the inverse of
-/// the exporter's 1-based `frame + 1` markers. Only a series that is
-/// entirely whole numbers in `1..=256` reads as frame markers; anything else
-/// (an older 0-based crema export, de1app's ±10000000 toggles, absent) yields
-/// no frames, so the samples keep frame 0 as before.
-fn frames_from_state_change(markers: &[f32]) -> Vec<f32> {
-    let is_marker = |m: &f32| m.fract() == 0.0 && (1.0..=256.0).contains(m);
-    if markers.is_empty() || !markers.iter().all(is_marker) {
+/// How many samples a shot has: the length of `elapsed`, cut to the
+/// shortest of the other machine series that is present. An absent or empty
+/// series (another app's v2 file with no `flow.goal`, say) is skipped and its
+/// values read as 0, rather than emptying the shot. The scale series never
+/// bound the count: a scale that connected late leaves them short. Port of
+/// decaid 223a3512 (`tcl_shot_parser.dart`, `where((l) => l.isNotEmpty)`).
+fn sample_count(elapsed: &[f32], machine: &[&[f32]]) -> usize {
+    machine
+        .iter()
+        .filter(|series| !series.is_empty())
+        .map(|series| series.len())
+        .fold(elapsed.len(), usize::min)
+}
+
+/// Profile frame per sample from a `state_change` series, or none when the
+/// series does not cover all `count` samples. A partial series is not used
+/// at all, so frame numbers never jump back where it runs out (decaid
+/// 223a3512); those samples keep frame 0. Two writers:
+///
+/// - Crema (and decaid ≥ 8427fb07) write the profile frame + 1, so a series
+///   that is entirely whole numbers in `1..=256` reads as those frames.
+/// - de1app writes ±10000000 (`gui.tcl` `_state_change_chart_value`) and
+///   flips the sign at each frame change the DE1 reports, with 0 before the
+///   first. Each sign change is one frame on. A frame the machine skips
+///   counts as one change, so later frames read low by the number skipped;
+///   neither de1app format records the frame itself. Port of decaid
+///   bdff4c3f (`state_change_frames.dart`).
+///
+/// Anything else (an older 0-based crema export, absent) has no sign change
+/// and so reads as frame 0 throughout, as before.
+fn frames_from_state_change(markers: &[f32], count: usize) -> Vec<u8> {
+    let Some(markers) = markers.get(..count) else {
         return Vec::new();
+    };
+    let is_marker = |m: &f32| m.fract() == 0.0 && (1.0..=256.0).contains(m);
+    if markers.iter().all(is_marker) {
+        return markers
+            .iter()
+            .map(|m| frame_number_from_f32(m - 1.0))
+            .collect();
     }
-    markers.iter().map(|m| m - 1.0).collect()
+    let mut frame = 0u8;
+    let mut previous_positive = None;
+    markers
+        .iter()
+        .map(|m| {
+            if *m != 0.0 && !m.is_nan() {
+                let positive = *m > 0.0;
+                if previous_positive.is_some_and(|p| p != positive) {
+                    frame = frame.saturating_add(1);
+                }
+                previous_positive = Some(positive);
+            }
+            frame
+        })
+        .collect()
 }
 
 /// Round + clamp a recorded frame-index float into the byte range the
@@ -354,6 +408,69 @@ fn frame_number_from_f32(f: f32) -> u8 {
     f.round().clamp(0.0, 255.0) as u8
 }
 
+/// Split a de1app `.shot` into its Tcl part and the JSON text of its
+/// top-level `profile {…}` block, if it has one. The block starts at a line
+/// beginning `profile {`; its end is found by counting braces outside JSON
+/// strings, so a brace in a profile's notes cannot end it early. Port of
+/// decaid 3b5b4d46 / 223a3512 (`tcl_shot_parser.dart` `_profileBlock`). With
+/// no block, or one that never closes, the content is returned whole.
+fn split_profile_block(content: &str) -> (std::borrow::Cow<'_, str>, Option<&str>) {
+    const OPENING: &str = "profile {";
+    let start = content
+        .match_indices(OPENING)
+        .map(|(i, _)| i)
+        .find(|&i| i == 0 || content.as_bytes()[i - 1] == b'\n');
+    let Some(start) = start else {
+        return (content.into(), None);
+    };
+    let json_start = start + OPENING.len() - 1;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    // Every byte this matches is ASCII, so the slice ends on a char boundary.
+    for (offset, byte) in content.as_bytes()[json_start..].iter().enumerate() {
+        if in_string {
+            match byte {
+                _ if escaped => escaped = false,
+                b'\\' => escaped = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    let end = json_start + offset + 1;
+                    let tcl = format!("{}{}", &content[..start], &content[end..]);
+                    return (tcl.into(), Some(&content[json_start..end]));
+                }
+            }
+            _ => {}
+        }
+    }
+    (content.into(), None)
+}
+
+/// The profile a de1app `.shot` embeds, decoded as a recorded v2 profile.
+/// `None` when it does not decode or has no steps, so the caller falls back
+/// to the stepless profile from `settings.profile_title`.
+fn embedded_tcl_profile(json: &str) -> Option<Profile> {
+    crate::profile_import::import_v2_json_embedded(json)
+        .ok()
+        .filter(|p| !p.steps.is_empty())
+}
+
+/// A dose, yield, TDS or EY as recorded, or `None` for de1app's `0`, which
+/// it writes when the value was never entered (decaid 223a3512, merge design
+/// "0 is empty"). A negative or NaN value means nothing either.
+fn entered(value: Option<f32>) -> Option<f32> {
+    value.filter(|v| *v > 0.0)
+}
+
 /// Parse a Tcl-list string like `"0.0 0.25 0.5"` into a `Vec<f32>`.
 fn parse_tcl_double_list(raw: Option<&str>) -> Vec<f32> {
     let Some(s) = raw else { return Vec::new() };
@@ -364,10 +481,10 @@ fn parse_tcl_double_list(raw: Option<&str>) -> Vec<f32> {
 
 /// Build a [`ShotMetadata`] from the legacy `settings {…}` block.
 fn tcl_metadata(settings: &TclDict) -> ShotMetadata {
-    let dose = settings.get_f32("grinder_dose_weight");
-    let yield_out = settings.get_f32("drink_weight");
-    let tds = settings.get_f32("drink_tds");
-    let extraction_yield = settings.get_f32("drink_ey");
+    let dose = entered(settings.get_f32("grinder_dose_weight"));
+    let yield_out = entered(settings.get_f32("drink_weight"));
+    let tds = entered(settings.get_f32("drink_tds"));
+    let extraction_yield = entered(settings.get_f32("drink_ey"));
     let enjoyment = settings.get_f32("espresso_enjoyment");
     let rating = enjoyment.and_then(enjoyment_to_rating);
     let notes = settings
@@ -405,8 +522,9 @@ fn tcl_metadata(settings: &TclDict) -> ShotMetadata {
     }
 }
 
-/// Build a minimal [`Profile`] from the legacy `settings.profile_title`,
-/// or `None` if the title is empty / missing.
+/// Build a stepless [`Profile`] from the legacy `settings.profile_title`,
+/// or `None` if the title is empty / missing. The fallback for a `.shot`
+/// whose embedded profile is absent or unreadable.
 fn tcl_profile(settings: &TclDict, metadata: &ShotMetadata) -> Option<Profile> {
     let title = settings.get("profile_title").map(str::trim)?;
     if title.is_empty() {
@@ -640,8 +758,8 @@ fn v2_metadata(raw: &V2ShotJson) -> ShotMetadata {
         Some(b) => combine_bean_label(b.brand.as_deref(), b.kind.as_deref()),
         None => None,
     };
-    let dose = raw.meta.dose_in;
-    let yield_out = raw.meta.out;
+    let dose = entered(raw.meta.dose_in);
+    let yield_out = entered(raw.meta.out);
     let grinder_setting = raw
         .meta
         .grinder
@@ -652,8 +770,8 @@ fn v2_metadata(raw: &V2ShotJson) -> ShotMetadata {
     let (rating, tds, extraction_yield, notes) = match &raw.meta.shot {
         Some(s) => (
             s.enjoyment.and_then(enjoyment_to_rating),
-            s.tds,
-            s.ey,
+            entered(s.tds),
+            entered(s.ey),
             s.notes.clone().filter(|s| !s.trim().is_empty()),
         ),
         None => (None, None, None, None),
@@ -693,16 +811,30 @@ mod tests {
     #[test]
     fn state_change_markers_read_back_as_frames() {
         // Crema / decaid 1-based markers → frame indices.
+        assert_eq!(frames_from_state_change(&[1.0, 1.0, 3.0], 3), [0, 0, 2]);
+        // A 0 means an older 0-based export: no sign change, so frame 0.
+        assert_eq!(frames_from_state_change(&[0.0, 0.0, 2.0], 3), [0, 0, 0]);
+        assert_eq!(frames_from_state_change(&[1.5], 1), [0]);
+        assert!(frames_from_state_change(&[], 0).is_empty());
+    }
+
+    /// de1app's ±10000000 series: 0 before the first frame, then one frame
+    /// on at each sign change (decaid `state_change_frames_test.dart`).
+    #[test]
+    fn de1app_state_change_sign_flips_read_as_frames() {
+        const UP: f32 = 10_000_000.0;
+        let series = [0.0, UP, UP, UP, -UP, -UP, -UP, UP, UP];
         assert_eq!(
-            frames_from_state_change(&[1.0, 1.0, 3.0]),
-            vec![0.0, 0.0, 2.0]
+            frames_from_state_change(&series, 9),
+            [0, 0, 0, 0, 1, 1, 1, 2, 2]
         );
-        // A 0 means an older 0-based export: ambiguous, so no frames.
-        assert!(frames_from_state_change(&[0.0, 0.0, 2.0]).is_empty());
-        // de1app's ±10000000 toggles aren't frame markers.
-        assert!(frames_from_state_change(&[10_000_000.0, -10_000_000.0]).is_empty());
-        assert!(frames_from_state_change(&[1.5]).is_empty());
-        assert!(frames_from_state_change(&[]).is_empty());
+        // The writer's sign at the start does not matter.
+        assert_eq!(frames_from_state_change(&[-UP, UP, -UP], 3), [0, 1, 2]);
+        // A series longer than the samples is cut to them.
+        assert_eq!(frames_from_state_change(&[UP, -UP, UP], 2), [0, 1]);
+        // A series that does not cover every sample is not used at all, so
+        // the frame never falls back to 0 part-way through.
+        assert!(frames_from_state_change(&[UP, -UP, UP], 6).is_empty());
     }
 
     /// A miniature legacy `.shot` fixture covering every metadata field
@@ -972,5 +1104,198 @@ settings {
             shot.profile.expect("profile present").title,
             "Best Practice"
         );
+    }
+
+    /// de1app's own `de1plus/simulations/simulated_1.shot` (de1app
+    /// 3f50a8bf, GPL-3.0), as de1app 1.39.0 wrote it: a 145-sample Londonium
+    /// shot with the embedded profile, a four-frame `espresso_state_change`
+    /// and `0` for the TDS, EY and enjoyment nobody entered.
+    const DE1APP_SIMULATED_SHOT: &str = include_str!("../tests/fixtures/de1app/simulated_1.shot");
+
+    #[test]
+    fn de1app_shot_imports_its_embedded_profile_frames_and_unset_zeros() {
+        let shot = import_legacy_tcl_shot(DE1APP_SIMULATED_SHOT).expect("imports");
+        assert_eq!(shot.record.samples.len(), 145);
+
+        let profile = shot.profile.as_ref().expect("profile present");
+        assert_eq!(profile.title, "Londonium");
+        assert_eq!(profile.author, "Decent");
+        let steps: Vec<&str> = profile.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            steps,
+            [
+                "Fill",
+                "Infuse",
+                "Pressure Up",
+                "Pressure Decline",
+                "Pressure Hold",
+                "Flow Limit"
+            ]
+        );
+        assert_eq!(profile.target_weight, 36.0);
+
+        // Runs of 17, 58, 39 and 31 samples between the sign flips.
+        let frames: Vec<u8> = shot
+            .record
+            .samples
+            .iter()
+            .map(|s| s.sample.frame_number)
+            .collect();
+        let mut runs: Vec<(u8, usize)> = Vec::new();
+        for f in frames {
+            match runs.last_mut() {
+                Some((last, n)) if *last == f => *n += 1,
+                _ => runs.push((f, 1)),
+            }
+        }
+        assert_eq!(runs, [(0, 17), (1, 58), (2, 39), (3, 31)]);
+
+        // The settings block after `machine {…}` still reads.
+        assert_eq!(shot.metadata.yield_out, Some(35.7));
+        assert_eq!(shot.metadata.tds, None);
+        assert_eq!(shot.metadata.extraction_yield, None);
+        assert_eq!(shot.metadata.rating, None);
+        assert_eq!(shot.metadata.dose, None);
+    }
+
+    /// A minimal profile block, written ahead of `settings` (decaid 223a3512's
+    /// case), with braces and an escaped quote inside JSON strings that are
+    /// not balanced as Tcl.
+    fn legacy_with_profile(profile_json: &str) -> String {
+        LEGACY_FIXTURE.replace(
+            "settings {",
+            &format!("profile {profile_json}\nsettings {{"),
+        )
+    }
+
+    const EMBEDDED_PROFILE: &str = r#"{
+  "title": "Rao Allongé",
+  "author": "Decent",
+  "notes": "close } early, open {{ twice, quote \" and \/ slash",
+  "beverage_type": "espresso",
+  "steps": [{
+      "name": "hold at 4.5 ml\/s", "temperature": "92.00", "sensor": "coffee",
+      "pump": "flow", "transition": "fast", "pressure": "0", "flow": "4.50",
+      "seconds": "8.00", "volume": "0", "weight": "0",
+      "exit": {"type": "pressure", "condition": "over", "value": "4.00"}
+    }, {
+      "name": "extract", "temperature": "92.00", "sensor": "coffee",
+      "pump": "flow", "transition": "smooth", "pressure": "0", "flow": "2.20",
+      "seconds": "40.00", "volume": "0", "weight": "0"
+    }],
+  "tank_temperature": "0",
+  "target_weight": "61",
+  "version": "2"
+}"#;
+
+    #[test]
+    fn legacy_shot_prefers_the_embedded_profile_with_steps() {
+        let doc = legacy_with_profile(EMBEDDED_PROFILE);
+        let shot = import_legacy_tcl_shot(&doc).expect("imports");
+        let profile = shot.profile.expect("profile present");
+        assert_eq!(profile.title, "Rao Allongé");
+        assert_eq!(profile.steps.len(), 2);
+        assert_eq!(profile.steps[0].name, "hold at 4.5 ml/s");
+        assert_eq!(profile.target_weight, 61.0);
+        // The settings that follow the block are still read.
+        assert_eq!(shot.metadata.dose, Some(18.5));
+        assert_eq!(shot.metadata.barista.as_deref(), Some("Barista"));
+        assert_eq!(shot.record.samples.len(), 2);
+    }
+
+    #[test]
+    fn legacy_shot_falls_back_to_the_title_without_a_usable_profile() {
+        // No steps, then not JSON: both give today's stepless profile.
+        let no_steps = r#"{"title": "Empty", "version": "2", "steps": []}"#;
+        for block in [no_steps, "{not json}"] {
+            let shot = import_legacy_tcl_shot(&legacy_with_profile(block))
+                .unwrap_or_else(|e| panic!("{block}: {e:?}"));
+            let profile = shot.profile.expect("profile present");
+            assert_eq!(profile.title, "Default", "{block}");
+            assert!(profile.steps.is_empty(), "{block}");
+            assert_eq!(profile.dose, 18.5, "{block}");
+        }
+        // `profile_title` inside settings is not a profile block.
+        let (tcl, json) = split_profile_block(LEGACY_FIXTURE);
+        assert_eq!(tcl, LEGACY_FIXTURE);
+        assert!(json.is_none());
+    }
+
+    #[test]
+    fn v2_json_shot_reads_de1app_state_change_as_frames() {
+        let doc = V2_JSON_FIXTURE.replace(
+            r#""totals": {"#,
+            r#""state_change": ["0.0", "10000000.0"], "totals": {"#,
+        );
+        assert_ne!(doc, V2_JSON_FIXTURE, "fixture edit applied");
+        let shot = import_v2_json_shot(&doc).expect("imports");
+        let frames: Vec<u8> = shot
+            .record
+            .samples
+            .iter()
+            .map(|s| s.sample.frame_number)
+            .collect();
+        assert_eq!(frames, [0, 0]);
+
+        let doc = V2_JSON_FIXTURE.replace(
+            r#""totals": {"#,
+            r#""state_change": [10000000.0, -10000000.0], "totals": {"#,
+        );
+        let shot = import_v2_json_shot(&doc).expect("imports");
+        assert_eq!(shot.record.samples[1].sample.frame_number, 1);
+    }
+
+    #[test]
+    fn a_missing_goal_series_does_not_empty_the_shot() {
+        // v2: no `flow.goal` (another app's export).
+        let doc = V2_JSON_FIXTURE.replace(r#", "goal": [0.0, 0.0]}"#, "}");
+        assert_ne!(doc, V2_JSON_FIXTURE, "fixture edit applied");
+        let shot = import_v2_json_shot(&doc).expect("imports");
+        assert_eq!(shot.record.samples.len(), 2);
+        let s = &shot.record.samples[1].sample;
+        assert!((s.group_pressure - 9.0).abs() < 1e-6);
+        assert_eq!(s.set_group_flow, 0.0);
+
+        // Legacy: no `espresso_pressure_goal`, an empty `espresso_flow_goal`.
+        let tcl = LEGACY_FIXTURE
+            .replace("espresso_pressure_goal {0.0 9.0}\n", "")
+            .replace("espresso_flow_goal {0.0 0.0}", "espresso_flow_goal {}");
+        assert_ne!(tcl, LEGACY_FIXTURE, "fixture edit applied");
+        let shot = import_legacy_tcl_shot(&tcl).expect("imports");
+        assert_eq!(shot.record.samples.len(), 2);
+        let s = &shot.record.samples[1].sample;
+        assert!((s.group_flow - 2.5).abs() < 1e-6);
+        assert_eq!(s.set_group_pressure, 0.0);
+
+        // A short series present still bounds the count.
+        let short = LEGACY_FIXTURE.replace("espresso_flow {0.0 2.5}", "espresso_flow {0.0}");
+        assert_eq!(
+            import_legacy_tcl_shot(&short).unwrap().record.samples.len(),
+            1
+        );
+    }
+
+    #[test]
+    fn de1app_zero_dose_yield_tds_and_ey_import_as_unset() {
+        let tcl = LEGACY_FIXTURE
+            .replace("grinder_dose_weight {18.5}", "grinder_dose_weight 0")
+            .replace("drink_weight {38.0}", "drink_weight 0")
+            .replace("drink_tds {9.0}", "drink_tds 0")
+            .replace("drink_ey {21.0}", "drink_ey 0.0");
+        let shot = import_legacy_tcl_shot(&tcl).expect("imports");
+        assert_eq!(shot.metadata.dose, None);
+        assert_eq!(shot.metadata.yield_out, None);
+        assert_eq!(shot.metadata.tds, None);
+        assert_eq!(shot.metadata.extraction_yield, None);
+
+        let doc = V2_JSON_FIXTURE
+            .replace(r#""tds": 8.5, "ey": 20.5"#, r#""tds": "0", "ey": 0"#)
+            .replace(r#""in": 18.0, "out": 36.0"#, r#""in": "0", "out": 0.0"#);
+        assert_ne!(doc, V2_JSON_FIXTURE, "fixture edit applied");
+        let shot = import_v2_json_shot(&doc).expect("imports");
+        assert_eq!(shot.metadata.dose, None);
+        assert_eq!(shot.metadata.yield_out, None);
+        assert_eq!(shot.metadata.tds, None);
+        assert_eq!(shot.metadata.extraction_yield, None);
     }
 }
