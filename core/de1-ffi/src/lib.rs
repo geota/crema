@@ -795,18 +795,28 @@ pub fn grinder_presets_json() -> String {
 /// and the bean library (`Bean[]` JSON) in, the settings JSON out. Settings
 /// that already have owned grinders come back unchanged; the old grinder
 /// fields are never changed. See [`de1_domain::migrate_grinders`].
+///
+/// # Errors
+/// When the settings aren't a non-empty JSON object: keep what you have.
 #[uniffi::export]
-#[must_use]
-pub fn migrate_grinders_json(settings_json: String, beans_json: String) -> String {
-    de1_domain::migrate_grinders_json(&settings_json, &beans_json)
+pub fn migrate_grinders_json(
+    settings_json: String,
+    beans_json: String,
+) -> Result<String, CremaError> {
+    de1_domain::migrate_grinders_json(&settings_json, &beans_json).map_err(crema_err)
 }
 
 /// An owned grinder for each new name among an import's grinder names (a
 /// JSON array of strings) (#488). See [`de1_domain::add_grinders_for_names`].
+///
+/// # Errors
+/// When the settings aren't a non-empty JSON object: keep what you have.
 #[uniffi::export]
-#[must_use]
-pub fn add_grinders_for_names_json(settings_json: String, names_json: String) -> String {
-    de1_domain::add_grinders_for_names_json(&settings_json, &names_json)
+pub fn add_grinders_for_names_json(
+    settings_json: String,
+    names_json: String,
+) -> Result<String, CremaError> {
+    de1_domain::add_grinders_for_names_json(&settings_json, &names_json).map_err(crema_err)
 }
 
 /// The active grinder's scale (`GrindScale` JSON), else the default scale

@@ -541,35 +541,70 @@ pub fn migrate_grinders<S: AsRef<str>>(
 }
 
 /// The bags' old grinder names from a bean-library JSON array, read
-/// leniently: each element's `grinder` string, whatever else it holds. Not an
-/// array: none.
-fn bag_grinders_from_json(beans_json: &str) -> Vec<String> {
+/// leniently: each element's `grinder` string, whatever else it holds.
+/// `None` when the text isn't a JSON array: a malformed or not yet loaded
+/// library must not spend the one-time migration.
+fn bag_grinders_from_json(beans_json: &str) -> Option<Vec<String>> {
     let Ok(serde_json::Value::Array(beans)) = serde_json::from_str(beans_json) else {
-        return Vec::new();
+        return None;
     };
-    beans
-        .iter()
-        .filter_map(|b| b.get("grinder").and_then(serde_json::Value::as_str))
-        .map(str::to_owned)
-        .collect()
+    Some(
+        beans
+            .iter()
+            .filter_map(|b| b.get("grinder").and_then(serde_json::Value::as_str))
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// A stored settings blob for a call whose answer the shell saves: it must be
+/// a non-empty JSON object, then reads through
+/// [`crate::app_settings::sanitize_common_settings`]. Anything else is an
+/// error, so a malformed or missing blob never comes back as the defaults
+/// for the shell to save over the user's settings.
+fn stored_settings_from_json(settings_json: &str) -> Result<CommonSettings, String> {
+    match serde_json::from_str::<serde_json::Value>(settings_json) {
+        Ok(blob @ serde_json::Value::Object(_))
+            if blob.as_object().is_some_and(|o| !o.is_empty()) =>
+        {
+            Ok(crate::app_settings::sanitize_common_settings(&blob))
+        }
+        Ok(_) => Err("the settings are not a non-empty JSON object".to_owned()),
+        Err(e) => Err(format!("the settings are not JSON: {e}")),
+    }
 }
 
 /// JSON-bridged [`migrate_grinders`]: a settings blob (read through
 /// [`crate::app_settings::sanitize_common_settings`]) and the bean library (a
-/// JSON array of `Bean`) in, the settings JSON out.
-#[must_use]
-pub fn migrate_grinders_json(settings_json: &str, beans_json: &str) -> String {
-    let settings = settings_from_json(settings_json);
-    let out = migrate_grinders(settings, &bag_grinders_from_json(beans_json));
-    serde_json::to_string(&out).unwrap_or_default()
+/// JSON array of `Bean`) in, the settings JSON out. A library that isn't a
+/// JSON array leaves the settings unmigrated (`grinders` stays unset), so the
+/// migration runs on a later load with the real bags.
+///
+/// # Errors
+/// When the settings aren't a non-empty JSON object: the shell keeps what it
+/// has.
+pub fn migrate_grinders_json(settings_json: &str, beans_json: &str) -> Result<String, String> {
+    let settings = stored_settings_from_json(settings_json)?;
+    let out = match bag_grinders_from_json(beans_json) {
+        Some(bags) => migrate_grinders(settings, &bags),
+        None => settings,
+    };
+    serde_json::to_string(&out).map_err(|e| e.to_string())
 }
 
 /// JSON-bridged [`add_grinders_for_names`]: a settings blob and the grinder
 /// names an import carries (a JSON array of strings: imported bags'
 /// `grinder`, imported shots' `grinderModel`) in, the settings JSON out.
-/// Non-string elements are skipped.
-#[must_use]
-pub fn add_grinders_for_names_json(settings_json: &str, names_json: &str) -> String {
+/// Non-string elements are skipped; names that aren't an array add nothing.
+///
+/// # Errors
+/// When the settings aren't a non-empty JSON object: the shell keeps what it
+/// has.
+pub fn add_grinders_for_names_json(
+    settings_json: &str,
+    names_json: &str,
+) -> Result<String, String> {
+    let settings = stored_settings_from_json(settings_json)?;
     let names: Vec<String> = match serde_json::from_str(names_json) {
         Ok(serde_json::Value::Array(names)) => names
             .iter()
@@ -578,8 +613,8 @@ pub fn add_grinders_for_names_json(settings_json: &str, names_json: &str) -> Str
             .collect(),
         _ => Vec::new(),
     };
-    let out = add_grinders_for_names(settings_from_json(settings_json), &names);
-    serde_json::to_string(&out).unwrap_or_default()
+    let out = add_grinders_for_names(settings, &names);
+    serde_json::to_string(&out).map_err(|e| e.to_string())
 }
 
 /// JSON-bridged [`active_grind_scale`]: a settings blob in, a [`GrindScale`]
@@ -973,20 +1008,40 @@ mod tests {
         niche.grinder_setting = "14".into();
         let plain = Bean::new("bean:2".into(), "Kenya".into(), 1);
         let library = serde_json::to_string(&vec![niche.clone(), plain]).unwrap();
-        let out: CommonSettings = serde_json::from_str(&migrate_grinders_json(
-            &serde_json::to_string(&settings("")).unwrap(),
-            &library,
-        ))
+        let out: CommonSettings = serde_json::from_str(
+            &migrate_grinders_json(&serde_json::to_string(&settings("")).unwrap(), &library)
+                .unwrap(),
+        )
         .unwrap();
         assert_eq!(names(&out), ["Niche Zero"]);
-        // A library that isn't an array of objects migrates the settings
-        // grinder alone.
-        let out: CommonSettings = serde_json::from_str(&migrate_grinders_json(
-            &serde_json::to_string(&settings("EK43")).unwrap(),
-            "not json",
-        ))
+    }
+
+    #[test]
+    fn a_library_that_isnt_an_array_leaves_the_migration_for_later() {
+        let stored = serde_json::to_string(&settings("EK43")).unwrap();
+        for bad in ["not json", "", "null", "{}", r#"{"beans":[]}"#] {
+            let out: CommonSettings =
+                serde_json::from_str(&migrate_grinders_json(&stored, bad).unwrap()).unwrap();
+            assert_eq!(out.grinders, None, "{bad:?}");
+            assert_eq!(out.grinder_model, "EK43");
+        }
+        // The next load, with the real bags, migrates them all.
+        let out: CommonSettings = serde_json::from_str(
+            &migrate_grinders_json(&stored, r#"[{"grinder":"Niche Zero"}]"#).unwrap(),
+        )
         .unwrap();
-        assert_eq!(names(&out), ["EK43"]);
+        assert_eq!(names(&out), ["EK43", "Niche Zero"]);
+    }
+
+    #[test]
+    fn malformed_or_empty_settings_are_an_error_not_the_defaults() {
+        for bad in ["", "not json", "null", "[]", "{}", "\"x\""] {
+            assert!(migrate_grinders_json(bad, "[]").is_err(), "{bad:?}");
+            assert!(
+                add_grinders_for_names_json(bad, r#"["EK43"]"#).is_err(),
+                "{bad:?}"
+            );
+        }
     }
 
     // ── Imports ──
@@ -1015,10 +1070,13 @@ mod tests {
 
     #[test]
     fn an_import_names_json_skips_non_strings() {
-        let out: CommonSettings = serde_json::from_str(&add_grinders_for_names_json(
-            &serde_json::to_string(&migrate_grinders::<&str>(settings(""), &[])).unwrap(),
-            r#"["EK43", 3, null, "Niche Zero"]"#,
-        ))
+        let out: CommonSettings = serde_json::from_str(
+            &add_grinders_for_names_json(
+                &serde_json::to_string(&migrate_grinders::<&str>(settings(""), &[])).unwrap(),
+                r#"["EK43", 3, null, "Niche Zero"]"#,
+            )
+            .unwrap(),
+        )
         .unwrap();
         assert_eq!(names(&out), ["EK43", "Niche Zero"]);
         assert_eq!(active_name(&out), Some("EK43"));

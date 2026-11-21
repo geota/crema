@@ -727,15 +727,26 @@ pub fn grinder_presets_json() -> String {
 /// The one-time migration to owned grinders (#488): a `CommonSettings` JSON
 /// and the bean library (`Bean[]` JSON) in, the settings JSON out. See
 /// `de1_domain::migrate_grinders`.
+///
+/// # Errors
+/// Throws when the settings aren't a non-empty JSON object: keep what you
+/// have.
 #[wasm_bindgen(js_name = migrateGrindersJson)]
-pub fn migrate_grinders_json(settings_json: &str, beans_json: &str) -> String {
+pub fn migrate_grinders_json(settings_json: &str, beans_json: &str) -> Result<String, String> {
     de1_domain::migrate_grinders_json(settings_json, beans_json)
 }
 
 /// An owned grinder for each new name among an import's grinder names (#488).
 /// See `de1_domain::add_grinders_for_names`.
+///
+/// # Errors
+/// Throws when the settings aren't a non-empty JSON object: keep what you
+/// have.
 #[wasm_bindgen(js_name = addGrindersForNamesJson)]
-pub fn add_grinders_for_names_json(settings_json: &str, names_json: &str) -> String {
+pub fn add_grinders_for_names_json(
+    settings_json: &str,
+    names_json: &str,
+) -> Result<String, String> {
     de1_domain::add_grinders_for_names_json(settings_json, names_json)
 }
 
