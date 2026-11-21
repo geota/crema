@@ -1095,6 +1095,33 @@ data class CatalogueRoasterPage (
 	val pages: UInt
 )
 
+/// A grinder's grind scale: the stepper's range and the unit shown next to a
+/// value. `unit` is free text and may be empty ("μm", "clicks", "turns", …).
+@Serializable
+data class GrindScale (
+	/// Lowest setting.
+	val min: Float,
+	/// Highest setting.
+	val max: Float,
+	/// Step between settings.
+	val step: Float,
+	/// The unit label; empty for none.
+	val unit: String
+)
+
+/// A grinder the user owns.
+@Serializable
+data class OwnedGrinder (
+	/// Stable id, unique among the owned grinders ([`add_grinder`] mints it).
+	val id: String,
+	/// The name shots are stamped with: `"Niche Zero"`.
+	val name: String,
+	/// Its grind scale; the user may change any of it.
+	val scale: GrindScale,
+	/// The [`GrinderPreset::id`] the scale came from, if any.
+	val presetId: String? = null
+)
+
 /// How the hot-water amount is set.
 @Serializable
 enum class HotWaterMode(val string: String) {
@@ -1217,8 +1244,21 @@ data class CommonSettings (
 	val defaultBrewTempC: Float,
 	/// Default pre-infusion time, seconds. Web `defaultPreinfusionS`.
 	val defaultPreinfuseS: Float,
-	/// Free-text equipment grinder model.
+	/// Free-text equipment grinder model: the one grinder before #488. Kept
+	/// in storage, import, export and backups as it is, and read only by the
+	/// migration to owned grinders ([`crate::grinder::migrate_grinders`]);
+	/// no longer edited in the UI.
 	val grinderModel: String,
+	/// The owned grinders (#488), each with its grind scale. `None` = not
+	/// migrated yet: the shells run [`crate::grinder::migrate_grinders`] on
+	/// load, which fills it once. `Some(empty)` = the user owns none (or
+	/// removed them all), and the migration doesn't run again. `Option` so
+	/// older blobs and backups decode.
+	val grinders: List<OwnedGrinder>? = null,
+	/// The active owned grinder's id ([`crate::grinder::active_grinder`]).
+	/// `None`, or an id no owned grinder has, = no active grinder: the
+	/// default grind scale, and shots carry no grinder.
+	val activeGrinderId: String? = null,
 	/// Default barista name, stamped on each new shot's
 	/// [`ShotMetadata::barista`](crate::ShotMetadata::barista). `None` (or
 	/// blank) = no default; `Option` so an older `prefs.json` / backup still
@@ -3321,6 +3361,46 @@ data class GateStatus (
 	val pending: Boolean
 )
 
+/// The newest grind recorded on one bag with one grinder: what the history
+/// answers per (bag, grinder) (`de1_history`'s `last_grinds_for_bag`).
+@Serializable
+data class LastGrind (
+	/// The grinder the shot was stamped with, as spelled on the newest one.
+	val grinder: String,
+	/// The grind it recorded, as stored.
+	val grind: String,
+	/// When that shot completed, Unix epoch ms.
+	val completedAt: Long
+)
+
+/// What [`grind_on_select`] reads.
+@Serializable
+data class GrindOnSelectInput (
+	/// The active grinder's name; `None` or blank when there is none.
+	val activeGrinder: String? = null,
+	/// The bag's newest grind per grinder, from the history.
+	val lastGrinds: List<LastGrind>,
+	/// The bag's old stored grinder (`Bean::grinder`).
+	val bagGrinder: String,
+	/// The bag's old stored setting (`Bean::grinder_setting`).
+	val bagGrinderSetting: String
+)
+
+/// A preset as the shells list it.
+@Serializable
+data class GrinderPresetInfo (
+	/// [`GrinderPreset::id`].
+	val id: String,
+	/// Display name.
+	val name: String,
+	/// Other names that pick it.
+	val aliases: List<String>,
+	/// Its scale.
+	val scale: GrindScale,
+	/// The maker's page the range was checked against.
+	val source: String
+)
+
 /// The user's Visualizer sync **preferences** — the portable, cross-shell
 /// subset a whole-app backup carries. One shared `#[typeshare]` shape so web
 /// and Android serialise byte-identical JSON: a backup's `visualizerPrefs`
@@ -4124,8 +4204,14 @@ data class QualityLine (
 data class QuickControlBounds (
 	/// Dose, g.
 	val doseG: StepRange,
-	/// Grind setting.
+	/// Grind setting: the active grinder's scale
+	/// ([`crate::grinder::active_grind_scale`]), repaired for a stepper
+	/// ([`crate::GrindScale::step_range`]). A value outside it is kept, never
+	/// clamped.
 	val grind: StepRange,
+	/// The unit shown next to a grind value: the active scale's, `""` for
+	/// none.
+	val grindUnit: String,
 	/// Yield, g.
 	val yieldG: StepRange,
 	/// Yield-to-dose ratio (the `x` in `1:x`).
@@ -4585,8 +4671,9 @@ data class SeriesPoint (
 )
 
 /// What "Restore defaults" leaves: every common setting back to the default
-/// bundle except the two facts about the user's setup it keeps, the weight
-/// unit (it matches their scale) and the mains line frequency. The idle-sleep
+/// bundle except the facts about the user's setup it keeps: the weight unit
+/// (it matches their scale), the mains line frequency, and the grinders (the
+/// owned grinders, the active one and the pre-#488 `grinder_model`). The idle-sleep
 /// timer gets its default explicitly, and so does the hot-water dose: ratio
 /// 1:3 stored with its mode, so the next load doesn't run the never-changed
 /// rule on it.
@@ -4675,7 +4762,9 @@ data class ShotCaptureContext (
 	val id: String? = null,
 	/// The bean snapshot the shot was pulled with, or `None`.
 	val bean: ShotBean? = null,
-	/// The Settings grinder model, the fallback when the bean has none.
+	/// The active grinder's name ([`crate::grinder::active_grinder_name`]):
+	/// what the shot is stamped with. `None` or blank = no grinder. (The
+	/// field keeps its pre-#488 name so both shells' contexts still decode.)
 	val settingsGrinder: String? = null,
 	/// The grind dial at shot start, or `None` when it carried no value.
 	val grindDial: Float? = null,

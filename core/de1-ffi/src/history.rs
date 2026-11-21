@@ -449,6 +449,27 @@ pub enum HistoryDir {
     Desc,
 }
 
+/// The newest grind on a bag with one grinder (#488; core `LastGrind`).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HistoryLastGrind {
+    /// The grinder, as the newest shot spells it.
+    pub grinder: String,
+    /// The grind, as stored.
+    pub grind: String,
+    /// When that shot completed, Unix epoch ms.
+    pub completed_at: i64,
+}
+
+impl From<de1_domain::LastGrind> for HistoryLastGrind {
+    fn from(l: de1_domain::LastGrind) -> Self {
+        Self {
+            grinder: l.grinder,
+            grind: l.grind,
+            completed_at: l.completed_at,
+        }
+    }
+}
+
 /// A sort: newest first by default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct HistorySort {
@@ -1479,6 +1500,17 @@ impl HistoryDb {
     /// A store error class.
     pub fn doses_for_bag(&self, bean_id: String, limit: u32) -> HResult<Vec<f64>> {
         self.with(|s| s.doses_for_bag(&bean_id, limit))
+    }
+
+    /// The newest grind per grinder on a bag, newest first (#488): what
+    /// selecting a bag or switching grinder reads
+    /// (`grindOnSelectJson`).
+    ///
+    /// # Errors
+    /// A store error class.
+    pub fn last_grinds_for_bag(&self, bean_id: String) -> HResult<Vec<HistoryLastGrind>> {
+        self.with(|s| s.last_grinds_for_bag(&bean_id))
+            .map(|v| v.into_iter().map(Into::into).collect())
     }
 
     /// The upload backlog for `destination`, by `rid` after `after_rid`.

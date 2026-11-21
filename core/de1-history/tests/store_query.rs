@@ -392,6 +392,46 @@ fn facets_count_each_dimension_without_its_own_filter() {
     }
 }
 
+/// #488: the newest grind per grinder on a bag, from both row shapes (web
+/// `metadata.grinderSetting` text, Android `grindSetting` number), grinders
+/// matched ignoring case, values as stored.
+#[test]
+fn last_grinds_for_bag_are_the_newest_per_grinder() {
+    let d = dir();
+    let mut store = create(&file(&d, "history.db"));
+    let bag = json!({ "beanId": "bag" });
+    store
+        .upsert(&rows_in(&[
+            row("w1", 10, json!({ "bean": bag, "grinderModel": "Niche Zero", "metadata": { "grinderSetting": "14" } })),
+            row("w2", 20, json!({ "bean": bag, "grinderModel": "niche zero ", "metadata": { "grinderSetting": "1200" } })),
+            row("a1", 30, json!({ "bean": bag, "grinderModel": "EK43", "grindSetting": 9.5 })),
+            row("a2", 40, json!({ "bean": bag, "grinderModel": "Motto 80", "grindSetting": 480.0 })),
+            // No grind, a blank grind, no grinder, a tombstone, another bag:
+            // none of them count.
+            row("n1", 50, json!({ "bean": bag, "grinderModel": "EK43" })),
+            row("n2", 60, json!({ "bean": bag, "grinderModel": "EK43", "metadata": { "grinderSetting": "  " } })),
+            row("n3", 70, json!({ "bean": bag, "metadata": { "grinderSetting": "3" } })),
+            row("n4", 80, json!({ "bean": bag, "grinderModel": "EK43", "grindSetting": 2, "deletedAt": 81 })),
+            row("n5", 90, json!({ "bean": { "beanId": "other" }, "grinderModel": "EK43", "grindSetting": 1 })),
+        ]))
+        .expect("writes");
+    let got: Vec<(String, String, i64)> = store
+        .last_grinds_for_bag("bag")
+        .expect("reads")
+        .into_iter()
+        .map(|l| (l.grinder, l.grind, l.completed_at))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("Motto 80".to_owned(), "480".to_owned(), 40),
+            ("EK43".to_owned(), "9.5".to_owned(), 30),
+            ("niche zero ".to_owned(), "1200".to_owned(), 20),
+        ]
+    );
+    assert!(store.last_grinds_for_bag("none").expect("reads").is_empty());
+}
+
 #[test]
 fn lookups_by_id_remote_id_bag_and_backlog() {
     let d = dir();

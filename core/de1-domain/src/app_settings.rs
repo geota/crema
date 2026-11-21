@@ -143,8 +143,23 @@ pub struct CommonSettings {
     pub default_brew_temp_c: f32,
     /// Default pre-infusion time, seconds. Web `defaultPreinfusionS`.
     pub default_preinfuse_s: f32,
-    /// Free-text equipment grinder model.
+    /// Free-text equipment grinder model: the one grinder before #488. Kept
+    /// in storage, import, export and backups as it is, and read only by the
+    /// migration to owned grinders ([`crate::grinder::migrate_grinders`]);
+    /// no longer edited in the UI.
     pub grinder_model: String,
+    /// The owned grinders (#488), each with its grind scale. `None` = not
+    /// migrated yet: the shells run [`crate::grinder::migrate_grinders`] on
+    /// load, which fills it once. `Some(empty)` = the user owns none (or
+    /// removed them all), and the migration doesn't run again. `Option` so
+    /// older blobs and backups decode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grinders: Option<Vec<crate::grinder::OwnedGrinder>>,
+    /// The active owned grinder's id ([`crate::grinder::active_grinder`]).
+    /// `None`, or an id no owned grinder has, = no active grinder: the
+    /// default grind scale, and shots carry no grinder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_grinder_id: Option<String>,
     /// Default barista name, stamped on each new shot's
     /// [`ShotMetadata::barista`](crate::ShotMetadata::barista). `None` (or
     /// blank) = no default; `Option` so an older `prefs.json` / backup still
@@ -234,6 +249,8 @@ impl Default for CommonSettings {
             default_brew_temp_c: 93.0,
             default_preinfuse_s: 8.0,
             grinder_model: String::new(),
+            grinders: None,
+            active_grinder_id: None,
             barista_name: None,
             suppress_de1_sleep: true,
             idle_sleep_min: None,
@@ -486,7 +503,12 @@ pub fn sanitize_common_settings(blob: &serde_json::Value) -> CommonSettings {
     };
     for (key, value) in fields {
         let mut trial = base.clone();
-        trial.insert(key.clone(), value.clone());
+        let value = if key == "grinders" {
+            lenient_grinders(value)
+        } else {
+            value.clone()
+        };
+        trial.insert(key.clone(), value);
         if serde_json::from_value::<CommonSettings>(serde_json::Value::Object(trial.clone()))
             .is_ok()
         {
@@ -498,9 +520,53 @@ pub fn sanitize_common_settings(blob: &serde_json::Value) -> CommonSettings {
         .sanitized()
 }
 
+/// A stored `grinders` list read leniently, so one bad entry or field never
+/// drops the user's grinders (which would let the migration run again): each
+/// object entry keeps every field that has the right type (its scale field by
+/// field too) and takes the default for the rest; a non-object entry is
+/// dropped. Anything but an array is returned as it is, and decodes or not.
+fn lenient_grinders(value: &serde_json::Value) -> serde_json::Value {
+    use crate::grinder::{GrindScale, OwnedGrinder};
+    fn lenient<T: Serialize + serde::de::DeserializeOwned + Default>(
+        v: &serde_json::Value,
+        nested: &dyn Fn(&str, &serde_json::Value) -> serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        let fields = v.as_object()?;
+        let serde_json::Value::Object(mut base) = serde_json::to_value(T::default()).ok()? else {
+            return None;
+        };
+        for (key, value) in fields {
+            let mut trial = base.clone();
+            trial.insert(key.clone(), nested(key, value));
+            if serde_json::from_value::<T>(serde_json::Value::Object(trial.clone())).is_ok() {
+                base = trial;
+            }
+        }
+        Some(serde_json::Value::Object(base))
+    }
+    let Some(entries) = value.as_array() else {
+        return value.clone();
+    };
+    let plain = |_: &str, v: &serde_json::Value| v.clone();
+    let scale = |key: &str, v: &serde_json::Value| {
+        if key == "scale" {
+            lenient::<GrindScale>(v, &plain).unwrap_or_else(|| v.clone())
+        } else {
+            v.clone()
+        }
+    };
+    serde_json::Value::Array(
+        entries
+            .iter()
+            .filter_map(|e| lenient::<OwnedGrinder>(e, &scale))
+            .collect(),
+    )
+}
+
 /// What "Restore defaults" leaves: every common setting back to the default
-/// bundle except the two facts about the user's setup it keeps, the weight
-/// unit (it matches their scale) and the mains line frequency. The idle-sleep
+/// bundle except the facts about the user's setup it keeps: the weight unit
+/// (it matches their scale), the mains line frequency, and the grinders (the
+/// owned grinders, the active one and the pre-#488 `grinder_model`). The idle-sleep
 /// timer gets its default explicitly, and so does the hot-water dose: ratio
 /// 1:3 stored with its mode, so the next load doesn't run the never-changed
 /// rule on it.
@@ -520,6 +586,16 @@ pub struct SettingsReset {
 pub fn reset_settings(current: &CommonSettings, line_frequency_hz: f32) -> SettingsReset {
     let mut common = default_common_settings();
     common.weight_unit = one_of(&current.weight_unit, &["g", "oz"], &common.weight_unit);
+    // The owned grinders are equipment, like the scale behind the weight
+    // unit: a reset keeps them and the active one, so no scale the user set
+    // up is lost.
+    common.grinders.clone_from(&current.grinders);
+    common
+        .active_grinder_id
+        .clone_from(&current.active_grinder_id);
+    // The pre-#488 grinder field is no longer edited in the UI, so a reset
+    // couldn't be undone by hand: it stays as stored.
+    common.grinder_model.clone_from(&current.grinder_model);
     common.idle_sleep_min = Some(crate::idle_sleep::DEFAULT_IDLE_SLEEP_MIN);
     let dose = crate::hot_water::HotWaterDose::default();
     common.qc_hot_water_mode = Some(dose.mode);
@@ -828,6 +904,7 @@ mod tests {
             r.common,
             CommonSettings {
                 weight_unit: "oz".into(),
+                grinder_model: "Niche".into(),
                 idle_sleep_min: Some(crate::idle_sleep::DEFAULT_IDLE_SLEEP_MIN),
                 qc_hot_water_mode: Some(HotWaterMode::Ratio),
                 qc_hot_water_time_s: Some(30.0),

@@ -88,6 +88,7 @@ pub mod filter;
 pub mod firmware_builds;
 pub mod firmware_image;
 pub mod flow;
+pub mod grinder;
 pub mod history;
 pub mod history_export;
 pub mod history_import;
@@ -189,7 +190,8 @@ pub use beanconqueror::{
 pub use bounds::{
     BrewDefaultsBounds, ProfileEditorBounds, QuickControlBounds, STEAM_TEMP_MIN_C,
     brew_defaults_bounds, brew_defaults_bounds_json, clamp_steam_temp, profile_editor_bounds,
-    profile_editor_bounds_json, quick_control_bounds, quick_control_bounds_json,
+    profile_editor_bounds_json, quick_control_bounds, quick_control_bounds_for,
+    quick_control_bounds_for_settings_json, quick_control_bounds_json,
 };
 pub use brew::{
     BREW_METHOD_OTHER, BrewHistoryStats, BrewLogPrefill, BrewLogSeedInput, BrewLogSeeds,
@@ -276,6 +278,14 @@ pub use firmware_image::{
     validate_firmware_image_json,
 };
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
+pub use grinder::{
+    GRINDER_PRESETS, GrindOnSelectInput, GrindScale, GrinderPreset, GrinderPresetInfo, LastGrind,
+    OwnedGrinder, active_grind_scale, active_grind_scale_json, active_grinder, active_grinder_name,
+    add_grinder, add_grinders_for_names, add_grinders_for_names_json, grind_on_select,
+    grind_on_select_json, grinder_key, grinder_presets, grinder_presets_json, last_grind_for,
+    migrate_grinders, migrate_grinders_json, preset_by_id, preset_for_name, remove_grinder,
+    same_grinder,
+};
 pub use history::{
     HistoryStats, STORED_SHOT_FORMAT_VERSION, ShotMachine, ShotMetadata, ShotPrivacy,
     ShotStatInput, StoredShot, brew_ratio, history_stats, ratio_label,

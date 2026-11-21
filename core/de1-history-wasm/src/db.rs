@@ -617,6 +617,12 @@ impl HistoryDb {
         self.sync(|s| s.doses_for_bag(&a.bean_id, a.limit))
     }
 
+    /// `last_grinds_for_bag(beanId)` → `[LastGrind]`, newest first (#488).
+    #[wasm_bindgen(js_name = lastGrindsForBag)]
+    pub fn last_grinds_for_bag(&self, bean_id: &str) -> Result<String, JsValue> {
+        self.sync(|s| s.last_grinds_for_bag(bean_id))
+    }
+
     /// `unsent({dest, afterRid, limit})` → `[RidRow]`, by `rid`.
     pub fn unsent(&self, json: &str) -> Result<String, JsValue> {
         let a: UnsentArgs = parse(json)?;
