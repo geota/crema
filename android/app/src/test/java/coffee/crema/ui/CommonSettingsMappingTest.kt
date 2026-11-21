@@ -22,6 +22,14 @@ import kotlin.test.assertEquals
 class CommonSettingsMappingTest {
     private val json = Json { encodeDefaults = true }
 
+    /**
+     * #488's owned grinders: the core has them (issue 01), the Android shell
+     * doesn't carry them through AppPrefs / MainUiState yet. Issue 03
+     * (`.scratch/grinder-488/issues/03-android-ui.md`) maps them and removes
+     * this list, before the shell runs the grinder migration.
+     */
+    private val NOT_MAPPED_YET = setOf("grinders", "activeGrinderId")
+
     private val nonDefault = CommonSettings(
         themeMode = "light", maxShotDurationS = 40f, autoTare = false, stopOnWeight = false,
         volumeStopWithScale = true, requireScale = true, steamEco = true, steamTwoTap = true, fanThresholdC = 40f,
@@ -41,6 +49,7 @@ class CommonSettingsMappingTest {
         val d = json.encodeToJsonElement(CommonSettings.serializer(), CommonDefaults.common).jsonObject
         val same = CommonSettings.serializer().descriptor.elementNames
             .filter { it != "suppressDe1Sleep" } // retired, always written true
+            .filter { it !in NOT_MAPPED_YET }
             .filter { nd[it] == d[it] }
         assertEquals(emptyList(), same, "set these to a non-default value above")
     }
