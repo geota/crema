@@ -1177,6 +1177,33 @@ export interface CatalogueRoasterPage {
 	pages: number;
 }
 
+/**
+ * A grinder's grind scale: the stepper's range and the unit shown next to a
+ * value. `unit` is free text and may be empty ("μm", "clicks", "turns", …).
+ */
+export interface GrindScale {
+	/** Lowest setting. */
+	min: number;
+	/** Highest setting. */
+	max: number;
+	/** Step between settings. */
+	step: number;
+	/** The unit label; empty for none. */
+	unit: string;
+}
+
+/** A grinder the user owns. */
+export interface OwnedGrinder {
+	/** Stable id, unique among the owned grinders ([`add_grinder`] mints it). */
+	id: string;
+	/** The name shots are stamped with: `"Niche Zero"`. */
+	name: string;
+	/** Its grind scale; the user may change any of it. */
+	scale: GrindScale;
+	/** The [`GrinderPreset::id`] the scale came from, if any. */
+	presetId?: string;
+}
+
 /** How the hot-water amount is set. */
 export enum HotWaterMode {
 	/** Pour for a number of seconds. */
@@ -1320,8 +1347,27 @@ export interface CommonSettings {
 	defaultBrewTempC: number;
 	/** Default pre-infusion time, seconds. Web `defaultPreinfusionS`. */
 	defaultPreinfuseS: number;
-	/** Free-text equipment grinder model. */
+	/**
+	 * Free-text equipment grinder model: the one grinder before #488. Kept
+	 * in storage, import, export and backups as it is, and read only by the
+	 * migration to owned grinders ([`crate::grinder::migrate_grinders`]);
+	 * no longer edited in the UI.
+	 */
 	grinderModel: string;
+	/**
+	 * The owned grinders (#488), each with its grind scale. `None` = not
+	 * migrated yet: the shells run [`crate::grinder::migrate_grinders`] on
+	 * load, which fills it once. `Some(empty)` = the user owns none (or
+	 * removed them all), and the migration doesn't run again. `Option` so
+	 * older blobs and backups decode.
+	 */
+	grinders?: OwnedGrinder[];
+	/**
+	 * The active owned grinder's id ([`crate::grinder::active_grinder`]).
+	 * `None`, or an id no owned grinder has, = no active grinder: the
+	 * default grind scale, and shots carry no grinder.
+	 */
+	activeGrinderId?: string;
 	/**
 	 * Default barista name, stamped on each new shot's
 	 * [`ShotMetadata::barista`](crate::ShotMetadata::barista). `None` (or
@@ -3213,6 +3259,45 @@ export interface GateStatus {
 }
 
 /**
+ * The newest grind recorded on one bag with one grinder: what the history
+ * answers per (bag, grinder) (`de1_history`'s `last_grinds_for_bag`).
+ */
+export interface LastGrind {
+	/** The grinder the shot was stamped with, as spelled on the newest one. */
+	grinder: string;
+	/** The grind it recorded, as stored. */
+	grind: string;
+	/** When that shot completed, Unix epoch ms. */
+	completedAt: number;
+}
+
+/** What [`grind_on_select`] reads. */
+export interface GrindOnSelectInput {
+	/** The active grinder's name; `None` or blank when there is none. */
+	activeGrinder?: string;
+	/** The bag's newest grind per grinder, from the history. */
+	lastGrinds: LastGrind[];
+	/** The bag's old stored grinder (`Bean::grinder`). */
+	bagGrinder: string;
+	/** The bag's old stored setting (`Bean::grinder_setting`). */
+	bagGrinderSetting: string;
+}
+
+/** A preset as the shells list it. */
+export interface GrinderPresetInfo {
+	/** [`GrinderPreset::id`]. */
+	id: string;
+	/** Display name. */
+	name: string;
+	/** Other names that pick it. */
+	aliases: string[];
+	/** Its scale. */
+	scale: GrindScale;
+	/** The maker's page the range was checked against. */
+	source: string;
+}
+
+/**
  * The user's Visualizer sync **preferences** — the portable, cross-shell
  * subset a whole-app backup carries. One shared `#[typeshare]` shape so web
  * and Android serialise byte-identical JSON: a backup's `visualizerPrefs`
@@ -3997,8 +4082,18 @@ export interface QualityLine {
 export interface QuickControlBounds {
 	/** Dose, g. */
 	doseG: StepRange;
-	/** Grind setting. */
+	/**
+	 * Grind setting: the active grinder's scale
+	 * ([`crate::grinder::active_grind_scale`]), repaired for a stepper
+	 * ([`crate::GrindScale::step_range`]). A value outside it is kept, never
+	 * clamped.
+	 */
 	grind: StepRange;
+	/**
+	 * The unit shown next to a grind value: the active scale's, `""` for
+	 * none.
+	 */
+	grindUnit: string;
 	/** Yield, g. */
 	yieldG: StepRange;
 	/** Yield-to-dose ratio (the `x` in `1:x`). */
@@ -4508,8 +4603,9 @@ export interface SeriesPoint {
 
 /**
  * What "Restore defaults" leaves: every common setting back to the default
- * bundle except the two facts about the user's setup it keeps, the weight
- * unit (it matches their scale) and the mains line frequency. The idle-sleep
+ * bundle except the facts about the user's setup it keeps: the weight unit
+ * (it matches their scale), the mains line frequency, and the grinders (the
+ * owned grinders, the active one and the pre-#488 `grinder_model`). The idle-sleep
  * timer gets its default explicitly, and so does the hot-water dose: ratio
  * 1:3 stored with its mode, so the next load doesn't run the never-changed
  * rule on it.
@@ -4617,7 +4713,11 @@ export interface ShotCaptureContext {
 	id?: string;
 	/** The bean snapshot the shot was pulled with, or `None`. */
 	bean?: ShotBean;
-	/** The Settings grinder model, the fallback when the bean has none. */
+	/**
+	 * The active grinder's name ([`crate::grinder::active_grinder_name`]):
+	 * what the shot is stamped with. `None` or blank = no grinder. (The
+	 * field keeps its pre-#488 name so both shells' contexts still decode.)
+	 */
 	settingsGrinder?: string;
 	/** The grind dial at shot start, or `None` when it carried no value. */
 	grindDial?: number;

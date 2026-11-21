@@ -717,6 +717,43 @@ pub fn sanitize_common_settings_json(blob_json: &str) -> String {
     de1_domain::app_settings::sanitize_common_settings_json(blob_json)
 }
 
+/// The built-in grinder presets (`GrinderPresetInfo[]` JSON) (#488). See
+/// `de1_domain::grinder_presets`.
+#[wasm_bindgen(js_name = grinderPresetsJson)]
+pub fn grinder_presets_json() -> String {
+    de1_domain::grinder_presets_json()
+}
+
+/// The one-time migration to owned grinders (#488): a `CommonSettings` JSON
+/// and the bean library (`Bean[]` JSON) in, the settings JSON out. See
+/// `de1_domain::migrate_grinders`.
+#[wasm_bindgen(js_name = migrateGrindersJson)]
+pub fn migrate_grinders_json(settings_json: &str, beans_json: &str) -> String {
+    de1_domain::migrate_grinders_json(settings_json, beans_json)
+}
+
+/// An owned grinder for each new name among an import's grinder names (#488).
+/// See `de1_domain::add_grinders_for_names`.
+#[wasm_bindgen(js_name = addGrindersForNamesJson)]
+pub fn add_grinders_for_names_json(settings_json: &str, names_json: &str) -> String {
+    de1_domain::add_grinders_for_names_json(settings_json, names_json)
+}
+
+/// The active grinder's scale (`GrindScale` JSON), else the default (#488).
+/// See `de1_domain::active_grind_scale`.
+#[wasm_bindgen(js_name = activeGrindScaleJson)]
+pub fn active_grind_scale_json(settings_json: &str) -> String {
+    de1_domain::active_grind_scale_json(settings_json)
+}
+
+/// The grind Brew takes on selecting a bag or switching grinder (#488):
+/// `GrindOnSelectInput` JSON in, a JSON string or `null` out. See
+/// `de1_domain::grind_on_select`.
+#[wasm_bindgen(js_name = grindOnSelectJson)]
+pub fn grind_on_select_json(input_json: &str) -> String {
+    de1_domain::grind_on_select_json(input_json)
+}
+
 /// "Restore defaults": the current `CommonSettings` JSON and line-frequency
 /// override in, a `SettingsReset` JSON out. See
 /// `de1_domain::app_settings::reset_settings`.
@@ -2697,6 +2734,14 @@ pub fn pour_averages_for_shot(stored_shot_json: &str) -> Result<String, String> 
 #[wasm_bindgen]
 pub fn profile_bounds_json() -> String {
     de1_domain::profile_bounds::profile_bounds_json()
+}
+
+/// The Quick Controls steppers' ranges with the grind range and unit of the
+/// active grinder in a `CommonSettings` JSON (#488). See
+/// `de1_domain::quick_control_bounds_for_settings_json`.
+#[wasm_bindgen(js_name = quickControlBoundsForSettingsJson)]
+pub fn quick_control_bounds_for_settings_json(settings_json: &str) -> String {
+    de1_domain::quick_control_bounds_for_settings_json(settings_json)
 }
 
 /// The Quick Controls steppers' ranges (`QuickControlBounds` JSON; hot water

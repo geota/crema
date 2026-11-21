@@ -782,6 +782,50 @@ pub fn sanitize_common_settings_json(blob_json: String) -> String {
     de1_domain::app_settings::sanitize_common_settings_json(&blob_json)
 }
 
+/// The built-in grinder presets (`GrinderPresetInfo[]` JSON), each with the
+/// maker's page its range was checked against (#488). See
+/// [`de1_domain::grinder_presets`].
+#[uniffi::export]
+#[must_use]
+pub fn grinder_presets_json() -> String {
+    de1_domain::grinder_presets_json()
+}
+
+/// The one-time migration to owned grinders (#488): a `CommonSettings` JSON
+/// and the bean library (`Bean[]` JSON) in, the settings JSON out. Settings
+/// that already have owned grinders come back unchanged; the old grinder
+/// fields are never changed. See [`de1_domain::migrate_grinders`].
+#[uniffi::export]
+#[must_use]
+pub fn migrate_grinders_json(settings_json: String, beans_json: String) -> String {
+    de1_domain::migrate_grinders_json(&settings_json, &beans_json)
+}
+
+/// An owned grinder for each new name among an import's grinder names (a
+/// JSON array of strings) (#488). See [`de1_domain::add_grinders_for_names`].
+#[uniffi::export]
+#[must_use]
+pub fn add_grinders_for_names_json(settings_json: String, names_json: String) -> String {
+    de1_domain::add_grinders_for_names_json(&settings_json, &names_json)
+}
+
+/// The active grinder's scale (`GrindScale` JSON), else the default scale
+/// (#488). See [`de1_domain::active_grind_scale`].
+#[uniffi::export]
+#[must_use]
+pub fn active_grind_scale_json(settings_json: String) -> String {
+    de1_domain::active_grind_scale_json(&settings_json)
+}
+
+/// The grind Brew takes on selecting a bag or switching grinder
+/// (`GrindOnSelectInput` JSON in, a JSON string or `null` out) (#488). See
+/// [`de1_domain::grind_on_select`].
+#[uniffi::export]
+#[must_use]
+pub fn grind_on_select_json(input_json: String) -> String {
+    de1_domain::grind_on_select_json(&input_json)
+}
+
 /// "Restore defaults": the current `CommonSettings` JSON and line-frequency
 /// override in, a `SettingsReset` JSON out (defaults, keeping the weight unit
 /// and the line frequency). See [`de1_domain::app_settings::reset_settings`].
@@ -1916,6 +1960,15 @@ pub fn roast_level_from_wire(label: Option<String>) -> Option<i32> {
 #[uniffi::export]
 pub fn profile_bounds_json() -> String {
     de1_domain::profile_bounds::profile_bounds_json()
+}
+
+/// The Quick Controls steppers' ranges with the grind range and unit of the
+/// active grinder in a `CommonSettings` JSON (#488). See
+/// [`de1_domain::quick_control_bounds_for_settings_json`].
+#[uniffi::export]
+#[must_use]
+pub fn quick_control_bounds_for_settings_json(settings_json: String) -> String {
+    de1_domain::quick_control_bounds_for_settings_json(&settings_json)
 }
 
 /// The Quick Controls steppers' ranges (`QuickControlBounds` JSON; hot water

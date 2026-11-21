@@ -7,6 +7,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **A shot records the grinder in use, not the bag's** — a new shot is
+  stamped with the grinder you brew on (today the Settings grinder), even
+  when its bag names another one. The bag's grinder and grind stay stored,
+  and come along in exports and backups as before. Groundwork for picking
+  a grinder on Brew, with a grind scale per grinder (#488). Android and web.
+
 ### Fixed
 
 - **de1app shot imports keep their profile and frames** — a `.shot` file

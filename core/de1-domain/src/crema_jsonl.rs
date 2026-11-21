@@ -1003,6 +1003,45 @@ mod tests {
         );
     }
 
+    /// #488: the pre-#488 grinder fields (`Bean::grinder`,
+    /// `Bean::grinder_setting`, `CommonSettings::grinder_model`) and the owned
+    /// grinders ride through a backup, a bean-library export and the settings
+    /// sanitize unchanged.
+    #[test]
+    fn the_old_grinder_fields_and_owned_grinders_survive_round_trips() {
+        let mut bean = sample_bean("bean:b1", "Yirg", None);
+        bean.grinder = " Niche Zero ".into();
+        bean.grinder_setting = "6 + a tooth".into();
+        let settings = crate::migrate_grinders(
+            crate::app_settings::CommonSettings {
+                grinder_model: "EK43".into(),
+                ..crate::app_settings::default_common_settings()
+            },
+            &[bean.grinder.as_str()],
+        );
+        let envelope = serde_json::json!({
+            "beans": [bean.clone()],
+            "settings": settings.clone(),
+        });
+        let plan = parse_backup_jsonl(&export(&envelope).jsonl);
+        assert_eq!(plan.beans.len(), 1);
+        assert_eq!(plan.beans[0].grinder, " Niche Zero ");
+        assert_eq!(plan.beans[0].grinder_setting, "6 + a tooth");
+        let restored =
+            crate::app_settings::sanitize_common_settings(&plan.settings.expect("settings"));
+        assert_eq!(restored, settings);
+        assert_eq!(restored.grinder_model, "EK43");
+        // Restoring runs the migration again: already migrated, so a no-op.
+        assert_eq!(
+            crate::migrate_grinders(restored.clone(), &[bean.grinder.as_str()]),
+            restored
+        );
+
+        let lib = parse_jsonl(&export_jsonl(&[bean], &[], &[], 1, "test")).unwrap();
+        assert_eq!(lib.beans[0].grinder, " Niche Zero ");
+        assert_eq!(lib.beans[0].grinder_setting, "6 + a tooth");
+    }
+
     /// A shot row with a curve, the way a shell hands it over.
     fn shot_row(id: &str) -> serde_json::Value {
         let mut shot = StoredShot::new(

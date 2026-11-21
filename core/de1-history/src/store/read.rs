@@ -3,7 +3,7 @@
 //! and the query runs again on the scan path (M6), so a search on a damaged
 //! index answers, with health `reindexing`, and never gives `Corrupt`.
 
-use de1_domain::BrewHistoryStats;
+use de1_domain::{BrewHistoryStats, LastGrind};
 use rusqlite::types::{Value as Sql, ValueRef};
 use rusqlite::{Connection, Row, params_from_iter};
 use serde::{Deserialize, Serialize};
@@ -187,6 +187,20 @@ pub(crate) fn rows<T>(
         Ok(out)
     };
     run().map_err(|e| Fail::Sql(e, source))
+}
+
+/// A row's grind as text: a non-blank string as stored, a finite number in
+/// its shortest form (`15`, `15.5`, `480`); anything else is none.
+fn grind_text(v: ValueRef<'_>) -> Option<String> {
+    match v {
+        ValueRef::Text(t) => std::str::from_utf8(t)
+            .ok()
+            .filter(|t| !t.trim().is_empty())
+            .map(str::to_owned),
+        ValueRef::Integer(i) => Some(i.to_string()),
+        ValueRef::Real(f) if f.is_finite() => Some(format!("{f}")),
+        _ => None,
+    }
 }
 
 /// The `write_seq` committed, read in the caller's transaction.
@@ -607,6 +621,46 @@ impl Store {
                 r.get(0)
             })
         })
+    }
+
+    /// The newest grind per grinder on a bag (#488): for each grinder the
+    /// bag's listed rows name (matched ignoring case and surrounding spaces,
+    /// [`de1_domain::same_grinder`]), the grind of its newest row that
+    /// recorded one, newest first. A grind is the row's text as stored, or
+    /// an Android row's number written without a trailing `.0`; a blank one
+    /// doesn't count. Values are never clamped or rewritten otherwise.
+    ///
+    /// # Errors
+    /// A SQLite error class.
+    pub fn last_grinds_for_bag(&mut self, bean_id: &str) -> Result<Vec<LastGrind>> {
+        let found = self.read(|conn, faults, _| {
+            rows(conn, faults, &sql::grinds_for_bag(bean_id), |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    grind_text(r.get_ref(1)?),
+                    r.get::<_, i64>(2)?,
+                ))
+            })
+        })?;
+        let mut out: Vec<LastGrind> = Vec::new();
+        for (grinder, grind, completed_at) in found {
+            let (Some(grinder), Some(grind)) = (grinder, grind) else {
+                continue;
+            };
+            if de1_domain::grinder_key(&grinder).is_empty()
+                || out
+                    .iter()
+                    .any(|l| de1_domain::same_grinder(&l.grinder, &grinder))
+            {
+                continue;
+            }
+            out.push(LastGrind {
+                grinder,
+                grind,
+                completed_at,
+            });
+        }
+        Ok(out)
     }
 
     /// The upload backlog for `dest`, by `rid` after `after_rid`: live, not

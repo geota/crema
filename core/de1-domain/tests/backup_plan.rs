@@ -518,6 +518,25 @@ fn a_fresh_install_is_pristine_on_both_shells() {
     // Android's first launch: the idle-sleep default and `resolveHotWater`.
     let reset = de1_domain::app_settings::reset_settings(&CommonSettings::default(), 0.0);
     assert!(common_is_pristine(&reset.common));
+    // #488: a fresh install the grinder migration ran on owns no grinders,
+    // and is still pristine.
+    let migrated = de1_domain::migrate_grinders::<&str>(CommonSettings::default(), &[]);
+    assert_eq!(migrated.grinders, Some(Vec::new()));
+    assert!(common_is_pristine(&migrated));
+}
+
+#[test]
+fn owning_a_grinder_is_not_pristine() {
+    let owned = de1_domain::migrate_grinders::<&str>(
+        CommonSettings {
+            grinder_model: "EK43".to_owned(),
+            ..CommonSettings::default()
+        },
+        &[],
+    );
+    assert!(!common_is_pristine(&owned));
+    let added = de1_domain::add_grinder(CommonSettings::default(), "Niche Zero", None).0;
+    assert!(!common_is_pristine(&added));
 }
 
 #[test]

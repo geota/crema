@@ -86,6 +86,8 @@ export const READS = [
 	'byRemoteId',
 	'byDecentId',
 	'dosesForBag',
+	// #488: the newest grind per grinder on a bag (`LastGrind[]`).
+	'lastGrindsForBag',
 	'unsent',
 	'syncRows',
 	'syncProjection',

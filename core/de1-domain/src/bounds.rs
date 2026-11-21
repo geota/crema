@@ -16,6 +16,7 @@
 //! profile with a value outside them is never rewritten (only edits clamp).
 
 use crate::effective_profile::PREINFUSION_DIAL_MAX_S;
+use crate::grinder::GrindScale;
 use crate::hot_water::StepRange;
 use crate::profile_bounds::{
     MAX_FRAME_SECONDS, MAX_STEAM_TEMPERATURE_C, MAX_TEMPERATURE_C, MAX_TOTAL_VOLUME_ML,
@@ -63,8 +64,14 @@ impl StepRange {
 pub struct QuickControlBounds {
     /// Dose, g.
     pub dose_g: StepRange,
-    /// Grind setting.
+    /// Grind setting: the active grinder's scale
+    /// ([`crate::grinder::active_grind_scale`]), repaired for a stepper
+    /// ([`crate::GrindScale::step_range`]). A value outside it is kept, never
+    /// clamped.
     pub grind: StepRange,
+    /// The unit shown next to a grind value: the active scale's, `""` for
+    /// none.
+    pub grind_unit: String,
     /// Yield, g.
     pub yield_g: StepRange,
     /// Yield-to-dose ratio (the `x` in `1:x`).
@@ -137,9 +144,17 @@ pub struct ProfileEditorBounds {
     pub tank_temp_c: StepRange,
 }
 
-/// The Quick Controls table.
+/// The Quick Controls table with the default grind scale (no active
+/// grinder): [`quick_control_bounds_for`] the default.
 #[must_use]
 pub fn quick_control_bounds() -> QuickControlBounds {
+    quick_control_bounds_for(&GrindScale::default())
+}
+
+/// The Quick Controls table with `grind` as the grind range: the active
+/// grinder's scale ([`crate::grinder::active_grind_scale`]).
+#[must_use]
+pub fn quick_control_bounds_for(grind: &GrindScale) -> QuickControlBounds {
     let dose_g = range(5.0, 30.0, 0.1);
     let yield_g = range(10.0, 80.0, 0.5);
     let ratio = range(1.0, 5.0, 0.1);
@@ -150,7 +165,8 @@ pub fn quick_control_bounds() -> QuickControlBounds {
     );
     QuickControlBounds {
         dose_g,
-        grind: range(0.0, 20.0, 0.1),
+        grind: grind.step_range(),
+        grind_unit: grind.unit.clone(),
         yield_g,
         ratio,
         brew_temp_c: range(MIN_BREW_TEMPERATURE_C, MAX_TEMPERATURE_C, 0.5),
@@ -212,6 +228,15 @@ pub fn clamp_steam_temp(value: f32, fallback: f32) -> f32 {
 #[must_use]
 pub fn quick_control_bounds_json() -> String {
     serde_json::to_string(&quick_control_bounds()).unwrap_or_default()
+}
+
+/// [`quick_control_bounds_for`] the active grinder of a settings blob (read
+/// through [`crate::app_settings::sanitize_common_settings`]), as JSON.
+#[must_use]
+pub fn quick_control_bounds_for_settings_json(settings_json: &str) -> String {
+    let settings = crate::grinder::settings_from_json(settings_json);
+    let scale = crate::grinder::active_grind_scale(&settings);
+    serde_json::to_string(&quick_control_bounds_for(&scale)).unwrap_or_default()
 }
 
 /// [`brew_defaults_bounds`] as JSON.
