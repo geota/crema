@@ -1344,6 +1344,24 @@ mod tests {
     }
 
     #[test]
+    fn a_history_export_keeps_the_profile_id_and_an_old_line_reads_as_none() {
+        let record = crate::shot::ShotRecord {
+            duration: std::time::Duration::from_secs(30),
+            samples: Vec::new(),
+        };
+        let mut shot = StoredShot::new(1_700_000_000_000, record);
+        shot.profile_name = Some("Blooming".to_owned());
+        let old = export_jsonl(&[], &[], &[shot.clone()], 1, "0.1");
+        assert!(!old.contains("profileId"));
+        let plan = parse_jsonl(&old).unwrap();
+        assert_eq!(plan.shots[0].stored_shot.profile_id, None);
+
+        shot.profile_id = Some("profile:blooming".to_owned());
+        let plan = parse_jsonl(&export_jsonl(&[], &[], &[shot.clone()], 1, "0.1")).unwrap();
+        assert_eq!(plan.shots[0].stored_shot, shot);
+    }
+
+    #[test]
     fn export_writes_header_then_entities() {
         let roasters = vec![sample_roaster("roaster:r1", "Onyx")];
         let beans = vec![sample_bean("bean:b1", "Yirg", Some("roaster:r1"))];
@@ -1493,6 +1511,7 @@ mod tests {
                 "id": "shot:rt-1",
                 "completedAt": 1_700_000_000_000_i64,
                 "profileName": "Londinium",
+                "profileId": "profile:londinium",
                 "profile": null,
                 "stopReason": null,
                 "record": { "duration": 30_000, "samples": [] },
@@ -1516,6 +1535,7 @@ mod tests {
         // ImportedShot wrapper (which would have no `id` / `bean` at top level).
         assert_eq!(shot.id, "shot:rt-1");
         assert_eq!(shot.profile_name.as_deref(), Some("Londinium"));
+        assert_eq!(shot.profile_id.as_deref(), Some("profile:londinium"));
         let bean = shot.bean.as_ref().expect("shot keeps its bean snapshot");
         assert_eq!(bean.name, "Yirg");
         assert_eq!(bean.bean_id.as_deref(), Some("bean:b1"));

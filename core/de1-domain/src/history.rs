@@ -396,6 +396,14 @@ pub struct StoredShot {
     /// paying the JSON cost of the full profile body.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_name: Option<String>,
+    /// The library id of the profile pulled (custom or built-in), next to
+    /// the `profile_name` snapshot: lookups ("Start from last shot") use the
+    /// id, display uses the name, so a rename doesn't break the link.
+    /// `None` on rows from before the field, and when the profile isn't a
+    /// known library profile (one another app loaded). Omitted when absent,
+    /// so existing bytes don't change; never sent to Visualizer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
     /// The profile pulled, if known. `serde(default)` — web-persisted
     /// rows may omit optional fields entirely (review #39: the core now
     /// parses shell-persisted rows for the quality analysis, so absence
@@ -577,6 +585,7 @@ impl StoredShot {
             id: new_shot_id(),
             completed_at,
             profile_name: None,
+            profile_id: None,
             profile: None,
             stop_reason: None,
             stop_estimated: false,
@@ -973,6 +982,19 @@ mod tests {
         let json = serde_json::to_string(&shot).unwrap();
         assert!(json.contains(r#""pinned":true"#));
         assert!(serde_json::from_str::<StoredShot>(&json).unwrap().pinned);
+    }
+
+    #[test]
+    fn the_profile_id_round_trips_and_an_old_row_reads_as_none() {
+        let mut shot = StoredShot::new(1, sample_record());
+        shot.profile_name = Some("Blooming".to_owned());
+        let old = serde_json::to_string(&shot).unwrap();
+        assert!(!old.contains("profileId"), "existing bytes don't change");
+        assert_eq!(StoredShot::from_json(&old).unwrap().profile_id, None);
+        shot.profile_id = Some("0190a0b2-0000-7000-8000-000000000001".to_owned());
+        let json = serde_json::to_string(&shot).unwrap();
+        assert!(json.contains(r#""profileId":"0190a0b2-0000-7000-8000-000000000001""#));
+        assert_eq!(StoredShot::from_json(&json), Ok(shot));
     }
 
     #[test]

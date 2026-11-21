@@ -455,8 +455,9 @@ pub fn add_grinder(
 }
 
 /// `settings` without the owned grinder `id`. Shots and bags are not touched.
-/// When it was the active one, the first remaining grinder becomes active
-/// (none when none remain).
+/// When it was the active one, no grinder is active afterwards: picking
+/// another would silently change the next shot's grind scale, so the user
+/// picks one (save-boundaries review F5, 2026-11-21).
 #[must_use]
 pub fn remove_grinder(mut settings: CommonSettings, id: &str) -> CommonSettings {
     let Some(grinders) = settings.grinders.as_mut() else {
@@ -464,7 +465,7 @@ pub fn remove_grinder(mut settings: CommonSettings, id: &str) -> CommonSettings 
     };
     grinders.retain(|g| g.id != id);
     if settings.active_grinder_id.as_deref() == Some(id) {
-        settings.active_grinder_id = grinders.first().map(|g| g.id.clone());
+        settings.active_grinder_id = None;
     }
     settings
 }
@@ -1098,12 +1099,22 @@ mod tests {
     }
 
     #[test]
-    fn removing_the_active_grinder_activates_the_first_left() {
+    fn removing_the_active_grinder_clears_the_selection() {
         let s = migrate_grinders(settings("EK43"), &["Niche Zero"]);
         let s = remove_grinder(s, "grinder:ek43");
         assert_eq!(names(&s), ["Niche Zero"]);
-        assert_eq!(active_name(&s), Some("Niche Zero"));
+        assert_eq!(s.active_grinder_id, None);
+        assert_eq!(active_name(&s), None);
+        assert_eq!(active_grind_scale(&s), GrindScale::default());
         assert_eq!(s.grinder_model, "EK43", "the old field stays");
+    }
+
+    #[test]
+    fn removing_another_grinder_keeps_the_active_one() {
+        let s = migrate_grinders(settings("EK43"), &["Niche Zero"]);
+        let s = remove_grinder(s, "grinder:niche-zero");
+        assert_eq!(names(&s), ["EK43"]);
+        assert_eq!(active_name(&s), Some("EK43"));
     }
 
     // ── Settings storage ──

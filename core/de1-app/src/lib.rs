@@ -14256,7 +14256,8 @@ mod tests {
 
                 #[test]
                 fn a_shot_records_the_profile_and_overrides_the_de1_ran() {
-                    let p = library("Daily");
+                    let mut p = library("Daily");
+                    p.id = "profile:daily".to_owned();
                     let mut core = connected();
                     let overrides = BrewOverrides {
                         brew_temp: Some(p.brew_temp + 2.0),
@@ -14268,6 +14269,7 @@ mod tests {
                     pour(&mut core, 1_000);
                     let shot = core.take_stored_shot(ctx()).expect("a shot");
                     assert_eq!(shot.profile_name.as_deref(), Some("Daily"));
+                    assert_eq!(shot.profile_id.as_deref(), Some(p.id.as_str()));
                     assert_eq!(shot.brew_temp_target, Some(p.brew_temp + 2.0));
                     let ran = shot.profile.expect("the as-run profile");
                     let shifted = de1_domain::effective_crema_profile(&p, &overrides);
@@ -14308,6 +14310,7 @@ mod tests {
                     pour(&mut core, 1_000);
                     let shot = core.take_stored_shot(ctx()).expect("a shot");
                     assert_eq!(shot.profile_name.as_deref(), Some("Theirs"), "name only");
+                    assert_eq!(shot.profile_id, None, "no library id");
                     assert!(shot.profile.is_none());
                     assert_eq!(shot.metadata.dose, None);
                     assert_eq!(shot.brew_temp_target, None);
