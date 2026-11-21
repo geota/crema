@@ -854,6 +854,8 @@ class LibraryController(
         val profileId: String,
         /** The profile's body before the Save. */
         val previousJson: String,
+        /** The body the Save wrote: Undo restores only over this one. */
+        val writtenJson: String,
         /** The Quick-Controls override the Save folded into the profile. */
         val previousBrew: BrewParams?,
         /** The bag grind the same Save wrote: (bag, its grind before, the grind written). */
@@ -920,7 +922,7 @@ class LibraryController(
                 // The values live in the profile now.
                 resetBrewParams()
                 parts += "“${plan.profileName}” updated"
-                undo = QuickSaveUndo(++quickSaveSeq, id, base, s.brewParams, null)
+                undo = QuickSaveUndo(++quickSaveSeq, id, base, written, s.brewParams, null)
             }
         }
         val grind = plan.grind
@@ -941,25 +943,38 @@ class LibraryController(
         }
     }
 
-    /** Undo the in-place Save [seq]: the profile's body and the override
-     *  come back, and the bag's grind if the same Save wrote it (and it is
-     *  still the one written). */
+    /** Undo the in-place Save [seq]: each half comes back only while it is
+     *  still what the Save wrote, so an edit made since (a star, a rename, a
+     *  new grind) stands. The profile's body brings its dial back, unless the
+     *  user dialled again since. */
     fun undoQuickSave(seq: Long) {
         val u = quickSaveUndo?.takeIf { it.seq == seq } ?: return
         quickSaveUndo = null
         updateUi { st -> if (st.quickSaveUndo?.seq == seq) st.copy(quickSaveUndo = null) else st }
-        if (customProfilesJson.any { profileIdOf(it, json) == u.profileId }) {
+        val current = customProfilesJson.firstOrNull { profileIdOf(it, json) == u.profileId }
+        val profileBack = current == u.writtenJson
+        if (profileBack) {
             customProfilesJson = customProfilesJson.map { if (profileIdOf(it, json) == u.profileId) u.previousJson else it }
             refreshProfiles()
             persistCustomProfiles()
-            if (uiState().activeProfileId == u.profileId) u.previousBrew?.let(restoreBrewParams)
+            val st = uiState()
+            if (st.activeProfileId == u.profileId && st.brewParams == null) u.previousBrew?.let(restoreBrewParams)
         }
+        var grindBack = false
         u.grind?.let { (beanId, before, written) ->
             if (uiState().beans.firstOrNull { it.id == beanId }?.grinderSetting == written) {
                 mutateBean(beanId) { it.copy(grinderSetting = before) }
+                grindBack = true
             }
         }
-        notify("Save undone")
+        val name = uiState().profiles.firstOrNull { it.id == u.profileId }?.name
+        notify(
+            when {
+                profileBack -> "Save undone"
+                grindBack -> "Grind put back; ${name?.let { "“$it”" } ?: "the profile"} changed since, not undone"
+                else -> "${name?.let { "“$it”" } ?: "The profile"} changed since; not undone"
+            },
+        )
     }
 
     /** The Save [seq]'s message went without Undo: the save stands. */

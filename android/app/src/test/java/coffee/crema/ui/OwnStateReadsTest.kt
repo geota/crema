@@ -75,7 +75,7 @@ class OwnStateReadsTest {
             "deleteBean" to setOf("activeBeanId"),
             // A Save's Undo puts the override back on this device's own
             // selection (Save is off on a remote, F8).
-            "undoQuickSave" to setOf("activeProfileId"),
+            "undoQuickSave" to setOf("activeProfileId", "brewParams"),
             // Own-state writers (§7.4): a restore and a bean import.
             // A restore writes the library's own active bean, and plans against it.
             "restoreSink" to setOf("activeBeanId"),

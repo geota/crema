@@ -222,6 +222,22 @@ class SaveBoundariesVmTest {
         assertEquals(custom.dose, vm.customs().single().dose)
     }
 
+    /** Review 496 M1: Undo restores only the body the Save wrote. */
+    @Test
+    fun `undo after a later edit of the profile keeps that edit`() {
+        val vm = vmWith()
+        val custom = activeCustom(vm)
+        dialDose(vm)
+        vm.quickSave(); VmHarness.idle()
+        val undo = assertNotNull(vm.ui.value.quickSaveUndo)
+        val pinned = !vm.customs().single().pinned
+        vm.togglePinProfile(custom.id); VmHarness.idle()
+        vm.undoQuickSave(undo.seq); VmHarness.idle()
+        assertEquals(pinned, vm.customs().single().pinned, "Undo must not revert the later pin")
+        assertTrue("“Mine” changed since; not undone" in vm.messages(), "${vm.messages()}")
+        assertNull(vm.ui.value.brewParams, "no dial back without its profile body")
+    }
+
     // ── F5: deleting the selection clears it ─────────────────────────────────
 
     @Test
