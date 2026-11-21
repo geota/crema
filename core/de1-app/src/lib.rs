@@ -14330,19 +14330,19 @@ mod tests {
                 }
 
                 #[test]
-                fn grinder_model_is_the_bean_grinder_else_the_settings_grinder() {
+                fn grinder_model_is_the_active_grinder_never_the_bags() {
+                    // #488: the shot carries the active grinder's name (the
+                    // shell passes it as `settings_grinder`); the bag's old
+                    // stored grinder is not read.
                     let bean = |grinder: Option<&str>| ShotBean {
                         name: "Gesha".into(),
                         grinder: grinder.map(str::to_owned),
                         ..ShotBean::default()
                     };
-                    for (b, settings, want) in [
-                        (
-                            Some(bean(Some("Niche Zero"))),
-                            Some("EK43"),
-                            Some("Niche Zero"),
-                        ),
-                        (Some(bean(None)), Some("EK43"), Some("EK43")),
+                    for (b, active, want) in [
+                        (Some(bean(Some("Niche Zero"))), Some("EK43"), Some("EK43")),
+                        (Some(bean(None)), Some(" EK43 "), Some("EK43")),
+                        (Some(bean(Some("Niche Zero"))), None, None),
                         (None, Some("  "), None),
                         (None, None, None),
                     ] {
@@ -14351,7 +14351,7 @@ mod tests {
                         let shot = core
                             .take_stored_shot(ShotCaptureContext {
                                 bean: b,
-                                settings_grinder: settings.map(str::to_owned),
+                                settings_grinder: active.map(str::to_owned),
                                 ..ctx()
                             })
                             .expect("a shot");

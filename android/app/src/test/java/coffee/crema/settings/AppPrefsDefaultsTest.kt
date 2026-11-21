@@ -54,7 +54,7 @@ class AppPrefsDefaultsTest {
     }
 
     @Test
-    fun `resetCommon resets every common field but keeps the weight unit and line frequency`() {
+    fun `resetCommon resets every common field but keeps the weight unit, line frequency and grinder`() {
         val mine = AppPrefs(
             themeMode = "light", weightUnit = "oz", tempUnit = "F", grinderModel = "Niche",
             baristaName = "Ana", qcSteamTempC = 150f, idleSleepMin = 120, waterWarnMl = 300f,
@@ -65,9 +65,11 @@ class AppPrefsDefaultsTest {
         assertEquals("oz", reset.weightUnit)
         val d = AppPrefs()
         assertEquals(
-            listOf(d.themeMode, d.tempUnit, d.grinderModel, d.baristaName, d.qcSteamTempC),
-            listOf(reset.themeMode, reset.tempUnit, reset.grinderModel, reset.baristaName, reset.qcSteamTempC),
+            listOf(d.themeMode, d.tempUnit, d.baristaName, d.qcSteamTempC),
+            listOf(reset.themeMode, reset.tempUnit, reset.baristaName, reset.qcSteamTempC),
         )
+        // #488: the grinder is equipment, kept like the weight unit.
+        assertEquals("Niche", reset.grinderModel)
         assertEquals(30, reset.idleSleepMin)
         assertEquals(null, reset.waterWarnMl)
         // Android-only extras and bindings stay.

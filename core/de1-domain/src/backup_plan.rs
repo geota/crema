@@ -1302,9 +1302,10 @@ pub fn common_is_pristine(common: &CommonSettings) -> bool {
 }
 
 /// What a first load does to `c`: the settings sanitize, the idle-sleep
-/// default and the hot-water never-changed rule.
+/// default, the hot-water never-changed rule and the grinder migration (with
+/// no bags: a fresh install has none).
 fn first_run(c: CommonSettings) -> CommonSettings {
-    let mut c = c.sanitized();
+    let mut c = crate::grinder::migrate_grinders::<&str>(c.sanitized(), &[]);
     if c.idle_sleep_min.is_none() {
         c.idle_sleep_min = Some(crate::idle_sleep::DEFAULT_IDLE_SLEEP_MIN);
     }

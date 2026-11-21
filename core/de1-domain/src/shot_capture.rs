@@ -14,8 +14,9 @@
 //!   temperature and pre-infusion are its values — the Quick Controls
 //!   override, else the profile's own. Without it (a profile another app
 //!   loaded) the shot keeps the profile's name only and no Quick Controls.
-//! - **Grinder.** The bean's grinder, else the Settings grinder, frozen at
-//!   capture — history never changes when Settings do.
+//! - **Grinder.** The active grinder's name (#488), frozen at capture —
+//!   history never changes when Settings do. The bag's old stored grinder is
+//!   not read: the grinder is equipment picked on Brew, not a bag field.
 //! - **Measured values.** The settled final weight, the stop reason and the
 //!   stop switches come from the core.
 //! - **Full series.** The stored record keeps every sample (up to
@@ -49,7 +50,9 @@ pub struct ShotCaptureContext {
     /// The bean snapshot the shot was pulled with, or `None`.
     #[serde(default)]
     pub bean: Option<ShotBean>,
-    /// The Settings grinder model, the fallback when the bean has none.
+    /// The active grinder's name ([`crate::grinder::active_grinder_name`]):
+    /// what the shot is stamped with. `None` or blank = no grinder. (The
+    /// field keeps its pre-#488 name so both shells' contexts still decode.)
     #[serde(default)]
     pub settings_grinder: Option<String>,
     /// The grind dial at shot start, or `None` when it carried no value.
@@ -154,11 +157,7 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
     s.metadata.yield_out = shot.final_weight.filter(|w| w.is_finite() && *w > 0.0);
     s.metadata.grinder_setting = ctx.grind_dial.and_then(grind_text);
     s.metadata.barista = non_blank(ctx.barista.as_deref());
-    s.grinder_model = ctx
-        .bean
-        .as_ref()
-        .and_then(|b| non_blank(b.grinder.as_deref()))
-        .or_else(|| non_blank(ctx.settings_grinder.as_deref()));
+    s.grinder_model = non_blank(ctx.settings_grinder.as_deref());
     s.tags = ctx.tags.unwrap_or_default();
     s.bean = ctx.bean;
     s.machine = ctx.machine;

@@ -185,7 +185,7 @@ describe('core-owned defaults, sanitize and reset (F15)', () => {
 		expect([s.showFlow, s.showPressure]).toEqual([true, false]);
 	});
 
-	it('reset keeps weightUnit and lineFrequencyHz', async () => {
+	it('reset keeps weightUnit, lineFrequencyHz and the grinder', async () => {
 		const { getSettingsStore } = await import('./store.svelte');
 		const store = getSettingsStore();
 		store.onReplaced = null;
@@ -198,10 +198,12 @@ describe('core-owned defaults, sanitize and reset (F15)', () => {
 		expect(store.current.weightUnit).toBe('oz');
 		expect(store.current.lineFrequencyHz).toBe(60);
 		expect(store.current.theme).toBe('dark');
-		expect(store.current.grinderModel).toBe('');
+		// #488: the grinder is equipment, kept like the weight unit.
+		expect(store.current.grinderModel).toBe('Niche');
 		expect(store.current.telemetryRateHz).toBe(DEFAULT_SETTINGS.telemetryRateHz);
 		store.set('weightUnit', 'g');
 		store.set('lineFrequencyHz', 0);
+		store.set('grinderModel', '');
 	});
 });
 

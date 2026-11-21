@@ -646,6 +646,24 @@ pub fn doses_for_bag(bean_id: &str, limit: u32) -> Stmt {
     b.finish(sql)
 }
 
+/// The grinder and grind of every listed row on a bag that names a grinder,
+/// newest first, for the last grind per (bag, grinder) (#488): the shot's
+/// `grinderModel` (both shapes), its grind (`metadata.grinderSetting` on web,
+/// `grindSetting` on Android, text or number) and `completed_at`. Rows
+/// without a grind are left for the caller to skip (a blank string is one).
+#[must_use]
+pub fn grinds_for_bag(bean_id: &str) -> Stmt {
+    let mut b = Builder::default();
+    let p = b.text(bean_id);
+    let sql = format!(
+        "SELECT json_extract(s.row_json, '$.grinderModel'), \
+         coalesce(json_extract(s.row_json, '$.metadata.grinderSetting'), json_extract(s.row_json, '$.grindSetting')), \
+         s.completed_at FROM shot s WHERE s.deleted_at IS NULL AND s.hold_delete = 0 AND s.bean_id = {p} \
+         AND json_type(s.row_json, '$.grinderModel') = 'text' ORDER BY s.completed_at DESC, s.id DESC"
+    );
+    b.finish(sql)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
