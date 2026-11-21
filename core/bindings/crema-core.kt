@@ -4778,7 +4778,12 @@ data class ShotCaptureContext (
 	/// The profile name the shell knows, the last fallback when the core
 	/// knows neither the profile it ran nor a title — a replay, whose shadow
 	/// core saw no upload, passes the capture's name here.
-	val profileName: String? = null
+	val profileName: String? = null,
+	/// The library id of the profile the shell has active, or `None`. The
+	/// fallback for [`StoredShot::profile_id`] when the core doesn't hold the
+	/// profile it ran; stamped only when the shot's name is this profile's
+	/// (`profile_name`), so a profile another app loaded never gets an id.
+	val profileId: String? = null
 )
 
 /// What the merge reads of the local row.

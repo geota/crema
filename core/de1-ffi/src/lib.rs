@@ -453,6 +453,44 @@ pub fn set_bean_frozen_json(
     de1_domain::set_bean_frozen_json(&bean_json, frozen, now_unix_ms).map_err(CremaError::from)
 }
 
+/// A bag editor's Save (`Bean` JSON in and out): the fields the user changed
+/// (`edited_json` against `base_json`, the bag the editor opened on) applied
+/// onto `current_json`, the bag as stored now, so a debit or a sync during
+/// the edit stands. `updated_at` is bumped when anything changed. See
+/// [`de1_domain::merge_bean_edit`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when a bean JSON is malformed.
+#[uniffi::export]
+pub fn merge_bean_edit_json(
+    base_json: String,
+    edited_json: String,
+    current_json: String,
+    now_unix_ms: i64,
+) -> Result<String, CremaError> {
+    de1_domain::merge_bean_edit_json(&base_json, &edited_json, &current_json, now_unix_ms)
+        .map_err(CremaError::from)
+}
+
+/// A roaster editor's Save (`Roaster` JSON in and out) — the
+/// [`merge_bean_edit_json`] rule for a roaster. See
+/// [`de1_domain::merge_roaster_edit`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when a roaster JSON is malformed.
+#[uniffi::export]
+pub fn merge_roaster_edit_json(
+    base_json: String,
+    edited_json: String,
+    current_json: String,
+    now_unix_ms: i64,
+) -> Result<String, CremaError> {
+    de1_domain::merge_roaster_edit_json(&base_json, &edited_json, &current_json, now_unix_ms)
+        .map_err(CremaError::from)
+}
+
 /// The "≈N brews left" estimate — [`de1_domain::brews_remaining_estimate`]
 /// (the bag's newest ≤10 doses, newest first; 18 g fallback).
 #[uniffi::export]

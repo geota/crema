@@ -14,6 +14,9 @@
 //!   temperature and pre-infusion are its values — the Quick Controls
 //!   override, else the profile's own. Without it (a profile another app
 //!   loaded) the shot keeps the profile's name only and no Quick Controls.
+//! - **Profile id.** The library id of the profile the DE1 held, else the
+//!   shell's [`ShotCaptureContext::profile_id`] when the shot's name is that
+//!   profile's; stored next to the name snapshot (save-boundaries review F4).
 //! - **Grinder.** The active grinder's name (#488), frozen at capture —
 //!   history never changes when Settings do. The bag's old stored grinder is
 //!   not read: the grinder is equipment picked on Brew, not a bag field.
@@ -73,6 +76,12 @@ pub struct ShotCaptureContext {
     /// core saw no upload, passes the capture's name here.
     #[serde(default)]
     pub profile_name: Option<String>,
+    /// The library id of the profile the shell has active, or `None`. The
+    /// fallback for [`StoredShot::profile_id`] when the core doesn't hold the
+    /// profile it ran; stamped only when the shot's name is this profile's
+    /// (`profile_name`), so a profile another app loaded never gets an id.
+    #[serde(default)]
+    pub profile_id: Option<String>,
 }
 
 /// The profile and Quick Controls the DE1 held when the shot started.
@@ -136,6 +145,8 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
     if let Some(as_run) = &shot.as_run {
         let effective = effective_crema_profile(&as_run.profile, &as_run.qc);
         s.profile_name = non_blank(Some(&effective.name));
+        s.profile_id =
+            non_blank(Some(&as_run.profile.id)).or_else(|| non_blank(ctx.profile_id.as_deref()));
         s.metadata.dose = Some(effective.dose).filter(|d| *d > 0.0);
         s.yield_target = Some(effective.yield_out).filter(|y| *y > 0.0);
         s.brew_temp_target = Some(effective.brew_temp).filter(|t| t.is_finite());
@@ -144,6 +155,11 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
     } else {
         s.profile_name = non_blank(shot.profile_title.as_deref())
             .or_else(|| non_blank(ctx.profile_name.as_deref()));
+        // The shell's id only when the name is its profile's: a title the DE1
+        // reported may be a profile another app loaded.
+        if s.profile_name.is_some() && s.profile_name == non_blank(ctx.profile_name.as_deref()) {
+            s.profile_id = non_blank(ctx.profile_id.as_deref());
+        }
     }
     // An estimated stop is stored as `Weight`, which older builds parse,
     // flagged `stop_estimated` (`DESIGN.md` §3.5).
@@ -282,6 +298,42 @@ mod tests {
         // The core's own title wins over it.
         let shot = assemble_stored_shot(completed(None), ctx).unwrap();
         assert_eq!(shot.profile_name.as_deref(), Some("Foreign"));
+    }
+
+    #[test]
+    fn the_profile_id_is_the_held_profiles_else_the_shells_for_its_name() {
+        let held = profile();
+        let shot = assemble_stored_shot(
+            completed(Some(AsRunShot {
+                profile: held.clone(),
+                qc: BrewOverrides::default(),
+            })),
+            ShotCaptureContext {
+                profile_id: Some("profile:other".into()),
+                ..ShotCaptureContext::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(shot.profile_id.as_deref(), Some(held.id.as_str()));
+        assert_eq!(shot.profile_name.as_deref(), Some("Test"));
+
+        // A replay: the core held nothing, the shell names its profile.
+        let mut nameless = completed(None);
+        nameless.profile_title = None;
+        let ctx = ShotCaptureContext {
+            profile_name: Some("From the capture".into()),
+            profile_id: Some("profile:capture".into()),
+            ..ShotCaptureContext::default()
+        };
+        let shot = assemble_stored_shot(nameless, ctx.clone()).unwrap();
+        assert_eq!(shot.profile_id.as_deref(), Some("profile:capture"));
+
+        // A title another app loaded never takes the shell's id.
+        let shot = assemble_stored_shot(completed(None), ctx).unwrap();
+        assert_eq!(shot.profile_name.as_deref(), Some("Foreign"));
+        assert_eq!(shot.profile_id, None);
+        let shot = assemble_stored_shot(completed(None), ShotCaptureContext::default()).unwrap();
+        assert_eq!(shot.profile_id, None);
     }
 
     #[test]
