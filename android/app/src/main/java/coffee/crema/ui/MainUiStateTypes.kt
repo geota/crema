@@ -2,6 +2,9 @@ package coffee.crema.ui
 
 import coffee.crema.history.StoredShot
 
+/** An undoable message: [seq] tells two with the same text apart. */
+data class UndoNotice(val message: String, val seq: Long)
+
 /**
  * Summary of the most recently completed espresso shot — assembled from
  * `Event.ShotCompleted` for the Brew screen's "Last shot" card. Null until a

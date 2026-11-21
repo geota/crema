@@ -42,6 +42,7 @@ import coffee.crema.ui.components.CremaMessageHost
 import coffee.crema.ui.components.LocalMessageAnchors
 import coffee.crema.ui.components.MessageAnchors
 import coffee.crema.ui.components.showDiscardMessage
+import coffee.crema.ui.components.showUndoMessage
 import coffee.crema.ui.components.showKeptAsideMessage
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -298,6 +299,18 @@ class MainActivity : ComponentActivity() {
                             msg,
                             onUndo = viewModel::undoDiscardShot,
                             onDrop = viewModel::consumeDiscardToast,
+                        )
+                    }
+                }
+                // A Quick Controls Save that updated a profile in place: Undo
+                // puts the profile (and the grind it saved) back.
+                LaunchedEffect(ui.quickSaveUndo) {
+                    val notice = ui.quickSaveUndo ?: return@LaunchedEffect
+                    snackbarScope.launch {
+                        snackbarHostState.showUndoMessage(
+                            notice.message,
+                            onUndo = { viewModel.undoQuickSave(notice.seq) },
+                            onDrop = { viewModel.consumeQuickSaveUndo(notice.seq) },
                         )
                     }
                 }

@@ -186,7 +186,7 @@ class ShotStartOverridesTest {
         assertNotNull(vm.ui.value.brewParams)
         vm.archiveBuiltinProfile(active.id)
         VmHarness.idle()
-        assertNotEquals(active.id, vm.ui.value.activeProfileId, "another profile is active")
-        assertNull(vm.ui.value.brewParams, "the override does not carry over to it")
+        assertNull(vm.ui.value.activeProfileId, "no profile is active (review 2026-11-21 F5)")
+        assertNull(vm.ui.value.brewParams, "the override goes with it")
     }
 }
