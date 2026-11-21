@@ -919,6 +919,34 @@ pub fn set_bean_frozen_json(bean_json: &str, frozen: bool, now_ms: f64) -> Resul
     de1_domain::set_bean_frozen_json(bean_json, frozen, f64_to_ms(now_ms))
 }
 
+/// A bag editor's Save (`Bean` JSON in and out): the fields the user changed
+/// (`editedJson` against `baseJson`, the bag the editor opened on) applied
+/// onto `currentJson`, the bag as stored now, so a debit or a sync during the
+/// edit stands. `updatedAt` is bumped when anything changed. See
+/// `de1_domain::merge_bean_edit`.
+#[wasm_bindgen(js_name = mergeBeanEditJson)]
+pub fn merge_bean_edit_json(
+    base_json: &str,
+    edited_json: &str,
+    current_json: &str,
+    now_ms: f64,
+) -> Result<String, String> {
+    de1_domain::merge_bean_edit_json(base_json, edited_json, current_json, f64_to_ms(now_ms))
+}
+
+/// A roaster editor's Save (`Roaster` JSON in and out) — the
+/// `mergeBeanEditJson` rule for a roaster. See
+/// `de1_domain::merge_roaster_edit`.
+#[wasm_bindgen(js_name = mergeRoasterEditJson)]
+pub fn merge_roaster_edit_json(
+    base_json: &str,
+    edited_json: &str,
+    current_json: &str,
+    now_ms: f64,
+) -> Result<String, String> {
+    de1_domain::merge_roaster_edit_json(base_json, edited_json, current_json, f64_to_ms(now_ms))
+}
+
 /// The "≈N brews left" estimate — shared
 /// `de1_domain::brews_remaining_estimate` (the bag's newest ≤10 doses,
 /// newest first; 18 g fallback).

@@ -1,0 +1,315 @@
+//! # library_edit
+//!
+//! The Save of a bag or roaster editor, onto the row as it stands now
+//! (save-boundaries review F2, 2026-11-21). The port of Android's
+//! `BeanDraft.kt` (geota/crema#324), moved here so both shells share it.
+//!
+//! An editor opens on a row (`base`) and the user edits a copy of it
+//! (`edited`). Meanwhile the stored row (`current`) may have moved on: a shot
+//! debited `remaining`, a Visualizer pull or an import rewrote fields. Save
+//! applies **only the fields the user changed** (those where `edited` differs
+//! from `base`) onto `current`; every other field keeps `current`'s value.
+//! Nested objects (`origin`, `metadata`) merge key by key the same way; one
+//! the editor opened as `null` counts as empty.
+//!
+//! The row's identity (`id`, `created_at`) is always `current`'s. When the
+//! result differs from `current`, `updated_at` is bumped to `now_unix_ms`
+//! (never backwards); a Save that changes nothing returns `current` as it is,
+//! so it doesn't look like a fresh edit to sync.
+
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::{Map, Value};
+
+use crate::bean::{Bean, Roaster};
+
+/// `current` with the keys that differ between `base` and `edited` taken
+/// from `edited`, recursing into objects all three hold.
+fn changes_over(
+    current: &Map<String, Value>,
+    edited: &Map<String, Value>,
+    base: &Map<String, Value>,
+) -> Map<String, Value> {
+    let mut out = Map::new();
+    let keys = current.keys().chain(edited.keys()).chain(base.keys());
+    for key in keys {
+        if out.contains_key(key) {
+            continue;
+        }
+        if let Some(v) = merged(current.get(key), edited.get(key), base.get(key)) {
+            out.insert(key.clone(), v);
+        }
+    }
+    out
+}
+
+fn merged(current: Option<&Value>, edited: Option<&Value>, base: Option<&Value>) -> Option<Value> {
+    if edited == base {
+        return current.cloned();
+    }
+    match (current, edited, base) {
+        (Some(Value::Object(c)), Some(Value::Object(e)), Some(Value::Object(b))) => {
+            Some(Value::Object(changes_over(c, e, b)))
+        }
+        // An object the editor opened empty (`metadata` starts as `null`):
+        // the user's keys land beside the ones added elsewhere.
+        (Some(Value::Object(c)), Some(Value::Object(e)), None | Some(Value::Null)) => {
+            Some(Value::Object(changes_over(c, e, &Map::new())))
+        }
+        _ => edited.cloned(),
+    }
+}
+
+/// The three-way merge over any row type. Falls back to a top-level merge
+/// (each changed field whole from `edited`) when a nested merge doesn't make
+/// a valid row, and to `edited` if even that fails.
+fn merge_row<T: Serialize + DeserializeOwned + Clone>(base: &T, edited: &T, current: &T) -> T {
+    let tree = |row: &T| match serde_json::to_value(row) {
+        Ok(Value::Object(m)) => Some(m),
+        _ => None,
+    };
+    let (Some(b), Some(e), Some(c)) = (tree(base), tree(edited), tree(current)) else {
+        return edited.clone();
+    };
+    if let Ok(row) = serde_json::from_value(Value::Object(changes_over(&c, &e, &b))) {
+        return row;
+    }
+    let mut flat = c.clone();
+    for key in e.keys().chain(b.keys()) {
+        if e.get(key) != b.get(key) {
+            match e.get(key) {
+                Some(v) => flat.insert(key.clone(), v.clone()),
+                None => flat.remove(key),
+            };
+        }
+    }
+    serde_json::from_value(Value::Object(flat)).unwrap_or_else(|_| edited.clone())
+}
+
+/// A bag editor's Save: the fields the user changed (`edited` against
+/// `base`, the bag the editor opened on) applied onto `current`, the bag as
+/// stored now. See the module docs.
+#[must_use]
+pub fn merge_bean_edit(base: &Bean, edited: &Bean, current: &Bean, now_unix_ms: i64) -> Bean {
+    let mut out = merge_row(base, edited, current);
+    out.id.clone_from(&current.id);
+    out.created_at = current.created_at;
+    out.updated_at = current.updated_at;
+    if out != *current {
+        out.updated_at = now_unix_ms.max(current.updated_at);
+    }
+    out
+}
+
+/// A roaster editor's Save — [`merge_bean_edit`] for a [`Roaster`].
+#[must_use]
+pub fn merge_roaster_edit(
+    base: &Roaster,
+    edited: &Roaster,
+    current: &Roaster,
+    now_unix_ms: i64,
+) -> Roaster {
+    let mut out = merge_row(base, edited, current);
+    out.id.clone_from(&current.id);
+    out.created_at = current.created_at;
+    out.updated_at = current.updated_at;
+    if out != *current {
+        out.updated_at = now_unix_ms.max(current.updated_at);
+    }
+    out
+}
+
+/// [`merge_bean_edit`] over `Bean` JSON (the FFI / wasm boundary).
+///
+/// # Errors
+///
+/// The JSON error string when a row is malformed.
+pub fn merge_bean_edit_json(
+    base_json: &str,
+    edited_json: &str,
+    current_json: &str,
+    now_unix_ms: i64,
+) -> Result<String, String> {
+    let parse = |s: &str| serde_json::from_str::<Bean>(s).map_err(|e| e.to_string());
+    let out = merge_bean_edit(
+        &parse(base_json)?,
+        &parse(edited_json)?,
+        &parse(current_json)?,
+        now_unix_ms,
+    );
+    serde_json::to_string(&out).map_err(|e| e.to_string())
+}
+
+/// [`merge_roaster_edit`] over `Roaster` JSON (the FFI / wasm boundary).
+///
+/// # Errors
+///
+/// The JSON error string when a row is malformed.
+pub fn merge_roaster_edit_json(
+    base_json: &str,
+    edited_json: &str,
+    current_json: &str,
+    now_unix_ms: i64,
+) -> Result<String, String> {
+    let parse = |s: &str| serde_json::from_str::<Roaster>(s).map_err(|e| e.to_string());
+    let out = merge_roaster_edit(
+        &parse(base_json)?,
+        &parse(edited_json)?,
+        &parse(current_json)?,
+        now_unix_ms,
+    );
+    serde_json::to_string(&out).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OPENED_AT: i64 = 1_000;
+    const NOW: i64 = 5_000;
+
+    fn bag() -> Bean {
+        let mut b = Bean::new("bean:1".into(), "Geometry".into(), OPENED_AT);
+        b.remaining = 250.0;
+        b.bag_size = 250.0;
+        b.notes = "fruity".into();
+        b.origin.country = Some("Ethiopia".into());
+        b
+    }
+
+    #[test]
+    fn a_debit_during_the_edit_survives_and_the_users_change_wins() {
+        let base = bag();
+        let mut edited = base.clone();
+        edited.name = "Geometry II".into();
+        let mut current = base.clone();
+        current.remaining = 232.0; // a shot debited the bag
+        current.updated_at = 2_000;
+        let saved = merge_bean_edit(&base, &edited, &current, NOW);
+        assert_eq!(saved.name, "Geometry II");
+        assert_eq!(saved.remaining, 232.0);
+        assert_eq!(saved.updated_at, NOW);
+        assert_eq!(saved.created_at, OPENED_AT);
+    }
+
+    #[test]
+    fn a_field_the_user_changed_wins_over_a_change_elsewhere() {
+        let base = bag();
+        let mut edited = base.clone();
+        edited.remaining = 100.0; // the user corrected the weight
+        let mut current = base.clone();
+        current.remaining = 232.0;
+        assert_eq!(
+            merge_bean_edit(&base, &edited, &current, NOW).remaining,
+            100.0
+        );
+    }
+
+    #[test]
+    fn a_visualizer_pull_during_the_edit_survives() {
+        let base = bag();
+        let mut edited = base.clone();
+        edited.rating = 4;
+        let mut current = base.clone();
+        current.visualizer_id = Some("vb-1".into());
+        current.tasting_notes = "from Visualizer".into();
+        current.origin.region = Some("Guji".into());
+        let saved = merge_bean_edit(&base, &edited, &current, NOW);
+        assert_eq!(saved.rating, 4);
+        assert_eq!(saved.visualizer_id.as_deref(), Some("vb-1"));
+        assert_eq!(saved.tasting_notes, "from Visualizer");
+        assert_eq!(saved.origin.region.as_deref(), Some("Guji"));
+        assert_eq!(saved.origin.country.as_deref(), Some("Ethiopia"));
+    }
+
+    #[test]
+    fn nested_fields_merge_key_by_key() {
+        let base = bag();
+        let mut edited = base.clone();
+        edited.origin.country = Some("Kenya".into());
+        edited.metadata = serde_json::json!({ "crema": { "a": 1 } });
+        let mut current = base.clone();
+        current.origin.variety = Some("SL28".into());
+        current.metadata = serde_json::json!({ "bc": { "uuid": "x" } });
+        let saved = merge_bean_edit(&base, &edited, &current, NOW);
+        assert_eq!(saved.origin.country.as_deref(), Some("Kenya"));
+        assert_eq!(saved.origin.variety.as_deref(), Some("SL28"));
+        assert_eq!(
+            saved.metadata,
+            serde_json::json!({ "bc": { "uuid": "x" }, "crema": { "a": 1 } })
+        );
+    }
+
+    #[test]
+    fn clearing_a_field_clears_it() {
+        let base = bag();
+        let mut edited = base.clone();
+        edited.origin.country = None;
+        edited.notes = String::new();
+        let saved = merge_bean_edit(&base, &edited, &base, NOW);
+        assert_eq!(saved.origin.country, None);
+        assert_eq!(saved.notes, "");
+    }
+
+    #[test]
+    fn a_save_with_no_changes_leaves_the_row_untouched() {
+        let base = bag();
+        let mut current = base.clone();
+        current.remaining = 232.0;
+        current.updated_at = 2_000;
+        assert_eq!(merge_bean_edit(&base, &base, &current, NOW), current);
+    }
+
+    #[test]
+    fn identity_and_time_never_go_backwards() {
+        let base = bag();
+        let mut edited = base.clone();
+        edited.id = "bean:other".into();
+        edited.created_at = 0;
+        edited.name = "Renamed".into();
+        let mut current = base.clone();
+        current.updated_at = 9_000; // a row stamped by a clock ahead of ours
+        let saved = merge_bean_edit(&base, &edited, &current, NOW);
+        assert_eq!(saved.id, "bean:1");
+        assert_eq!(saved.created_at, OPENED_AT);
+        assert_eq!(saved.updated_at, 9_000);
+    }
+
+    #[test]
+    fn a_roaster_edit_merges_the_same_way() {
+        let base = Roaster::new("roaster:1".into(), "Onyx".into(), OPENED_AT);
+        let mut edited = base.clone();
+        edited.city = Some("Rogers".into());
+        let mut current = base.clone();
+        current.visualizer_id = Some("vr-1".into());
+        current.website = Some("https://onyx.example".into());
+        let saved = merge_roaster_edit(&base, &edited, &current, NOW);
+        assert_eq!(saved.city.as_deref(), Some("Rogers"));
+        assert_eq!(saved.visualizer_id.as_deref(), Some("vr-1"));
+        assert_eq!(saved.website.as_deref(), Some("https://onyx.example"));
+        assert_eq!(saved.updated_at, NOW);
+        assert_eq!(merge_roaster_edit(&base, &base, &current, NOW), current);
+    }
+
+    #[test]
+    fn the_json_facades_round_trip_and_reject_garbage() {
+        let base = bag();
+        let mut edited = base.clone();
+        edited.name = "New".into();
+        let j = |b: &Bean| serde_json::to_string(b).unwrap();
+        let out = merge_bean_edit_json(&j(&base), &j(&edited), &j(&base), NOW).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Bean>(&out).unwrap(),
+            merge_bean_edit(&base, &edited, &base, NOW)
+        );
+        assert!(merge_bean_edit_json("nope", &j(&edited), &j(&base), NOW).is_err());
+        let r = Roaster::new("roaster:1".into(), "Onyx".into(), OPENED_AT);
+        let rj = serde_json::to_string(&r).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Roaster>(&merge_roaster_edit_json(&rj, &rj, &rj, NOW).unwrap())
+                .unwrap(),
+            r
+        );
+        assert!(merge_roaster_edit_json(&rj, "{}", &rj, NOW).is_err());
+    }
+}

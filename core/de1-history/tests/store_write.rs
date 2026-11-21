@@ -686,3 +686,20 @@ fn three_tabs_resending_across_reopens_apply_each_write_once() {
         .expect("a row");
     assert_eq!(notes, format!("{}{last_seq}", tabs[last_tab]));
 }
+
+#[test]
+fn a_rows_profile_id_is_stored_and_read_back_as_written() {
+    let d = dir();
+    let mut store = create(&file(&d, "history.db"));
+    let with_id = row("s1", 1, json!({ "profileId": "profile:turbo" }));
+    let without = row("s2", 2, json!({}));
+    store
+        .upsert(&rows_in(&[with_id.clone(), without.clone()]))
+        .expect("writes");
+    let got = store
+        .get(&["s1".to_owned(), "s2".to_owned()])
+        .expect("reads");
+    let by_id = |id: &str| got.iter().find(|r| r.id == id).map(|r| r.row_json.clone());
+    assert_eq!(by_id("s1"), Some(with_id));
+    assert_eq!(by_id("s2"), Some(without));
+}

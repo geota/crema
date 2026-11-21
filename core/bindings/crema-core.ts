@@ -4736,6 +4736,13 @@ export interface ShotCaptureContext {
 	 * core saw no upload, passes the capture's name here.
 	 */
 	profileName?: string;
+	/**
+	 * The library id of the profile the shell has active, or `None`. The
+	 * fallback for [`StoredShot::profile_id`] when the core doesn't hold the
+	 * profile it ran; stamped only when the shot's name is this profile's
+	 * (`profile_name`), so a profile another app loaded never gets an id.
+	 */
+	profileId?: string;
 }
 
 /** What the merge reads of the local row. */

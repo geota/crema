@@ -95,6 +95,7 @@ pub mod history_import;
 pub mod hot_water;
 pub mod idle_sleep;
 pub mod ids;
+pub mod library_edit;
 pub mod maintenance;
 pub mod mode_targets;
 pub mod oauth_callback;
@@ -301,6 +302,9 @@ pub use hot_water::{
     sanitize_hot_water_dose,
 };
 pub use ids::{new_custom_method_id, new_profile_id, new_recipe_id, new_shot_id};
+pub use library_edit::{
+    merge_bean_edit, merge_bean_edit_json, merge_roaster_edit, merge_roaster_edit_json,
+};
 pub use maintenance::{
     MAX_COUNTED_GAP_S, MaintenanceReadout, MaintenanceState, counts_toward_water,
     default_maintenance_state_json, maintenance_readout, maintenance_readout_json,
