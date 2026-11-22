@@ -151,7 +151,10 @@ sealed interface MachineCommand {
             val number = coffee.crema.beans.grindNumber(text)
             return when {
                 text.isEmpty() -> "a grind is required"
-                text.length > MAX_GRIND_LENGTH || text.any { it.isISOControl() } -> "malformed grind"
+                // The raw value, ends included (REVIEW-526): no control or format
+                // characters (bidi overrides) anywhere, and the trimmed text no
+                // longer than a grind needs; [applyTo] stores it trimmed.
+                text.length > MAX_GRIND_LENGTH || grind.any { it.isISOControl() || Character.getType(it) == Character.FORMAT.toInt() } -> "malformed grind"
                 number != null && !number.within(0.0..MAX_GRIND) -> "grind out of range: $text"
                 else -> null
             }
@@ -238,7 +241,8 @@ private const val MAX_NAME_LENGTH = 128
 private const val MAX_PREINF_S = 300.0
 /** A sanity bound, not the scale: a typed grind outside the active scale is kept (#488). */
 private const val MAX_GRIND = 10_000.0
-private const val MAX_GRIND_LENGTH = 64
+/** The longest grind text: the core's `MAX_GRIND_NUMBER_LEN` (it has no separate text limit). */
+private const val MAX_GRIND_LENGTH = 32
 
 /** The core's temperature ceiling (`MAX_TEMPERATURE_C`, 100 °C), the one bound
  *  for a brew temperature on every path. */

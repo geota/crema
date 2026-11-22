@@ -3,6 +3,7 @@ package coffee.crema.machine
 import coffee.crema.core.HotWaterDose
 import coffee.crema.core.HotWaterMode
 import coffee.crema.core.MachineRequest
+import coffee.crema.ui.applyTo
 import kotlin.reflect.KClass
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -101,6 +102,18 @@ class MachineCommandCodecTest {
             assertEquals(MachineCommand.SetGrind(text), ok("setQcGrind", text).command, text)
         }
         for (bad in listOf("-1", "-0.5", "20000", "", "  ", "a\nb", "x".repeat(65))) refused("setQcGrind", bad)
+    }
+
+    /** REVIEW-526 probe: a relayed grind is stored as checked (trimmed), no longer than 32, with no control or format characters. */
+    @Test
+    fun `a relayed grind padded or carrying control characters is refused or stored trimmed`() {
+        refused("setQcGrind", "12" + " ".repeat(60_000) + "\u0001")
+        refused("setQcGrind", "\n\u001F12\t\r")
+        refused("setQcGrind", "12\u202Eevil")
+        refused("setQcGrind", "x".repeat(33))
+        ok("setQcGrind", "x".repeat(32))
+        val padded = ok("setQcGrind", "12" + " ".repeat(60_000)).command as MachineCommand.SetGrind
+        assertEquals("12", padded.applyTo(coffee.crema.ui.MainUiState()).qcGrind, "stored trimmed")
     }
 
     /** REVIEW-513 follow-up 2: a number is what the core's grind_number reads, so an exponent is text, not a number to range-check. */
