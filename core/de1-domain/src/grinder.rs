@@ -597,7 +597,8 @@ pub fn match_grinders(
                 .map(|e| e.id)
         })
         .collect();
-    for e in GRINDER_CATALOGUE {
+    // Hidden entries only merge spellings: never offered.
+    for e in GRINDER_CATALOGUE.iter().filter(|e| e.listed()) {
         if recorded.contains(&e.id) {
             continue;
         }
@@ -832,7 +833,7 @@ mod tests {
     // ── Add, archive, restore ──
 
     #[test]
-    fn adding_a_catalogue_grinder_takes_its_verified_scale_or_the_default() {
+    fn adding_a_catalogue_grinder_takes_its_verified_scale() {
         let a = add_grinder(&[], "", Some("niche-zero"), NOW).unwrap();
         assert_eq!(a.kind, GrinderAddKind::Created);
         assert_eq!(a.grinder.id, "grinder:niche-zero");
@@ -840,12 +841,31 @@ mod tests {
         assert_eq!(a.grinder.preset_id.as_deref(), Some("niche-zero"));
         assert_eq!(a.grinder.scale.max, 50.0);
         assert_eq!(a.grinder.updated_at, NOW);
-        // No verified range: the default scale.
-        let df = add_grinder(&[], "", Some("df64"), NOW).unwrap().grinder;
+        let ek = add_grinder(&[], "", Some("mahlkonig-ek43"), NOW)
+            .unwrap()
+            .grinder;
+        assert_eq!(
+            (ek.name.as_str(), ek.scale.min, ek.scale.max, ek.scale.step),
+            ("Mahlkönig EK43", 0.0, 16.0, 0.1)
+        );
+        // A typical range comes with the entry too.
+        let c40 = add_grinder(&[], "c40", None, NOW).unwrap().grinder;
+        assert_eq!(
+            (
+                c40.preset_id.as_deref(),
+                c40.scale.max,
+                c40.scale.unit.as_str()
+            ),
+            (Some("comandante-c40"), 40.0, "clicks")
+        );
+        // A hidden entry links the record (its spellings merge) but gives no
+        // range: the default scale.
+        let df = add_grinder(&[], "DF64", None, NOW).unwrap().grinder;
         assert_eq!(
             (df.preset_id.as_deref(), df.scale),
             (Some("df64"), GrindScale::default())
         );
+        assert_eq!(add_grinder(&[], "", Some("retired-grinder"), NOW), None);
         // A typed name the catalogue knows strictly takes that entry.
         let nz = add_grinder(&[], "nichezero", None, NOW).unwrap().grinder;
         assert_eq!(
@@ -862,6 +882,41 @@ mod tests {
         );
         assert_eq!(add_grinder(&[], " ", None, NOW), None);
         assert_eq!(add_grinder(&[], "x", Some("no-such-entry"), NOW), None);
+    }
+
+    /// A grinder added from an entry the catalogue later dropped, or moved
+    /// to another tier, keeps its stored name, scale and `preset_id`; nothing
+    /// rewrites it, and it still answers to its own name.
+    #[test]
+    fn a_grinder_from_a_dropped_entry_is_never_rewritten() {
+        let mut df = grinder("grinder:turin-df64", "Turin DF64");
+        df.preset_id = Some("retired-grinder".into());
+        df.scale = GrindScale {
+            min: 0.0,
+            max: 90.0,
+            step: 1.0,
+            unit: String::new(),
+        };
+        let before = df.clone();
+        let gs = vec![df];
+        assert_eq!(gs[0].catalogue_entry(), None);
+        assert!(names_grinder(&gs[0], "turin df64"));
+        assert_eq!(grinder_named(&gs, "Turin DF64"), Some(&before));
+        assert!(grinders_for_names(&gs, &["Turin DF64"], NOW).is_empty());
+        let again = add_grinder(&gs, "Turin DF64", None, NOW).unwrap();
+        assert_eq!(
+            (again.kind, &again.grinder),
+            (GrinderAddKind::Existing, &before)
+        );
+        let m = migrate_grinder_library(&gs, &[bag("b1", "Turin DF64", "")], "Turin DF64", NOW);
+        assert!(m.new_grinders.is_empty());
+        assert_eq!(
+            active_grind_scale(&gs, Some("grinder:turin-df64")),
+            before.scale
+        );
+        let found = match_grinders("df64", &gs, &[]);
+        assert_eq!(found[0].id, "grinder:turin-df64");
+        assert_eq!(gs[0], before);
     }
 
     #[test]
@@ -1143,12 +1198,13 @@ mod tests {
     #[test]
     fn typos_missing_makers_and_spacing_dont_matter() {
         for (query, id) in [
-            ("df46", "df64"),
+            ("nihce", "niche-zero"),
             ("niche", "niche-zero"),
-            ("c40", "comandante-c40"),
             ("nichezero", "niche-zero"),
             ("niche  zero", "niche-zero"),
-            ("specialita", "eureka-mignon-specialita"),
+            ("smart grinder", "breville-smart-grinder-pro"),
+            ("virtuso", "baratza-virtuoso-plus"),
+            ("sculptor 64s", "timemore-sculptor-064s"),
             ("mahlkonig x54", "mahlkonig-x54"),
         ] {
             let top = match_grinders(query, &[], &[]);
@@ -1207,8 +1263,11 @@ mod tests {
                 (GrinderMatchKind::Owned, "grinder:a")
             ]
         );
-        assert_eq!(out.len(), 2 + GRINDER_CATALOGUE.len());
+        // Listed entries only: hidden ones are never offered.
+        let listed = GRINDER_CATALOGUE.iter().filter(|e| e.listed()).count();
+        assert_eq!(out.len(), 2 + listed);
         assert_eq!(out[2].id, GRINDER_CATALOGUE[0].id);
+        assert!(match_grinders("j-ultra", &[], &[]).is_empty());
         let json: Vec<GrinderMatch> = serde_json::from_str(
             &match_grinders_json("", &serde_json::to_string(&gs).unwrap(), "nope").unwrap(),
         )

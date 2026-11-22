@@ -1067,6 +1067,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 .distinctUntilChanged()
                 .collect { library.pushShotSelections(it) }
         }
+        // What Brew has selected goes to the core as it changes: the core
+        // freezes it at shot start, whoever starts the shot (REVIEW-CORE H3).
+        viewModelScope.launch {
+            ui.map { library.shotSelectionsOf(it) }
+                .distinctUntilChanged()
+                .collect { library.pushShotSelections(it) }
+        }
         // A hub's remotes hold no live copy of its stock: a change to the active
         // bag's weights re-sends the snapshot that carries its empty flag.
         viewModelScope.launch {
