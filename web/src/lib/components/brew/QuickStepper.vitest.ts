@@ -7,7 +7,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount, type ComponentProps } from 'svelte';
 import { initTestWasm } from '#lib/testing/test-init.js';
-import { grindNumber, grindText, type GrindScale } from '#lib/bean/grinder.js';
+import { DEFAULT_GRIND_SCALE, grindInputMode, grindNumber, grindText, type GrindScale } from '#lib/bean/grinder.js';
 import QuickStepper from './QuickStepper.svelte';
 
 beforeAll(async () => {
@@ -49,7 +49,8 @@ describe('QuickStepper with a grind parse', () => {
 		clampTyped: false,
 		onChange,
 		fmt: (v: number) => grindText(v, ODE),
-		parse: grindNumber
+		parse: grindNumber,
+		inputmode: grindInputMode(ODE)
 	});
 
 	it('shows thirds and steps onto the next one', () => {
@@ -89,6 +90,28 @@ describe('QuickStepper with a grind parse', () => {
 		input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 		flushSync();
 		expect(onChange).not.toHaveBeenCalled();
+	});
+
+	it('opens the full keyboard on a thirds scale and the number pad on any other', async () => {
+		expect(grindInputMode(ODE)).toBe('text');
+		expect(grindInputMode(DEFAULT_GRIND_SCALE)).toBe('decimal');
+		expect(grindInputMode({ min: 0, max: 999, step: 1, unit: 'μm' })).toBe('decimal');
+		expect(grindInputMode(null)).toBe('decimal');
+
+		let root = render(grindProps(vi.fn()));
+		expect((await edit(root)).inputMode, 'Fellow Ode').toBe('text');
+		unmount(component!);
+		document.body.innerHTML = '';
+		root = render({
+			...grindProps(vi.fn()),
+			value: 4.2,
+			step: 0.1,
+			fmt: (v: number) => grindText(v, DEFAULT_GRIND_SCALE),
+			inputmode: grindInputMode(DEFAULT_GRIND_SCALE)
+		});
+		const input = await edit(root);
+		expect(input.inputMode, 'a decimal scale').toBe('decimal');
+		expect(input.value).toBe('4.2');
 	});
 
 	it('stays a number input without a parse', async () => {

@@ -105,6 +105,13 @@ fun grindNumber(text: String?): Double? = text?.let { coffee.crema.core.grindNum
 /** Whether [scale] counts in thirds (core `counts_in_thirds`, the Fellow Ode). */
 fun countsInThirds(scale: GrindScale): Boolean = countsInThirdsJson(scaleJson(scale))
 
+/**
+ * Whether a grind field on [scale] opens the full keyboard: only on a thirds
+ * scale, where "4 1/3" needs a space and a slash; every other scale keeps the
+ * decimal pad.
+ */
+fun grindFullKeyboard(scale: GrindScale): Boolean = countsInThirds(scale)
+
 /** [scale]'s step as Devices shows it: "⅓" on a thirds scale, "0.05", "1" (core `grind_text` of the step). */
 fun grindStepText(scale: GrindScale): String = grindText(scale.step.toDouble(), scale)
 

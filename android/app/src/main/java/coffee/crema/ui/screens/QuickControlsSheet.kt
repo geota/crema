@@ -313,6 +313,7 @@ fun QuickControlsSheet(
                         clampTyped = doseGrindMode == DoseGrindMode.Dose,
                         blank = if (doseGrindMode == DoseGrindMode.Grind) grindView.stepperBlank() else null,
                         parse = if (doseGrindMode == DoseGrindMode.Grind) ({ t: String -> coffee.crema.beans.grindNumber(t) }) else null,
+                        fullKeyboard = doseGrindMode == DoseGrindMode.Grind && coffee.crema.beans.grindFullKeyboard(grindScale),
                         onChange = { if (doseGrindMode == DoseGrindMode.Dose) onAdjustBrew(it, yieldOut, brewTemp, preinfOverride) else onGrind(it) },
                         style = CremaStepperStyle.Boxed,
                         gate = doseGrindGate,

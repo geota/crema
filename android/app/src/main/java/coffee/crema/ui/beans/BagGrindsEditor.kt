@@ -160,6 +160,7 @@ private fun GrindStepper(row: BagGrind, scale: coffee.crema.core.GrindScale, mod
         max = hi,
         fmt = { v -> coffee.crema.beans.grindText(v, scale) },
         parse = { coffee.crema.beans.grindNumber(it) },
+        fullKeyboard = coffee.crema.beans.grindFullKeyboard(scale),
         style = CremaStepperStyle.BareCompact,
         clampTyped = false,
         blank = blank,

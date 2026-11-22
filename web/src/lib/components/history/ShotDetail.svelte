@@ -60,7 +60,7 @@
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { downloadBlob } from '#lib/utils/download.js';
 	import { getBeanStore } from '#lib/bean/index.js';
-	import { grindNumber, grindStartFromBlank, grindText, shotGrindScale } from '#lib/bean/grinder.js';
+	import { grindInputMode, grindNumber, grindStartFromBlank, grindText, shotGrindScale } from '#lib/bean/grinder.js';
 	import { getHistoryContext } from '#lib/state/index.js';
 	import TagInput from '#lib/components/profiles/TagInput.svelte';
 	import SplitButton from '#lib/components/shared/SplitButton.svelte';
@@ -1285,6 +1285,7 @@
 						onChange={commitGrind}
 						fmt={grindFmt}
 						parse={grindNumber}
+						inputmode={grindInputMode(grindScale)}
 					/>
 				</div>
 				{@render peopleFields()}
@@ -1684,6 +1685,7 @@
 				onChange={commitGrind}
 				fmt={grindFmt}
 				parse={grindNumber}
+				inputmode={grindInputMode(grindScale)}
 			/>
 		</div>
 	</div>

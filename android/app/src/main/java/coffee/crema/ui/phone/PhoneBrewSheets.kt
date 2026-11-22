@@ -210,6 +210,7 @@ fun PhoneQuickSheet(
                                 clampTyped = doseGrindMode == DoseGrindMode.Dose,
                                 blank = if (doseGrindMode == DoseGrindMode.Grind) grindView.stepperBlank() else null,
                                 parse = if (doseGrindMode == DoseGrindMode.Grind) ({ t: String -> coffee.crema.beans.grindNumber(t) }) else null,
+                                fullKeyboard = doseGrindMode == DoseGrindMode.Grind && coffee.crema.beans.grindFullKeyboard(grindScale),
                                 fmt = if (doseGrindMode == DoseGrindMode.Dose) ({ fmt("%.1f", it) }) else ({ v -> coffee.crema.beans.grindText(v, grindScale) }),
                                 onChange = { if (doseGrindMode == DoseGrindMode.Dose) vm.quickAdjustBrew(it, yieldOut, brewTemp, preinfOverride) else vm.setQcGrind(it.toFloat()) },
                                 gate = if (doseGrindMode == DoseGrindMode.Dose) brewGate else ui.gate(Setting.QC_GRIND),
@@ -473,6 +474,8 @@ private fun QcCell(
     blank: coffee.crema.ui.components.StepperBlank? = null,
     /** Reads a typed value through the core (the grind: "4⅓", "4 1/3"), with the field starting from [fmt]'s text. */
     parse: ((String) -> Double?)? = null,
+    /** The full keyboard for typing (a thirds scale's "4 1/3"). */
+    fullKeyboard: Boolean = false,
 ) {
     val presetLabel = gate.fmt(presetFmt ?: fmt)
     val fmt = gate.fmt(fmt)
@@ -500,6 +503,7 @@ private fun QcCell(
                         clampTyped = clampTyped,
                         parse = parse,
                         editText = fmt,
+                        fullKeyboard = fullKeyboard,
                     ) {
                         Text(
                             blank?.text ?: fmt(value),

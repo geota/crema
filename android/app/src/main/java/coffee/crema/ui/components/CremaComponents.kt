@@ -1150,6 +1150,8 @@ fun TapToEditValue(
     parse: ((String) -> Double?)? = null,
     /** The field's starting text for [value] when [parse] is set (the grind's own text, "4⅓"). */
     editText: ((Double) -> String)? = null,
+    /** The full keyboard instead of the decimal pad (a thirds scale: "4 1/3", [editKeyboardType]). */
+    fullKeyboard: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     var editing by remember { mutableStateOf(false) }
@@ -1190,7 +1192,7 @@ fun TapToEditValue(
         enabled = enabled,
         textStyle = editStyle.copy(textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurface),
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-        keyboardOptions = KeyboardOptions(keyboardType = if (parse != null) KeyboardType.Text else KeyboardType.Decimal, imeAction = ImeAction.Done),
+        keyboardOptions = KeyboardOptions(keyboardType = editKeyboardType(fullKeyboard), imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(onDone = { commit() }),
         modifier = modifier
             .widthIn(min = 56.dp)
@@ -1989,6 +1991,13 @@ data class CremaStepperStyle(
 internal fun stepperPlaces(step: Double): Int =
     if (kotlin.math.abs(step * 100 - kotlin.math.round(step * 100)) < 1e-6) 2 else 6
 
+/**
+ * The keyboard a tap-to-edit field opens: the decimal pad, or the full
+ * keyboard where a thirds scale needs "4 1/3" (a space and a slash).
+ */
+internal fun editKeyboardType(fullKeyboard: Boolean): KeyboardType =
+    if (fullKeyboard) KeyboardType.Text else KeyboardType.Decimal
+
 /** [x] rounded to [places] decimals. */
 internal fun roundTo(x: Double, places: Int): Double {
     val k = Math.pow(10.0, places.toDouble())
@@ -2038,6 +2047,8 @@ fun CremaStepper(
     // any text, starting from [fmt]'s, and a typed value is kept as read. The
     // grind reads "4⅓" and "4 1/3" through the core's grind_number (#488).
     parse: ((String) -> Double?)? = null,
+    // The full keyboard for typing (a thirds scale's "4 1/3"); else the decimal pad.
+    fullKeyboard: Boolean = false,
 ) {
     val chipLabel = gate.fmt(chipFmt ?: fmt)
     val fmtRaw = fmt
@@ -2070,6 +2081,7 @@ fun CremaStepper(
                         clampTyped = clampTyped,
                         parse = parse,
                         editText = fmtRaw,
+                        fullKeyboard = fullKeyboard,
                         editStyle = CremaTheme.readout.readoutSm,
                         enabled = enabled,
                     ) {
@@ -2130,6 +2142,7 @@ fun CremaStepper(
                         clampTyped = clampTyped,
                         parse = parse,
                         editText = fmtRaw,
+                        fullKeyboard = fullKeyboard,
                         editStyle = TextStyle(fontFamily = JetBrainsMono, fontSize = style.valueSize),
                         enabled = enabled,
                     ) {

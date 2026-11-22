@@ -204,6 +204,17 @@ class GrinderStateTest {
     }
 
     @Test
+    fun `a grind field opens the full keyboard only on a thirds scale`() {
+        val ode = coffee.crema.beans.grinderCatalogue.first { it.id == "fellow-ode" }.scale!!
+        assertTrue(coffee.crema.beans.grindFullKeyboard(ode))
+        assertEquals(androidx.compose.ui.text.input.KeyboardType.Text, coffee.crema.ui.components.editKeyboardType(coffee.crema.beans.grindFullKeyboard(ode)))
+        for (scale in listOf(coffee.crema.beans.DEFAULT_GRIND_SCALE, GrindScale(0f, 999f, 1f, "μm"), GrindScale(0f, 10f, 0.05f, ""))) {
+            assertFalse(coffee.crema.beans.grindFullKeyboard(scale), scale.toString())
+            assertEquals(androidx.compose.ui.text.input.KeyboardType.Decimal, coffee.crema.ui.components.editKeyboardType(coffee.crema.beans.grindFullKeyboard(scale)))
+        }
+    }
+
+    @Test
     fun `a thirds stepper lands on thirds`() {
         val ode = coffee.crema.beans.grinderCatalogue.first { it.id == "fellow-ode" }.scale!!
         val step = ode.step.toDouble()

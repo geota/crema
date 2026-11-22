@@ -34,7 +34,8 @@
 		blankStart = 0,
 		blankText = '',
 		precision = 2,
-		parse
+		parse,
+		inputmode = 'decimal'
 	}: {
 		/** Optional caption above the stepper row. */
 		label?: string;
@@ -112,6 +113,12 @@
 		 * and "4 1/3" through the core (#488). Default: a number input.
 		 */
 		parse?: (text: string) => number | null;
+		/**
+		 * The keyboard the text box opens with {@link parse}: the decimal
+		 * number pad (default), or the full keyboard for a thirds scale
+		 * ("4 1/3", `grindInputMode`).
+		 */
+		inputmode?: 'decimal' | 'text';
 	} = $props();
 
 	// Numeric core (clamp + canonical↔display + grid-snapped inc + click-to-type)
@@ -159,6 +166,7 @@
 					bind:this={stepper.inputEl}
 					class="qcs-num qcs-num-input"
 					type={parse ? 'text' : 'number'}
+					inputmode={parse ? inputmode : undefined}
 					aria-label={a11yName}
 					bind:value={stepper.draft}
 					onblur={stepper.commit}

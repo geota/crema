@@ -248,6 +248,15 @@ export function countsInThirds(scale: GrindScale): boolean {
 	return countsInThirdsJson(JSON.stringify(scale));
 }
 
+/**
+ * The keyboard a grind field opens on `scale`: the full keyboard on a thirds
+ * scale, where "4 1/3" needs a space and a slash; the decimal number pad on
+ * every other scale.
+ */
+export function grindInputMode(scale: GrindScale | null): 'text' | 'decimal' {
+	return scale && countsInThirds(scale) ? 'text' : 'decimal';
+}
+
 /** A scale's step as Devices shows it: "⅓" on a thirds scale, "0.05", "1" (`grind_text` of the step). */
 export function stepText(scale: GrindScale): string {
 	return grindText(scale.step, scale);
