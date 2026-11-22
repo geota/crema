@@ -4,14 +4,23 @@
 //! grinds"): maker, model, the names people type for them, and the kind
 //! (electric or hand).
 //!
-//! **Only grinders we are sure of** (#488): an entry is here only when its
-//! maker's name for it, its popularity among home espresso or high-end
-//! filter brewers, and its range are all certain. Every entry carries a [`VerifiedScale`] checked
-//! against the maker's manual or page, cited in [`VerifiedScale::source`].
-//! A grinder whose range can't be checked from its maker, or whose dial isn't
-//! one numeric range (Baratza macro plus micro, 1Zpresso
-//! rotation.number.click, Fellow Opus with its inner ring), isn't listed: the
-//! user creates it by name and it gets the default scale (0–20, step 0.1).
+//! **Three kinds of entry** (#488). Every entry's maker name is certain,
+//! and listed ones are popular with home espresso or high-end filter
+//! brewers.
+//! - **Verified** ([`ScaleTier::Verified`]): the range is the maker's, from
+//!   its manual or page, cited in [`CatalogueScale::source`].
+//! - **Typical** ([`ScaleTier::Typical`]): the maker states no single range;
+//!   it is inferred with high or medium confidence from the printed dial, a
+//!   maker drawing or consistent community charts, the evidence cited in
+//!   [`CatalogueScale::source`]. The shells label it "Typical range — check
+//!   your dial".
+//! - **Hidden** (no scale): a grinder whose range couldn't be inferred (a
+//!   composite dial like 1Zpresso rotation.number.click, or no evidence).
+//!   It is never listed and never given a range; it only lets imports, the
+//!   upgrade and Create merge its spellings ("C40 MK3" and "Comandante C40
+//!   MK3"). A grinder created from it gets the default scale (0–20, step
+//!   0.1).
+//!
 //! Each entry's comment quotes what its source says.
 //!
 //! **Owned grinders never change with the list.** A [`crate::grinder::Grinder`]
@@ -44,9 +53,22 @@ pub enum GrinderKind {
     Hand,
 }
 
-/// A range checked against the maker's manual or product page.
+/// How sure the catalogue is of an entry's range.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ScaleTier {
+    /// Checked against the maker's manual or page.
+    Verified,
+    /// Inferred from the printed dial, a maker drawing or consistent
+    /// community charts, where the maker states no single range: shown as
+    /// "Typical range — check your dial".
+    Typical,
+}
+
+/// An entry's range and where it comes from.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct VerifiedScale {
+pub struct CatalogueScale {
     /// Lowest setting.
     pub min: f32,
     /// Highest setting.
@@ -55,11 +77,14 @@ pub struct VerifiedScale {
     pub step: f32,
     /// Unit label; empty for none.
     pub unit: &'static str,
-    /// The maker's page the range was checked against.
+    /// The page the range comes from: the maker's for
+    /// [`ScaleTier::Verified`], the evidence for [`ScaleTier::Typical`].
     pub source: &'static str,
+    /// Verified or typical.
+    pub tier: ScaleTier,
 }
 
-impl VerifiedScale {
+impl CatalogueScale {
     /// As a [`GrindScale`].
     #[must_use]
     pub fn scale(&self) -> GrindScale {
@@ -86,8 +111,9 @@ pub struct CatalogueGrinder {
     pub aliases: &'static [&'static str],
     /// Electric or hand.
     pub kind: GrinderKind,
-    /// Its range, checked against the maker.
-    pub scale: VerifiedScale,
+    /// Its range; `None` for a hidden entry (see the module docs), which
+    /// only merges spellings and is never listed.
+    pub scale: Option<CatalogueScale>,
 }
 
 impl CatalogueGrinder {
@@ -105,10 +131,19 @@ impl CatalogueGrinder {
             .collect()
     }
 
-    /// The scale a grinder added from it starts with: its verified one.
+    /// Whether the shells list it: it has a range (verified or typical).
+    #[must_use]
+    pub fn listed(&self) -> bool {
+        self.scale.is_some()
+    }
+
+    /// The scale a grinder added from it starts with: its range, else (a
+    /// hidden entry) the default.
     #[must_use]
     pub fn starting_scale(&self) -> GrindScale {
-        self.scale.scale()
+        self.scale
+            .as_ref()
+            .map_or_else(GrindScale::default, CatalogueScale::scale)
     }
 }
 
@@ -158,11 +193,14 @@ pub struct CatalogueGrinderInfo {
     pub aliases: Vec<String>,
     /// Electric or hand.
     pub kind: GrinderKind,
-    /// Its verified scale. Every entry has one now; it stays optional so the
+    /// Its scale. Every listed entry has one; it stays optional so the
     /// shells' "Range not set" path keeps compiling and the JSON shape holds.
     pub scale: Option<GrindScale>,
-    /// Where the scale was checked; set whenever `scale` is.
+    /// Where the scale comes from; set whenever `scale` is.
     pub source: Option<String>,
+    /// Verified, or typical ("Typical range — check your dial" wherever a
+    /// verified entry says it comes with its scale).
+    pub tier: ScaleTier,
 }
 
 impl From<&CatalogueGrinder> for CatalogueGrinderInfo {
@@ -174,17 +212,20 @@ impl From<&CatalogueGrinder> for CatalogueGrinderInfo {
             model: g.model.to_owned(),
             aliases: g.aliases.iter().map(|a| (*a).to_owned()).collect(),
             kind: g.kind,
-            scale: Some(g.scale.scale()),
-            source: Some(g.scale.source.to_owned()),
+            scale: g.scale.as_ref().map(CatalogueScale::scale),
+            source: g.scale.as_ref().map(|s| s.source.to_owned()),
+            tier: g.scale.map_or(ScaleTier::Typical, |s| s.tier),
         }
     }
 }
 
-/// The whole catalogue, in list order.
+/// The listed catalogue (verified, then typical), in list order; hidden
+/// entries are left out.
 #[must_use]
 pub fn grinder_catalogue() -> Vec<CatalogueGrinderInfo> {
     GRINDER_CATALOGUE
         .iter()
+        .filter(|g| g.listed())
         .map(CatalogueGrinderInfo::from)
         .collect()
 }
@@ -195,7 +236,7 @@ pub fn grinder_catalogue_json() -> String {
     serde_json::to_string(&grinder_catalogue()).unwrap_or_default()
 }
 
-use GrinderKind::Electric as E;
+use GrinderKind::{Electric as E, Hand as H};
 
 const fn entry(
     id: &'static str,
@@ -203,7 +244,7 @@ const fn entry(
     model: &'static str,
     aliases: &'static [&'static str],
     kind: GrinderKind,
-    scale: VerifiedScale,
+    scale: CatalogueScale,
 ) -> CatalogueGrinder {
     CatalogueGrinder {
         id,
@@ -211,29 +252,68 @@ const fn entry(
         model,
         aliases,
         kind,
-        scale,
+        scale: Some(scale),
     }
 }
 
+/// A hidden entry: names only, no range, never listed.
+const fn hidden(
+    id: &'static str,
+    maker: &'static str,
+    model: &'static str,
+    aliases: &'static [&'static str],
+    kind: GrinderKind,
+) -> CatalogueGrinder {
+    CatalogueGrinder {
+        id,
+        maker,
+        model,
+        aliases,
+        kind,
+        scale: None,
+    }
+}
+
+/// A range checked against the maker.
 const fn scale(
     min: f32,
     max: f32,
     step: f32,
     unit: &'static str,
     source: &'static str,
-) -> VerifiedScale {
-    VerifiedScale {
+) -> CatalogueScale {
+    CatalogueScale {
         min,
         max,
         step,
         unit,
         source,
+        tier: ScaleTier::Verified,
     }
 }
 
-/// The catalogue: every entry's range checked against its maker (see the
-/// module docs), the source quoted above each entry.
+/// A typical range: see [`ScaleTier::Typical`].
+const fn typical(
+    min: f32,
+    max: f32,
+    step: f32,
+    unit: &'static str,
+    source: &'static str,
+) -> CatalogueScale {
+    CatalogueScale {
+        min,
+        max,
+        step,
+        unit,
+        source,
+        tier: ScaleTier::Typical,
+    }
+}
+
+/// The catalogue: verified, typical, then hidden entries (see the module
+/// docs), the source quoted above each entry.
 pub const GRINDER_CATALOGUE: &[CatalogueGrinder] = &[
+    // ── Verified ranges (ScaleTier::Verified) ──
     // `bladeGap`, the grind size in μm, 0–999.
     entry(
         "bookoo-motto-80",
@@ -515,6 +595,459 @@ pub const GRINDER_CATALOGUE: &[CatalogueGrinder] = &[
             "https://www.seattlecoffeegear.com/cdn/shop/files/fellow-ode-2-user-manual.pdf",
         ),
     ),
+    // ── Typical ranges (ScaleTier::Typical): no single range from the maker;
+    // inferred, high or medium confidence. Shown as "Typical range — check
+    // your dial". ──
+    // Fellow: "The outer ring adjusts between 1-11 with 4 minor increments
+    // (0.25) between each"; the inner ring adds micro steps (composite), so
+    // the outer ring only. High confidence.
+    entry(
+        "fellow-opus",
+        "Fellow",
+        "Opus",
+        &["Opus", "Fellow Opus Conical Burr Grinder"],
+        E,
+        typical(
+            1.0,
+            11.0,
+            0.25,
+            "",
+            "https://fellowproducts.com/pages/gear-guide-opus",
+        ),
+    ),
+    // The maker's manual draws an unnumbered stepless dial; the printed dial
+    // and community charts run 0 (Turkish) to 90 (cold brew). Medium.
+    entry(
+        "df64-gen-2",
+        "Turin",
+        "DF64 Gen 2",
+        &["DF64 Gen 2", "DF64 II", "DF64 V2", "Turin DF64 Gen 2"],
+        E,
+        typical(
+            0.0,
+            90.0,
+            1.0,
+            "",
+            "https://honestcoffeeguide.com/turin-df64-gen-2-grind-settings/",
+        ),
+    ),
+    // Clicks from burr contact on an unnumbered dial; charts run 2 (Turkish)
+    // to 40 (cold brew). Medium.
+    entry(
+        "comandante-c40",
+        "Comandante",
+        "C40 MK4",
+        &["Comandante C40", "C40", "C40 MK4"],
+        H,
+        typical(
+            0.0,
+            40.0,
+            1.0,
+            "clicks",
+            "https://honestcoffeeguide.com/comandante-c40-mk4-grind-settings",
+        ),
+    ),
+    // "60 clicks per full rotation (up to 4 rotations)", 16 μm a click:
+    // total clicks from zero. Medium.
+    entry(
+        "kingrinder-k6",
+        "KINGrinder",
+        "K6",
+        &["Kingrinder K6", "King Grinder K6"],
+        H,
+        typical(
+            0.0,
+            240.0,
+            1.0,
+            "clicks",
+            "https://coffeexplore.com/kingrinder-k6-review/",
+        ),
+    ),
+    // The manual charts "+1" to "+18" from its calibration "0"; community
+    // charts ("numbers from zero") reach 19.6. Medium.
+    entry(
+        "varia-vs3-gen-2",
+        "Varia",
+        "VS3 Gen 2",
+        &["VS3 Gen 2", "Varia VS3 Gen 2", "VS3 2nd Gen"],
+        E,
+        typical(
+            0.0,
+            20.0,
+            0.1,
+            "",
+            "https://honestcoffeeguide.com/varia-vs3-gen-2-grind-settings/",
+        ),
+    ),
+    // Mazzer gives the 0 point and "every notch corresponds to 6 microns";
+    // owners report the dial locks at 0 and at 145, one turn. Medium.
+    entry(
+        "mazzer-philos",
+        "Mazzer",
+        "Philos",
+        &["Philos"],
+        E,
+        typical(
+            0.0,
+            145.0,
+            1.0,
+            "",
+            "https://www.home-barista.com/blog/mazzer-philos-comments-t93466-50.html",
+        ),
+    ),
+    // The main (macro) ring, 1 to 31, as community charts use it; the micro
+    // ring is left out (composite). Medium.
+    entry(
+        "baratza-sette-270",
+        "Baratza",
+        "Sette 270",
+        &["Sette 270"],
+        E,
+        typical(
+            1.0,
+            31.0,
+            1.0,
+            "",
+            "https://honestcoffeeguide.com/baratza-sette-270-grind-settings/",
+        ),
+    ),
+    // ── Hidden: names only, never listed, never given a range. Kept so
+    // imports, the upgrade and Create still merge their spellings ("C40 MK3",
+    // "Comandante C40 MK3"). The research for each is in the PR. ──
+    hidden(
+        "baratza-sette-270wi",
+        "Baratza",
+        "Sette 270Wi",
+        &["Sette 270Wi", "270Wi"],
+        E,
+    ),
+    hidden("baratza-vario", "Baratza", "Vario", &["Vario"], E),
+    hidden(
+        "baratza-vario-plus",
+        "Baratza",
+        "Vario+",
+        &["Vario+", "Vario Plus"],
+        E,
+    ),
+    hidden("baratza-vario-w", "Baratza", "Vario-W", &["Vario-W"], E),
+    hidden("baratza-forte-ap", "Baratza", "Forté AP", &["Forte AP"], E),
+    hidden("baratza-forte-bg", "Baratza", "Forté BG", &["Forte BG"], E),
+    hidden("mahlkonig-e65s", "Mahlkönig", "E65S", &["E65S"], E),
+    hidden(
+        "mahlkonig-e80-supreme",
+        "Mahlkönig",
+        "E80 Supreme",
+        &["E80 Supreme"],
+        E,
+    ),
+    hidden(
+        "eureka-mignon-specialita",
+        "Eureka",
+        "Mignon Specialità",
+        &["Specialita", "Mignon Specialita", "Eureka Specialita"],
+        E,
+    ),
+    hidden(
+        "eureka-mignon-silenzio",
+        "Eureka",
+        "Mignon Silenzio",
+        &["Mignon Silenzio", "Silenzio"],
+        E,
+    ),
+    hidden(
+        "eureka-mignon-notte",
+        "Eureka",
+        "Mignon Notte",
+        &["Mignon Notte"],
+        E,
+    ),
+    hidden(
+        "eureka-mignon-manuale",
+        "Eureka",
+        "Mignon Manuale",
+        &["Mignon Manuale"],
+        E,
+    ),
+    hidden(
+        "eureka-mignon-facile",
+        "Eureka",
+        "Mignon Facile",
+        &["Mignon Facile"],
+        E,
+    ),
+    hidden(
+        "eureka-mignon-perfetto",
+        "Eureka",
+        "Mignon Perfetto",
+        &["Mignon Perfetto", "Perfetto"],
+        E,
+    ),
+    hidden(
+        "eureka-mignon-libra",
+        "Eureka",
+        "Mignon Libra",
+        &["Mignon Libra"],
+        E,
+    ),
+    hidden("eureka-mignon-xl", "Eureka", "Mignon XL", &["Mignon XL"], E),
+    hidden(
+        "eureka-mignon-zero",
+        "Eureka",
+        "Mignon Zero",
+        &["Mignon Zero"],
+        E,
+    ),
+    hidden(
+        "eureka-mignon-crono",
+        "Eureka",
+        "Mignon Crono",
+        &["Mignon Crono"],
+        E,
+    ),
+    hidden(
+        "eureka-oro-mignon-single-dose",
+        "Eureka",
+        "Oro Mignon Single Dose",
+        &["Eureka Oro Single Dose", "Oro Mignon Single Dose"],
+        E,
+    ),
+    hidden("eureka-atom-75", "Eureka", "Atom 75", &["Atom 75"], E),
+    hidden(
+        "df64",
+        "Turin",
+        "DF64",
+        &["DF64", "G-IOTA", "MiiCoffee DF64"],
+        E,
+    ),
+    hidden("df64v", "Turin", "DF64V", &["DF64V"], E),
+    hidden("df83", "Turin", "DF83", &["DF83"], E),
+    hidden("df83v", "Turin", "DF83V", &["DF83V"], E),
+    hidden("df54", "Turin", "DF54", &["DF54"], E),
+    hidden(
+        "lagom-p64",
+        "Option-O",
+        "Lagom P64",
+        &["Lagom P64", "P64"],
+        E,
+    ),
+    hidden(
+        "lagom-p100",
+        "Option-O",
+        "Lagom P100",
+        &["Lagom P100", "P100"],
+        E,
+    ),
+    hidden("lagom-mini", "Option-O", "Lagom Mini", &["Lagom Mini"], H),
+    hidden(
+        "weber-eg-1",
+        "Weber Workshops",
+        "EG-1",
+        &["EG-1", "Weber EG-1"],
+        E,
+    ),
+    hidden(
+        "weber-key",
+        "Weber Workshops",
+        "Key",
+        &["Weber Key", "Key Grinder"],
+        H,
+    ),
+    hidden(
+        "weber-hg-1",
+        "Weber Workshops",
+        "HG-1",
+        &["HG-1", "Weber HG-1"],
+        H,
+    ),
+    hidden("zerno-z1", "Zerno", "Z1", &["Zerno"], E),
+    hidden("varia-vs3", "Varia", "VS3", &["VS3"], E),
+    hidden("varia-vs6", "Varia", "VS6", &["VS6"], E),
+    hidden(
+        "kafatek-monolith-flat",
+        "Kafatek",
+        "Monolith Flat",
+        &["Monolith Flat"],
+        E,
+    ),
+    hidden(
+        "kafatek-monolith-conical",
+        "Kafatek",
+        "Monolith Conical",
+        &["Monolith Conical"],
+        E,
+    ),
+    hidden("profitec-t64", "Profitec", "T64", &["Profitec Pro T64"], E),
+    hidden(
+        "timemore-sculptor-064",
+        "Timemore",
+        "Sculptor 064",
+        &["Sculptor 064", "Sculptor 64"],
+        E,
+    ),
+    hidden(
+        "timemore-sculptor-078",
+        "Timemore",
+        "Sculptor 078",
+        &["Sculptor 078", "Sculptor 78"],
+        E,
+    ),
+    hidden(
+        "timemore-sculptor-078s",
+        "Timemore",
+        "Sculptor 078S",
+        &["Sculptor 078S"],
+        E,
+    ),
+    hidden(
+        "timemore-c2",
+        "Timemore",
+        "Chestnut C2",
+        &["Timemore C2"],
+        H,
+    ),
+    hidden(
+        "timemore-c3",
+        "Timemore",
+        "Chestnut C3",
+        &["Timemore C3"],
+        H,
+    ),
+    hidden(
+        "timemore-c3-esp",
+        "Timemore",
+        "Chestnut C3 ESP",
+        &["Timemore C3 ESP"],
+        H,
+    ),
+    hidden(
+        "timemore-chestnut-x",
+        "Timemore",
+        "Chestnut X",
+        &["Timemore X"],
+        H,
+    ),
+    hidden("timemore-slim-plus", "Timemore", "Slim Plus", &[], H),
+    hidden("timemore-nano", "Timemore", "Nano", &[], H),
+    hidden(
+        "comandante-c40-mk3",
+        "Comandante",
+        "C40 MK3",
+        &["C40 MK3"],
+        H,
+    ),
+    hidden("kingrinder-k4", "Kingrinder", "K4", &[], H),
+    hidden("1zpresso-j-max", "1Zpresso", "J-Max", &["J-Max"], H),
+    hidden("1zpresso-j-ultra", "1Zpresso", "J-Ultra", &["J-Ultra"], H),
+    hidden("1zpresso-jx-pro", "1Zpresso", "JX-Pro", &["JX-Pro"], H),
+    hidden("1zpresso-jx", "1Zpresso", "JX", &[], H),
+    hidden("1zpresso-k-ultra", "1Zpresso", "K-Ultra", &["K-Ultra"], H),
+    hidden("1zpresso-k-max", "1Zpresso", "K-Max", &["K-Max"], H),
+    hidden("1zpresso-k-plus", "1Zpresso", "K-Plus", &["K-Plus"], H),
+    hidden(
+        "1zpresso-zp6-special",
+        "1Zpresso",
+        "ZP6 Special",
+        &["ZP6 Special", "ZP6"],
+        H,
+    ),
+    hidden("1zpresso-q2", "1Zpresso", "Q2", &[], H),
+    hidden("1zpresso-q-air", "1Zpresso", "Q Air", &[], H),
+    hidden("1zpresso-x-pro", "1Zpresso", "X-Pro", &[], H),
+    hidden("1zpresso-x-ultra", "1Zpresso", "X-Ultra", &["X-Ultra"], H),
+    hidden(
+        "hario-skerton-pro",
+        "Hario",
+        "Skerton Pro",
+        &["Skerton Pro"],
+        H,
+    ),
+    hidden(
+        "hario-mini-mill-slim",
+        "Hario",
+        "Mini Mill Slim",
+        &["Hario Mini Mill"],
+        H,
+    ),
+    hidden("porlex-mini", "Porlex", "Mini", &["Porlex Mini II"], H),
+    hidden("porlex-tall", "Porlex", "Tall", &["Porlex Tall II"], H),
+    hidden(
+        "kinu-m47-phoenix",
+        "Kinu",
+        "M47 Phoenix",
+        &["M47 Phoenix"],
+        H,
+    ),
+    hidden(
+        "kinu-m47-classic",
+        "Kinu",
+        "M47 Classic",
+        &["M47 Classic", "Kinu M47"],
+        H,
+    ),
+    hidden(
+        "kinu-m47-simplicity",
+        "Kinu",
+        "M47 Simplicity",
+        &["M47 Simplicity"],
+        H,
+    ),
+    hidden("fiorenzato-pietro", "Fiorenzato", "Pietro", &["Pietro"], H),
+    hidden(
+        "rocket-faustino",
+        "Rocket Espresso",
+        "Faustino",
+        &["Rocket Faustino"],
+        E,
+    ),
+    hidden("rancilio-rocky", "Rancilio", "Rocky", &[], E),
+    hidden("la-marzocco-lux-d", "La Marzocco", "Lux D", &["Lux D"], E),
+    hidden("mazzer-mini", "Mazzer", "Mini", &[], E),
+    hidden(
+        "mazzer-super-jolly",
+        "Mazzer",
+        "Super Jolly",
+        &["Super Jolly"],
+        E,
+    ),
+    hidden("mazzer-zm", "Mazzer", "ZM", &[], E),
+    hidden("compak-k3", "Compak", "K3", &[], E),
+    hidden("compak-k10", "Compak", "K10", &[], E),
+    hidden("ceado-e37s", "Ceado", "E37S", &["E37S"], E),
+    hidden("ceado-e37j", "Ceado", "E37J", &["E37J"], E),
+    hidden(
+        "fiorenzato-f64-evo",
+        "Fiorenzato",
+        "F64 EVO",
+        &["F64 EVO"],
+        E,
+    ),
+    hidden(
+        "fiorenzato-allground",
+        "Fiorenzato",
+        "AllGround",
+        &["AllGround"],
+        E,
+    ),
+    hidden("wilfa-svart", "Wilfa", "Svart", &[], E),
+    hidden(
+        "oxo-brew-conical-burr",
+        "OXO",
+        "Brew Conical Burr",
+        &["OXO Conical Burr"],
+        E,
+    ),
+    hidden("capresso-infinity", "Capresso", "Infinity", &[], E),
+    hidden("bodum-bistro", "Bodum", "Bistro", &[], E),
+    hidden("gaggia-mdf", "Gaggia", "MDF", &[], E),
+    hidden("lelit-fred", "Lelit", "Fred", &[], E),
+    hidden(
+        "delonghi-dedica-kg521",
+        "De'Longhi",
+        "Dedica KG521",
+        &["KG521"],
+        E,
+    ),
+    hidden("delonghi-kg79", "De'Longhi", "KG79", &["KG79"], E),
 ];
 
 #[cfg(test)]
@@ -552,9 +1085,19 @@ mod tests {
     }
 
     #[test]
-    fn every_entry_has_a_usable_scale_and_a_source() {
-        for g in GRINDER_CATALOGUE {
-            let s = g.scale;
+    fn every_listed_entry_has_a_usable_scale_and_a_source() {
+        let tier = |t| {
+            GRINDER_CATALOGUE
+                .iter()
+                .filter(|g| g.scale.is_some_and(|s| s.tier == t))
+                .count()
+        };
+        assert_eq!(
+            (tier(ScaleTier::Verified), tier(ScaleTier::Typical)),
+            (16, 7)
+        );
+        for g in GRINDER_CATALOGUE.iter().filter(|g| g.listed()) {
+            let s = g.scale.unwrap();
             assert!(s.source.starts_with("https://"), "{}", g.id);
             assert!(
                 s.min.is_finite() && s.max.is_finite() && s.min < s.max,
@@ -580,7 +1123,8 @@ mod tests {
             ("breville-dose-control-pro", 1.0, 60.0, 1.0),
             ("mahlkonig-x54", 1.0, 35.0, 1.0),
         ] {
-            let s = catalogue_entry(id).unwrap().scale;
+            let s = catalogue_entry(id).unwrap().scale.unwrap();
+            assert_eq!(s.tier, ScaleTier::Verified, "{id}");
             assert_eq!((s.min, s.max, s.step), (min, max, step), "{id}");
         }
     }
@@ -588,7 +1132,7 @@ mod tests {
     #[test]
     fn the_odes_have_31_settings_from_1_to_11_in_thirds() {
         for id in ["fellow-ode", "fellow-ode-gen-2"] {
-            let s = catalogue_entry(id).unwrap().scale;
+            let s = catalogue_entry(id).unwrap().scale.unwrap();
             assert_eq!((s.min, s.max), (1.0, 11.0), "{id}");
             let steps = (s.max - s.min) / s.step;
             assert!((steps - 30.0).abs() < 1e-4, "{id}: {steps}");
@@ -653,11 +1197,9 @@ mod tests {
             "ek34",
             "Motto 80 Pro",
             "Niche Zero 2",
-            "Sculptor 064",
-            "Sculptor 078S",
             "Encore ESP Pro",
             "Uniform Evo",
-            "Wilfa Svart",
+            "VS3 Gen 3",
             "   ",
             "",
         ] {
@@ -666,22 +1208,54 @@ mod tests {
     }
 
     #[test]
-    fn grinders_left_out_by_the_research_are_not_listed() {
-        // Ranges that couldn't be checked from the maker, or composite dials.
-        for name in [
-            "DF64",
-            "Comandante C40",
-            "Eureka Mignon Specialita",
-            "1Zpresso J-Ultra",
-            "Fellow Opus",
-            "Baratza Sette 270",
-            "Lagom P64",
-            "Fellow Opus",
+    fn typical_entries_carry_their_tier_and_evidence() {
+        for (name, id, min, max, step, unit) in [
+            ("Fellow Opus", "fellow-opus", 1.0, 11.0, 0.25, ""),
+            ("DF64 Gen 2", "df64-gen-2", 0.0, 90.0, 1.0, ""),
+            ("c40", "comandante-c40", 0.0, 40.0, 1.0, "clicks"),
+            ("Kingrinder K6", "kingrinder-k6", 0.0, 240.0, 1.0, "clicks"),
+            ("Varia VS3 Gen 2", "varia-vs3-gen-2", 0.0, 20.0, 0.1, ""),
+            ("Philos", "mazzer-philos", 0.0, 145.0, 1.0, ""),
+            ("Sette 270", "baratza-sette-270", 1.0, 31.0, 1.0, ""),
         ] {
-            assert_eq!(catalogue_entry_for_name(name), None, "{name}");
+            let g = catalogue_entry_for_name(name).unwrap();
+            let s = g.scale.unwrap();
+            assert_eq!(
+                (g.id, s.tier, s.min, s.max, s.step, s.unit),
+                (id, ScaleTier::Typical, min, max, step, unit),
+                "{name}"
+            );
         }
-        for id in ["df64", "comandante-c40", "fellow-opus", "baratza-sette-270"] {
-            assert_eq!(catalogue_entry(id), None, "{id}");
+    }
+
+    #[test]
+    fn hidden_entries_merge_spellings_but_are_never_listed_or_ranged() {
+        for (a, b, id) in [
+            ("DF64", "G-IOTA", "df64"),
+            ("C40 MK3", "Comandante C40 MK3", "comandante-c40-mk3"),
+            (
+                "Specialita",
+                "Eureka Mignon Specialità",
+                "eureka-mignon-specialita",
+            ),
+            ("J-Ultra", "1Zpresso J-Ultra", "1zpresso-j-ultra"),
+            ("P64", "Lagom P64", "lagom-p64"),
+            (
+                "Sculptor 078S",
+                "Timemore Sculptor 078S",
+                "timemore-sculptor-078s",
+            ),
+        ] {
+            for name in [a, b] {
+                let g = catalogue_entry_for_name(name).unwrap();
+                assert_eq!(g.id, id, "{name}");
+                assert!(!g.listed(), "{name}");
+                assert_eq!(g.starting_scale(), GrindScale::default(), "{name}");
+            }
+        }
+        let listed: Vec<String> = grinder_catalogue().into_iter().map(|g| g.id).collect();
+        for g in GRINDER_CATALOGUE.iter().filter(|g| !g.listed()) {
+            assert!(!listed.iter().any(|id| id == g.id), "{}", g.id);
         }
     }
 
@@ -689,11 +1263,16 @@ mod tests {
     fn the_catalogue_lists_as_json_each_with_its_scale_and_source() {
         let list: Vec<CatalogueGrinderInfo> =
             serde_json::from_str(&grinder_catalogue_json()).unwrap();
-        assert_eq!(list.len(), GRINDER_CATALOGUE.len());
-        for (info, g) in list.iter().zip(GRINDER_CATALOGUE) {
+        let listed: Vec<&CatalogueGrinder> =
+            GRINDER_CATALOGUE.iter().filter(|g| g.listed()).collect();
+        assert_eq!(list.len(), listed.len());
+        for (info, g) in list.iter().zip(listed) {
+            let s = g.scale.unwrap();
             assert_eq!(info.scale.as_ref(), Some(&g.starting_scale()), "{}", g.id);
-            assert_eq!(info.source.as_deref(), Some(g.scale.source), "{}", g.id);
+            assert_eq!(info.source.as_deref(), Some(s.source), "{}", g.id);
+            assert_eq!(info.tier, s.tier, "{}", g.id);
         }
+        assert!(grinder_catalogue_json().contains(r#""tier":"typical""#));
         let nz = list.iter().find(|g| g.id == "niche-zero").unwrap();
         assert_eq!(
             (nz.name.as_str(), nz.kind),

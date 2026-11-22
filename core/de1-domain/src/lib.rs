@@ -308,8 +308,9 @@ pub use grinder::{
     same_grinder,
 };
 pub use grinder_catalogue::{
-    CatalogueGrinder, CatalogueGrinderInfo, GRINDER_CATALOGUE, GrinderKind, VerifiedScale,
-    catalogue_entry, catalogue_entry_for_name, grinder_catalogue, grinder_catalogue_json,
+    CatalogueGrinder, CatalogueGrinderInfo, CatalogueScale, GRINDER_CATALOGUE, GrinderKind,
+    ScaleTier, catalogue_entry, catalogue_entry_for_name, grinder_catalogue,
+    grinder_catalogue_json,
 };
 pub use history::{
     HistoryStats, STORED_SHOT_FORMAT_VERSION, ShotMachine, ShotMetadata, ShotPrivacy,

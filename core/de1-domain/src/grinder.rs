@@ -597,7 +597,8 @@ pub fn match_grinders(
                 .map(|e| e.id)
         })
         .collect();
-    for e in GRINDER_CATALOGUE {
+    // Hidden entries only merge spellings: never offered.
+    for e in GRINDER_CATALOGUE.iter().filter(|e| e.listed()) {
         if recorded.contains(&e.id) {
             continue;
         }
@@ -847,14 +848,24 @@ mod tests {
             (ek.name.as_str(), ek.scale.min, ek.scale.max, ek.scale.step),
             ("Mahlkönig EK43", 0.0, 16.0, 0.1)
         );
-        // An id that left the catalogue names nothing.
-        assert_eq!(add_grinder(&[], "", Some("df64"), NOW), None);
-        // A name the catalogue doesn't list: the default scale, no preset.
+        // A typical range comes with the entry too.
+        let c40 = add_grinder(&[], "c40", None, NOW).unwrap().grinder;
+        assert_eq!(
+            (
+                c40.preset_id.as_deref(),
+                c40.scale.max,
+                c40.scale.unit.as_str()
+            ),
+            (Some("comandante-c40"), 40.0, "clicks")
+        );
+        // A hidden entry links the record (its spellings merge) but gives no
+        // range: the default scale.
         let df = add_grinder(&[], "DF64", None, NOW).unwrap().grinder;
         assert_eq!(
             (df.preset_id.as_deref(), df.scale),
-            (None, GrindScale::default())
+            (Some("df64"), GrindScale::default())
         );
+        assert_eq!(add_grinder(&[], "", Some("retired-grinder"), NOW), None);
         // A typed name the catalogue knows strictly takes that entry.
         let nz = add_grinder(&[], "nichezero", None, NOW).unwrap().grinder;
         assert_eq!(
@@ -873,13 +884,13 @@ mod tests {
         assert_eq!(add_grinder(&[], "x", Some("no-such-entry"), NOW), None);
     }
 
-    /// A grinder added from an entry the catalogue later dropped (#488's
-    /// verified list) keeps its stored name, scale and `preset_id`; nothing
+    /// A grinder added from an entry the catalogue later dropped, or moved
+    /// to another tier, keeps its stored name, scale and `preset_id`; nothing
     /// rewrites it, and it still answers to its own name.
     #[test]
     fn a_grinder_from_a_dropped_entry_is_never_rewritten() {
         let mut df = grinder("grinder:turin-df64", "Turin DF64");
-        df.preset_id = Some("df64".into());
+        df.preset_id = Some("retired-grinder".into());
         df.scale = GrindScale {
             min: 0.0,
             max: 90.0,
@@ -1252,8 +1263,11 @@ mod tests {
                 (GrinderMatchKind::Owned, "grinder:a")
             ]
         );
-        assert_eq!(out.len(), 2 + GRINDER_CATALOGUE.len());
+        // Listed entries only: hidden ones are never offered.
+        let listed = GRINDER_CATALOGUE.iter().filter(|e| e.listed()).count();
+        assert_eq!(out.len(), 2 + listed);
         assert_eq!(out[2].id, GRINDER_CATALOGUE[0].id);
+        assert!(match_grinders("j-ultra", &[], &[]).is_empty());
         let json: Vec<GrinderMatch> = serde_json::from_str(
             &match_grinders_json("", &serde_json::to_string(&gs).unwrap(), "nope").unwrap(),
         )

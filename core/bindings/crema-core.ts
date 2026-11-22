@@ -1312,6 +1312,18 @@ export enum GrinderKind {
 	Hand = "hand",
 }
 
+/** How sure the catalogue is of an entry's range. */
+export enum ScaleTier {
+	/** Checked against the maker's manual or page. */
+	Verified = "verified",
+	/**
+	 * Inferred from the printed dial, a maker drawing or consistent
+	 * community charts, where the maker states no single range: shown as
+	 * "Typical range — check your dial".
+	 */
+	Typical = "typical",
+}
+
 /** A catalogue entry as the shells list it. */
 export interface CatalogueGrinderInfo {
 	/** [`CatalogueGrinder::id`]. */
@@ -1327,12 +1339,17 @@ export interface CatalogueGrinderInfo {
 	/** Electric or hand. */
 	kind: GrinderKind;
 	/**
-	 * Its verified scale. Every entry has one now; it stays optional so the
+	 * Its scale. Every listed entry has one; it stays optional so the
 	 * shells' "Range not set" path keeps compiling and the JSON shape holds.
 	 */
 	scale?: GrindScale;
-	/** Where the scale was checked; set whenever `scale` is. */
+	/** Where the scale comes from; set whenever `scale` is. */
 	source?: string;
+	/**
+	 * Verified, or typical ("Typical range — check your dial" wherever a
+	 * verified entry says it comes with its scale).
+	 */
+	tier: ScaleTier;
 }
 
 /** One page of catalogue search results. */

@@ -15,6 +15,11 @@
 //!   decimals, up to [`MAX_OFF_STEP_DECIMALS`]; no one-decimal rounding.
 //! - [`same_grind`]: numeric when both parse ("15" = "15.0"), else trimmed
 //!   text.
+//! - **Thirds.** A scale whose step is one third (the Fellow Ode: 1–11, 31
+//!   settings) counts in thirds of a whole number: [`grind_text`] writes
+//!   `4`, `4⅓`, `4⅔` (never 4.33), [`grind_number`] reads those and
+//!   `4 1/3`, and the chips and the blank start land on thirds. The step is
+//!   stored as the nearest `f32` to 1/3; see [`counts_in_thirds`].
 //! - [`format_grind`]: the unit only after a plain number ("480 μm", "2.1.3").
 //! - [`grind_scale_refusal`]: why a typed scale can't be stored.
 //! - [`brew_grind_view`]: what Brew's grind is (decided 2026-11-22, DESIGN
@@ -66,6 +71,68 @@ fn scale_decimals(scale: &GrindScale) -> usize {
     decimals_of(r.step).max(decimals_of(r.min))
 }
 
+/// Whether `scale` counts in thirds: its step is one third, as stored (the
+/// nearest `f32`, 0.33333334) or typed to four places (0.3333). A step of
+/// 0.333 is a decimal step.
+#[must_use]
+pub fn counts_in_thirds(scale: &GrindScale) -> bool {
+    (f64::from(scale.step_range().step) * 3.0 - 1.0).abs() < 5e-4
+}
+
+/// `v` as whole thirds (`4`, `4⅓`, `⅔`), when it is one, within float noise
+/// and not below 0; `None` otherwise (written with decimals instead).
+// The thirds count saturates (`as` on a float, never negative here); a grind
+// is far below 2^52.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn thirds_text(v: f64) -> Option<String> {
+    let n = (v * 3.0).round();
+    if n < 0.0 || (v * 3.0 - n).abs() > (v.abs() * 3e-6).max(1e-4) {
+        return None;
+    }
+    let n = n as u64;
+    let (whole, rem) = (n / 3, n % 3);
+    let frac = match rem {
+        1 => "⅓",
+        2 => "⅔",
+        _ => "",
+    };
+    Some(if rem == 0 {
+        whole.to_string()
+    } else if whole == 0 {
+        frac.to_owned()
+    } else {
+        format!("{whole}{frac}")
+    })
+}
+
+/// A grind written in thirds (`4⅓`, `4 ⅓`, `⅔`, `4 1/3`, `2/3`) as a number:
+/// the whole part plus the third. `None` for anything else.
+fn thirds_number(raw: &str) -> Option<f64> {
+    let (whole, thirds, ascii) = if let Some(w) = raw.strip_suffix('⅓') {
+        (w, 1_u32, false)
+    } else if let Some(w) = raw.strip_suffix('⅔') {
+        (w, 2, false)
+    } else if let Some(w) = raw.strip_suffix("1/3") {
+        (w, 1, true)
+    } else {
+        (raw.strip_suffix("2/3")?, 2, true)
+    };
+    // "41/3" is forty-one thirds, not four and a third: a typed fraction
+    // after a whole number needs a space.
+    if ascii && !whole.is_empty() && !whole.ends_with(char::is_whitespace) {
+        return None;
+    }
+    let whole = whole.trim_end();
+    let whole = if whole.is_empty() {
+        0
+    } else if whole.bytes().all(|b| b.is_ascii_digit()) {
+        whole.parse::<u32>().ok()?
+    } else {
+        return None;
+    };
+    Some(f64::from(whole) + f64::from(thirds) / 3.0)
+}
+
 /// `v` with `decimals` decimals, trailing zeros and a bare point dropped;
 /// `-0` reads `0`.
 fn fixed(v: f64, decimals: usize) -> String {
@@ -88,6 +155,9 @@ pub fn grind_text(dial: f64, scale: &GrindScale) -> String {
     if !dial.is_finite() {
         return String::new();
     }
+    if counts_in_thirds(scale) {
+        return thirds_text(dial).unwrap_or_else(|| fixed(dial, MAX_OFF_STEP_DECIMALS));
+    }
     let decimals = scale_decimals(scale);
     let on_step = fixed(dial, decimals);
     // Noise is far below the step's last decimal, and grows with an `f32`
@@ -101,10 +171,14 @@ pub fn grind_text(dial: f64, scale: &GrindScale) -> String {
 }
 
 /// A grind as a number, when it is a plain one: trimmed, a decimal comma
-/// read as a point (`"2,5"` → 2.5). `None` for text ("2.1.3", "6 + a
-/// tooth"), blank, or a word Rust would parse ("inf", "NaN").
+/// read as a point (`"2,5"` → 2.5), or thirds (`"4⅓"`, `"4 1/3"`, see the
+/// module docs). `None` for text ("2.1.3", "6 + a tooth"), blank, or a word
+/// Rust would parse ("inf", "NaN").
 #[must_use]
 pub fn grind_number(grind: &str) -> Option<f64> {
+    if let Some(n) = thirds_number(grind.trim()) {
+        return Some(n);
+    }
     let raw = grind.trim().replace(',', ".");
     if raw.is_empty()
         || !raw
@@ -180,15 +254,27 @@ pub fn grind_scale_refusal(scale: &GrindScale) -> Option<ScaleRefusal> {
 }
 
 /// `scale`'s stepper range as clean `f64`s: (lowest, highest, step,
-/// decimals).
+/// decimals). A thirds scale's step is exactly 1/3.
 fn grid(scale: &GrindScale) -> (f64, f64, f64, usize) {
     let r = scale.step_range();
-    (
-        clean(r.min),
-        clean(r.max),
-        clean(r.step),
-        scale_decimals(scale),
-    )
+    let step = if counts_in_thirds(scale) {
+        1.0 / 3.0
+    } else {
+        clean(r.step)
+    };
+    (clean(r.min), clean(r.max), step, scale_decimals(scale))
+}
+
+/// A point on `scale`'s grid as (value, text): thirds on a thirds scale,
+/// else `decimals` decimals.
+fn on_grid(v: f64, scale: &GrindScale, decimals: usize) -> (f64, String) {
+    if counts_in_thirds(scale) {
+        let text = thirds_text(v).unwrap_or_else(|| fixed(v, MAX_OFF_STEP_DECIMALS));
+        let value = grind_number(&text).unwrap_or(v);
+        return (value, text);
+    }
+    let text = fixed(v, decimals);
+    (text.parse().unwrap_or(v), text)
 }
 
 /// Where the stepper's first + or − goes from a blank grind: the middle of
@@ -198,7 +284,7 @@ fn grid(scale: &GrindScale) -> (f64, f64, f64, usize) {
 pub fn grind_start_from_blank(scale: &GrindScale) -> f64 {
     let (lo, hi, step, decimals) = grid(scale);
     let mid = lo + ((hi - lo) / 2.0 / step).round() * step;
-    fixed(mid.min(hi), decimals).parse().unwrap_or(lo)
+    on_grid(mid.min(hi), scale, decimals).0
 }
 
 /// One Quick Controls grind chip.
@@ -231,11 +317,8 @@ pub fn grind_chips(scale: &GrindScale, around: Option<&str>, count: usize) -> Ve
     let first = (centre - count / 2).clamp(0, (last + 1 - count).max(0));
     (first..first + count)
         .map(|i| {
-            let text = fixed(lo + i as f64 * step, decimals);
-            GrindChip {
-                value: text.parse().unwrap_or(lo),
-                text,
-            }
+            let (value, text) = on_grid(lo + i as f64 * step, scale, decimals);
+            GrindChip { value, text }
         })
         .collect()
 }
@@ -552,6 +635,95 @@ mod tests {
         assert_eq!(r(r#"{"min":null,"max":20,"step":0.1}"#), r#""notANumber""#);
         assert_eq!(r(r#"{"max":20,"step":0.1}"#), r#""notANumber""#);
         assert_eq!(r(r#"{"min":0,"max":1,"step":2}"#), r#""stepTooLarge""#);
+    }
+
+    fn ode() -> GrindScale {
+        scale(1.0, 11.0, 1.0 / 3.0, "")
+    }
+
+    #[test]
+    fn a_thirds_scale_writes_thirds_not_decimals() {
+        assert!(counts_in_thirds(&ode()));
+        assert!(counts_in_thirds(&scale(1.0, 11.0, 0.3333, "")));
+        assert!(!counts_in_thirds(&scale(1.0, 11.0, 0.333, "")));
+        assert!(!counts_in_thirds(&GrindScale::default()));
+        for (dial, text) in [
+            (4.0, "4"),
+            (4.0 + 1.0 / 3.0, "4⅓"),
+            (4.0 + 2.0 / 3.0, "4⅔"),
+            (1.0 / 3.0, "⅓"),
+            (11.0, "11"),
+            (-(1.0 + 1.0 / 3.0), "-1.3333"),
+        ] {
+            assert_eq!(grind_text(dial, &ode()), text, "{dial}");
+        }
+        // A stepper on Android adds the f32 step; a JS sum carries noise.
+        let mut dial = 1.0_f32;
+        for _ in 0..10 {
+            dial += 1.0 / 3.0;
+        }
+        assert_eq!(grind_text(f64::from(dial), &ode()), "4⅓");
+        assert_eq!(grind_text(4.333_333_4, &ode()), "4⅓");
+        // A typed value off the thirds keeps its decimals.
+        assert_eq!(grind_text(4.25, &ode()), "4.25");
+        assert_eq!(grind_text(4.333, &ode()), "4.333");
+    }
+
+    #[test]
+    fn thirds_read_back_as_numbers() {
+        let third = 1.0 / 3.0;
+        for (text, n) in [
+            ("4⅓", 4.0 + third),
+            (" 4 ⅓ ", 4.0 + third),
+            ("4⅔", 4.0 + 2.0 * third),
+            ("⅓", third),
+            ("4 1/3", 4.0 + third),
+            ("2/3", 2.0 * third),
+        ] {
+            assert_eq!(grind_number(text), Some(n), "{text}");
+        }
+        for text in ["41/3", "a⅓", "4.5⅓", "-⅓", "1/2"] {
+            assert_eq!(grind_number(text), None, "{text}");
+        }
+        assert!(same_grind("4⅓", "4 1/3"));
+        assert!(!same_grind("4⅓", "4.33"));
+        // What the stepper writes is what it reads.
+        let dial = grind_number("6⅔").unwrap() + f64::from(1.0_f32 / 3.0);
+        assert_eq!(grind_text(dial, &ode()), "7");
+        assert_eq!(
+            format_grind("4⅓", &scale(1.0, 11.0, 1.0 / 3.0, "clicks")),
+            "4⅓ clicks"
+        );
+    }
+
+    #[test]
+    fn a_thirds_scale_starts_and_chips_on_thirds() {
+        assert_eq!(grind_start_from_blank(&ode()), 6.0);
+        let chips = grind_chips(&ode(), Some("6"), 5);
+        assert_eq!(
+            chips.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(),
+            ["5⅓", "5⅔", "6", "6⅓", "6⅔"]
+        );
+        assert_eq!(chips[3].value, grind_number("6⅓").unwrap());
+        let ends = grind_chips(&ode(), Some("10⅔"), 3);
+        assert_eq!(
+            ends.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(),
+            ["10⅓", "10⅔", "11"]
+        );
+        let view = brew_grind_view(&BrewGrindInput {
+            bag: None,
+            grinder: Some(Grinder {
+                id: "grinder:ode".into(),
+                name: "Fellow Ode Gen 2".into(),
+                scale: ode(),
+                ..Grinder::default()
+            }),
+            brew_grind: Some(" 4⅓ ".into()),
+        });
+        assert_eq!(
+            (view.value.as_deref(), view.display.as_str(), view.dial),
+            (Some("4⅓"), "4⅓", grind_number("4⅓"))
+        );
     }
 
     #[test]
