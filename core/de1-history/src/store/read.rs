@@ -652,32 +652,22 @@ impl Store {
                 ))
             })
         })?;
-        let mut out: Vec<LastGrind> = Vec::new();
-        for (grinder, grind, completed_at, grinder_id) in found {
-            let Some(grind) = grind else {
-                continue;
-            };
-            let grinder = grinder.unwrap_or_default();
-            let grinder_id = grinder_id.filter(|id| !id.trim().is_empty());
-            let seen = match grinder_id.as_deref() {
-                Some(id) => out.iter().any(|l| l.grinder_id.as_deref() == Some(id)),
-                None => {
-                    de1_domain::grinder_key(&grinder).is_empty()
-                        || out.iter().any(|l| {
-                            l.grinder_id.is_none() && de1_domain::same_grinder(&l.grinder, &grinder)
-                        })
-                }
-            };
-            if seen {
-                continue;
-            }
-            out.push(LastGrind {
-                grinder_id,
-                grinder,
-                grind,
-                completed_at,
-            });
-        }
+        // One grouping for the history and the shells' in-memory rows
+        // (REVIEW-CORE M1). The SQL order (newest, then the higher id) is
+        // kept by the stable sort, so the rows need no id here.
+        let rows: Vec<de1_domain::LastGrindRow> = found
+            .into_iter()
+            .map(
+                |(grinder, grind, completed_at, grinder_id)| de1_domain::LastGrindRow {
+                    completed_at,
+                    id: String::new(),
+                    grinder_id,
+                    grinder_model: grinder,
+                    grind,
+                },
+            )
+            .collect();
+        let out = de1_domain::last_grinds_from_rows(&rows);
         Ok(out)
     }
 

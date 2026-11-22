@@ -526,9 +526,9 @@ function atShotStartMeta(active: ActiveShotData | null): Record<string, unknown>
  * `ReplayMeta` view.
  *
  * The bag, grinder and grind are the ones the shot recorded (the core
- * froze them at shot start). The grind rides the bag block's
- * `grinderSetting`, the one grind slot the META has, so a shot with no bag
- * carries none.
+ * froze them at shot start). The grind is the top-level `grind`, so a shot
+ * with no bag replays with it too (PLAN follow-up 36); the bag block's
+ * `grinderSetting` keeps it as well, for readers from before that key.
  *
  * `profileBytesHex` is deliberately absent — the core doesn't surface
  * the byte-exact upload payload and caching it shell-side is multi-file
@@ -555,6 +555,8 @@ export function buildAtShotStartMeta(
 	}
 	const grinder = shot.grinderModel?.trim();
 	if (grinder) meta.grinderModel = grinder;
+	const grind = shot.metadata?.grinderSetting?.trim();
+	if (grind) meta.grind = grind;
 	if (Object.keys(meta).length === 0) return null;
 	return { t: Math.round(tMs), dir: 'in', src: 'META', hex: '', meta };
 }

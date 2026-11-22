@@ -3667,6 +3667,13 @@ export interface GrinderLibraryMigration {
 	 * the migration ran (even with nothing to do).
 	 */
 	skipped?: MigrationSkip;
+	/**
+	 * Bags left unmigrated (`grinds` still `None`) because the settings were
+	 * quarantined and the bag names no grinder of its own
+	 * ([`MigrationGate::settings_quarantined`], PLAN follow-up 40): they
+	 * migrate on a later load whose settings read.
+	 */
+	leftForSettings?: number;
 }
 
 /** Which list a [`GrinderMatch`] comes from, in the order they are listed. */
@@ -3703,6 +3710,27 @@ export interface GrinderPickInput {
 	id: string;
 	/** The typed name ("+ Create"). */
 	name: string;
+}
+
+/**
+ * One grinder row in Brew's grinder pickers, for the selected bag
+ * ([`grinder_pick_rows`]). The shells word it: "This bag's grinder · …",
+ * "Saved 480 μm", "Nothing saved · last shot 32", "Nothing saved"; with no
+ * bag, the grinder's range.
+ */
+export interface GrinderPickRow {
+	/** The grinder's id. */
+	grinderId: string;
+	/** The bag's row for it is starred ("This bag's grinder"). */
+	starred: boolean;
+	/** The bag's saved grind for it, when there is one (not blank). */
+	saved?: string;
+	/**
+	 * With nothing saved: the newest shot grind on the bag with it
+	 * ([`newest_shot_grind`]: by id, or an older row by name through the
+	 * catalogue's exact aliases, so "Niche" finds the Niche Zero).
+	 */
+	lastShot?: string;
 }
 
 /** What [`resolve_grinder_switch`] reads. */
@@ -3919,6 +3947,30 @@ export interface KnownRow {
 	isBrew?: boolean;
 	/** Deleted here: the remote copy stays out. */
 	tombstoned?: boolean;
+}
+
+/**
+ * One shot row on a bag, as a shell holds it in memory, for
+ * [`last_grinds_from_rows`]: the same columns the history's
+ * `last_grinds_for_bag` reads.
+ */
+export interface LastGrindRow {
+	/** When the shot completed, Unix epoch ms. */
+	completedAt: number;
+	/**
+	 * The shot's id: the tie-break among rows that completed at the same
+	 * time (the higher id is newer, as in the history query).
+	 */
+	id: string;
+	/**
+	 * The grinder id the shot was stamped with; `None` or blank on rows
+	 * from before grinder ids.
+	 */
+	grinderId?: string;
+	/** The grinder name the shot was stamped with (`grinderModel`). */
+	grinderModel?: string;
+	/** The grind it recorded, as stored; a number reads as its text. */
+	grind?: string;
 }
 
 /** A `GET /shots` list row. */
@@ -4141,6 +4193,17 @@ export interface MigrationGate {
 	 * old grind would land under "no grinder" for good.
 	 */
 	settings: boolean;
+	/**
+	 * A damaged settings copy was kept aside (quarantined on an earlier
+	 * load) and the settings `grinder_model` is blank now, whether the
+	 * settings read as absent or were written again since (REVIEW-514): the
+	 * grinder the old settings named is unknown, not blank (PLAN follow-up
+	 * 40). Only the bags that name their own grinder migrate; the rest wait
+	 * until a settings grinder is known (picked, or restored). Settings
+	 * never written, with nothing kept aside, are not this: they read, with
+	 * no settings grinder.
+	 */
+	settingsQuarantined?: boolean;
 }
 
 /**
@@ -4578,6 +4641,173 @@ export interface QuickControlBounds {
 }
 
 /**
+ * The grind half of an in-place Save's Undo: the one (bag, grinder) row as
+ * it was before the Save and as the Save wrote it.
+ */
+export interface QuickSaveGrindUndo {
+	/** The bag. */
+	beanId: string;
+	/**
+	 * The row's grinder id ([`crate::NO_GRINDER_ID`] for the "no grinder"
+	 * slot).
+	 */
+	grinderId: string;
+	/** The row before the Save; `None` = there was none (Undo removes it). */
+	before?: BagGrind;
+	/** The row as the Save wrote it. */
+	written?: BagGrind;
+}
+
+/** The kind of profile Save would write to. */
+export enum QuickSaveProfileKind {
+	/** No active profile: Save saves the grind only. */
+	None = "none",
+	/** A user-owned profile: updated in place. */
+	Custom = "custom",
+	/** A read-only built-in: copied under a new name. */
+	Builtin = "builtin",
+}
+
+/** The active profile, as the plan needs it. */
+export interface QuickSaveProfile {
+	/** Its library id. */
+	id: string;
+	/** Its name. */
+	name: string;
+	/** Custom or built-in (`None` is read as no profile). */
+	kind: QuickSaveProfileKind;
+}
+
+/**
+ * What [`quick_save_plan`] reads: the state on screen (on a remote, the
+ * hub's).
+ */
+export interface QuickSaveInput {
+	/** The bag on Brew, if any. */
+	bag?: Bean;
+	/** The active grinder; `None` = the "no grinder" slot. */
+	grinder?: Grinder;
+	/** Brew's grind (the per-device session value); `None` = not set. */
+	brewGrind?: string;
+	/** The active profile, if any. */
+	profile?: QuickSaveProfile;
+	/**
+	 * The Quick Controls override as stored, normalized by the core's
+	 * lifecycle rule (`normalize_brew_overrides`): a dial back at the
+	 * profile's own value is no override, so an empty one is no change.
+	 */
+	recipeOverrides: BrewOverrides;
+}
+
+/** How Save writes the recipe. */
+export enum QuickSaveProfileWrite {
+	/** The recipe isn't written (unchanged, or no profile). */
+	None = "none",
+	/** The custom profile is updated in place; the message offers Undo. */
+	InPlace = "inPlace",
+	/**
+	 * A built-in is copied under a name the user gives; the copy is made
+	 * active.
+	 */
+	Copy = "copy",
+}
+
+/** What Save would write, for the state on screen. */
+export interface QuickSavePlan {
+	/** The bag the grind would be saved to. */
+	beanId?: string;
+	/** Its name, for the message. */
+	beanName?: string;
+	/** The active grinder's id; `None` = the "no grinder" slot. */
+	grinderId?: string;
+	/** Its name, for the message. */
+	grinderName?: string;
+	/**
+	 * Brew's grind to save to the (bag, grinder) row, when it differs from
+	 * the saved one ([`crate::BrewGrindView::save_grind`]); else `None`.
+	 */
+	grind?: string;
+	/** The active profile's id. */
+	profileId?: string;
+	/** The active profile's name. */
+	profileName?: string;
+	/** The kind of profile Save writes to. */
+	profileKind: QuickSaveProfileKind;
+	/** The recipe dials differ from the active profile's own. */
+	recipeChanged: boolean;
+	/** How the recipe is written ("Save" with nothing else chosen). */
+	profileWrite: QuickSaveProfileWrite;
+	/** Save writes the recipe to a profile (there is one to write to). */
+	writesRecipe: boolean;
+	/** Save has something to write; else the button is off. */
+	enabled: boolean;
+	/** Save asks for a name first: a built-in is read-only, so it's a copy. */
+	needsName: boolean;
+	/**
+	 * "Save as new…" is offered: a custom profile would otherwise be
+	 * updated in place.
+	 */
+	offersSaveAsNew: boolean;
+	/** Save includes the grind: the button carries the unsaved-grind dot. */
+	includesGrind: boolean;
+	/** The name a copy's prompt starts from: "‹name› (copy)", or empty. */
+	copyNameSeed: string;
+}
+
+/** What an in-place Save wrote, for its Undo. */
+export interface QuickSaveUndo {
+	/** The profile updated in place. */
+	profileId: string;
+	/** Its name, for the message. */
+	profileName: string;
+	/**
+	 * Its stored body as the Save wrote it (the shell's stored JSON): Undo
+	 * restores the profile only over this, compared by value.
+	 */
+	writtenProfile: unknown;
+	/** The grind the same Save wrote, if it wrote one. */
+	grind?: QuickSaveGrindUndo;
+}
+
+/** What [`quick_save_undo`] reads: the Undo and the state now. */
+export interface QuickSaveUndoInput {
+	/** What the Save wrote. */
+	undo: QuickSaveUndo;
+	/** The profile's stored body now (as JSON); `null` = it is gone. */
+	nowProfile: unknown;
+	/** The bag as stored now; `None` = it is gone. */
+	nowBag?: Bean;
+}
+
+/** How an Undo came out; the shells word the message. */
+export enum QuickSaveUndoOutcome {
+	/** Everything the Save wrote came back: "Save undone". */
+	Undone = "undone",
+	/** The profile came back; the grind changed since and stands. */
+	ProfileOnly = "profileOnly",
+	/**
+	 * The grind came back; the profile changed since and stands: "Grind put
+	 * back; “X” changed since, not undone".
+	 */
+	GrindOnly = "grindOnly",
+	/** Nothing came back: "“X” changed since; not undone". */
+	NotUndone = "notUndone",
+}
+
+/** What an Undo writes. */
+export interface QuickSaveUndoPlan {
+	/** Store the profile's body from before the Save (the shell kept it). */
+	restoreProfile: boolean;
+	/**
+	 * The bag to store with the row put back (`updated_at` moved), or `None`
+	 * to leave the bag alone.
+	 */
+	restoreBean?: Bean;
+	/** How it came out. */
+	outcome: QuickSaveUndoOutcome;
+}
+
+/**
  * The inclusive `[min, max]` bounds of a ranged scale setting.
  * 
  * A ranged setting (the beeper volume, the auto-standby timeout) carries its
@@ -4710,6 +4940,13 @@ export interface ReplayMeta {
 	bean?: ReplayMetaBean;
 	/** Equipment-level grinder model at shot start. */
 	grinderModel?: string;
+	/**
+	 * The grind the shot recorded (Brew's grind at shot start, as text),
+	 * with or without a bag (PLAN follow-up 36). Read from the top-level
+	 * `grind` key; a capture from before it carries the grind only in the
+	 * bag block, so the fold falls back to [`ReplayMetaBean::grinder_setting`].
+	 */
+	grind?: string;
 }
 
 /** What the user chose in the report. */

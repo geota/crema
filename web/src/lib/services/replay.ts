@@ -148,8 +148,9 @@ export function replayMetaToActiveShot(meta: ReplayMeta): ActiveShotData {
  * The capture's selections for the shadow core to freeze at the replay's
  * shot start (REVIEW-CORE H3): what the shot recorded, from its META. The
  * bag has no `beanId` (it isn't necessarily in this device's library), and
- * the profile and grinder have no ids. The grind rides the META bag block's
- * `grinderSetting` (an older capture's is the bag's own grind then).
+ * the profile and grinder have no ids. The grind is the META's top-level
+ * `grind`, else (an older capture) the bag block's `grinderSetting`, as the
+ * core's fold reads it.
  */
 export function replayMetaToSelections(meta: ReplayMeta): ShotSelections {
 	const bean = meta.bean;
@@ -172,7 +173,7 @@ export function replayMetaToSelections(meta: ReplayMeta): ShotSelections {
 			: undefined,
 		profileName: meta.profileName?.trim() || undefined,
 		grinderName: meta.grinderModel?.trim() || undefined,
-		grind: bean?.grinderSetting?.trim() || undefined
+		grind: meta.grind?.trim() || bean?.grinderSetting?.trim() || undefined
 	};
 }
 

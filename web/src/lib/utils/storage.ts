@@ -110,6 +110,14 @@ export function isIdOrNull(v: unknown): v is string | null {
 
 /** Where an unreadable value of `key` is kept aside (newest capture wins). */
 export const corruptKeyOf = (key: string): string => `${key}.corrupt`;
+/** Whether a damaged value of `key` was kept aside (quarantined) and is still there. */
+export function hasKeptAside(key: string): boolean {
+	try {
+		return localStorage.getItem(corruptKeyOf(key)) !== null;
+	} catch {
+		return false;
+	}
+}
 /** ISO-8601 time the kept-aside value was captured. */
 export const corruptAtKeyOf = (key: string): string => `${key}.corruptAt`;
 /** Where the rows a loader of `key` couldn't coerce are kept. */

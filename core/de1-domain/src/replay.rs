@@ -4,7 +4,7 @@
 //! `meta` payload — the core's connect-phase prelude (scale name +
 //! DE1 firmware / model / serial) and an optional shell-appended
 //! at-shot-start line (active profile + Quick-Controls overrides +
-//! bean snapshot + grinder model). [`fold_meta_jsonl`] merges every
+//! bean snapshot + grinder model + grind). [`fold_meta_jsonl`] merges every
 //! payload into a single typed [`ReplayMeta`], later entries
 //! overriding earlier ones.
 //!
@@ -98,6 +98,12 @@ pub struct ReplayMeta {
     /// Equipment-level grinder model at shot start.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub grinder_model: Option<String>,
+    /// The grind the shot recorded (Brew's grind at shot start, as text),
+    /// with or without a bag (PLAN follow-up 36). Read from the top-level
+    /// `grind` key; a capture from before it carries the grind only in the
+    /// bag block, so the fold falls back to [`ReplayMetaBean::grinder_setting`].
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub grind: Option<String>,
 }
 
 /// Fold a sequence of `src:"META"` payload JSON strings into one
@@ -116,7 +122,32 @@ pub fn fold_meta_jsonl(payloads: &[&str]) -> Result<ReplayMeta, String> {
         let Some(obj) = v.as_object() else { continue };
         fold_one(&mut acc, obj);
     }
+    finish(&mut acc);
     Ok(acc)
+}
+
+/// A capture with no top-level `grind` (from before it) recorded its grind
+/// in the bag block: that is the shot's grind.
+fn finish(acc: &mut ReplayMeta) {
+    if acc.grind.is_none() {
+        acc.grind = acc
+            .bean
+            .as_ref()
+            .and_then(|b| b.grinder_setting.as_deref())
+            .map(str::trim)
+            .filter(|g| !g.is_empty())
+            .map(str::to_owned);
+    }
+}
+
+/// A grind value as text: a string trimmed, a finite number as written. A
+/// blank string is no grind.
+fn grind_text_of(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.trim().to_owned()).filter(|s| !s.is_empty()),
+        Value::Number(n) if n.as_f64().is_some_and(f64::is_finite) => Some(n.to_string()),
+        _ => None,
+    }
 }
 
 fn fold_one(acc: &mut ReplayMeta, obj: &serde_json::Map<String, Value>) {
@@ -169,6 +200,9 @@ fn fold_one(acc: &mut ReplayMeta, obj: &serde_json::Map<String, Value>) {
     }
     if let Some(s) = obj.get("grinderModel").and_then(Value::as_str) {
         acc.grinder_model = Some(s.to_owned());
+    }
+    if let Some(g) = obj.get("grind").and_then(grind_text_of) {
+        acc.grind = Some(g);
     }
     if let Some(raw) = obj.get("bean").and_then(Value::as_object) {
         let mut bean = acc.bean.take().unwrap_or_default();
@@ -227,6 +261,7 @@ pub fn fold_meta_jsonl_json(payloads_json: &str) -> Result<String, String> {
             fold_one(&mut acc, obj);
         }
     }
+    finish(&mut acc);
     serde_json::to_string(&acc).map_err(|e| e.to_string())
 }
 
@@ -340,6 +375,36 @@ mod tests {
         let bean = got.bean.unwrap();
         assert_eq!(bean.name.as_deref(), Some("Yirg"));
         assert_eq!(bean.roaster.as_deref(), Some("Onyx"));
+    }
+
+    #[test]
+    fn a_capture_with_no_bag_carries_its_grind_at_the_top() {
+        // PLAN follow-up 36: the grind no longer rides only the bag block.
+        let got = fold_meta_jsonl(&[r#"{"grinderModel": "Niche Zero", "grind": " 14 "}"#]).unwrap();
+        assert_eq!(got.grind.as_deref(), Some("14"));
+        assert!(got.bean.is_none());
+        let n = fold_meta_jsonl(&[r#"{"grind": 4.5}"#]).unwrap();
+        assert_eq!(n.grind.as_deref(), Some("4.5"));
+        let blank = fold_meta_jsonl(&[r#"{"grind": "  "}"#]).unwrap();
+        assert_eq!(blank.grind, None);
+    }
+
+    #[test]
+    fn an_older_capture_reads_its_grind_from_the_bag_block() {
+        let old = r#"{"bean": {"name": "Guji", "grinderSetting": "2.25"}}"#;
+        assert_eq!(
+            fold_meta_jsonl(&[old]).unwrap().grind.as_deref(),
+            Some("2.25")
+        );
+        // The top-level grind wins over the bag block's.
+        let both = r#"{"grind": "4⅓", "bean": {"name": "Guji", "grinderSetting": "2.25"}}"#;
+        assert_eq!(
+            fold_meta_jsonl(&[both]).unwrap().grind.as_deref(),
+            Some("4⅓")
+        );
+        let out = fold_meta_jsonl_json(&format!("[{old}]")).unwrap();
+        let parsed: ReplayMeta = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed.grind.as_deref(), Some("2.25"));
     }
 
     #[test]

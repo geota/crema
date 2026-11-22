@@ -111,9 +111,19 @@ fun lastGrindsForBag(beanId: String, shots: List<ShotMeta>): List<LastGrind> {
  * loaded, isn't: its rows or its `grinderModel` would look blank, and the
  * migration would file every old grind under "no grinder" for good.
  */
-fun migrationGate(library: coffee.crema.persist.StoreHealth, settings: coffee.crema.persist.StoreHealth): MigrationGate {
+fun migrationGate(
+    library: coffee.crema.persist.StoreHealth,
+    settings: coffee.crema.persist.StoreHealth,
+    settingsKeptAside: Boolean = false,
+    grinderModel: String = "",
+): MigrationGate {
     fun read(h: coffee.crema.persist.StoreHealth) = h == coffee.crema.persist.StoreHealth.OK || h == coffee.crema.persist.StoreHealth.ABSENT
-    return MigrationGate(library = read(library), settings = read(settings))
+    // A damaged settings file was kept aside and no settings grinder is known
+    // now, even after the settings were written again (REVIEW-514): the core
+    // then migrates only bags with their own grinder (PLAN follow-up 40).
+    // Never-written settings have nothing kept aside and read normally.
+    val quarantined = settingsKeptAside && grinderModel.isBlank()
+    return MigrationGate(library = read(library), settings = read(settings), settingsQuarantined = quarantined)
 }
 
 /** The library migration (core `migrate_grinder_library`), run once the library and the settings have loaded.

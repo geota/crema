@@ -22,6 +22,7 @@ import { getSettingsStore } from '#lib/settings/store.svelte.js';
 import {
 	followOtherTabs,
 	storeHealth,
+	hasKeptAside,
 	isIdOrNull,
 	isJsonObject,
 	keepSkippedRows,
@@ -867,15 +868,20 @@ export class BeanLibraryStore {
 	 * its old grind as a saved grind. The old fields and `updatedAt` are never
 	 * written. Skipped over a library that couldn't be read (its rows would
 	 * look absent), and with `settingsReadable` false (the settings grinder
-	 * would look blank). Whether anything changed.
+	 * would look blank). With `settingsQuarantined` (a damaged settings copy
+	 * was kept aside and no settings grinder is known) over a library with bags,
+	 * only the bags that name their own grinder migrate (the core's gate,
+	 * PLAN follow-up 40). Settings never written read normally. Whether
+	 * anything changed.
 	 */
-	migrateGrinders(grinderModel: string, settingsReadable = true): boolean {
+	migrateGrinders(grinderModel: string, settingsReadable = true, settingsQuarantined = false): boolean {
 		if (!this.canMigrate || !settingsReadable) return false;
 		let m;
 		try {
 			m = migrateGrinderLibrary(this.allGrinders, this.beans, grinderModel, {
 				library: this.canMigrate,
-				settings: settingsReadable
+				settings: settingsReadable,
+				settingsQuarantined
 			});
 		} catch (e) {
 			// Malformed rows: keep what there is; a later load tries again.
@@ -969,7 +975,12 @@ export function runGrinderMigration(
 	const settings = getSettingsStore();
 	const health = storeHealth(SETTINGS_KEY);
 	const readable = health === 'ok' || health === 'absent';
-	return lib.migrateGrinders(settings.current.grinderModel ?? '', readable);
+	// A damaged copy was kept aside and no settings grinder is known now, even
+	// after the settings were written again (PLAN follow-up 40, REVIEW-514).
+	// Never-written settings have no kept-aside copy and read normally.
+	const model = settings.current.grinderModel ?? '';
+	const quarantined = hasKeptAside(SETTINGS_KEY) && model.trim() === '';
+	return lib.migrateGrinders(model, readable, quarantined);
 }
 
 /**

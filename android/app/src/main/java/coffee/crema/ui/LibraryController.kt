@@ -2743,9 +2743,12 @@ class LibraryController(
     fun migrateGrinderLibrary(now: Long = System.currentTimeMillis()) {
         val s = uiState()
         // Only over a library and settings that read (REVIEW-CORE H5): the core runs nothing otherwise.
+        val settingsFile = java.io.File(app.filesDir, coffee.crema.settings.SettingsStore.FILE_NAME)
         val gate = coffee.crema.beans.migrationGate(
             library = coffee.crema.persist.Stores.health(java.io.File(app.filesDir, LibraryStore.FILE_NAME)),
-            settings = coffee.crema.persist.Stores.health(java.io.File(app.filesDir, coffee.crema.settings.SettingsStore.FILE_NAME)),
+            settings = coffee.crema.persist.Stores.health(settingsFile),
+            settingsKeptAside = coffee.crema.persist.SafeFile.keptAside(settingsFile).isNotEmpty(),
+            grinderModel = s.grinderModel,
         )
         val out = runCatching { coffee.crema.beans.migrateGrinderLibrary(s.grinders, s.beans, s.grinderModel, gate, now) }.getOrElse {
             appendLog("Grinder migration failed (runs again next load): ${it.message}")

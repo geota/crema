@@ -522,6 +522,29 @@ mod tests {
     }
 
     #[test]
+    fn the_record_never_carries_the_library_profile_id() {
+        // PLAN follow-up 9.
+        let mut s = shot();
+        s.profile_id = Some("profile:local-only-7f3a".into());
+        let rec = serde_json::to_string(&decent_shot_record(&s, &machine(), "x")).unwrap();
+        assert!(
+            !rec.contains("local-only-7f3a") && !rec.contains("profileId"),
+            "{rec}"
+        );
+    }
+
+    #[test]
+    fn a_thirds_grind_is_sent_as_text_as_recorded() {
+        // PLAN follow-up 33: decaid's `WorkflowContext.grinderSetting` is a
+        // free `String?` (de1app sends any typed text), and the body is
+        // UTF-8 JSON, so "4⅓" goes as recorded, not as a rounded decimal.
+        let mut s = shot();
+        s.metadata.grinder_setting = Some("4⅓".to_owned());
+        let rec = decent_shot_record(&s, &machine(), "x");
+        assert_eq!(rec["workflow"]["context"]["grinderSetting"], "4⅓");
+    }
+
+    #[test]
     fn stamps_identity_provenance_and_the_schema_version() {
         let rec = decent_shot_record(&shot(), &machine(), "0.0.7");
         assert_eq!(rec["id"], "crema-shot:0192");

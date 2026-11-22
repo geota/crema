@@ -908,6 +908,21 @@ mod tests {
     }
 
     #[test]
+    fn the_upload_exports_never_carry_the_library_profile_id() {
+        // PLAN follow-up 9: `profileId` is a local library id; the shells'
+        // wire shot carries it, the Visualizer documents must not.
+        let mut shot = fixture();
+        shot.profile_id = Some("profile:local-only-7f3a".into());
+        for doc in [
+            export_v2_json_shot(&shot).unwrap(),
+            export_v2_json_shot_full(&shot).unwrap(),
+        ] {
+            assert!(!doc.contains("local-only-7f3a"), "{doc}");
+            assert!(!doc.contains("profileId") && !doc.contains("profile_id"));
+        }
+    }
+
+    #[test]
     fn exports_a_v2_document_with_the_expected_top_level_shape() {
         let shot = fixture();
         let json = export_v2_json_shot(&shot).unwrap();
