@@ -676,10 +676,17 @@
 	// Seed the QC grind dial from the active bean's saved setting (issue #16
 	// round 2, Android parity): "tweak slightly from last time" must START at
 	// last time. Switching bags re-seeds the dial to THAT bag's grind; the
-	// user's subsequent dial edits win until the next switch. `untrack`ed
-	// writes so the effect tracks only the active bean, not `params.current`.
+	// user's subsequent dial edits win until the next switch. The effect
+	// tracks only the bag's id and saved grind (`$derived` primitives, which
+	// notify only when they change): the library is `$state.raw`, so any
+	// write to it — a shot's debit, a sync, a favourite — would otherwise
+	// re-run it and snap an unsaved dial back (REVIEW-497 M1). `untrack`ed
+	// writes, so it doesn't track `params.current` either.
+	const activeBagId = $derived(beanLibrary.activeBean?.id ?? null);
+	const activeBagGrind = $derived(beanLibrary.activeBean?.grinderSetting ?? '');
 	$effect(() => {
-		const raw = beanLibrary.activeBean?.grinderSetting?.trim().replace(',', '.');
+		void activeBagId;
+		const raw = activeBagGrind.trim().replace(',', '.');
 		const parsed = raw ? Number.parseFloat(raw) : NaN;
 		const next = Number.isFinite(parsed) ? parsed : 4.2;
 		if (untrack(() => params.current.grind) !== next) {

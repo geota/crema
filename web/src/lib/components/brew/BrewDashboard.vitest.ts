@@ -107,7 +107,7 @@ describe('Quick Controls Save on the dashboard', () => {
 	function activeBag(grind: string): void {
 		const beans = getBeanStore();
 		beans.clearAll();
-		beans.upsertBean({ ...blankBean('bean:a'), name: 'Guji', grinderSetting: grind });
+		beans.upsertBean({ ...blankBean('bean:a'), name: 'Guji', grinderSetting: grind, bagSize: 250, remaining: 200 });
 		beans.setActiveBean('bean:a');
 	}
 
@@ -128,6 +128,24 @@ describe('Quick Controls Save on the dashboard', () => {
 		await tick();
 		expect(getActiveDialog(), 'no name prompt for a grind').toBeNull();
 		expect(getBeanStore().getBean('bean:a')!.grinderSetting).toBe('4.6');
+	});
+
+	it('an unsaved dial survives a shot debit (REVIEW-497 M1)', async () => {
+		await getProfileStore().ensureLoaded();
+		getProfileStore().setActive(null);
+		activeBag('4.2');
+		const root = sheet(await render());
+		click(root, 'Grind');
+		click(root, '4.6');
+		getBeanStore().debitBean('bean:a', 18);
+		flushSync();
+		await tick();
+		expect(buttonIn(root, 'Save')!.disabled, 'the unsaved dial is still there').toBe(false);
+		// A new saved grind on the bag still re-seeds the dial.
+		getBeanStore().updateBean('bean:a', { grinderSetting: '5' });
+		flushSync();
+		await tick();
+		expect(buttonIn(root, 'Save')!.disabled, 'the dial follows the bag’s new grind').toBe(true);
 	});
 
 	it('a built-in with a changed recipe asks for a name before writing anything', async () => {
