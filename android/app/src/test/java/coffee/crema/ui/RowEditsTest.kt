@@ -28,6 +28,20 @@ class RowEditsTest {
         MainUiState(beans = rowViewOf(listOf(bean)), roasters = rowViewOf(listOf(roaster))),
     )
 
+    /** #488 review S5: the state hides a bag tombstone, an edit still holds it. */
+    @Test
+    fun `a bag tombstone is hidden from the state and kept by an edit`() {
+        val ui = store()
+        val gone = bean.copy(id = "bean:gone", visualizerId = "b1", deletedAt = 5)
+        ui.edit({ it.copy(beans = it.beans.with(it.beans + gone)) })
+        assertEquals(listOf(bean), ui.value.beans.toList())
+        assertEquals(listOf(bean, gone), ui.value.beans.withTombstones())
+        // A change to the hidden row alone still lands.
+        ui.edit({ it.copy(beans = it.beans.mapped { b -> if (b.id == gone.id) b.copy(deletedAt = 9) else b }) })
+        assertEquals(9L, ui.value.beans.withTombstones().last().deletedAt)
+        assertEquals("the library file keeps it", 2, ui.value.libraryFile().beans.size)
+    }
+
     @Test
     fun `stale_beans_copy_has_no_effect`() {
         val ui = store()

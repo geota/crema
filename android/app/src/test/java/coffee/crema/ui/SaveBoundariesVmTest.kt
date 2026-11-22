@@ -277,6 +277,39 @@ class SaveBoundariesVmTest {
         assertEquals("b", VmHarness.ownState(vm).activeBeanId)
     }
 
+    // ── #488 review S5: a bag deleted here stays deleted ────────────────────
+
+    @Test
+    fun `a bag on Visualizer deleted here stays as a hidden tombstone`() {
+        val vm = vmWith(listOf(bag("a").copy(visualizerId = "b1", imageRef = "bean:a"), bag("b")), active = "a")
+        vm.deleteBean("a")
+        VmHarness.idle()
+        val s = VmHarness.ownState(vm)
+        assertEquals(listOf("b"), s.beans.map { it.id }, "hidden from the library")
+        assertNull(s.activeBeanId)
+        val tomb = s.beans.withTombstones().single { it.id == "a" }
+        assertNotNull(tomb.deletedAt)
+        assertEquals("b1", tomb.visualizerId, "the pull matches it by its Visualizer id")
+        assertNull(tomb.imageRef)
+        assertTrue(s.libraryFile().beans.any { it.id == "a" && it.deletedAt != null }, "saved and synced")
+    }
+
+    @Test
+    fun `a bag never on Visualizer is removed outright`() {
+        val vm = vmWith(listOf(bag("a"), bag("b")))
+        vm.deleteBean("a")
+        VmHarness.idle()
+        assertEquals(listOf("b"), VmHarness.ownState(vm).beans.withTombstones().map { it.id })
+    }
+
+    @Test
+    fun `a saved tombstone loads hidden`() {
+        val vm = vmWith(listOf(bag("a"), bag("gone").copy(visualizerId = "b9", deletedAt = 5)))
+        val s = VmHarness.ownState(vm)
+        assertEquals(listOf("a"), s.beans.map { it.id })
+        assertEquals(2, s.beans.withTombstones().size)
+    }
+
     // ── F9 ───────────────────────────────────────────────────────────────────
 
     @Test

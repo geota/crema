@@ -217,8 +217,19 @@ export class BeanLibraryStore {
 
 	// ── Reads ────────────────────────────────────────────────────────
 
-	/** The full bean list, ordered by `updatedAt` desc by default in the UI. */
+	/**
+	 * The bags, ordered by `updatedAt` desc by default in the UI. Tombstones
+	 * (a Visualizer bag deleted here, {@link deleteBean}) are left out.
+	 */
 	get beans(): Bean[] {
+		return this.envelope.beans.filter((b) => b.deletedAt == null);
+	}
+
+	/**
+	 * Every bag row, tombstones included: what the Visualizer sync, backup,
+	 * restore and import read, so a bag deleted here stays deleted.
+	 */
+	get allBeans(): Bean[] {
 		return this.envelope.beans;
 	}
 
@@ -268,12 +279,12 @@ export class BeanLibraryStore {
 	get activeBean(): Bean | null {
 		const id = this.activeId;
 		if (!id) return null;
-		return this.envelope.beans.find((b) => b.id === id) ?? null;
+		return this.getBean(id);
 	}
 
-	/** Look up a bean by id. */
+	/** Look up a bag by id; a tombstone is not one. */
 	getBean(id: string): Bean | null {
-		return this.envelope.beans.find((b) => b.id === id) ?? null;
+		return this.envelope.beans.find((b) => b.id === id && b.deletedAt == null) ?? null;
 	}
 
 	/** Look up a roaster by id. */
@@ -382,7 +393,11 @@ export class BeanLibraryStore {
 	}
 
 	/**
-	 * Hard-delete a bean locally (and clear the active pointer if it was active).
+	 * Delete a bag on this device (and clear the active pointer if it was
+	 * active). A bag that is on Visualizer leaves a tombstone: the row stays,
+	 * hidden, with `deletedAt` set and its photo dropped, so the next pull
+	 * doesn't add it back (#488 review S5). That holds for both scopes, as the
+	 * remote DELETE is best-effort. Any other bag is removed outright.
 	 *
 	 * Local-only by design: the Visualizer-side DELETE is owned by the caller
 	 * (the delete-split component), which runs `BeanSync.deleteBean` on the app
@@ -391,9 +406,12 @@ export class BeanLibraryStore {
 	 * which a module-scope store can't do under Option 3.
 	 */
 	deleteBean(id: string): void {
-		const doomed = this.envelope.beans.filter((b) => b.id === id);
+		const doomed = this.envelope.beans.filter((b) => b.id === id && b.deletedAt == null);
 		if (doomed.length === 0) return;
-		const beans = this.envelope.beans.filter((b) => b.id !== id);
+		const now = Date.now();
+		const beans = this.envelope.beans.flatMap((b) =>
+			b.id !== id ? [b] : b.visualizerId ? [{ ...b, deletedAt: now, imageRef: null }] : []
+		);
 		this.envelope = { ...this.envelope, beans };
 		this.persist();
 		if (this.activeId === id) {

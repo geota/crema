@@ -392,6 +392,7 @@ class HistorySourceTest {
             machineBusy = false,
             health = listOf(LocalStoreHealth("shots", LocalHealth.Ok)),
             beans = emptyList(),
+            deletedBeans = emptyList(),
             roasters = emptyList(),
             grinders = emptyList(),
             profiles = emptyList(),

@@ -1043,7 +1043,13 @@ pub struct LocalState {
     /// A shot or a firmware flash is running, in any tab.
     pub machine_busy: bool,
     pub health: Vec<LocalStoreHealth>,
+    /// Tombstones included.
     pub beans: Vec<String>,
+    /// Of [`Self::beans`], the tombstones: bags deleted on this device, kept
+    /// so a Visualizer pull doesn't add them back (#488 review S5). Replace
+    /// keeps one the backup doesn't carry; a backup row with its id wins as
+    /// any row does.
+    pub deleted_beans: Vec<String>,
     pub roasters: Vec<String>,
     /// Grinder records (#488), archived and tombstones included.
     pub grinders: Vec<String>,
@@ -1531,7 +1537,8 @@ pub fn plan_restore(
     }
 
     // ── Rows ──
-    let beans = row_plan(m, local, mode, RowStore::Beans);
+    let mut beans = row_plan(m, local, mode, RowStore::Beans);
+    beans.remove.retain(|id| !local.deleted_beans.contains(id));
     let roasters = row_plan(m, local, mode, RowStore::Roasters);
     let grinders = row_plan(m, local, mode, RowStore::Grinders);
     let beans_keep_grinds: Vec<String> = beans

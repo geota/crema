@@ -190,6 +190,25 @@ fn replace_keeps_the_saved_grinds_a_pre_488_bean_row_lacks() {
     assert!(merge.beans_keep_grinds.is_empty() && merge.beans.overwrite.is_empty());
 }
 
+/// Review S5: a bag deleted here stays a tombstone through a restore, so the
+/// next Visualizer pull can't add it back blank.
+#[test]
+fn a_restore_keeps_the_tombstone_of_a_bag_deleted_here() {
+    let m = scan_backup_bytes(&grinder_backup(None, &[bean_row("bean:kept", None)]));
+    let mut local = local_with(&["bean:kept", "bean:gone", "bean:other"], &[], None);
+    local.deleted_beans = vec!["bean:gone".to_owned()];
+    let replace = plan_restore(&m, &local, RestoreMode::Replace, RestoreOpts::default());
+    assert_eq!(replace.beans.remove, ["bean:other"], "the tombstone stays");
+    assert_eq!(replace.beans.overwrite, ["bean:kept"]);
+    // A backup that has the row is the backup's to restore, as any row.
+    let m = scan_backup_bytes(&grinder_backup(None, &[bean_row("bean:gone", None)]));
+    let replace = plan_restore(&m, &local, RestoreMode::Replace, RestoreOpts::default());
+    assert_eq!(replace.beans.overwrite, ["bean:gone"]);
+    // Merge never adds a second row over it: the id is here.
+    let merge = plan_restore(&m, &local, RestoreMode::Merge, RestoreOpts::default());
+    assert!(merge.beans.add.is_empty() && merge.beans.overwrite.is_empty());
+}
+
 #[test]
 fn import_reads_what_the_old_parser_read() {
     for bytes in [WEB, ANDROID] {

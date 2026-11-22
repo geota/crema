@@ -4061,7 +4061,13 @@ data class LocalState (
 	/// A shot or a firmware flash is running, in any tab.
 	val machineBusy: Boolean,
 	val health: List<LocalStoreHealth>,
+	/// Tombstones included.
 	val beans: List<String>,
+	/// Of [`Self::beans`], the tombstones: bags deleted on this device, kept
+	/// so a Visualizer pull doesn't add them back (#488 review S5). Replace
+	/// keeps one the backup doesn't carry; a backup row with its id wins as
+	/// any row does.
+	val deletedBeans: List<String>,
 	val roasters: List<String>,
 	/// Grinder records (#488), archived and tombstones included.
 	val grinders: List<String>,

@@ -770,6 +770,12 @@ pub fn reconcile_roasters(
 /// else by signature over an unbound, non-deleted local →
 /// [`BeanReconcileAction::Replace`]; else [`BeanReconcileAction::Add`].
 ///
+/// A bag deleted on this device is a tombstone (`deleted_at` set, the row kept
+/// with its `visualizer_id`; geota/crema#488 review S5). A remote that only
+/// matches a tombstone gets no action: never added again, never written over
+/// the tombstone. Live rows match first, so a bag the user adds again (same
+/// signature, unbound) binds to the remote as a new bag would.
+///
 /// Last-write-wins against the sync baseline `last_sync_at` (the previous
 /// completed sync, unix ms; `None` = never synced):
 ///
@@ -803,6 +809,9 @@ pub fn reconcile_beans(
     let mut actions = Vec::with_capacity(remote.len());
     for decoded in remote {
         if let Some(m) = match_local_bean(local, decoded, &name_of) {
+            if m.deleted_at.is_some() {
+                continue;
+            }
             let bound = m.visualizer_id.is_some() && m.visualizer_id == decoded.visualizer_id;
             let edited_here = last_sync_at.is_some_and(|ls| m.updated_at > ls);
             if bound && edited_here {
@@ -824,34 +833,37 @@ pub fn reconcile_beans(
     actions
 }
 
-/// The local bean a decoded remote matches: by (`visualizer_id`
-/// both-set-and-equal) OR (same `id`); else by signature over an unbound,
-/// non-deleted local.
+/// The local bean a decoded remote matches, live rows first: a live row by
+/// (`visualizer_id` both-set-and-equal) OR (same `id`); else a live unbound
+/// row by signature; else a tombstone by id (the caller skips it).
 fn match_local_bean<'a>(
     local: &'a [Bean],
     decoded: &Bean,
     name_of: &dyn Fn(&Option<String>) -> Option<String>,
 ) -> Option<&'a Bean> {
-    let by_id = local.iter().find(|b| {
+    let same_id = |b: &&Bean| {
         (decoded.visualizer_id.is_some() && b.visualizer_id == decoded.visualizer_id)
             || b.id == decoded.id
-    });
-    by_id.or_else(|| {
-        let decoded_sig = signature_for_bean(
-            &decoded.name,
-            name_of(&decoded.roaster_id).as_deref(),
-            decoded.roasted_on.as_deref(),
-        );
-        local.iter().find(|b| {
-            b.visualizer_id.is_none()
-                && b.deleted_at.is_none()
-                && signature_for_bean(
-                    &b.name,
-                    name_of(&b.roaster_id).as_deref(),
-                    b.roasted_on.as_deref(),
-                ) == decoded_sig
+    };
+    let live = || local.iter().filter(|b| b.deleted_at.is_none());
+    live()
+        .find(same_id)
+        .or_else(|| {
+            let decoded_sig = signature_for_bean(
+                &decoded.name,
+                name_of(&decoded.roaster_id).as_deref(),
+                decoded.roasted_on.as_deref(),
+            );
+            live().find(|b| {
+                b.visualizer_id.is_none()
+                    && signature_for_bean(
+                        &b.name,
+                        name_of(&b.roaster_id).as_deref(),
+                        b.roasted_on.as_deref(),
+                    ) == decoded_sig
+            })
         })
-    })
+        .or_else(|| local.iter().find(same_id))
 }
 
 /// One pulled bag as the shell hands it to [`reconcile_pulled_bags`]: the RAW
@@ -902,6 +914,9 @@ pub fn reconcile_pulled_bags(
             now_ms,
         );
         if let Some(m) = match_local_bean(local, &decoded, &name_of) {
+            if m.deleted_at.is_some() {
+                continue;
+            }
             let bound = m.visualizer_id.is_some() && m.visualizer_id == decoded.visualizer_id;
             let edited_here = last_sync_at.is_some_and(|ls| m.updated_at > ls);
             if bound && edited_here {
@@ -1987,6 +2002,79 @@ mod tests {
             actions.as_slice(),
             [BeanReconcileAction::Add { .. }]
         ));
+    }
+
+    /// A bound bag deleted on this device (review S5).
+    fn tombstone(id: &str, name: &str, visualizer_id: &str) -> Bean {
+        let mut b = bean(id, name, Some(visualizer_id));
+        b.deleted_at = Some(5_000);
+        b
+    }
+
+    #[test]
+    fn reconcile_beans_never_adds_back_a_bag_deleted_here() {
+        let gone = tombstone("bean:l1", "Yirg", "b1");
+        let decoded = bean("bean:remote", "Yirgacheffe", Some("b1"));
+        let actions = reconcile_beans(
+            std::slice::from_ref(&gone),
+            &[decoded],
+            &HashMap::new(),
+            Some(1_000),
+        );
+        assert_eq!(actions, vec![], "the pull leaves the tombstone alone");
+        // By its round-tripped `crema_id` too, before it was ever bound here.
+        let by_id = bean("bean:l1", "Yirg", Some("b2"));
+        assert_eq!(
+            reconcile_beans(&[gone], &[by_id], &HashMap::new(), None),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn reconcile_pulled_bags_never_adds_back_a_bag_deleted_here() {
+        let gone = tombstone("bean:l1", "Yirg", "b1");
+        let pulled = PulledBag {
+            wire: serde_json::json!({ "id": "b1", "name": "Yirgacheffe" }),
+            local_roaster_id: None,
+            fallback_id: "bean:fresh".to_owned(),
+        };
+        let actions = reconcile_pulled_bags(&[gone], &[pulled], &HashMap::new(), Some(1_000), 7);
+        assert_eq!(actions, vec![]);
+    }
+
+    #[test]
+    fn a_bag_added_again_binds_past_its_tombstone() {
+        // Deleted here, then added again by hand: the new row takes the remote.
+        let gone = tombstone("bean:old", "Yirg", "b1");
+        let again = bean("bean:new", "Yirg", None);
+        let decoded = bean("bean:remote", "Yirg", Some("b1"));
+        let actions = reconcile_beans(
+            &[gone.clone(), again],
+            std::slice::from_ref(&decoded),
+            &HashMap::new(),
+            None,
+        );
+        assert!(
+            matches!(
+                actions.as_slice(),
+                [BeanReconcileAction::Replace { local_id, remote }]
+                    if local_id == "bean:new" && remote.visualizer_id.as_deref() == Some("b1")
+            ),
+            "{actions:?}"
+        );
+        // Once bound, the live row matches first; the tombstone stays put.
+        let mut bound = bean("bean:new", "Yirg", Some("b1"));
+        bound.updated_at = 0;
+        let actions = reconcile_beans(
+            &[gone, bound],
+            &[bean("bean:remote", "Yirg 2", Some("b1"))],
+            &HashMap::new(),
+            Some(1_000),
+        );
+        assert!(
+            matches!(actions.as_slice(), [BeanReconcileAction::Replace { local_id, .. }] if local_id == "bean:new"),
+            "{actions:?}"
+        );
     }
 
     #[test]
