@@ -110,7 +110,7 @@ enum class Setting(
     SCALE_MODE(A, RO, SettingStore.SCALE, null, MirrorSource.NONE_AVAILABLE, null, false, listOf("$VM.setScaleMode(Int)"), uiField = "scaleActiveMode"),
     SCALE_AUTO_STOP(A, RO, SettingStore.SCALE, null, MirrorSource.SCALE_ECHO, null, false, listOf("$VM.setScaleAutoStop(Int)"), uiField = "scaleAutoStop"),
 
-    // ── B: session (14) ──────────────────────────────────────────────────────
+    // ── B: session (13) ──────────────────────────────────────────────────────
     STOP_ON_WEIGHT(B, REL, AP, "stopOnWeight", SNAP, "stopOnWeight", true, listOf("$VM.setStopOnWeight(Boolean)")),
     AUTO_TARE(B, REL, AP, "autoTare", SNAP, "autoTare", true, listOf("$VM.setAutoTare(Boolean)")),
     MAX_SHOT_DURATION(B, RO, AP, "maxShotDurationS", SNAP, "maxShotDurationS", true, listOf("$VM.setMaxShotDuration(Float?)")),
@@ -119,7 +119,6 @@ enum class Setting(
     PRE_FLUSH(B, RO, AP, "preFlush", SNAP, "preFlush", true, listOf("$VM.setPreFlush(Boolean)")),
     STEAM_PURGE(B, RO, AP, "steamPurge", SNAP, "steamPurge", true, listOf("$VM.setSteamPurge(Boolean)")),
     IDLE_SLEEP(B, RO, AP, "idleSleepMin", SNAP, "idleSleepMin", true, listOf("$VM.setIdleSleepMin(Int)")),
-    GRINDER_MODEL(B, RO, AP, "grinderModel", SNAP, "grinderModel", true, listOf("$VM.setGrinderModel(String)")),
     QC_GRIND(B, REL, AP, "qcGrind", SNAP, "qcGrind", true, listOf("$VM.setQcGrind(Float)")),
     ACTIVE_PROFILE(B, REL, AP, "activeProfileId", SNAP, "activeProfileId", true, listOf("$VM.setActiveProfile(String)")),
     ACTIVE_BEAN(B, REL, SettingStore.LIBRARY, null, SNAP, "activeBeanId", true, listOf("$VM.setActiveBean(String?)"), uiField = "activeBeanId"),
@@ -135,7 +134,11 @@ enum class Setting(
         uiField = "brewParams", snapshotExtras = listOf("brewYieldG", "brewTempC", "brewPreinfuseS"),
     ),
 
-    // ── C: personal (58) ─────────────────────────────────────────────────────
+    // ── C: personal (59) ─────────────────────────────────────────────────────
+    /** The pre-#488 Settings grinder: read once, by the grinder library's
+     *  migration. No shot, upload or export falls back to it, and a remote
+     *  neither shows nor adopts the hub's (REVIEW-FINAL S3, N8). */
+    GRINDER_MODEL(C, LOC, AP, "grinderModel", NONE, null, false, emptyList()),
     THEME_MODE(C, LOC, AP, "themeMode", NONE, null, false, listOf("$VM.setThemeMode(String)")),
     WEIGHT_UNIT(C, LOC, AP, "weightUnit", NONE, null, false, listOf("$VM.setWeightUnit(String)")),
     TEMP_UNIT(C, LOC, AP, "tempUnit", NONE, null, false, listOf("$VM.setTempUnit(String)")),

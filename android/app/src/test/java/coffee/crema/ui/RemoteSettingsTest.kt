@@ -95,7 +95,8 @@ class RemoteSettingsTest {
         assertEquals(S.stopOnWeight, ui.stopOnWeight)
         assertEquals(S.autoTare, ui.autoTare)
         assertEquals(S.maxShotDurationS, ui.maxShotDurationS)
-        assertEquals(S.grinderModel, ui.grinderModel)
+        // The Settings grinder is retired (REVIEW-FINAL N8): the own one shows.
+        assertEquals(P.grinderModel, ui.grinderModel)
         assertEquals(listOf(S.qcSteamTimeS, S.qcSteamFlowMlS, S.qcSteamTempC, S.qcHotWaterTempC, S.qcHotWaterVolumeMl, S.qcFlushTimeS, S.qcFlushTempC), listOf(ui.qcSteamTimeS, ui.qcSteamFlowMlS, ui.qcSteamTempC, ui.qcHotWaterTempC, ui.qcHotWaterVolumeMl, ui.qcFlushTimeS, ui.qcFlushTempC))
         assertEquals(S.qcGrind, ui.qcGrind)
         assertEquals(PROFILE_S, ui.activeProfileId)
@@ -357,7 +358,7 @@ class RemoteSettingsTest {
         val vm = fixture.start()
         fixture.push(S.copy(rev = 5))
         val shown = abOfUi(vm.ui.value)
-        val after = S.copy(stopOnWeight = false, qcGrind = "9", grinderModel = "After the restart", rev = 0)
+        val after = S.copy(stopOnWeight = false, qcGrind = "9", rev = 0)
         fixture.hubConfig = coreJson.encodeToString(coffee.crema.settings.ConfigSnapshot.serializer(), after)
         fixture.restart()
         VmHarness.idleUntil("the remote to notice") { vm.ui.value.mirrorReconnecting }
@@ -369,7 +370,7 @@ class RemoteSettingsTest {
         }
         assertEquals(abOf(P), abOf(savedPrefs()))
         untilClock("the reattach") { fixture.hub.remotes().isNotEmpty() && !vm.ui.value.mirrorReconnecting }
-        VmHarness.idleUntil("the restarted hub's snapshot") { vm.ui.value.grinderModel == "After the restart" }
+        VmHarness.idleUntil("the restarted hub's snapshot") { vm.ui.value.qcGrind == "9" }
         assertEquals("9", vm.ui.value.qcGrind)
         assertEquals(false, vm.ui.value.stopOnWeight)
         assertEquals(SettingAvailability.VIA_HUB, vm.ui.value.availability(Setting.STOP_ON_WEIGHT))
@@ -414,7 +415,7 @@ class RemoteSettingsTest {
             maxShotDurationS = ui.maxShotDurationS, autoTare = ui.autoTare, stopOnWeight = ui.stopOnWeight,
             volumeStopWithScale = ui.volumeStopWithScale, requireScale = ui.requireScale, steamEco = ui.steamEco,
             steamTwoTap = ui.steamTwoTap, fanThresholdC = ui.fanThresholdC, preFlush = ui.preFlush, steamPurge = ui.steamPurge,
-            idleSleepMin = ui.idleSleepMin, grinderModel = ui.grinderModel, qcSteamTimeS = ui.qcSteamTimeS,
+            idleSleepMin = ui.idleSleepMin, qcSteamTimeS = ui.qcSteamTimeS,
             qcSteamFlowMlS = ui.qcSteamFlowMlS, qcSteamTempC = ui.qcSteamTempC, qcHotWaterTempC = ui.qcHotWaterTempC,
             qcHotWaterVolumeMl = ui.qcHotWaterVolumeMl, qcFlushTimeS = ui.qcFlushTimeS, qcFlushTempC = ui.qcFlushTempC,
             qcGrind = ui.qcGrind, activeProfileId = ui.activeProfileId, waterRefillPointMm = ui.waterRefillPointMm,

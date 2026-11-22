@@ -43,6 +43,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.brew.brewMethodPickerPresets
 import coffee.crema.brew.methodIcon
 import coffee.crema.ui.MainUiState
+import coffee.crema.ui.activeGrindScale
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
@@ -174,10 +175,17 @@ private fun LogBrewFormBody(
                     )
                 },
                 { m ->
+                    // On the active grinder's scale, which the save stamps (REVIEW-FINAL S4):
+                    // its steps and its decimals. Not set shows "—" (0 is a grind).
+                    val scale = ui.activeGrindScale()
+                    val start = androidx.compose.runtime.remember(scale) { coffee.crema.beans.grindStartFromBlank(scale) }
                     CremaStepper(
-                        label = "Grind", value = draft.grind, unit = null,
+                        label = "Grind", value = draft.grind ?: start, unit = null,
                         onChange = { v -> update { it.edited(BrewLogDraft.GRIND).copy(grind = v) } },
-                        step = 0.1, min = 0.0, max = 200.0, modifier = m, style = CremaStepperStyle.Boxed,
+                        step = scale.step.toDouble(), min = scale.min.toDouble(), max = scale.max.toDouble(),
+                        fmt = { coffee.crema.beans.grindText(it, scale) },
+                        modifier = m, style = CremaStepperStyle.Boxed,
+                        blank = if (draft.grind == null) coffee.crema.ui.components.StepperBlank("—", start) else null,
                     )
                 },
                 { m ->

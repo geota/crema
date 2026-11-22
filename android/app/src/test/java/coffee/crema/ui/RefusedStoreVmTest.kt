@@ -70,7 +70,7 @@ class RefusedStoreVmTest {
     private fun MainViewModel.logBrew() = addManualBrew(
         LibraryController.ManualBrewInput(
             method = "espresso", completedAtMs = 1_700_000_000_000, beanId = null, doseG = 18f, waterG = null,
-            yieldG = 36f, grindSetting = null, brewTempC = null, durationMs = 28_000, rating = null, notes = null, nextPlan = null,
+            yieldG = 36f, grind = null, brewTempC = null, durationMs = 28_000, rating = null, notes = null, nextPlan = null,
         ),
     )
 

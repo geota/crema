@@ -75,7 +75,6 @@ class StandaloneSettingsTest {
         Edit("preFlush", { it.setPreFlush(true) }, { it.preFlush }, { it.preFlush }, true),
         Edit("steamPurge", { it.setSteamPurge(true) }, { it.steamPurge }, { it.steamPurge }, true),
         Edit("idleSleep", { it.setIdleSleepMin(60) }, { it.idleSleepMin }, { it.idleSleepMin }, 60),
-        Edit("grinderModel", { it.setGrinderModel("Niche") }, { it.grinderModel }, { it.grinderModel }, "Niche"),
         Edit("qcGrind", { it.setQcGrind(15f) }, { it.qcGrind }, { it.qcGrind }, "15"),
         Edit("activeProfile", { it.setActiveProfile(RemoteFixture.PROFILE_S) }, { it.activeProfileId }, { it.activeProfileId }, RemoteFixture.PROFILE_S),
     )

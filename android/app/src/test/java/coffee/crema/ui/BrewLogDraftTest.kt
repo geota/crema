@@ -74,7 +74,7 @@ class BrewLogDraftTest {
         assertEquals(185_000L, input.rows.single().durationMs)
         assertEquals("aeropress", d.method)
         assertEquals(14.0, d.dose, 1e-6)
-        assertEquals(22.0, d.grind, 1e-6)
+        assertEquals(22.0, d.grind!!, 1e-6)
         assertEquals(90.0, d.temp, 1e-6)
         assertEquals(BrewLogOwner.HISTORY, d.owner)
         assertFalse(d.journalOpen)
@@ -133,7 +133,7 @@ class BrewLogDraftTest {
     @Test fun missingSeedsBlankTheirFields() {
         val core = FakeCore(seeds("cold_brew", 60f, 700f))
         val d = BrewLogSeeds.open(BrewLogOwner.HISTORY, emptyList(), activeBeanId = null, seedsJson = core::call)
-        assertEquals(0.0, d.grind, 1e-6)
+        assertNull("not set (0 would be a grind)", d.grind)
         assertEquals(0.0, d.temp, 1e-6)
         assertEquals("", d.timeStr)
     }

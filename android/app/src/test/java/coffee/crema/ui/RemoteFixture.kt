@@ -64,12 +64,13 @@ internal class RemoteFixture(private val store: ViewModelStore) {
     /** The NSD peers the remote sees, when the test drives them. */
     var peers: MutableStateFlow<List<Peer>>? = null
 
-    /** Restore a remote with [own] as its settings and wait for the hub's Welcome. */
-    fun start(own: AppPrefs = P, onBuilt: (MainViewModel) -> Unit = {}): MainViewModel {
+    /** Restore a remote with [own] as its settings and [library] as its own
+     *  library, and wait for the hub's Welcome. */
+    fun start(own: AppPrefs = P, library: BeanLibrary = LIBRARY, onBuilt: (MainViewModel) -> Unit = {}): MainViewModel {
         val dir = VmHarness.app().filesDir
         val (relayStore, keys) = VmHarness.relayStore()
         remoteKeys = keys
-        File(dir, "beanLibrary.json").writeText(coreJson.encodeToString(BeanLibrary.serializer(), LIBRARY))
+        File(dir, "beanLibrary.json").writeText(coreJson.encodeToString(BeanLibrary.serializer(), library))
         serve()
         VmHarness.pinHub(relayStore, hubKeys, endpoint.port)
         writePrefs(own.copy(proxyRole = "secondary", proxyPrimaryHost = "127.0.0.1", proxyPrimaryPort = endpoint.port))
@@ -202,7 +203,7 @@ internal class RemoteFixture(private val store: ViewModelStore) {
         /** A hub snapshot whose machine and session values all differ from [P]. */
         val S = ConfigSnapshot(
             activeProfileId = PROFILE_S, activeBeanId = BEAN_S, activeBeanSummary = "S bag",
-            stopOnWeight = true, autoTare = true, maxShotDurationS = 44f, grinderModel = "S grinder",
+            stopOnWeight = true, autoTare = true, maxShotDurationS = 44f,
             qcSteamTimeS = 30f, qcSteamFlowMlS = 1.6f, qcSteamTempC = 150f, qcHotWaterTempC = 85f,
             qcHotWaterVolumeMl = 200f, qcFlushTimeS = 6f, qcFlushTempC = 93f, qcGrind = "15",
             qcHotWaterMode = coffee.crema.core.HotWaterMode.Time, qcHotWaterTimeS = 45f,
@@ -243,7 +244,7 @@ internal fun abOf(p: AppPrefs): Map<String, Any?> = mapOf(
     "maxShotDurationS" to p.maxShotDurationS, "autoTare" to p.autoTare, "stopOnWeight" to p.stopOnWeight,
     "volumeStopWithScale" to p.volumeStopWithScale, "requireScale" to p.requireScale, "steamEco" to p.steamEco,
     "steamTwoTap" to p.steamTwoTap, "fanThresholdC" to p.fanThresholdC, "preFlush" to p.preFlush, "steamPurge" to p.steamPurge,
-    "idleSleepMin" to p.idleSleepMin, "grinderModel" to p.grinderModel, "qcSteamTimeS" to p.qcSteamTimeS,
+    "idleSleepMin" to p.idleSleepMin, "qcSteamTimeS" to p.qcSteamTimeS,
     "qcSteamFlowMlS" to p.qcSteamFlowMlS, "qcSteamTempC" to p.qcSteamTempC, "qcHotWaterTempC" to p.qcHotWaterTempC,
     "qcHotWaterVolumeMl" to p.qcHotWaterVolumeMl, "qcFlushTimeS" to p.qcFlushTimeS, "qcFlushTempC" to p.qcFlushTempC,
     "qcGrind" to p.qcGrind, "activeProfileId" to p.activeProfileId, "waterRefillPointMm" to p.waterRefillPointMm,

@@ -59,7 +59,7 @@ class HistoryCutNoticeVmTest {
     private fun MainViewModel.logBrew() = addManualBrew(
         LibraryController.ManualBrewInput(
             method = "pourover", completedAtMs = 1_800_000_000_000, beanId = null, doseG = 15f, waterG = 250f,
-            yieldG = null, grindSetting = null, brewTempC = null, durationMs = 180_000, rating = null, notes = null, nextPlan = null,
+            yieldG = null, grind = null, brewTempC = null, durationMs = 180_000, rating = null, notes = null, nextPlan = null,
         ),
     )
 

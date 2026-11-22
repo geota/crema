@@ -88,7 +88,7 @@ class RemoteToStandaloneTest {
                 maxShotDurationS = s.maxShotDurationS, autoTare = s.autoTare, stopOnWeight = s.stopOnWeight,
                 volumeStopWithScale = s.volumeStopWithScale!!, requireScale = s.requireScale!!, steamEco = s.steamEco!!,
                 steamTwoTap = s.steamTwoTap!!, fanThresholdC = s.fanThresholdC!!, preFlush = s.preFlush!!, steamPurge = s.steamPurge!!,
-                idleSleepMin = s.idleSleepMin, grinderModel = s.grinderModel, qcSteamTimeS = s.qcSteamTimeS,
+                idleSleepMin = s.idleSleepMin, qcSteamTimeS = s.qcSteamTimeS,
                 qcSteamFlowMlS = s.qcSteamFlowMlS, qcSteamTempC = s.qcSteamTempC, qcHotWaterTempC = s.qcHotWaterTempC,
                 qcHotWaterVolumeMl = s.qcHotWaterVolumeMl, qcFlushTimeS = s.qcFlushTimeS, qcFlushTempC = s.qcFlushTempC,
                 qcGrind = s.qcGrind, activeProfileId = s.activeProfileId, waterRefillPointMm = s.waterRefillPointMm,

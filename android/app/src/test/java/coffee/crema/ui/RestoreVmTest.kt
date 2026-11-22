@@ -56,7 +56,7 @@ class RestoreVmTest {
         vm.addManualBrew(
             LibraryController.ManualBrewInput(
                 method = "espresso", completedAtMs = 1_700_000_000_000, beanId = null, doseG = 18f, waterG = null,
-                yieldG = 36f, grindSetting = null, brewTempC = null, durationMs = 28_000, rating = null, notes = null, nextPlan = null,
+                yieldG = 36f, grind = null, brewTempC = null, durationMs = 28_000, rating = null, notes = null, nextPlan = null,
             ),
         )
         VmHarness.idle()
@@ -96,7 +96,7 @@ class RestoreVmTest {
             vm.addManualBrew(
                 LibraryController.ManualBrewInput(
                     method = "pourover", completedAtMs = 1_700_000_200_000, beanId = null, doseG = 15f, waterG = 250f,
-                    yieldG = null, grindSetting = null, brewTempC = null, durationMs = 180_000, rating = null, notes = null, nextPlan = null,
+                    yieldG = null, grind = null, brewTempC = null, durationMs = 180_000, rating = null, notes = null, nextPlan = null,
                 ),
             )
         }

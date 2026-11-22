@@ -25,7 +25,7 @@ import kotlinx.serialization.json.JsonObject
 /**
  * Build the ShotRecord JSON. [fullSamples] replaces the stored (downsampled)
  * series when the caller still holds the full-resolution buffer (the live-shot
- * path); [grinderModel] is the equipment-level grinder from Settings.
+ * path). The grinder is the shot's own, never the Settings one.
  */
 fun decentShotRecordJson(
     core: DecentCore,
@@ -33,11 +33,10 @@ fun decentShotRecordJson(
     shot: StoredShot,
     machine: ShotMachine,
     appVersion: String,
-    grinderModel: String? = null,
     fullSamples: List<TelemetrySample>? = null,
 ): String {
     val source = fullSamples?.takeIf { it.isNotEmpty() }?.let { shot.copy(samples = it) } ?: shot
-    val wire = wireShotJson(source, grinderModel = grinderModel?.takeIf { it.isNotBlank() })
+    val wire = wireShotJson(source)
     return core.shotRecordJson(
         json.encodeToString(JsonObject.serializer(), wire),
         json.encodeToString(ShotMachine.serializer(), machine),

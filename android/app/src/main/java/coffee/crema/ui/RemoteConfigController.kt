@@ -91,7 +91,6 @@ internal class RemoteConfigController(
                 stopOnWeight = ui.stopOnWeight,
                 autoTare = ui.autoTare,
                 maxShotDurationS = ui.maxShotDurationS,
-                grinderModel = ui.grinderModel,
                 qcSteamTimeS = ui.qcSteamTimeS,
                 qcSteamFlowMlS = ui.qcSteamFlowMlS,
                 qcSteamTempC = ui.qcSteamTempC,

@@ -34,15 +34,15 @@ fun shotFinalWeight(shot: StoredShot): Float? {
     return weights.lastOrNull() ?: weights.maxOrNull() ?: shot.yieldG
 }
 
-/** Assemble the Rust wire `StoredShot` JSON for [shot]. [grinderModel] is the
- *  equipment-level Settings default; the shot's own [StoredShot.grinderModel]
- *  wins over it (web `resolveGrinderModel`), so a backup keeps it too.
+/** Assemble the Rust wire `StoredShot` JSON for [shot]. Its grinder is the
+ *  shot's own [StoredShot.grinderModel]: none is none, never the Settings
+ *  grinder (REVIEW-FINAL S3).
  *
  *  [forBackup] preserves the locally-held identity fields the Visualizer UPLOAD
  *  path intentionally nulls (the server assigns `visualizerId`; the upload omits
  *  the per-shot grind) so a whole-app backup round-trips them (issue 01). Leave
  *  it false for the upload path. */
-fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Boolean = false): JsonObject {
+fun wireShotJson(shot: StoredShot, forBackup: Boolean = false): JsonObject {
     return buildJsonObject {
         put("formatVersion", 3)
         put("id", shot.id)
@@ -151,7 +151,7 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
                 }
             } ?: JsonNull,
         )
-        put("grinderModel", resolveGrinderModel(shot, grinderModel))
+        put("grinderModel", resolveGrinderModel(shot))
         // Omitted when absent, as the core writes it (#488).
         shot.grinderId?.let { put("grinderId", it) }
         put("tags", buildJsonArray { shot.tags.forEach { add(JsonPrimitive(it)) } })
@@ -342,12 +342,10 @@ fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Jso
 }
 
 /** The history export: [shots] as the core's Crema `crema/v1` JSONL (F10) —
- *  what web's History import reads, and [shotsFromCremaJsonl] reads back.
- *  [grinderModel] is the Settings grinder, for shots captured before F10
- *  froze theirs. */
-fun shotHistoryJsonl(shots: List<StoredShot>, grinderModel: String?, exportedAtMs: Long, version: String): String {
+ *  what web's History import reads, and [shotsFromCremaJsonl] reads back. */
+fun shotHistoryJsonl(shots: List<StoredShot>, exportedAtMs: Long, version: String): String {
     val envelope = buildJsonObject {
-        put("shots", JsonArray(shots.map { wireShotJson(it, grinderModel, forBackup = true) }))
+        put("shots", JsonArray(shots.map { wireShotJson(it, forBackup = true) }))
     }
     return exportCremaJsonl(envelope.toString(), exportedAtMs, version)
 }

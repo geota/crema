@@ -133,10 +133,10 @@ class OwnStateReadsTest {
     private val effectiveMembers: Map<String, Set<String>> = mapOf(
         "MainViewModel.kt" to setOf(
             "startFromShot",
-            // Decent buildRecord.grinderModel; Visualizer grinderModel and beanLibrary.
-            "decent", "visualizer",
+            // Visualizer beanLibrary.
+            "visualizer",
         ),
-        "LibraryController.kt" to setOf("quickSave", "captureCompletedShot", "freezeShotSelections"),
+        "LibraryController.kt" to setOf("quickSave", "captureCompletedShot"),
         "GuidedBrewController.kt" to setOf(
             "guidedBeanId", "openGuidedLogBrew", "openLogBrew", "defaultBrewRecipeFor", "resolveGuidedSetup",
         ),

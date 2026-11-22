@@ -105,7 +105,7 @@ class HistoryNoCapVmTest {
     private fun MainViewModel.logBrewAt(at: Long, notes: String? = null) = VmHarness.library(this).addManualBrew(
         LibraryController.ManualBrewInput(
             method = "pourover", completedAtMs = at, beanId = null, doseG = 15f, waterG = 250f,
-            yieldG = null, grindSetting = null, brewTempC = null, durationMs = 180_000, rating = null, notes = notes, nextPlan = null,
+            yieldG = null, grind = null, brewTempC = null, durationMs = 180_000, rating = null, notes = notes, nextPlan = null,
         ),
     )
 

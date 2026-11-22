@@ -51,11 +51,12 @@ class SettingsRegistryTest {
     fun `the groups and counts match the spec`() {
         // 87: relay v4 R5 removed `pairedDevices` (C), the v3 pairing list; 91:
         // the hot-water modes added the dose rows A22–A25; 97: #488 added the
-        // active grinder (B) and the grind auto-save switch (C).
+        // active grinder (B) and the grind auto-save switch (C). Round 2 retired
+        // the Settings grinder's mirroring: it is this device's own (C, N8).
         assertEquals(97, Setting.entries.size)
         assertEquals(25, Setting.entries.count { it.group == SettingGroup.A_MACHINE })
-        assertEquals(14, Setting.entries.count { it.group == SettingGroup.B_SESSION })
-        assertEquals(58, Setting.entries.count { it.group == SettingGroup.C_PERSONAL })
+        assertEquals(13, Setting.entries.count { it.group == SettingGroup.B_SESSION })
+        assertEquals(59, Setting.entries.count { it.group == SettingGroup.C_PERSONAL })
         for (s in Setting.entries) {
             if (s.group == SettingGroup.C_PERSONAL) {
                 assertEquals(OnRemote.LOCAL, s.onRemote, "$s")
@@ -68,8 +69,8 @@ class SettingsRegistryTest {
             assertEquals(s.mirroredVia == MirrorSource.SNAPSHOT, s.snapshotField != null, "$s: snapshotField iff SNAPSHOT")
             if (s.adoptable) assertTrue(s.store in setOf(SettingStore.APP_PREFS, SettingStore.LIBRARY, SettingStore.MEMORY), "$s")
         }
-        // Adoptable at T6: A1–A11 and B1–B13.
-        assertEquals(28, Setting.entries.count { it.adoptable })
+        // Adoptable at T6: A1–A11 and B1–B13, less the retired Settings grinder.
+        assertEquals(27, Setting.entries.count { it.adoptable })
     }
 
     /** AC-14. */

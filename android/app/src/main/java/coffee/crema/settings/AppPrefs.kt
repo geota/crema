@@ -237,8 +237,8 @@ data class AppPrefs(
     val defaultRatio: Float = CommonDefaults.common.defaultRatio,
     val defaultBrewTempC: Float = CommonDefaults.common.defaultBrewTempC,
     val defaultPreinfuseS: Float = CommonDefaults.common.defaultPreinfuseS,
-    /** Equipment-level grinder model (web `grinderModel`) — free text shown on
-     *  Brew + sent with Visualizer uploads/patches. Blank = unset. */
+    /** The pre-#488 Settings grinder (web `grinderModel`): read once, by the
+     *  grinder library's migration. Nothing else reads it (REVIEW-FINAL S3). */
     val grinderModel: String = CommonDefaults.common.grinderModel,
     /** Default barista name (web `baristaName`) — stamped on each new shot and
      *  brew log. Blank = unset. */
@@ -623,7 +623,6 @@ data class ConfigSnapshot(
     val stopOnWeight: Boolean = false,
     val autoTare: Boolean = false,
     val maxShotDurationS: Float = 45f,
-    val grinderModel: String = "",
     val qcSteamTimeS: Float = 12f,
     val qcSteamFlowMlS: Float = 1.2f,
     val qcSteamTempC: Float = 148f,

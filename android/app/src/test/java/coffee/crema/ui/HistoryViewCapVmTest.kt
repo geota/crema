@@ -90,7 +90,7 @@ class HistoryViewCapVmTest {
         vm.addManualBrew(
             LibraryController.ManualBrewInput(
                 method = "espresso", completedAtMs = planted.first().completedAtMs + 1, beanId = null, doseG = 18f, waterG = null,
-                yieldG = 36f, grindSetting = null, brewTempC = null, durationMs = 28_000, rating = null, notes = null, nextPlan = null,
+                yieldG = 36f, grind = null, brewTempC = null, durationMs = 28_000, rating = null, notes = null, nextPlan = null,
             ),
         )
         VmHarness.idleUntil("the saves") { dbIds().size == 5_001 && dbField(top, "rating") == "4" }
@@ -180,7 +180,7 @@ class HistoryViewCapVmTest {
             vm!!.addManualBrew(
                 LibraryController.ManualBrewInput(
                     method = "pourover", completedAtMs = planted.first().completedAtMs + 10, beanId = null, doseG = 15f, waterG = 250f,
-                    yieldG = null, grindSetting = null, brewTempC = null, durationMs = 180_000, rating = null, notes = "made early", nextPlan = null,
+                    yieldG = null, grind = null, brewTempC = null, durationMs = 180_000, rating = null, notes = "made early", nextPlan = null,
                 ),
             )
             VmHarness.idle()

@@ -42,7 +42,6 @@ internal fun hubValue(cfg: ConfigSnapshot, setting: Setting): Any? = when (setti
     Setting.PRE_FLUSH -> cfg.preFlush
     Setting.STEAM_PURGE -> cfg.steamPurge
     Setting.IDLE_SLEEP -> cfg.idleSleepMin
-    Setting.GRINDER_MODEL -> cfg.grinderModel
     Setting.QC_GRIND -> cfg.qcGrind
     Setting.ACTIVE_PROFILE -> cfg.activeProfileId
     Setting.ACTIVE_BEAN -> cfg.activeBeanId
@@ -79,7 +78,6 @@ internal fun ownValue(own: MainUiState, setting: Setting): Any? = when (setting)
     Setting.PRE_FLUSH -> own.preFlush
     Setting.STEAM_PURGE -> own.steamPurge
     Setting.IDLE_SLEEP -> own.idleSleepMin
-    Setting.GRINDER_MODEL -> own.grinderModel
     Setting.QC_GRIND -> own.qcGrind
     Setting.ACTIVE_PROFILE -> own.activeProfileId
     Setting.ACTIVE_BEAN -> own.activeBeanId
@@ -131,7 +129,6 @@ fun adopt(own: MainUiState, cfg: ConfigSnapshot, changes: Set<Setting>, hasBean:
             Setting.PRE_FLUSH -> s.copy(preFlush = cfg.preFlush)
             Setting.STEAM_PURGE -> s.copy(steamPurge = cfg.steamPurge)
             Setting.IDLE_SLEEP -> idleSleepChoices().let { c -> s.copy(idleSleepMin = c[idleSleepIndex(cfg.idleSleepMin, c)]) }
-            Setting.GRINDER_MODEL -> s.copy(grinderModel = cfg.grinderModel)
             // The hub's grind as text; a number is still held to the sanity bound.
             Setting.QC_GRIND -> when (val g = cfg.qcGrind?.trim()?.takeIf { it.isNotEmpty() }) {
                 null -> s.copy(qcGrind = null)

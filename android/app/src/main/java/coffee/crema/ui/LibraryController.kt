@@ -42,6 +42,13 @@ import coffee.crema.core.resettleRemaining
 import coffee.crema.core.resettledBagDebit
 import coffee.crema.core.ShotCaptureContext
 import coffee.crema.core.ShotSelections
+import coffee.crema.core.ShotEffects
+import coffee.crema.core.ShotEffectsInput
+import coffee.crema.core.shotEffectsJson
+import coffee.crema.core.shotBeanSnapshotJson
+import coffee.crema.core.BrewLogGrind
+import coffee.crema.core.BrewLogGrindInput
+import coffee.crema.core.brewLogGrindJson
 import coffee.crema.core.exportProfileFile
 import coffee.crema.core.importProfileFile
 import coffee.crema.core.exportBeanconquerorMainJson
@@ -267,8 +274,9 @@ class LibraryController(
      */
     private var draftProfileJson: String? = null
 
-    /** The aborted shot held for the undo window (not yet in history). */
-    private var discardedShot: StoredShot? = null
+    /** The aborted shot held for the undo window (not yet in history), and
+     *  what it does when the Undo keeps it. */
+    private var discardedShot: Pair<StoredShot, ShotEffects>? = null
 
     // ── VM lookups (the whole-profile JSON the shot/proxy paths need) ────────
 
@@ -1261,7 +1269,7 @@ class LibraryController(
             // The shot whole, just before it goes (#310 P4a): a row holds no curve.
             val shot = runCatching { loadShot(id) }
                 .getOrElse { notify("Couldn't read that shot just now. Try again."); return@launch } ?: return@launch
-            val text = runCatching { exportV2JsonShot(wireShotJson(shot, settingsGrinder()).toString()) }
+            val text = runCatching { exportV2JsonShot(wireShotJson(shot).toString()) }
                 .getOrElse { appendLog("Export shot failed: ${it.message}"); return@launch }
             shareText(text, "Share shot")
         }
@@ -1275,10 +1283,6 @@ class LibraryController(
             shareText(text, "Export shots")
         }
     }
-
-    /** The Settings grinder, for an export of a shot captured before F10
-     *  froze the grinder on it. */
-    private fun settingsGrinder(): String? = effectiveState().grinderModel.trim().ifEmpty { null }
 
     /** Export the bean library (beans + roasters) as Crema JSONL — Settings → Sharing. */
     fun exportBeansLibrary() {
@@ -1351,7 +1355,7 @@ class LibraryController(
         if (missing.isNotEmpty()) notify("${missing.size} shot(s) have damaged telemetry and are exported without their curves")
         return withContext(Dispatchers.Default) {
             runCatching {
-                shotHistoryJsonl(shots, settingsGrinder(), System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME)
+                shotHistoryJsonl(shots, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME)
             }.getOrElse { appendLog("Export shots failed: ${it.message}"); null }
         }
     }
@@ -3233,23 +3237,6 @@ class LibraryController(
 
     // ── Shot history ──────────────────────────────────────────────────────────
 
-    /** What a shot records of the selections, read when it started (review
-     *  2026-11-21 F9, web parity): switching the bag, the profile or the
-     *  grind mid-shot can't relabel or debit the wrong bag. */
-    private data class ShotStartSelections(
-        val atMs: Long,
-        val bean: Bean?,
-        val roasterName: String?,
-        val profile: CremaProfile?,
-        /** Brew's grind at the start (#488 round 2): what the header showed. */
-        val grind: String?,
-        /** The active grinder's name and id at the start (#488, review F4). */
-        val settingsGrinder: String?,
-        val grinderId: String?,
-    )
-
-    private var shotStart: ShotStartSelections? = null
-
     /**
      * What Brew has selected (REVIEW-CORE H3) in [s], the effective state (on
      * a remote, the hub's): the core freezes it on its own shot start, the
@@ -3260,17 +3247,7 @@ class LibraryController(
         val grinder = s.activeGrinder()
         val profile = s.activeProfile()
         return ShotSelections(
-            bean = bean?.let { b ->
-                ShotBean(
-                    beanId = b.id,
-                    name = b.name,
-                    roasterName = b.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name },
-                    roastedOn = b.roastedOn,
-                    roastLevel = b.roastLevel,
-                    tags = b.tags,
-                    notes = b.notes?.takeIf { it.isNotBlank() },
-                )
-            },
+            bean = bean?.let { b -> shotBeanSnapshot(b, b.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }) },
             profileId = profile?.id,
             profileName = profile?.name,
             grinderId = grinder?.id,
@@ -3286,30 +3263,10 @@ class LibraryController(
     }
 
     /**
-     * A shot started (`ShotStarted`): freeze the selections on screen (on a
-     * remote, the hub's: its mirror copy of the shot is labelled the same way)
-     * for [captureCompletedShot].
-     */
-    fun freezeShotSelections(now: Long = System.currentTimeMillis()) {
-        val s = effectiveState()
-        val bean = s.beans.firstOrNull { it.id == s.activeBeanId }
-        shotStart = ShotStartSelections(
-            atMs = now,
-            bean = bean,
-            roasterName = bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name },
-            profile = s.activeProfile(),
-            grind = s.brewGrindView().value,
-            settingsGrinder = s.activeGrinder()?.name?.trim()?.ifEmpty { null },
-            grinderId = s.activeGrinder()?.id,
-        )
-    }
-
-    /**
      * Capture a completed shot into the log (newest first, capped) and persist.
-     * Profile / bean names come from the selections at the shot's start
-     * ([freezeShotSelections]), else those at completion. v1
-     * stores a summary only — the telemetry slice for the detail chart is a
-     * later increment.
+     * The bag, profile, grinder and grind are those the core froze at the
+     * shot's start ([shotSelectionsOf]); what the completion does besides the
+     * row is the core's [shotEffects].
      */
     fun captureCompletedShot(
         durationMs: Long,
@@ -3321,48 +3278,37 @@ class LibraryController(
         disposition: ShotDisposition = ShotDisposition.Record,
         peakWeightG: Float? = null,
     ) {
-        // The selections on screen: on a remote, the hub's (02 F2 — a remote
-        // still records the shot it watched). Those of the shot's start when
-        // this device saw it start; a start older than the shot (a missed
-        // ShotStarted, a link lost mid-shot) is not this shot's.
+        // What the completion does is the core's rule (REVIEW-CORE M4): only
+        // the device that records the shot acts on it. A remote's mirror copy
+        // of the hub's shot (02 F2: it still records the shot it watched) never
+        // debits its own copy of the hub's bag, uploads or auto-saves; a replay
+        // touches nothing real but still uploads.
         val s = effectiveState()
-        val started = shotStart?.takeIf { now - it.atMs in 0..(durationMs + SHOT_START_SLACK_MS) }
-        shotStart = null
-        val profile = if (started != null) started.profile else s.activeProfile()
-        // The core classified this completion (review #40 —
-        // `de1_domain::shot_disposition`, same rule on web). SkipCleaning:
-        // machine maintenance runs in the DE1's Espresso state, so a
+        val effects = shotEffects(disposition, recordedHere = s.mirror == null, replay = s.replayPrimary)
+        // SkipCleaning: machine maintenance runs in the DE1's Espresso state, so a
         // cleaning/backflush profile would be recorded as a shot — skip the
         // capture entirely (no history row, no Visualizer, no bean debit;
         // nothing was ground). Decenza #1325 (maincontroller.cpp:1841-1853).
         // Descale/calibrate run in their own machine states, never here.
-        if (disposition == ShotDisposition.SkipCleaning) {
+        if (!effects.record && !effects.offerUndo) {
             // Take the core's pending shot anyway, so it never outlives its
             // completion (web takes it whatever the disposition too).
             runCatching { bridge.takeStoredShot(json.encodeToString(ShotCaptureContext.serializer(), ShotCaptureContext(completedAt = now))) }
             appendLog("Cleaning run finished — not recorded as a shot")
             return
         }
-        val bean = if (started != null) started.bean else s.beans.firstOrNull { it.id == s.activeBeanId }
-        val roasterName = if (started != null) {
-            started.roasterName
-        } else {
-            bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
-        }
         // The core assembles the shot (F10, the rule set web uses too): its own
         // record (the full series with frames and scale overlays), the profile
-        // the DE1 held and its dose / yield / brew temp / pre-infusion, the
-        // grinder (bean, else Settings) frozen now, the stop reason and
-        // switches. The shell hands in only what the core can't know.
-        // The bag, profile, grinder and grind are the core's own: it froze
-        // them at shot start from [shotSelectionsOf] (REVIEW-CORE H3).
-        // TODO(#488 batch 2 Android): drop this shell's own freeze.
+        // the DE1 held and its dose / yield / brew temp / pre-infusion, the stop
+        // reason and switches. The bag, profile, grinder and grind are the ones
+        // it froze at its own shot start, the app's or the group head's, from
+        // [shotSelectionsOf] (REVIEW-CORE H3). The shell hands in only what the
+        // core can't know.
         val ctx = ShotCaptureContext(
             completedAt = now,
             id = shotId,
             // The Settings default barista (dye2 audit #1), editable later.
             barista = s.baristaName.trim().ifEmpty { null },
-            tags = bean?.tags?.takeIf { it.isNotEmpty() },
             // The DE1 this ran on — frozen here so a later Decent upload (#84)
             // carries the serial the server verifies.
             machine = liveMachine(),
@@ -3373,32 +3319,41 @@ class LibraryController(
         }.onFailure { appendLog("Shot assembly failed: ${it.message}") }.getOrNull()
         val core = assembled?.let { json.parseToJsonElement(it) as? JsonObject }
         // No telemetry at all (or the core refused): nothing to record.
-        val captured = core?.let { storedShotFromBackupJson(it, json) }?.copy(
-            // The core's running peaks from the event, as before.
-            peakPressure = peakPressure,
-            peakTemp = peakTemp,
-            peakWeightG = peakWeightG,
-        )
+        val captured = core?.let { storedShotFromBackupJson(it, json) }?.let { c ->
+            c.copy(
+                // The core's running peaks from the event, as before.
+                peakPressure = peakPressure,
+                peakTemp = peakTemp,
+                peakWeightG = peakWeightG,
+                // The shot's tags are its bag's at the start: a copy, so a later
+                // edit to the bag's tags doesn't rewrite history.
+                tags = c.bean?.tags.orEmpty(),
+            )
+        }
         if (captured == null) {
             appendLog("Shot had no telemetry — not recorded")
             return
         }
-        // Burn this shot's dose down from its bag's remaining weight — live
-        // shots only (a replay-demo must never touch real inventory) — and
-        // record what it took on the row. The dose the core recorded — the
-        // Quick Controls dial when the DE1 ran the dialled profile (review
-        // §2.3-6) — else the profile's.
-        val bagDebit = bean?.let { if (s.replayPrimary) 0f else debitBag(it, captured.doseG ?: profile?.dose) }
+        // Burn this shot's dose down from the bag it recorded (its frozen
+        // `bean.beanId`), and record what it took on the row. The dose the core
+        // recorded — the Quick Controls dial when the DE1 ran the dialled
+        // profile (review §2.3-6) — else the recorded profile's.
+        val bag = captured.bean?.beanId?.let { id -> s.beans.firstOrNull { it.id == id } }
+        val dose = captured.doseG ?: captured.profileId?.let { id ->
+            (s.mirroredProfile?.takeIf { it.id == id } ?: s.profiles.firstOrNull { it.id == id })?.dose
+        }
+        val bagDebit = bag?.takeIf { effects.debit }?.let { debitBag(it, dose) }
         val shot = captured.copy(bagDebitG = bagDebit)
         // Aborted-shot auto-discard (Decenza abortedshotclassifier.h:19-25,
         // validated over 882 shots): under 10 s of flow AND under 5 g in the
         // cup is an aborted pull, not a shot — it would only pollute history
         // and Visualizer. The rule lives in the core now; the mechanics stay
-        // here: held for an undo toast instead of a modal, and the bean debit
-        // below still runs (the dose was physically ground) as does the SAW
-        // model save (its own gates reject bad samples).
-        if (disposition == ShotDisposition.DiscardAborted) {
-            discardedShot = shot
+        // here: held for an undo toast instead of a modal. The bean debit above
+        // still ran (the dose was physically ground), and the SAW model save
+        // below still runs (its own gates reject bad samples); the uploads and
+        // the auto-save wait for the Undo.
+        if (effects.offerUndo) {
+            discardedShot = shot to effects
             updateUi { it.copy(
                 // The Last-shot card would point at a shot history doesn't
                 // hold — clear it for an aborted pull.
@@ -3413,15 +3368,20 @@ class LibraryController(
             addMade(row, cut)
             saveHistory()
             cut.say()
-            // Auto-upload to every armed destination (Visualizer, Decent), one
-            // notice for the batch; each reads the shot whole, from the stage.
-            autoUploadShot(row)
-            // A kept shot's grind to its bag, when auto-save is on (#488).
-            autoSaveGrind(row)
+            kept(row, effects)
         }
         // Persist the learned SAW drip model — a weight-stopped shot just
         // added a training sample in the core.
         scope.launch { persistSawModel() }
+    }
+
+    /** A kept shot's [row]: offered to the armed upload destinations and its
+     *  grind auto-saved to its bag (#488), as [effects] say. */
+    private fun kept(row: ShotRow, effects: ShotEffects) {
+        // Auto-upload to every armed destination (Visualizer, Decent), one
+        // notice for the batch; each reads the shot whole, from the stage.
+        if (effects.upload) autoUploadShot(row)
+        if (effects.autoSave) autoSaveGrind(row)
     }
 
     /**
@@ -3492,8 +3452,8 @@ class LibraryController(
         val doseG: Float?,
         val waterG: Float?,
         val yieldG: Float?,
-        /** The grind as text ("15", "2.25"); null = none. */
-        val grindSetting: String?,
+        /** The form's grind; null = none, 0 is a grind. */
+        val grind: Double?,
         val brewTempC: Float?,
         val durationMs: Long?,
         val rating: Int?,
@@ -3503,6 +3463,8 @@ class LibraryController(
         val brewSeries: coffee.crema.core.BrewSeries? = null,
         /** The custom method's label, snapshotted on the row (`custom:` methods only). */
         val methodLabel: String? = null,
+        /** The active grinder the brew is stamped with; null = no grinder. */
+        val grinder: coffee.crema.core.Grinder? = null,
     )
 
     /**
@@ -3516,18 +3478,13 @@ class LibraryController(
         val s = uiState()
         val bean = input.beanId?.let { id -> s.beans.firstOrNull { it.id == id } }
         val roasterName = bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
-        val beanSnapshot = bean?.let { b ->
-            ShotBean(
-                beanId = b.id,
-                name = b.name,
-                roasterName = roasterName,
-                roastedOn = b.roastedOn,
-                roastLevel = b.roastLevel,
-                tags = b.tags,
-                grinderSetting = b.grinderSetting?.takeIf { it.isNotBlank() },
-                grinder = b.grinder?.takeIf { it.isNotBlank() },
-            )
-        }
+        // The core's snapshot (REVIEW-FINAL S2, N6): the bag's notes, never
+        // its legacy grind and grinder.
+        val beanSnapshot = bean?.let { shotBeanSnapshot(it, roasterName) }
+        // The grinder and grind, stamped as a shot's are (REVIEW-FINAL S4): the
+        // brew counts for its bag's newest grind on that grinder and uploads
+        // under it; the grind is text on its scale, 0 kept.
+        val stamp = brewLogGrind(input.grinder, input.grind)
         // Burn the dose down from the bag — the whole point of the feature.
         val bagDebit = bean?.let { debitBag(it, input.doseG) }
         val shot = StoredShot(
@@ -3537,7 +3494,9 @@ class LibraryController(
             yieldG = input.yieldG,
             doseG = input.doseG,
             bagDebitG = bagDebit,
-            grindSetting = input.grindSetting,
+            grindSetting = stamp.grind,
+            grinderId = stamp.grinderId,
+            grinderModel = stamp.grinderName,
             profileName = null,
             bean = beanSnapshot,
             rating = input.rating?.coerceIn(1, 5),
@@ -3725,18 +3684,9 @@ class LibraryController(
         if (oldBeanId == beanId) return // same attribution — nothing to do
         val bean = beanId?.let { bid -> s.beans.firstOrNull { it.id == bid } }
         val roasterName = bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
-        val beanSnapshot = bean?.let { b ->
-            ShotBean(
-                beanId = b.id,
-                name = b.name,
-                roasterName = roasterName,
-                roastedOn = b.roastedOn,
-                roastLevel = b.roastLevel,
-                tags = b.tags,
-                grinderSetting = b.grinderSetting?.takeIf { it.isNotBlank() },
-                grinder = b.grinder?.takeIf { it.isNotBlank() },
-            )
-        }
+        // The core's snapshot (REVIEW-FINAL S2, N6): the bag's notes, never
+        // its legacy grind and grinder.
+        val beanSnapshot = bean?.let { shotBeanSnapshot(it, roasterName) }
         // Move the bag debit with the attribution: the grounds physically came
         // from the bag the user now says they did, so the old bag gets back what
         // the row took (core creditShotDebit: capped at bagSize, an untracked bag
@@ -3808,7 +3758,7 @@ class LibraryController(
 
     /** Undo an aborted-shot discard: persist the held shot after all. */
     fun undoDiscardShot() {
-        val shot = discardedShot ?: return
+        val (shot, effects) = discardedShot ?: return
         discardedShot = null
         val cut = CapCut()
         val row = staged(shot)
@@ -3828,9 +3778,8 @@ class LibraryController(
             ) },
         )
         saveHistory()
-        autoUploadShot(row)
-        // An undone discard is a kept shot (#488 auto-save).
-        autoSaveGrind(row)
+        // An undone discard is a kept shot.
+        kept(row, effects)
     }
 
     /** The discard snackbar timed out / was dismissed — drop the held shot. */
@@ -3895,6 +3844,54 @@ internal fun backupContentHash(jsonl: String, images: List<Pair<String, ByteArra
     return md.digest().joinToString("") { "%02x".format(it) }
 }
 
-/** How much later than its duration says a shot may complete after the start
- *  this device saw and still be that start's shot (event and clock lag). */
-private const val SHOT_START_SLACK_MS = 120_000L
+/**
+ * What a completed shot does besides its history row: the core's one rule
+ * (`shot_effects`, REVIEW-CORE M4). Should the bridge refuse, the shot is
+ * still recorded (or held for its Undo) and nothing else runs.
+ */
+internal fun shotEffects(
+    disposition: ShotDisposition,
+    recordedHere: Boolean,
+    replay: Boolean,
+    core: (String) -> String = ::shotEffectsJson,
+): ShotEffects = runCatching {
+    coreJson.decodeFromString(
+        ShotEffects.serializer(),
+        core(coreJson.encodeToString(ShotEffectsInput.serializer(), ShotEffectsInput(disposition, recordedHere, replay))),
+    )
+}.getOrElse {
+    ShotEffects(
+        record = disposition == ShotDisposition.Record,
+        offerUndo = disposition == ShotDisposition.DiscardAborted,
+        debit = false,
+        webhook = false,
+        autoSave = false,
+        upload = false,
+    )
+}
+
+/**
+ * [bean]'s snapshot for a shot, a logged brew or a shot moved to it: the
+ * core's one builder (`ShotBean::snapshot_of`), so its notes are kept and its
+ * legacy grind and grinder never are (REVIEW-FINAL S2, N6).
+ */
+internal fun shotBeanSnapshot(
+    bean: coffee.crema.core.Bean,
+    roasterName: String?,
+    core: (String, String) -> String = ::shotBeanSnapshotJson,
+): ShotBean = runCatching {
+    coreJson.decodeFromString(ShotBean.serializer(), core(coreJson.encodeToString(coffee.crema.core.Bean.serializer(), bean), roasterName.orEmpty()))
+}.getOrElse { ShotBean(beanId = bean.id, name = bean.name) }
+
+/**
+ * A logged brew's grinder and grind (core `brew_log_grind`, REVIEW-FINAL S4):
+ * [grinder]'s id and name, and [grind] as text on its scale (0 kept). Should
+ * the bridge refuse, the grinder is still stamped and the grind left out.
+ */
+internal fun brewLogGrind(
+    grinder: coffee.crema.core.Grinder?,
+    grind: Double?,
+    core: (String) -> String = ::brewLogGrindJson,
+): BrewLogGrind = runCatching {
+    coreJson.decodeFromString(BrewLogGrind.serializer(), core(coreJson.encodeToString(BrewLogGrindInput.serializer(), BrewLogGrindInput(grinder, grind))))
+}.getOrElse { BrewLogGrind(grinderId = grinder?.id?.ifBlank { null }, grinderName = grinder?.name?.trim()?.ifEmpty { null }) }

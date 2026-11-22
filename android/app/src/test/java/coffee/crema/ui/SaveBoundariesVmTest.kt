@@ -304,7 +304,7 @@ class SaveBoundariesVmTest {
 
     @Test
     fun `a shot records and debits the bag it started with`() {
-        val vm = vmWith(listOf(bag("a", remaining = 200f), bag("b", remaining = 200f)), active = "a")
+        val vm = vmWith(listOf(bag("a", remaining = 200f).copy(tags = listOf("light")), bag("b", remaining = 200f).copy(tags = listOf("dark"))), active = "a")
         val profile = activeBuiltin(vm)
         val bridge = VmHarness.bridge(vm)
         apply(vm, bridge.onNotification(NotificationSource.DE1_STATE, byteArrayOf(4, 5), 1_000uL))
@@ -325,6 +325,9 @@ class SaveBoundariesVmTest {
         val shot = VmHarness.whole(vm, VmHarness.rows(vm).first().id)
         assertEquals("a", shot.bean?.beanId, "the bag at the start")
         assertEquals("Bag a", shot.bean?.name)
+        assertEquals(listOf("light"), shot.tags, "the tags of the start's bag")
+        assertNull(shot.bean?.grinderSetting, "never the bag's legacy grind (S2)")
+        assertEquals(shot.bagDebitG, 200f - vm.bean("a").remaining!!, "the recorded row's bag is debited")
         assertTrue(vm.bean("a").remaining!! < 200f, "the debit is the start's bag's")
         assertEquals(200f, vm.bean("b").remaining)
         // F4: the profile's library id next to its name, in the store too.
@@ -346,7 +349,6 @@ class SaveBoundariesVmTest {
         VmHarness.idle()
         VmHarness.awaitPrefsLoaded(vm)
         VmHarness.awaitStartupLoaded(vm)
-        vm.setGrinderModel("Settings grinder")
         activeBuiltin(vm)
         // Auto-save on (#488): the kept shot's grind goes to its bag, for its grinder.
         vm.setGrindAutoSave(true)

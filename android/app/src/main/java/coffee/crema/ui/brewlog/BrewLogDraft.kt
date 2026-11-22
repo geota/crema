@@ -47,8 +47,8 @@ data class BrewLogDraft(
     val dose: Double,
     /** Water-in for filter methods, yield-out for espresso. */
     val water: Double,
-    /** 0 = no grind known. */
-    val grind: Double,
+    /** Null = no grind known; 0 is a grind (follow-up 34). */
+    val grind: Double?,
     /** 0 = no temperature. */
     val temp: Double,
     /** Brew time as typed ("3:05" or seconds). */
@@ -157,7 +157,7 @@ object BrewLogSeeds {
     fun apply(d: BrewLogDraft, s: CoreBrewLogSeeds): BrewLogDraft = d.copy(
         dose = if (BrewLogDraft.DOSE in d.dirty) d.dose else s.dose.toDouble(),
         water = if (BrewLogDraft.WATER in d.dirty) d.water else s.water.toDouble(),
-        grind = if (BrewLogDraft.GRIND in d.dirty) d.grind else (s.grind ?: 0f).toDouble(),
+        grind = if (BrewLogDraft.GRIND in d.dirty) d.grind else s.grind?.toDouble(),
         temp = if (BrewLogDraft.TEMP in d.dirty) d.temp else (s.tempC ?: 0f).toDouble(),
         timeStr = if (BrewLogDraft.TIME in d.dirty) d.timeStr else s.durationMs?.takeIf { it > 0 }?.let(::formatClock).orEmpty(),
     )
@@ -221,7 +221,7 @@ object BrewLogSeeds {
             beanId = beanId,
             dose = 0.0,
             water = 0.0,
-            grind = 0.0,
+            grind = null,
             temp = 0.0,
             recipeName = guidedRecipeName,
             series = guidedSeries,
