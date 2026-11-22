@@ -116,6 +116,8 @@ fun ScaleScreen(
             machineConnected = machineConnected,
             scaleConnected = connected,
             onConnect = onConnect,
+            devicesTab = ui.devicesTab,
+            onOpenDevicesTab = vm::openDevicesTab,
         )
         Column(
             Modifier.fillMaxSize().padding(start = sp.edge, top = sp.s4, end = sp.edge, bottom = sp.s5),

@@ -220,6 +220,8 @@ fun BeansScreen(
             machineConnected = connected,
             scaleConnected = scaleConnected,
             onConnect = onConnect,
+            devicesTab = ui.devicesTab,
+            onOpenDevicesTab = vm::openDevicesTab,
         )
         Column(Modifier.weight(1f).fillMaxHeight()) {
             Row(

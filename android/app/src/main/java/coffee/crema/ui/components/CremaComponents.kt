@@ -2246,11 +2246,18 @@ private fun RowScope.StepperChip(label: String, active: Boolean, modifier: Modif
 
 /*
  * NavigationRail — Crema's custom rail: a "C" wordmark at top, the six
- * destinations as M3 rail items (active-state pill retained), and DE1 + Scale
+ * destinations as M3 rail items (active-state pill retained; Devices splits into
+ * Scale and Grinder when the rail is tall enough, see [railItems]), and DE1 + Scale
  * connection status pips pinned at the bottom. Tapping a pip triggers connect /
  * disconnect (onConnect("machine"|"scale")).
  */
-data class RailItem(val id: String, val icon: String, val label: String)
+data class RailItem(
+    val id: String,
+    val icon: String,
+    val label: String,
+    /** The Devices tab a split item opens (brew-modes spec §1); null elsewhere. */
+    val devicesTab: String? = null,
+)
 
 private val cremaRailItems = listOf(
     RailItem("brew", "coffee", "Brew"),
@@ -2260,6 +2267,27 @@ private val cremaRailItems = listOf(
     RailItem("scale", "scales", "Devices"),
     RailItem("settings", "gear-six", "Settings"),
 )
+
+/** Scale and Grinder, in place of Devices when the rail has room. */
+private val devicesSplitItems = listOf(
+    RailItem("scale", "scales", "Scale", devicesTab = "scale"),
+    RailItem("scale", "funnel", "Grinder", devicesTab = "grinder"),
+)
+
+/**
+ * The rail's items (brew-modes spec §1). With [split], Devices becomes Scale
+ * and Grinder, each opening Devices on its tab; otherwise it stays one Devices
+ * item, which opens the tab used last (`devicesTab` in the UI state).
+ */
+fun railItems(split: Boolean): List<RailItem> =
+    cremaRailItems.flatMap { if (it.id == "scale" && split) devicesSplitItems else listOf(it) }
+
+/**
+ * Is [item] the page on show? A split item lights only while Devices shows its
+ * own tab; the others match the [active] route, as the rail always has.
+ */
+fun railItemSelected(item: RailItem, active: String, devicesTab: String): Boolean =
+    if (item.devicesTab != null) active == item.id && devicesTab == item.devicesTab else active == item.id
 
 /** How densely the rail lays out, picked from the rail's measured height. */
 enum class RailDensity { Regular, Compact }
@@ -2277,6 +2305,27 @@ const val COMPACT_RAIL_BELOW_DP = 560f
 fun railDensity(heightDp: Float): RailDensity =
     if (heightDp < COMPACT_RAIL_BELOW_DP) RailDensity.Compact else RailDensity.Regular
 
+/**
+ * The heights (dp) from which each density fits seven items (Devices split into
+ * Scale and Grinder) plus both pips without scrolling. Regular: the wordmark,
+ * seven 75dp labelled items and the stacked pips measure ≈755dp; compact:
+ * 4 + 7×48 + 48 + 4 = 392dp. Each keeps a little headroom; RailSplitTest renders
+ * both at their threshold and checks the last item isn't clipped.
+ */
+const val SPLIT_RAIL_FROM_DP = 768f
+const val SPLIT_COMPACT_RAIL_FROM_DP = 416f
+
+/** Does a rail of [heightDp] at [density] have room for Scale and Grinder? */
+fun railSplitsDevices(density: RailDensity, heightDp: Float): Boolean = when (density) {
+    RailDensity.Regular -> heightDp >= SPLIT_RAIL_FROM_DP
+    RailDensity.Compact -> heightDp >= SPLIT_COMPACT_RAIL_FROM_DP
+}
+
+/**
+ * @param devicesTab the Devices tab on show or used last (`MainUiState.devicesTab`).
+ * @param onOpenDevicesTab selects a Devices tab; a split Scale or Grinder item
+ *   calls it before navigating to Devices.
+ */
 @Composable
 fun CremaNavigationRail(
     active: String,
@@ -2284,23 +2333,36 @@ fun CremaNavigationRail(
     machineConnected: Boolean = true,
     scaleConnected: Boolean = true,
     onConnect: (String) -> Unit = {},
+    devicesTab: String = "scale",
+    onOpenDevicesTab: (String) -> Unit = {},
 ) {
     // Size by the rail's own measured height (not screenHeightDp) so split-screen,
     // freeform windows and a landscape phone all get the layout that fits.
     // The rail's edge is where a temporary message's strip starts.
     BoxWithConstraints(Modifier.fillMaxHeight().messageAnchor(MessageAnchorSlot.Rail)) {
-        val density = if (constraints.hasBoundedHeight) railDensity(maxHeight.value) else RailDensity.Regular
+        val bounded = constraints.hasBoundedHeight
+        val density = if (bounded) railDensity(maxHeight.value) else RailDensity.Regular
+        val items = railItems(split = bounded && railSplitsDevices(density, maxHeight.value))
+        val nav = RailNav(active, devicesTab) { item ->
+            item.devicesTab?.let(onOpenDevicesTab)
+            onNav(item.id)
+        }
         when (density) {
-            RailDensity.Regular -> RegularRail(active, onNav, machineConnected, scaleConnected, onConnect)
-            RailDensity.Compact -> CompactRail(active, onNav, machineConnected, scaleConnected, onConnect)
+            RailDensity.Regular -> RegularRail(items, nav, machineConnected, scaleConnected, onConnect)
+            RailDensity.Compact -> CompactRail(items, nav, machineConnected, scaleConnected, onConnect)
         }
     }
 }
 
+/** Which rail item is lit, and what a tap on one does. */
+private class RailNav(val active: String, val devicesTab: String, val open: (RailItem) -> Unit) {
+    fun selected(item: RailItem) = railItemSelected(item, active, devicesTab)
+}
+
 @Composable
 private fun RegularRail(
-    active: String,
-    onNav: (String) -> Unit,
+    items: List<RailItem>,
+    nav: RailNav,
     machineConnected: Boolean,
     scaleConnected: Boolean,
     onConnect: (String) -> Unit,
@@ -2328,10 +2390,10 @@ private fun RegularRail(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Spacer(Modifier.height(8.dp))
-            cremaRailItems.forEach { item ->
+            items.forEach { item ->
                 NavigationRailItem(
-                    selected = active == item.id,
-                    onClick = { onNav(item.id) },
+                    selected = nav.selected(item),
+                    onClick = { nav.open(item) },
                     icon = { PhIcon(item.icon, sizeDp = 24) },
                     label = { Text(item.label, style = MaterialTheme.typography.labelMedium) },
                     colors = NavigationRailItemDefaults.colors(
@@ -2360,8 +2422,8 @@ private fun RegularRail(
  */
 @Composable
 private fun CompactRail(
-    active: String,
-    onNav: (String) -> Unit,
+    items: List<RailItem>,
+    nav: RailNav,
     machineConnected: Boolean,
     scaleConnected: Boolean,
     onConnect: (String) -> Unit,
@@ -2377,8 +2439,8 @@ private fun CompactRail(
                 modifier = Modifier.weight(1f).railBottomFade(scroll, containerColor).verticalScroll(scroll),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                cremaRailItems.forEach { item ->
-                    CompactRailItem(item, selected = active == item.id) { onNav(item.id) }
+                items.forEach { item ->
+                    CompactRailItem(item, selected = nav.selected(item)) { nav.open(item) }
                 }
             }
             Row(horizontalArrangement = Arrangement.Center) {
