@@ -59,7 +59,8 @@ export interface ActiveShotBrewParams {
  *   - `brewParams` is null on a live shot with no active profile, or a
  *     replay META without QC fields. A manual on-machine start records the
  *     dial the DE1 was given (`CremaApp.pushedBrewParams`).
- *   - `grinderModel` falls through bean.grinder → settings default → null.
+ *   - `grinderModel` / `grinderId` are the active grinder's at shot start
+ *     (#488), or null with none.
  */
 export interface ActiveShotData {
 	readonly bean: ShotBean | null;
@@ -71,6 +72,8 @@ export interface ActiveShotData {
 	readonly dose: number | null;
 	readonly brewParams: ActiveShotBrewParams | null;
 	readonly grinderModel: string | null;
+	/** The active grinder's id at shot start (#488, review F4/F9); `null` = none or a replay. */
+	readonly grinderId?: string | null;
 	readonly source: 'live' | 'replay';
 }
 
@@ -118,9 +121,14 @@ export class ActiveShotStore {
 		return this.data?.brewParams ?? null;
 	}
 
-	/** The equipment-level grinder model at shot start, or `null`. */
+	/** The active grinder's name at shot start, or `null`. */
 	get grinderModel(): string | null {
 		return this.data?.grinderModel ?? null;
+	}
+
+	/** The active grinder's id at shot start, or `null`. */
+	get grinderId(): string | null {
+		return this.data?.grinderId ?? null;
 	}
 
 	/** Set the in-flight shot. Overwrites any prior value (typically `null`). */

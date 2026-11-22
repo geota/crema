@@ -4,8 +4,10 @@
  * follows): each changed part goes to its owner, and only once the user
  * confirms.
  *
- *  - The grind dial differs from the active bag's saved grind → the grind
- *    goes to the bag. No profile copy and no name prompt.
+ *  - Brew's grind differs from the active bag's saved grind for the active
+ *    grinder (#488) → the grind goes to that (bag, grinder) row, through the
+ *    core's `save_bag_grind` (added if missing, the star never changes). No
+ *    profile copy and no name prompt.
  *  - The recipe dials (dose, yield, brew temp, pre-infusion) differ from the
  *    active profile → a **custom** profile is updated in place (Undo in the
  *    message, and "Save as new…" beside Save); a **built-in** is read-only,
@@ -18,6 +20,15 @@
  */
 
 import type { Bean } from '#lib/bean/index.js';
+import {
+	formatGrind,
+	grindText,
+	grindUnsaved,
+	DEFAULT_GRIND_SCALE,
+	type BagGrind,
+	type Grinder,
+	type GrindSave
+} from '#lib/bean/grinder.js';
 import type { CremaProfile, ProfileFingerprintOverrides } from '#lib/profiles/index.js';
 import { sameRecord } from '#lib/utils/same-record.js';
 
@@ -28,8 +39,10 @@ export type QuickSaveProfileKind = 'none' | 'custom' | 'builtin';
 export interface QuickSavePlan {
 	readonly beanId: string | null;
 	readonly beanName: string | null;
-	/** The dial as the bag stores it, when it differs from the bag's; else `null`. */
+	/** Brew's grind as the bag stores it, when it differs from the bag's for the active grinder; else `null`. */
 	readonly grind: string | null;
+	/** The active grinder the grind is saved for (`null` = the "no grinder" slot). */
+	readonly grinder: Grinder | null;
 	readonly profileId: string | null;
 	readonly profileName: string | null;
 	readonly profileKind: QuickSaveProfileKind;
@@ -39,42 +52,31 @@ export interface QuickSavePlan {
 
 /** The bag's form of the grind dial: whole numbers without a decimal. */
 export function grindSettingOf(dial: number): string {
-	return Number.isInteger(dial) ? String(dial) : dial.toFixed(1);
-}
-
-/** A bag's saved grind as a number, or `null` when it has none (or not a number). */
-function savedGrind(bean: Bean): number | null {
-	const raw = (bean.grinderSetting ?? '').trim().replace(',', '.');
-	const n = raw ? Number.parseFloat(raw) : Number.NaN;
-	return Number.isFinite(n) ? n : null;
+	return grindText(dial);
 }
 
 /**
- * The plan for the active `bean`, the grind `dial`, the active `profile` and
- * its `overrides` — normalized by the core's lifecycle rule
+ * The plan for the active `bean`, the active `grinder`, Brew's grind
+ * (`brewGrind`, `null` = none set), the active `profile` and its
+ * `overrides` — normalized by the core's lifecycle rule
  * (`normalizeBrewOverrides`), so a dial back at the profile's own value is
- * no change. A bag with no saved grind and the dial at its untouched
- * `dialDefault` is no change either (the dial carries nothing then, as the
- * shot history reads it).
+ * no change. No grind on Brew is no grind change either.
  */
 export function quickSavePlan(input: {
 	bean: Bean | null;
-	dial: number;
-	dialDefault?: number;
+	grinder: Grinder | null;
+	brewGrind: number | null;
 	profile: CremaProfile | null;
 	overrides: ProfileFingerprintOverrides;
 }): QuickSavePlan {
-	const { bean, dial, profile } = input;
-	let grind: string | null = null;
-	if (bean && Number.isFinite(dial)) {
-		const saved = savedGrind(bean);
-		const untouched = saved === null && dial === input.dialDefault;
-		if (saved !== dial && !untouched) grind = grindSettingOf(dial);
-	}
+	const { bean, brewGrind, profile, grinder } = input;
+	const grind =
+		bean && brewGrind !== null && grindUnsaved(bean, grinder?.id ?? null, brewGrind) ? grindText(brewGrind) : null;
 	return {
 		beanId: bean?.id ?? null,
 		beanName: bean?.name ?? null,
 		grind,
+		grinder,
 		profileId: profile?.id ?? null,
 		profileName: profile?.name ?? null,
 		profileKind: profile == null ? 'none' : profile.source === 'custom' ? 'custom' : 'builtin',
@@ -112,6 +114,8 @@ export interface QuickSaveDeps {
 	readonly beans: {
 		getBean(id: string): Bean | null;
 		updateBean(id: string, patch: Partial<Bean>): void;
+		/** The core's grind save onto the (bag, grinder) row; stored only when it changed. */
+		saveBagGrind(beanId: string, grinder: Grinder | null, grind: string): GrindSave | null;
 	};
 	readonly profiles: {
 		get(id: string): CremaProfile | undefined;
@@ -131,8 +135,12 @@ export interface QuickSaveUndo {
 	readonly previous: CremaProfile;
 	/** The body the Save wrote: Undo restores only over this (REVIEW-496 M1). */
 	readonly written: CremaProfile;
-	/** The bag grind the same Save wrote, and the one it replaced. */
-	readonly grind: { readonly beanId: string; readonly before: string; readonly written: string } | null;
+	/** The bag's saved grinds before the same Save, and as it wrote them. */
+	readonly grind: {
+		readonly beanId: string;
+		readonly before: BagGrind[] | null;
+		readonly written: BagGrind[] | null;
+	} | null;
 }
 
 export interface QuickSaveResult {
@@ -195,11 +203,17 @@ export function runQuickSave(
 		}
 	}
 	if (plan.grind !== null && plan.beanId !== null) {
-		const before = deps.beans.getBean(plan.beanId)?.grinderSetting ?? '';
-		deps.beans.updateBean(plan.beanId, { grinderSetting: plan.grind });
-		parts.push(`${parts.length === 0 ? 'Grind' : 'grind'} ${plan.grind} saved to ${plan.beanName}`);
-		if (undo) undo = { ...undo, grind: { beanId: plan.beanId, before, written: plan.grind } };
+		const before = plain(deps.beans.getBean(plan.beanId)?.grinds ?? null);
+		const saved = deps.beans.saveBagGrind(plan.beanId, plan.grinder, plan.grind);
+		// A message only when the saved value changed.
+		if (saved?.changed) {
+			const where = plan.grinder ? `${plan.beanName} · ${plan.grinder.name}` : plan.beanName;
+			const value = formatGrind(plan.grind, plan.grinder?.scale ?? DEFAULT_GRIND_SCALE);
+			parts.push(`${parts.length === 0 ? 'Grind' : 'grind'} ${value} saved to ${where}`);
+			if (undo) undo = { ...undo, grind: { beanId: plan.beanId, before, written: plain(saved.bean.grinds ?? null) } };
+		}
 	}
+	if (parts.length === 0) return null;
 	return { message: parts.join(' · '), undo };
 }
 
@@ -215,8 +229,8 @@ export function undoQuickSave(
 	const now = deps.profiles.get(u.profileId);
 	const profileRestored = now !== undefined && sameRecord(now, u.written);
 	if (profileRestored) deps.profiles.save(u.previous);
-	if (u.grind && deps.beans.getBean(u.grind.beanId)?.grinderSetting === u.grind.written) {
-		deps.beans.updateBean(u.grind.beanId, { grinderSetting: u.grind.before });
+	if (u.grind && sameRecord(deps.beans.getBean(u.grind.beanId)?.grinds ?? null, u.grind.written)) {
+		deps.beans.updateBean(u.grind.beanId, { grinds: u.grind.before });
 	}
 	return {
 		profileRestored,

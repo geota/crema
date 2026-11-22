@@ -14,6 +14,7 @@
  */
 
 import type { Roast } from '#lib/profiles/index.js';
+import type { BagGrind } from '#lib/core/crema-core.js';
 import {
 	roast_band as wasmRoastBand,
 	roast_band5 as wasmRoastBand5,
@@ -124,8 +125,18 @@ export interface Bean {
 	 * tombstones out everywhere except the sync layer.
 	 */
 	deletedAt: number | null;
+	/** Legacy (#488): kept in storage and round trips, no longer edited. */
 	grinder: string;
+	/** Legacy (#488): kept in storage and round trips, no longer edited. */
 	grinderSetting: string;
+	/**
+	 * The saved grind per grinder (#488, "Bag grinds"): one row per grinder
+	 * id, at most one starred. `null`/absent = not migrated yet (the library
+	 * migration fills it from `grinderSetting`). Written only by an explicit
+	 * save: the bag editor's Save, Brew's Save, or auto-save. Mirrors
+	 * `de1_domain::Bean.grinds`.
+	 */
+	grinds?: BagGrind[] | null;
 	/**
 	 * Free-form user tags — `["daily-driver", "comp"]`. Defaults to `[]`.
 	 * Mirrors the profile tag pattern (`#lib/profiles`'s `CremaProfile.tags`)
@@ -194,6 +205,8 @@ export function blankBean(id?: string): Bean {
 		deletedAt: null,
 		grinder: '',
 		grinderSetting: '',
+		// A new bag needs no migration: it starts with no saved grinds.
+		grinds: [],
 		tags: [],
 		visualizerId: null,
 		canonicalCoffeeBagId: null,
@@ -530,6 +543,8 @@ export function migrateLegacyCurrentBean(raw: unknown): {
 	bean.roastedOn = roastedOn;
 	bean.roastLevel = roastLevel;
 	bean.grinder = grinderStr;
+	// Through the library migration like any older bag (#488).
+	bean.grinds = null;
 	bean.favourite = true; // The legacy active bean → pinned to the brew strip.
 	return { bean, roaster };
 }

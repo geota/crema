@@ -27,7 +27,8 @@
 		fmt,
 		dimension,
 		name,
-		extra
+		extra,
+		ringed = null
 	}: {
 		/** The preset values to render as chips (canonical when `dimension` set). */
 		options: number[];
@@ -48,6 +49,8 @@
 		 * No limit, "∞"): its label, accessible name, state and action.
 		 */
 		extra?: { label: string; name: string; active: boolean; onSelect: () => void };
+		/** The chip with this value gets a copper ring: the bag's saved grind (#488). */
+		ringed?: number | null;
 	} = $props();
 
 	const settings = getSettingsStore();
@@ -76,8 +79,9 @@
 			type="button"
 			class="qchip"
 			class:is-active={Math.abs(value - option) < 0.001}
+			class:is-saved={ringed !== null && Math.abs(ringed - option) < 0.001}
 			aria-pressed={Math.abs(value - option) < 0.001}
-			aria-label={effectiveUnit ? `${text} ${effectiveUnit}` : undefined}
+			aria-label={(effectiveUnit ? `${text} ${effectiveUnit}` : text) + (ringed !== null && Math.abs(ringed - option) < 0.001 ? ', saved for this bag' : '')}
 			onclick={() => onChange?.(option)}
 		>
 			{text}{#if effectiveUnit}<span class="qchip-unit">{effectiveUnit}</span>{/if}
@@ -94,3 +98,9 @@
 		>
 	{/if}
 </div>
+
+<style>
+	.qchip.is-saved {
+		box-shadow: inset 0 0 0 2px var(--copper-500, #c7763b);
+	}
+</style>

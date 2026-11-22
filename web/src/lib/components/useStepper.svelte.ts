@@ -50,6 +50,12 @@ export interface UseStepperOptions {
 	incPrecision?: number;
 	/** Whether click-to-type is allowed (reactive). Default: always. */
 	canEdit?: () => boolean;
+	/**
+	 * Whether a typed value is clamped into `min`..`max` (reactive). Default
+	 * true. The grind (#488) keeps a typed value outside its scale as typed:
+	 * values are never clamped or rewritten, only warned about.
+	 */
+	clampTyped?: () => boolean;
 }
 
 export interface Stepper {
@@ -145,7 +151,8 @@ export function useStepper(opts: UseStepperOptions): Stepper {
 		editing = false;
 		const n = Number(draft);
 		if (!Number.isFinite(n)) return;
-		const next = clamp(fromDisplay(n));
+		const typed = fromDisplay(n);
+		const next = opts.clampTyped?.() === false ? typed : clamp(typed);
 		if (next !== opts.value()) opts.commit(next);
 	}
 	function onKey(e: KeyboardEvent): void {

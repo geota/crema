@@ -27,8 +27,16 @@
 		beanFreshness,
 		freshnessColor,
 		type Bean,
-		type Roaster
+		type Roaster,
+		getBeanStore
 	} from '#lib/bean/index.js';
+	import {
+		DEFAULT_GRIND_SCALE,
+		NO_GRINDER_ID,
+		formatGrind,
+		isLiveGrinder,
+		validScale
+	} from '#lib/bean/grinder.js';
 	import { getHistoryStore, effectiveGrindSetting, yieldOf } from '#lib/history/index.js';
 	import { bagRows, getHistoryReads } from '#lib/history/reads.svelte.js';
 	import { getProfileStore } from '#lib/profiles/index.js';
@@ -82,6 +90,28 @@
 
 	const history = getHistoryStore();
 	const profiles = getProfileStore();
+	const library = getBeanStore();
+
+	/**
+	 * The bag's saved grinds, read-only (#488): the grinder's name as on
+	 * Devices (the saved copy once it's gone), ★ on this bag's grinder, and
+	 * the value with that grinder's unit.
+	 */
+	const savedGrinds = $derived(
+		(bean.grinds ?? []).map((g) => {
+			const none = g.grinderId === NO_GRINDER_ID;
+			const grinder = none ? null : library.getGrinder(g.grinderId);
+			const live = none || (grinder !== null && isLiveGrinder(grinder));
+			const scale = grinder && validScale(grinder.scale) ? grinder.scale : DEFAULT_GRIND_SCALE;
+			return {
+				key: `g:${g.grinderId}`,
+				name: none ? 'No grinder' : (live ? grinder?.name : null) || g.grinderName || 'Unknown grinder',
+				starred: g.starred,
+				live,
+				value: formatGrind(g.grind, scale)
+			};
+		})
+	);
 
 	/**
 	 * The bag's linked profile, resolved for display. A dangling id (profile
@@ -438,8 +468,16 @@
 				<div class="bn-group-body">
 					<div class="bn-row"><div class="bn-row-label">Bag size</div><div class="bn-row-val">{bean.bagSize > 0 ? `${bean.bagSize.toFixed(0)}g` : '—'}</div></div>
 					<div class="bn-row"><div class="bn-row-label">Remaining</div><div class="bn-row-val">{bean.bagSize > 0 || bean.remaining > 0 ? `${bean.remaining.toFixed(0)}g` : '—'}</div></div>
-					<div class="bn-row"><div class="bn-row-label">Grinder</div><div class="bn-row-val">{bean.grinder || '—'}</div></div>
-					<div class="bn-row"><div class="bn-row-label">Setting</div><div class="bn-row-val">{bean.grinderSetting || '—'}</div></div>
+					{#each savedGrinds as g (g.key)}
+						<div class={['bn-row', { 'is-gone': !g.live }]}>
+							<div class="bn-row-label">
+								{g.name}{#if g.starred}&nbsp;<span class="bn-star" aria-hidden="true">★</span><span class="bn-sr">, this bag's grinder</span>{/if}{#if !g.live}<span class="bn-sr">, no longer on Devices</span>{/if}
+							</div>
+							<div class="bn-row-val">{g.value}</div>
+						</div>
+					{:else}
+						<div class="bn-row"><div class="bn-row-label">Grind</div><div class="bn-row-val">—</div></div>
+					{/each}
 				</div>
 			{/if}
 		</section>
@@ -1066,6 +1104,23 @@
 		color: var(--fg-3);
 		font-size: 11px;
 		font-weight: 500;
+	}
+	.bn-row.is-gone .bn-row-val {
+		color: var(--fg-3);
+	}
+	.bn-star {
+		color: var(--fg-accent);
+	}
+	.bn-sr {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		margin: -1px;
+		padding: 0;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+		border: 0;
 	}
 	.bn-row-val {
 		color: var(--fg-1);

@@ -25,7 +25,7 @@ export function loadHistoryWasm(): void {
 	loaded = true;
 }
 
-const RAW_TEXT = new Set(['byRemoteId', 'byDecentId', 'appliedSeq', 'exportEnd', 'exportRewind', 'setSourceSeq', 'setMigrationDone', 'metaValue']);
+const RAW_TEXT = new Set(['byRemoteId', 'byDecentId', 'lastGrindsForBag', 'appliedSeq', 'exportEnd', 'exportRewind', 'setSourceSeq', 'setMigrationDone', 'metaValue']);
 
 function parse(v: unknown): unknown {
 	if (typeof v !== 'string') return v ?? null;

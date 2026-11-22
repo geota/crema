@@ -99,6 +99,12 @@
 		type Bean,
 		type Roaster, activateBean } from '#lib/bean/index.js';
 	import { scoreMap, searchBeans } from '#lib/bean/search.js';
+	import { DEFAULT_GRIND_SCALE, grindPlaceholder, type GrinderChoice, type LastGrind } from '#lib/bean/grinder.js';
+	import { grinderRowLine, grindView } from '#lib/brew/grind-view.js';
+	import { selectGrinder } from '#lib/bean/activate.js';
+	import { devicesHref } from '#lib/components/grinders/devices-link.js';
+	import type { GrinderPickRow } from '#lib/components/grinders/GrinderPicker.svelte';
+	import { getBrewGrind } from '#lib/brew/grind-session.svelte.js';
 	import BeanPicker from '#lib/components/history/BeanPicker.svelte';
 	import { getMaintenanceStore } from '#lib/maintenance/index.js';
 	import { dismissToast, toast } from '#lib/components/shared/toast.svelte.js';
@@ -130,7 +136,7 @@
 	import DialInCard from './DialInCard.svelte';
 	import { takePendingDialIn } from './dial-in.svelte';
 	import { getHistoryStore, effectiveGrindSetting, type AnyShot } from '#lib/history/index.js';
-	import { bagRows, getHistoryReads, newestRow } from '#lib/history/reads.svelte.js';
+	import { bagRows, getHistoryReads, lastGrinds, newestRow } from '#lib/history/reads.svelte.js';
 	import PowerButton from '#lib/components/PowerButton.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -451,6 +457,8 @@
 	// ── Bean library — drives the bean half of the unified favourites strip ─
 	/** The shared bean library — pinned beans + roasters + active pointer. */
 	const beanLibrary = getBeanStore();
+	/** Brew's grind for the next shot (#488): per device, persisted. */
+	const brewGrind = getBrewGrind();
 	/**
 	 * The pinned beans shown alongside profiles in the Quick Sheet's unified
 	 * favourites strip. "Pinned" = favourited and not archived; an archived
@@ -525,6 +533,10 @@
 			// core's desired profile (the effect below), and the core takes the
 			// stop target from there (`DESIGN.md` §3.10), Reset included.
 			switch (key) {
+				case 'grind':
+					// Brew's grind, per device and persisted (#488, review F9).
+					brewGrind.set(value);
+					break;
 				case // Steam temp/time + the hot-water temperature share the one
 				// cuuid_0B packet with the hot-water dose — persist, then the
 				// app's one push sends them from the settings store (issue 14).
@@ -590,8 +602,8 @@
 	const quickSave = $derived(
 		quickSavePlan({
 			bean: beanLibrary.activeBean,
-			dial: params.current.grind,
-			dialDefault: DEFAULT_BREW_PARAMS.grind,
+			grinder: beanLibrary.activeGrinder,
+			brewGrind: brewGrind.value,
 			profile: activeProfile ?? null,
 			overrides: activeProfile ? effectiveOverrides() : {}
 		})
@@ -673,24 +685,17 @@
 	 * the primary view; the header's QuickPill opens the sheet, and its Close
 	 * button or a scrim tap dismisses it again.
 	 */
-	// Seed the QC grind dial from the active bean's saved setting (issue #16
-	// round 2, Android parity): "tweak slightly from last time" must START at
-	// last time. Switching bags re-seeds the dial to THAT bag's grind; the
-	// user's subsequent dial edits win until the next switch. The effect
-	// tracks only the bag's id and saved grind (`$derived` primitives, which
-	// notify only when they change): the library is `$state.raw`, so any
-	// write to it — a shot's debit, a sync, a favourite — would otherwise
-	// re-run it and snap an unsaved dial back (REVIEW-497 M1). `untrack`ed
-	// writes, so it doesn't track `params.current` either.
-	const activeBagId = $derived(beanLibrary.activeBean?.id ?? null);
-	const activeBagGrind = $derived(beanLibrary.activeBean?.grinderSetting ?? '');
+	// The grind dial shows Brew's grind (#488, review F9): per device,
+	// persisted, and reset only by a bag or grinder pick (`activateBean`,
+	// `selectGrinder`, through the core's pick order). A library write — a
+	// shot's debit, a sync, a favourite — never touches it, so an unsaved
+	// dial is never snapped back (REVIEW-497 M1). With no grind yet the dial
+	// shows a placeholder on the active scale, which is not a grind.
+	const activeGrindScale = $derived(beanLibrary.activeGrinder?.scale ?? DEFAULT_GRIND_SCALE);
 	$effect(() => {
-		void activeBagId;
-		const raw = activeBagGrind.trim().replace(',', '.');
-		const parsed = raw ? Number.parseFloat(raw) : NaN;
-		const next = Number.isFinite(parsed) ? parsed : 4.2;
+		const next = brewGrind.value ?? grindPlaceholder(activeGrindScale);
 		if (untrack(() => params.current.grind) !== next) {
-			untrack(() => params.set('grind', next));
+			untrack(() => params.seedGrind(next));
 		}
 	});
 
@@ -877,7 +882,13 @@
 		const beanId = shot.bean?.beanId ?? null;
 		const liveBean = beanId ? beanLibrary.getBean(beanId) : null;
 		if (liveBean && liveBean.archivedAt == null && beanLibrary.activeBeanId !== liveBean.id) {
-			activateBean(liveBean.id, { shotInProgress: ui.shotInProgress });
+			// Awaited: its grind lands before the shot's own grind below.
+			await activateBean(liveBean.id, { shotInProgress: ui.shotInProgress });
+		}
+		// The shot's grinder, by id (#488, F4), while it is still on Devices.
+		const shotGrinder = shot.grinderId ? beanLibrary.getGrinder(shot.grinderId) : null;
+		if (shotGrinder && shotGrinder.archivedAt == null && shotGrinder.deletedAt == null) {
+			beanLibrary.setActiveGrinder(shotGrinder.id);
 		}
 		// 2. The profile — by name (case-insensitive, Android parity);
 		// `profileName` is all a shot persists.
@@ -1328,7 +1339,6 @@
 		if (headerBeanRoast) parts.push(headerBeanRoast);
 		if (b.roastType) parts.push(b.roastType[0].toUpperCase() + b.roastType.slice(1));
 		if (b.mix) parts.push(b.mix[0].toUpperCase() + b.mix.slice(1));
-		parts.push(`Grind ${p.grind}`);
 		return parts.join(' · ');
 	});
 
@@ -1399,6 +1409,37 @@
 		const id = profileStore.activeId;
 		if (id) void goto(resolve(`profiles/${encodeURIComponent(id)}/edit?from=brew`));
 	}
+	// ── Grinder (#488) ────────────────────────────────────────────────────
+	/** What Brew shows about the grind: the value with its unit, and the unsaved marker. */
+	const grindInfo = $derived(
+		grindView({ bag: beanLibrary.activeBean, grinder: beanLibrary.activeGrinder, brewGrind: brewGrind.value })
+	);
+	/** The selected bag's newest grind per grinder, for the picker rows. */
+	const bagLastGrinds = getHistoryReads().watch(
+		() => (beanLibrary.activeBeanId ? lastGrinds(beanLibrary.activeBeanId) : null),
+		[] as LastGrind[]
+	);
+	const grinderRows = $derived.by<GrinderPickRow[]>(() => {
+		const bag = beanLibrary.activeBean;
+		return beanLibrary.grinders.map((g) => ({
+			id: g.id,
+			name: g.name,
+			line: grinderRowLine(g, bag, bagLastGrinds.value),
+			starred: !!bag?.grinds?.some((r) => r.grinderId === g.id && r.starred)
+		}));
+	});
+	const activeGrinderStarred = $derived(grinderRows.some((r) => r.starred && r.id === beanLibrary.activeGrinder?.id));
+	function pickGrinder(id: string | null): void {
+		void selectGrinder(id);
+	}
+	function addGrinderChoice(choice: GrinderChoice): void {
+		const g = beanLibrary.takeGrinderChoice(choice);
+		if (g) void selectGrinder(g.id);
+	}
+	function openDevicesGrinder(): void {
+		void goto(devicesHref('grinder'));
+	}
+
 	function editActiveBean(): void {
 		const id = beanLibrary.activeBeanId;
 		void goto(id ? resolve(beanEditPath(id, '?from=brew')) : resolve('beans'));
@@ -1452,13 +1493,10 @@
 		]
 	}));
 
-	/** The strip's bottom row: the bag's grind and grinder, its own or the default. */
+	/** The strip's bottom row (#488, board PhoneBrew2): "Grind 480 μm · Motto 80". */
 	const stripSpecLine = $derived.by(() => {
-		const b = beanLibrary.activeBean;
-		if (!b) return null;
-		const grind = b.grinderSetting?.trim() ? `Grind ${b.grinderSetting.trim()}` : null;
-		const grinder = b.grinder?.trim() || prefs.grinderModel?.trim() || null;
-		return [grind, grinder].filter(Boolean).join(' · ') || null;
+		const g = beanLibrary.activeGrinder;
+		return [brewGrind.value !== null ? grindInfo.label : null, g?.name ?? null].filter(Boolean).join(' · ') || null;
 	});
 	/** The swap dropdown's rows: the loaded item leads, then favourites. */
 	const stripProfiles = $derived.by<StripProfileRow[]>(() =>
@@ -1771,10 +1809,6 @@
 			// bean seeded it, or the user dialed it. The bare placeholder
 			// (no bean grind, untouched dial) records nothing, so history
 			// falls back to the frozen bean snapshot as before.
-			const beanGrindRaw = beanLibrary.activeBean?.grinderSetting?.trim().replace(',', '.');
-			const beanHasGrind = beanGrindRaw
-				? Number.isFinite(Number.parseFloat(beanGrindRaw))
-				: false;
 			// The brew temp and pre-infusion the shot actually runs with
 			// (after the core's clamp), so history records what was sent.
 			const qc = effectiveOverrides();
@@ -1784,7 +1818,8 @@
 				preinfuseTarget: qc.preinf ?? paramSeed.preinf,
 				stopOnWeight: live.stopOnWeight,
 				autoTare: live.autoTare,
-				grind: beanHasGrind || live.grind !== DEFAULT_BREW_PARAMS.grind ? live.grind : null
+				// Brew's grind (#488); none set records none.
+				grind: brewGrind.value
 			});
 			// The fingerprint compare + lazy re-upload happens inside
 			// `startShot()`; when no upload is needed the call returns
@@ -1946,6 +1981,12 @@
 				title={profileName}
 				beanLine={headerBeanName}
 				specLine={stripSpecLine}
+				specMarker={grindInfo.marker}
+				specMarkerTitle={grindInfo.markerTitle}
+				grinders={grinderRows}
+				activeGrinderId={beanLibrary.activeGrinder?.id ?? null}
+				onSelectGrinder={pickGrinder}
+				onManageGrinders={openDevicesGrinder}
 				freshLabel={headerFreshLabel}
 				freshColor={headerFreshColor}
 				syncLabel={profileSyncLabel}
@@ -2086,6 +2127,8 @@
 			onToggleSteamEco={toggleSteamEco}
 			onSave={() => void runSave(false)}
 			saveEnabled={saveEnabled(quickSave)}
+				saveIncludesGrind={quickSave.grind !== null}
+				grindInfo={grindInfo}
 			onSaveAsNew={offersSaveAsNew(quickSave) ? () => void runSave(true) : undefined}
 		/>
 		<PhoneOverflowSheet
@@ -2117,6 +2160,18 @@
 				beanItems={beanPickerItems}
 				activeBeanId={beanLibrary.activeBeanId}
 				beanRank={rankBeansForPicker}
+				grinderName={beanLibrary.activeGrinder?.name ?? 'No grinder'}
+				grinderStarred={activeGrinderStarred}
+				grindLabel={grindInfo.label}
+				grindMarker={grindInfo.marker}
+				grindMarkerTitle={grindInfo.markerTitle}
+				{grinderRows}
+				activeGrinderId={beanLibrary.activeGrinder?.id ?? null}
+				allGrinders={beanLibrary.allGrinders}
+				onSelectGrinder={pickGrinder}
+				onAddGrinder={addGrinderChoice}
+				onEditBagGrinds={editActiveBean}
+				onDevices={openDevicesGrinder}
 				quickSheetOpen={quickSheetOpen}
 				onEditProfile={editActiveProfile}
 				onSelectProfile={(id) => {
@@ -2329,6 +2384,8 @@
 				onToggleYieldTarget={onToggleYieldTarget}
 				onSave={() => void runSave(false)}
 				saveEnabled={saveEnabled(quickSave)}
+				saveIncludesGrind={quickSave.grind !== null}
+				grindInfo={grindInfo}
 				onSaveAsNew={offersSaveAsNew(quickSave) ? () => void runSave(true) : undefined}
 				onToggleSteamEco={toggleSteamEco}
 			/>

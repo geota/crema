@@ -23,6 +23,7 @@
 	import type { Bean, Roaster } from '#lib/bean/index.js';
 	import FavoritesStrip from './FavoritesStrip.svelte';
 	import DoseGrindStepper from './DoseGrindStepper.svelte';
+	import type { GrindView } from '#lib/brew/grind-view.js';
 	import YieldRatioStepper from './YieldRatioStepper.svelte';
 	import BrewTempStepper from './BrewTempStepper.svelte';
 	import SteamStepper from './SteamStepper.svelte';
@@ -52,6 +53,8 @@
 		onToggleYieldTarget,
 		onSave,
 		saveEnabled = false,
+		saveIncludesGrind = false,
+		grindInfo = null,
 		onSaveAsNew,
 		onToggleSteamEco
 	}: {
@@ -104,6 +107,10 @@
 		onSave?: () => void;
 		/** Save has something to write; off otherwise. */
 		saveEnabled?: boolean;
+		/** Save would include the grind (#488): a copper dot on the button. */
+		saveIncludesGrind?: boolean;
+		/** The active grinder's scale and the unsaved-grind marker (#488). */
+		grindInfo?: GrindView | null;
 		/** "Save as new…": set when Save would update a custom profile in place. */
 		onSaveAsNew?: () => void;
 		/**
@@ -194,7 +201,7 @@
 			{/if}
 			{#if onSave}
 				<button class="qsheet-cta" onclick={onSave} disabled={!saveEnabled}>
-					<BookmarkSimpleIcon aria-hidden="true" /> Save
+					<BookmarkSimpleIcon aria-hidden="true" /> Save{#if saveIncludesGrind}<span class="qsave-dot" aria-hidden="true"></span><span class="qsave-sr">, includes the grind</span>{/if}
 				</button>
 			{/if}
 			<button class="qsheet-cta" onclick={() => params.reset()}>
@@ -217,7 +224,7 @@
 	/>
 
 	<div class="qsheet-g-grid is-six">
-		<DoseGrindStepper {params} />
+		<DoseGrindStepper {params} grind={grindInfo} />
 		<YieldRatioStepper {params} dotOn={yieldTargetOn} onDot={onToggleYieldTarget} />
 		<BrewTempStepper {params} />
 		<SteamStepper {params} />
@@ -330,6 +337,23 @@
 </div>
 
 <style>
+	.qsave-sr {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+		white-space: nowrap;
+	}
+	.qsave-dot {
+		display: inline-block;
+		width: 7px;
+		height: 7px;
+		margin-left: 6px;
+		border-radius: 50%;
+		background: var(--copper-500, #c7763b);
+		vertical-align: middle;
+	}
 	/* "Chart" strip in the foot — 4 channel groups (icon + 2 checkboxes
 	   each) with vertical hairline dividers. Sits on the left of the foot
 	   row; the existing stop-on-weight / auto-tare toggles sit on the

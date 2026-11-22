@@ -32,7 +32,10 @@
 	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
 	import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircleIcon';
 	import { restoreFocus, trapTab } from '#lib/a11y/focus.js';
+	import StarIcon from 'phosphor-svelte/lib/StarIcon';
 	import ProfileSpark from './ProfileSpark.svelte';
+	import GrindMarker from '#lib/components/grinders/GrindMarker.svelte';
+	import type { GrinderPickRow } from '#lib/components/grinders/GrinderPicker.svelte';
 
 	let {
 		title,
@@ -48,7 +51,13 @@
 		onSelectProfile,
 		onSelectBean,
 		onAllProfiles,
-		onAllBeans
+		onAllBeans,
+		specMarker = null,
+		specMarkerTitle = '',
+		grinders = [],
+		activeGrinderId = null,
+		onSelectGrinder,
+		onManageGrinders
 	}: {
 		title: string;
 		/** `Roaster · Bean`, or the empty-state line. */
@@ -67,6 +76,14 @@
 		onSelectBean: (id: string) => void;
 		onAllProfiles: () => void;
 		onAllBeans: () => void;
+		/** The unsaved-grind marker after the spec line ("Bag 4.2"), or null (#488). */
+		specMarker?: string | null;
+		specMarkerTitle?: string;
+		/** The swap sheet's Grinder section (#488, board PhoneBrew2). */
+		grinders?: readonly GrinderPickRow[];
+		activeGrinderId?: string | null;
+		onSelectGrinder?: (id: string | null) => void;
+		onManageGrinders?: () => void;
 	} = $props();
 
 	let open = $state(false);
@@ -119,7 +136,12 @@
 				{/if}
 			</span>
 			<span class="pstrip-line">{beanLine}</span>
-			{#if specLine}<span class="pstrip-line is-spec">{specLine}</span>{/if}
+			{#if specLine}
+				<span class="pstrip-line is-spec">
+					{specLine}
+					{#if specMarker}<GrindMarker text={specMarker} title={specMarkerTitle} interactive={false} />{/if}
+				</span>
+			{/if}
 		</span>
 		<CaretDownIcon aria-hidden="true" />
 	</button>
@@ -136,7 +158,7 @@
 			bind:this={panelEl}
 			class="pstrip-dd"
 			role="dialog"
-			aria-label="Choose profile and bean"
+			aria-label="Choose profile, bean and grinder"
 			tabindex="-1"
 			onkeydown={onKeydown}
 		>
@@ -189,11 +211,47 @@
 			{:else}
 				<p class="pdd-empty">No beans yet — add a bag in Beans.</p>
 			{/each}
+
+			{#if onSelectGrinder}
+				<div class="pdd-rule" aria-hidden="true"></div>
+				<div class="pdd-head">
+					<h2 class="pdd-title">Grinder</h2>
+					<button type="button" class="pdd-link" onclick={() => { open = false; onManageGrinders?.(); }}>
+						Manage grinders <ArrowRightIcon aria-hidden="true" />
+					</button>
+				</div>
+				{#each grinders as g (g.id)}
+					{@const active = g.id === activeGrinderId}
+					<button
+						type="button"
+						class={['pdd-row', { 'is-active': active }]}
+						aria-pressed={active}
+						onclick={() => pick((id) => onSelectGrinder?.(id), g.id)}
+					>
+						<span class="pdd-text">
+							<span class="pdd-name">
+								{g.name}
+								{#if g.starred}<StarIcon weight="fill" class="pdd-star" aria-label="this bag's grinder" />{/if}
+							</span>
+							<span class="pdd-meta">{g.line}</span>
+						</span>
+						{#if active}<CheckCircleIcon aria-hidden="true" />{/if}
+					</button>
+				{:else}
+					<p class="pdd-empty">No grinders yet — add yours in Devices.</p>
+				{/each}
+			{/if}
 		</div>
 	{/if}
 </div>
 
 <style>
+	.pdd-name :global(.pdd-star) {
+		color: var(--fg-accent);
+		font-size: 12px;
+		vertical-align: -1px;
+		margin-left: 4px;
+	}
 	.pstrip-wrap {
 		position: relative;
 		flex: none;

@@ -22,6 +22,7 @@ import type { CaptureEntry } from '#lib/capture/index.js';
 import { getCaptureStore } from '#lib/capture/index.js';
 import { getBeanStore } from '#lib/bean/index.js';
 import { getSettingsStore } from '#lib/settings/index.js';
+import { autoSaveShotGrind, DEFAULT_GRIND_SCALE, formatGrind } from '#lib/bean/grinder.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
 import { promptBagEmpty } from '#lib/bean/bag-empty-prompt.js';
 import { getProfileStore } from '#lib/profiles/index.js';
@@ -56,6 +57,7 @@ import {
 } from '#lib/services/visualizer-call.js';
 import { UploadQueue } from '#lib/services/upload-queue.js';
 import { getHistoryStore } from './store.svelte';
+import type { StoredShot } from './model';
 import { readCaptureKeep } from '#lib/capture/limit.js';
 import { pruneCaptures } from '#lib/capture/prune.js';
 import {
@@ -192,6 +194,8 @@ export function commitShotCompletion(
 				const record = captured ? getHistoryStore().recordCaptured(captured) : null;
 				if (!record) return;
 				getHistoryStore().setBagDebit(record.id, bagDebit);
+				// An undone discard is a kept shot: auto-save counts it.
+				if (frozenShot?.source !== 'replay') autoSaveGrind(record);
 				if (frozenCtx.runtime) {
 					registerUploadBatch(record.id, autoUploadDestinations());
 					frozenCtx.runtime.runFork(pushShotToVisualizer(record.id));
@@ -215,6 +219,7 @@ export function commitShotCompletion(
 			? runLiveOnlySideEffects(event, activeShot, dose, ctx.snapshot, ctx.fireWebhook)
 			: untouchedBag(activeShot);
 		getHistoryStore().setBagDebit(record.id, bagDebit);
+		if (isLive) autoSaveGrind(record);
 		// Visualizer push — fire-and-forget; recoverable failures land in the
 		// retry queue. Runs on the app runtime (T-22) so it sees ShotSync /
 		// UploadQueue and the REAL typed errors (no boundary squash); `runFork`
@@ -296,6 +301,7 @@ function commitFrozenShotsNow(runtime: AppRuntime | null): void {
 			if (debit.emptied) void promptBagEmpty(shot.beanId);
 		}
 		getHistoryStore().setBagDebit(record.id, bagDebit);
+		if (shot.live) autoSaveGrind(record);
 		if (runtime) {
 			registerUploadBatch(record.id, autoUploadDestinations());
 			runtime.runFork(pushShotToVisualizer(record.id));
@@ -360,7 +366,9 @@ function captureContext(activeShot: ActiveShotData | null): ShotCaptureContext {
 					grinder: bean.grinder
 				}
 			: undefined,
-		settingsGrinder: settings.grinderModel?.trim() || undefined,
+		// The active grinder at shot start (#488): its name snapshot and id.
+		settingsGrinder: activeShot?.grinderModel?.trim() || undefined,
+		grinderId: activeShot?.grinderId ?? undefined,
 		grindDial: activeShot?.brewParams?.grind ?? undefined,
 		barista: settings.baristaName?.trim() || undefined,
 		tags: liveBean?.tags && liveBean.tags.length > 0 ? [...liveBean.tags] : undefined,
@@ -373,6 +381,36 @@ function captureContext(activeShot: ActiveShotData | null): ShotCaptureContext {
 		// core stamps it when it didn't hold the profile it ran itself.
 		profileId: activeShot?.profileId ?? undefined
 	};
+}
+
+/**
+ * Auto-save (#488, Devices → Grinder "Save each shot's grind to its bag"):
+ * a kept live shot with a bag saves its grind for that bag and grinder, as
+ * Brew's Save would (a row added if missing, the star never changed). This
+ * device recorded the shot, so it is the one that saves (review F8). A
+ * message only when the value changed.
+ */
+export function autoSaveGrind(shot: StoredShot): void {
+	const beanId = shot.bean?.beanId ?? null;
+	if (!beanId) return;
+	const library = getBeanStore();
+	const bag = library.getBean(beanId);
+	if (!bag) return;
+	const raw = shot.metadata?.grinderSetting;
+	const out = autoSaveShotGrind({
+		enabled: getSettingsStore().current.grindAutoSave === true,
+		recordedHere: true,
+		shotBeanId: beanId,
+		shotGrinderId: shot.grinderId ?? undefined,
+		shotGrinderName: shot.grinderModel ?? undefined,
+		shotGrind: raw == null ? undefined : String(raw),
+		bag
+	});
+	if (!out?.changed) return;
+	library.storeBagFromCore(out.bean);
+	const grinder = shot.grinderId ? library.getGrinder(shot.grinderId) : null;
+	const where = shot.grinderModel ? `${bag.name} · ${shot.grinderModel}` : bag.name;
+	toast.info(`Grind ${formatGrind(String(raw), grinder?.scale ?? DEFAULT_GRIND_SCALE)} saved to ${where}`);
 }
 
 /** The `bagDebit` of a row whose bag wasn't debited: 0 with a bag, else `null`. */
