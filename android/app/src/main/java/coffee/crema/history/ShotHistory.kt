@@ -188,6 +188,10 @@ data class StoredShot(
      *  kept in History with a replay mark, never uploaded or debited. Core
      *  `StoredShot::replay`; kept by backups, omitted when false. */
     override val replay: Boolean = false,
+    /** A remote's copy of the hub's shot (#488 follow-up 51): history only, never
+     *  debited here, so moving it to another bag in History moves nothing. Core
+     *  `StoredShot::mirror_copy`; kept by backups, omitted when false. */
+    override val mirrorCopy: Boolean = false,
     /**
      * The DE1 this shot was pulled on, stamped at record time (#84). The Decent
      * upload needs the serial (the server checks it belongs to the account);

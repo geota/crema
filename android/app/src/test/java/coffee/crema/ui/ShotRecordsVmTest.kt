@@ -119,21 +119,36 @@ class ShotRecordsVmTest {
         assertEquals(200f, vm.bean(RemoteFixture.BEAN_S).remaining, "the hub debits its own bag")
         assertEquals(200f, vm.bean(RemoteFixture.BEAN_P).remaining)
         assertEquals(emptyList(), offered, "the hub uploads its own row")
+        // #488 follow-up 51 (REVIEW-523 M1): the copy carries the mirror-copy
+        // mark, kept by a backup, so moving it in History moves nothing.
+        assertTrue(shot.mirrorCopy, "marked as the hub's shot")
+        val backup = coffee.crema.visualizer.wireShotJson(shot, forBackup = true)
+        assertEquals("true", backup["mirrorCopy"].toString())
+        assertTrue(coffee.crema.visualizer.storedShotFromBackupJson(backup, coreJson)!!.mirrorCopy, "a restore keeps it")
+        vm.setShotBean(shot.id, RemoteFixture.BEAN_P)
+        VmHarness.idle()
+        assertEquals(RemoteFixture.BEAN_P, VmHarness.rows(vm).single { it.id == shot.id }.bean?.beanId, "moved")
+        assertEquals(200f, vm.bean(RemoteFixture.BEAN_S).remaining, "S gets back nothing it never lost")
+        assertEquals(200f, vm.bean(RemoteFixture.BEAN_P).remaining, "P isn't debited for the hub's shot")
+        assertEquals(0f, VmHarness.rows(vm).single { it.id == shot.id }.bagDebitG)
     }
 
     /** REVIEW-FINAL-2 MF1 repro: a remote moves its mirror copy of the hub's
      *  18 g shot to another bag in History. The bag it named gets back nothing
      *  it never lost, and the new bag isn't debited on a remote (core
-     *  `shot_bag_move`). Both a row written now (0) and one an older build
-     *  wrote (null, REVIEW-518 follow-up 1). */
+     *  `shot_bag_move`). Both a row written now (0, with the mirror-copy mark,
+     *  #488 follow-up 51) and one an older build wrote (null, no mark,
+     *  REVIEW-518 follow-up 1). */
     @Test
     fun `a remote's mirror shot moved in History credits and debits nothing`() {
-        fun mirrorRow(id: String, bagDebit: Float?) = coffee.crema.history.StoredShot(
+        fun mirrorRow(id: String, bagDebit: Float?, marked: Boolean) = coffee.crema.history.StoredShot(
             id = id, completedAtMs = 1_700_000_000_000, durationMs = 28_000, doseG = 18f, bagDebitG = bagDebit,
             bean = coffee.crema.core.ShotBean(beanId = RemoteFixture.BEAN_S, name = "Bag ${RemoteFixture.BEAN_S}"),
+            mirrorCopy = marked,
         )
         kotlinx.coroutines.runBlocking {
-            coffee.crema.history.HistoryStore(VmHarness.app(), coreJson).save(listOf(mirrorRow("now", 0f), mirrorRow("older", null)))
+            coffee.crema.history.HistoryStore(VmHarness.app(), coreJson)
+                .save(listOf(mirrorRow("now", 0f, marked = true), mirrorRow("older", null, marked = false)))
         }
         val library = BeanLibrary(listOf(bag(RemoteFixture.BEAN_P), bag(RemoteFixture.BEAN_S)), emptyList(), RemoteFixture.BEAN_P)
         val vm = fixture.start(library = library)
@@ -163,11 +178,12 @@ class ShotRecordsVmTest {
             id = "hub-era", completedAtMs = 1_700_000_000_000, durationMs = 28_000, doseG = 18f, bagDebitG = 18f,
             bean = coffee.crema.core.ShotBean(beanId = RemoteFixture.BEAN_S, name = "Bag ${RemoteFixture.BEAN_S}"),
         )
-        kotlinx.coroutines.runBlocking { coffee.crema.history.HistoryStore(VmHarness.app(), coreJson).save(listOf(hubEra)) }
+        val hubEraEmpty = hubEra.copy(id = "hub-era-empty", completedAtMs = 1_699_999_000_000, bagDebitG = 0f, bean = hubEra.bean?.copy(beanId = RemoteFixture.BEAN_P))
+        kotlinx.coroutines.runBlocking { coffee.crema.history.HistoryStore(VmHarness.app(), coreJson).save(listOf(hubEra, hubEraEmpty)) }
         val library = BeanLibrary(listOf(bag(RemoteFixture.BEAN_P), bag(RemoteFixture.BEAN_S)), emptyList(), RemoteFixture.BEAN_P)
         val vm = fixture.start(library = library)
         fixture.push()
-        VmHarness.idleUntil("the row") { VmHarness.rows(vm).isNotEmpty() }
+        VmHarness.idleUntil("the rows") { VmHarness.rows(vm).size == 2 }
         val brew = vm.addManualBrew(
             LibraryController.ManualBrewInput(
                 method = "pourover", completedAtMs = 1_700_000_100_000, beanId = RemoteFixture.BEAN_S, doseG = 18f, waterG = 300f,
@@ -191,6 +207,12 @@ class ShotRecordsVmTest {
         assertEquals(200f, vm.bean(RemoteFixture.BEAN_S).remaining)
         assertEquals(182f, vm.bean(RemoteFixture.BEAN_P).remaining)
         assertEquals(18f, VmHarness.rows(vm).single { it.id == "hub-era" }.bagDebitG)
+        // #488 follow-up 51: one it recorded on an empty bag (0, no mark) is
+        // still its own shot: moved, it debits the new bag.
+        vm.setShotBean("hub-era-empty", RemoteFixture.BEAN_S)
+        VmHarness.idle()
+        assertEquals(182f, vm.bean(RemoteFixture.BEAN_S).remaining, "the dose comes from the bag it names now")
+        assertEquals(18f, VmHarness.rows(vm).single { it.id == "hub-era-empty" }.bagDebitG)
     }
 
     /** A completed shot's side effects are the core's rule (REVIEW-CORE M4). */
