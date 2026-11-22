@@ -141,6 +141,7 @@ describe('HistoryStore reload', () => {
 			decentId: 'dec-1',
 			visualizerUpdatedAt: 1_700_000_000,
 			pinned: true,
+			replay: true,
 			machine,
 			deletedAt: 1_700_000_100_000,
 			brewMethod: 'custom:abc',
