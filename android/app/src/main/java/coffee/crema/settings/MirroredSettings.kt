@@ -74,7 +74,7 @@ data class MirroredSettings(
     fun settled(key: Setting, generation: Long, outcome: CommandOutcome): MirroredSettings {
         if (pending[key]?.generation != generation) return this
         return when (outcome) {
-            CommandOutcome.Accepted, is CommandOutcome.Refused -> copy(pending = pending - key)
+            CommandOutcome.Accepted, is CommandOutcome.BagPicked, is CommandOutcome.Refused -> copy(pending = pending - key)
             is CommandOutcome.Unknown -> copy(unconfirmed = unconfirmed + key)
         }
     }

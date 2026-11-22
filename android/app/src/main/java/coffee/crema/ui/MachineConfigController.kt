@@ -46,9 +46,10 @@ internal class MachineConfigController(
     private val pushConfig: () -> Unit,
     private val profileJson: (String) -> String?,
     private val persistLibrary: () -> Unit,
-    /** A bag was selected (its id, then the bag selected before it): resolve
-     *  the profile, grinder and grind it brings (#488, review F6). */
-    private val onBagSelected: (String, String?) -> Unit,
+    /** A bag was selected (its id, the bag selected before it, and whether a
+     *  peer picked it): resolve the profile, grinder and grind it brings (#488,
+     *  review F6); a peer's pick returns the selection to send back. */
+    private val onBagSelected: (String, String?, Boolean) -> coffee.crema.core.BagSelection?,
     /** A grinder was selected: Brew's grind takes the pick order (#488). */
     private val onGrinderSelected: (String?) -> Unit = {},
     /** Push the stop targets from a state, the desired profile after a delay in ms. */
@@ -109,8 +110,10 @@ internal class MachineConfigController(
     }
 
     /** The rest of a config command on the device that owns the config:
-     *  persist it, write the machine, push it to mirrors. */
-    fun commitConfig(cmd: MachineCommand.Config) {
+     *  persist it, write the machine, push it to mirrors. A peer's bag pick
+     *  ([relayed]) returns the core's selection for the peer to show (F6). */
+    fun commitConfig(cmd: MachineCommand.Config, relayed: Boolean = false): coffee.crema.core.BagSelection? {
+        var picked: coffee.crema.core.BagSelection? = null
         when (cmd) {
             is MachineCommand.SetActiveProfile -> {
                 persistPrefs()
@@ -126,7 +129,7 @@ internal class MachineConfigController(
                 // Unknown (no showConfig for it): resolved as a new pick.
                 val before = bagBefore?.takeIf { it.first === cmd }?.second
                 bagBefore = null
-                if (cmd.id != null) onBagSelected(cmd.id, before)
+                if (cmd.id != null) picked = onBagSelected(cmd.id, before, relayed)
             }
             is MachineCommand.SetActiveGrinder -> {
                 onGrinderSelected(cmd.id) // persists the pointer; Brew's grind takes the pick order
@@ -173,6 +176,7 @@ internal class MachineConfigController(
                 pushConfig() // mirrors drop their override too (issue 06)
             }
         }
+        return picked
     }
 
     /**

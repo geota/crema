@@ -31,7 +31,7 @@ import kotlin.test.assertTrue
  */
 class RelayHubControlOrderTest {
 
-    private fun hub(handler: suspend (String, String, String?, String?) -> Result<Unit>) = RelayHub(
+    private fun hub(handler: suspend (String, String, String?, String?) -> Result<String?>) = RelayHub(
         primaryName = "Tablet",
         roster = { emptyList() },
         readSource = { _, _, _ -> error("unused") },
@@ -69,7 +69,7 @@ class RelayHubControlOrderTest {
             delay(Random.nextLong(0, 5))
             handled += args
             synchronized(this) { running-- }
-            Result.success(Unit)
+            Result.success(null)
         }
         sendInOrder(hub, 40) { i -> Frame.Control(i.toLong(), "setQcGrind", "$i.0") }
         assertEquals((1..40).map { "$it.0" }, handled.toList())
@@ -91,7 +91,7 @@ class RelayHubControlOrderTest {
             controlHandler = { _, args, _, _ ->
                 config = """{"qcGrind":$args}"""
                 hub.pushConfig(config)
-                Result.success(Unit)
+                Result.success(null)
             },
             configSource = { config },
         )
@@ -129,7 +129,7 @@ class RelayHubControlOrderTest {
             )
             val hub = hub { method, args, id, name ->
                 when (val outcome = dispatcher.dispatch(method, args, CommandOrigin(id, name))) {
-                    CommandOutcome.Accepted -> Result.success(Unit)
+                    CommandOutcome.Accepted, is CommandOutcome.BagPicked -> Result.success(null)
                     else -> Result.failure(IllegalStateException(outcome.toString()))
                 }
             }
@@ -165,7 +165,7 @@ class RelayHubControlOrderTest {
         // The mapping ProxyController wires into its hub.
         val hub = hub { method, args, id, name ->
             when (val outcome = dispatcher.dispatch(method, args, CommandOrigin(id, name))) {
-                CommandOutcome.Accepted -> Result.success(Unit)
+                CommandOutcome.Accepted, is CommandOutcome.BagPicked -> Result.success(null)
                 is CommandOutcome.Refused -> Result.failure(IllegalStateException(outcome.reason))
                 is CommandOutcome.Unknown -> Result.failure(IllegalStateException(outcome.detail))
             }
@@ -205,7 +205,7 @@ class RelayHubControlOrderTest {
         )
         val hub = hub { method, args, id, name ->
             when (val outcome = dispatcher.dispatch(method, args, CommandOrigin(id, name))) {
-                CommandOutcome.Accepted -> Result.success(Unit)
+                CommandOutcome.Accepted, is CommandOutcome.BagPicked -> Result.success(null)
                 is CommandOutcome.Refused -> Result.failure(IllegalStateException(outcome.reason))
                 is CommandOutcome.Unknown -> Result.failure(IllegalStateException(outcome.detail))
             }

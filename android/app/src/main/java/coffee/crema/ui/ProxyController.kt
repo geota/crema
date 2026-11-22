@@ -43,6 +43,7 @@ import coffee.crema.machine.LocalMachine
 import coffee.crema.machine.ConfigEcho
 import coffee.crema.machine.MachineActions
 import coffee.crema.machine.MachineCommand
+import coffee.crema.machine.MachineCommandCodec
 import coffee.crema.machine.MachineCommands
 import coffee.crema.machine.RelayMachine
 import coffee.crema.machine.RelayedCommandDispatcher
@@ -1326,7 +1327,8 @@ class ProxyController(
             // Relayed user intent from a secondary → the machine command seam.
             controlHandler = { method, args, originId, originName ->
                 when (val outcome = handleRelayedControl(method, args, originId, originName)) {
-                    CommandOutcome.Accepted -> Result.success(Unit)
+                    // A bag pick answers with its selection (F6).
+                    CommandOutcome.Accepted, is CommandOutcome.BagPicked -> Result.success(MachineCommandCodec.encodeReply(outcome))
                     is CommandOutcome.Refused -> Result.failure(IllegalStateException(outcome.reason))
                     is CommandOutcome.Unknown -> Result.failure(IllegalStateException(outcome.detail))
                 }

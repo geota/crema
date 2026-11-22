@@ -54,7 +54,13 @@ internal class RecordingMachineActions(
         shown += cmd
     }
 
-    override fun commitConfig(cmd: MachineCommand.Config) = ran("commit($cmd)")
+    /** What a peer's bag pick answers ([commitConfig] with `relayed`): the core's selection, or none. */
+    var picked: coffee.crema.core.BagSelection? = null
+
+    override fun commitConfig(cmd: MachineCommand.Config, relayed: Boolean): coffee.crema.core.BagSelection? {
+        ran("commit($cmd)")
+        return picked?.takeIf { relayed && cmd is MachineCommand.SetActiveBean }
+    }
     override fun hasProfile(id: String): Boolean {
         maybeThrow("hasProfile")
         return id in profiles

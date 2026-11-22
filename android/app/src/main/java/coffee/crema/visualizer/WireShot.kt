@@ -177,6 +177,8 @@ fun wireShotJson(shot: StoredShot, forBackup: Boolean = false): JsonObject {
         if (forBackup) shot.visualizerUpdatedAt?.let { put("visualizerUpdatedAt", it) }
         // Omitted when false, as the core does, so an unpinned row's bytes don't change.
         if (forBackup && shot.pinned) put("pinned", true)
+        // The replay mark (#488 batch 6), omitted when false as the core does.
+        if (forBackup && shot.replay) put("replay", true)
         if (forBackup) shot.bagDebitG?.let { put("bagDebit", it) }
         // Brew Log fields (issue #10) — local-only rows, so backup only; the
         // core StoredShot carries them, and the restore inverts them below.
@@ -321,6 +323,7 @@ fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Jso
         decentId = str("decentId")?.takeIf { it.isNotBlank() },
         visualizerUpdatedAt = str("visualizerUpdatedAt")?.toLongOrNull(),
         pinned = boolOf("pinned") == true,
+        replay = boolOf("replay") == true,
         bagDebitG = str("bagDebit")?.toFloatOrNull(),
         machineSerial = machineStr("serialNumber"),
         machineFirmware = machineStr("serialNumber")?.let { machineStr("firmwareVersion") },

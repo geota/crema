@@ -1,7 +1,7 @@
 package coffee.crema.decent
 
 import coffee.crema.core.ShotMachine
-import coffee.crema.core.uploadRefusedNoSamples
+import coffee.crema.core.uploadRefusedShot
 import coffee.crema.history.ShotMeta
 import coffee.crema.history.ShotRow
 import coffee.crema.history.StoredShot
@@ -97,7 +97,8 @@ class DecentSync(
     private val onLinked: () -> Unit = {},
     private val now: () -> Long = System::currentTimeMillis,
     /** Core `upload_refused_no_samples`: a machine shot with no telemetry doesn't go. */
-    private val uploadRefused: (isBrewLog: Boolean, sampleCount: UInt?) -> Boolean = ::uploadRefusedNoSamples,
+    /** The core's upload refusal (`upload_refused_shot`): no telemetry, or a replay (#488 batch 6). */
+    private val uploadRefused: (isBrewLog: Boolean, sampleCount: UInt?, replay: Boolean) -> Boolean = ::uploadRefusedShot,
 ) : UploadDestination {
     companion object {
         const val MIN_SHOT_SECONDS = 5
@@ -313,7 +314,7 @@ class DecentSync(
      * a Brew Log row (issue #10) never goes — it is not a DE1 shot.
      */
     override fun canUpload(shot: ShotRow): Boolean =
-        !shot.isBrewLog && (!shot.pulledFromVisualizer || shotMachineOf(shot) != null)
+        !shot.isBrewLog && !shot.replay && (!shot.pulledFromVisualizer || shotMachineOf(shot) != null)
 
     override fun inBacklog(shot: ShotRow): Boolean =
         shot.decentId == null &&
@@ -506,8 +507,11 @@ class DecentSync(
         // Brew Log rows (issue #10): never uploaded, and never stamped with
         // the live DE1 (which the bind after a successful POST would do).
         if (shot.isBrewLog) return Outcome.Skipped(BREW_LOG_UPLOAD_SKIP)
-        // A record with no measurements isn't a shot; the row stays in the backlog.
-        if (uploadRefused(false, shot.samples.size.toUInt())) return Outcome.Skipped(NO_SERIES_REASON)
+        // A record with no measurements isn't a shot; a replay is a copy of one
+        // (#488 batch 6). The row stays where it is.
+        if (uploadRefused(false, shot.samples.size.toUInt(), shot.replay)) {
+            return Outcome.Skipped(if (shot.replay) coffee.crema.visualizer.REPLAY_NOT_UPLOADED else NO_SERIES_REASON)
+        }
         if (shot.decentId != null && !replace) return Outcome.Skipped("Already on Decent")
         if (!manual && shot.durationMs < MIN_SHOT_SECONDS * 1000L) return Outcome.Skipped("Shorter than $MIN_SHOT_SECONDS s")
         val (machine, fromLive) = resolveMachine(shot) ?: return Outcome.Skipped(

@@ -114,10 +114,34 @@ class ShotRecordsVmTest {
         VmHarness.idleUntil("the mirror copy to be recorded", 5_000) { VmHarness.rows(vm).isNotEmpty() }
         val shot = VmHarness.whole(vm, VmHarness.rows(vm).first().id)
         assertEquals(RemoteFixture.BEAN_S, shot.bean?.beanId, "the hub's bag, as the hub's own row says")
-        assertNull(shot.bagDebitG, "a remote's copy takes nothing")
+        // REVIEW-FINAL-2 MF1: 0, not null, so a later move credits nothing.
+        assertEquals(0f, shot.bagDebitG, "a remote's copy takes nothing, and says so")
         assertEquals(200f, vm.bean(RemoteFixture.BEAN_S).remaining, "the hub debits its own bag")
         assertEquals(200f, vm.bean(RemoteFixture.BEAN_P).remaining)
         assertEquals(emptyList(), offered, "the hub uploads its own row")
+    }
+
+    /** REVIEW-FINAL-2 MF1 repro: the remote moves its mirror copy of the hub's
+     *  shot to another bag in History. The bag it named gets back nothing it
+     *  never lost, and the new bag isn't debited on a remote (core `shot_bag_move`). */
+    @Test
+    fun `a remote's mirror shot moved in History credits and debits nothing`() {
+        val library = BeanLibrary(listOf(bag(RemoteFixture.BEAN_P), bag(RemoteFixture.BEAN_S)), emptyList(), RemoteFixture.BEAN_P)
+        val vm = fixture.start(library = library)
+        fixture.push() // the hub's active bag is BEAN_S
+        pour(vm)
+        VmHarness.idleUntil("the mirror copy to be recorded", 5_000) { VmHarness.rows(vm).isNotEmpty() }
+        val id = VmHarness.rows(vm).first().id
+        vm.setShotBean(id, RemoteFixture.BEAN_P)
+        VmHarness.idle()
+        assertEquals(RemoteFixture.BEAN_P, VmHarness.rows(vm).first().bean?.beanId, "the row moved")
+        assertEquals(200f, vm.bean(RemoteFixture.BEAN_S).remaining, "no coffee that doesn't exist")
+        assertEquals(200f, vm.bean(RemoteFixture.BEAN_P).remaining, "a remote never debits its own copy")
+        assertEquals(0f, VmHarness.rows(vm).first().bagDebitG)
+        vm.setShotBean(id, null)
+        VmHarness.idle()
+        assertEquals(200f, vm.bean(RemoteFixture.BEAN_P).remaining, "to no bag credits nothing either")
+        assertNull(VmHarness.rows(vm).first().bagDebitG, "no bag, no debit")
     }
 
     /** A completed shot's side effects are the core's rule (REVIEW-CORE M4). */
@@ -129,8 +153,9 @@ class ShotRecordsVmTest {
         assertTrue(remote.record)
         assertFalse(remote.debit || remote.autoSave || remote.upload, "a remote's mirror copy is history only")
         val replay = shotEffects(ShotDisposition.Record, recordedHere = true, replay = true)
-        assertFalse(replay.debit || replay.autoSave, "a replay touches nothing real")
-        assertTrue(replay.upload, "but still uploads")
+        // Owner decision (#488 batch 6): kept in History, never uploaded.
+        assertFalse(replay.debit || replay.autoSave || replay.upload, "a replay touches nothing real and never uploads")
+        assertTrue(replay.record, "but it is recorded")
         val aborted = shotEffects(ShotDisposition.DiscardAborted, recordedHere = true, replay = false)
         assertTrue(aborted.offerUndo && aborted.debit && !aborted.record, "the dose was ground; the row waits for the Undo")
         val cleaning = shotEffects(ShotDisposition.SkipCleaning, recordedHere = true, replay = false)

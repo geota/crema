@@ -56,7 +56,7 @@ internal class RemoteFixture(private val store: ViewModelStore) {
 
     /** Runs each relayed control instead of the default handler (a real
      *  dispatcher, say). */
-    @Volatile var dispatch: (suspend (method: String, args: String) -> Result<Unit>)? = null
+    @Volatile var dispatch: (suspend (method: String, args: String) -> Result<String?>)? = null
 
     /** The hub holds the DE1 (its roster lists it). */
     var hubHoldsDe1 = true
@@ -137,7 +137,7 @@ internal class RemoteFixture(private val store: ViewModelStore) {
                     method in refused -> Result.failure(IllegalStateException("refused by the hub"))
                     else -> {
                         if (echoEdits) echo(method, args)
-                        Result.success(Unit)
+                        Result.success(null)
                     }
                 }
             },

@@ -65,7 +65,7 @@ class ProxyHandshakeTest {
         roster = { listOf(DeviceInfo(addr, "DE1", "de1", "CONNECTED")) },
         readSource = { _, _, _ -> byteArrayOf(0x01) },
         isSnapshotChar = { _, c -> c == stateChar },
-        controlHandler = { method, _, _, _ -> relayed += method; Result.success(Unit) },
+        controlHandler = { method, _, _, _ -> relayed += method; Result.success(null) },
     )
 
     @Test

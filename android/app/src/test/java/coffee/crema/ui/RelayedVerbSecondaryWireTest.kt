@@ -71,7 +71,7 @@ class RelayedVerbSecondaryWireTest {
                     hubConfig = coffee.crema.settings.v4SnapshotJson(rev = ++hubRev) { it.copy(qcGrind = args) }
                     pushHubConfig()
                 }
-                Result.success(Unit)
+                Result.success(null)
             }
         },
         configSource = { hubConfig },
