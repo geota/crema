@@ -51,6 +51,7 @@ function mkDeps(parsed: ParsedCapture, core: CoreSlice, over: Partial<ReplayCapt
 		applyOutput: vi.fn<(o: CoreOutput) => void>(),
 		patch: vi.fn<(s: Record<string, unknown>) => void>(),
 		setActiveShot: vi.fn(),
+		setShotSelections: vi.fn(),
 		clearActiveShot: vi.fn(),
 		currentDone: vi.fn(() => 0),
 		...over
@@ -102,6 +103,54 @@ describe('replayCaptureProgram — happy path', () => {
 		await Effect.runPromise(replayCaptureProgram(deps));
 		expect(lastReplayPhase(deps.patch as ReturnType<typeof vi.fn>)).toBe('done');
 		expect(core.endReplay).toHaveBeenCalledOnce();
+	});
+});
+
+describe('replayCaptureProgram — the capture\'s selections (REVIEW-CORE H3)', () => {
+	it('hands the capture\'s bag, profile, grinder and grind to the shadow core before any event', async () => {
+		const order: string[] = [];
+		const core = mkCore({
+			beginReplay: vi.fn(() => {
+				order.push('begin');
+				return Promise.resolve();
+			}),
+			onNotification: vi.fn(() => {
+				order.push('event');
+				return Promise.resolve(EMPTY_OUTPUT);
+			})
+		});
+		const meta: ReplayMeta = {
+			profileName: 'Blooming',
+			grinderModel: 'Niche Zero',
+			bean: { name: 'Guji', roaster: 'Sey', roastLevel: 4, grinderSetting: '2.25' }
+		};
+		const deps = mkDeps(mkParsed(mkEvents([0, 50]), meta), core, {
+			setShotSelections: vi.fn(() => {
+				order.push('selections');
+			})
+		});
+		await Effect.runPromise(replayCaptureProgram(deps));
+		expect(order.slice(0, 3)).toEqual(['begin', 'selections', 'event']);
+		expect(deps.setShotSelections).toHaveBeenCalledWith({
+			bean: { name: 'Guji', roasterName: 'Sey', roastedOn: undefined, roastLevel: 4, notes: undefined },
+			profileName: 'Blooming',
+			grinderName: 'Niche Zero',
+			grind: '2.25'
+		});
+		// The replay's bag snapshot carries no legacy grind (REVIEW-FINAL S2).
+		const active = (deps.setActiveShot as ReturnType<typeof vi.fn>).mock.calls[0][0] as { bean: Record<string, unknown> };
+		expect(active.bean).not.toHaveProperty('grinderSetting');
+	});
+
+	it('a capture with no META hands empty selections, so a live selection never reaches the replayed shot', async () => {
+		const deps = mkDeps(mkParsed(mkEvents([0]), {}), mkCore());
+		await Effect.runPromise(replayCaptureProgram(deps));
+		expect(deps.setShotSelections).toHaveBeenCalledWith({
+			bean: undefined,
+			profileName: undefined,
+			grinderName: undefined,
+			grind: undefined
+		});
 	});
 });
 

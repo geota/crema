@@ -20,12 +20,13 @@
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	import { getBeanStore, type Roaster } from '#lib/bean/index.js';
-	import { boundsForGrinder, grindText } from '#lib/bean/grinder.js';
+	import { boundsForGrinder, grindStartFromBlank } from '#lib/bean/grinder.js';
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { openingBeanId } from '#lib/brew/bean-pick.js';
 	import {
 		INLINE_PRESET_COUNT,
 		OTHER_METHOD,
+		brewLogGrind,
 		brewLogSeeds,
 		brewMethodPresets,
 		isEspressoMethod,
@@ -305,6 +306,9 @@
 			whenLocal && (whenEdited || seed?.completedAt != null)
 				? fromLocalInput(whenLocal)
 				: Date.now();
+		// The active grinder and the grind on its scale, stamped as a shot's
+		// are (REVIEW-FINAL S4); a grind of 0 is kept.
+		const stamp = brewLogGrind(library.activeGrinder, grind);
 		const record = history.addManualBrew({
 			method: storedMethod,
 			methodLabel: methodLabelSnapshot(storedMethod),
@@ -313,7 +317,9 @@
 			dose: dose > 0 ? dose : null,
 			waterG: !espresso && water > 0 ? water : null,
 			yieldOut: espresso && water > 0 ? water : (seed?.yieldOut ?? null),
-			grinderSetting: grind != null && grind > 0 ? grindText(grind, library.activeGrinder?.scale ?? null) : null,
+			grinderSetting: stamp.grind ?? null,
+			grinderId: stamp.grinderId ?? null,
+			grinderModel: stamp.grinderName ?? null,
 			brewTempC: temp != null && temp > 0 ? temp : null,
 			durationMs: parseDuration(timeStr),
 			rating: rating > 0 ? rating : null,
@@ -484,16 +490,19 @@
 			</div>
 			<div class="bl-cell">
 				<span class="bl-label">Grind</span>
+				<!-- Blank until set (0 is a grind); the first ± starts mid-scale. -->
 				<QuickStepper
 					label=""
-					value={grind ?? 0}
+					name="Grind"
+					value={grind}
+					blankStart={grindStartFromBlank(library.activeGrinder?.scale ?? null)}
 					unit={grindBounds.grindUnit}
 					min={grindBounds.grind.min}
 					max={grindBounds.grind.max}
 					step={grindBounds.grind.step}
 					onChange={(n) => {
 						dirty.add('grind');
-						grind = n > 0 ? n : null;
+						grind = n;
 					}}
 				/>
 			</div>

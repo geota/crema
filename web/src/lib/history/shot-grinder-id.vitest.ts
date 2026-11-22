@@ -6,7 +6,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import { getActiveShotStore } from '#lib/state/active-shot.svelte.js';
-import type { ShotCaptureContext } from '#lib/core/crema-core.js';
+import type { ShotCaptureContext, ShotSelections } from '#lib/core/crema-core.js';
 import { blankBean, getBeanStore } from '#lib/bean/index.js';
 import { getSettingsStore } from '#lib/settings/index.js';
 import type { StoredShot } from './model';
@@ -27,7 +27,7 @@ beforeEach(() => {
 });
 
 describe('the shot records its grinder', () => {
-	it('the live shot start freezes the active grinder, not the bag or settings grinder', async () => {
+	it('Brew hands the core the active grinder, not the bag or settings grinder, and a bag snapshot with no legacy grind (REVIEW-CORE H3, REVIEW-FINAL S2)', async () => {
 		const { loadCore } = await import('#lib/core/index.js');
 		const { CremaApp } = await import('#lib/state/app.svelte.js');
 		const core = await loadCore();
@@ -37,15 +37,20 @@ describe('the shot records its grinder', () => {
 		getSettingsStore().set('grinderModel', 'EK43');
 		const motto = library.addGrinder('', 'bookoo-motto-80')!;
 		library.setActiveGrinder(motto.id);
-		library.upsertBean({ ...blankBean('bean:a'), name: 'A', grinder: 'Niche' });
+		library.upsertBean({ ...blankBean('bean:a'), name: 'A', grinder: 'Niche', grinderSetting: '14' });
 		library.setActiveBean('bean:a');
-		const frozen = (app as unknown as { buildLiveActiveShot(): { grinderId?: string | null; grinderModel: string | null } }).buildLiveActiveShot();
+		const selections = () => (app as unknown as { shotSelections(): ShotSelections }).shotSelections();
+		const frozen = selections();
 		expect(frozen.grinderId).toBe(motto.id);
-		expect(frozen.grinderModel).toBe(motto.name);
+		expect(frozen.grinderName).toBe(motto.name);
+		expect(frozen.bean?.beanId).toBe('bean:a');
+		expect(frozen.bean).not.toHaveProperty('grinderSetting');
+		expect(frozen.bean).not.toHaveProperty('grinder');
+		expect(frozen.grind, 'the legacy bag grind is not Brew\'s grind').toBeUndefined();
 		library.setActiveGrinder(null);
-		const none = (app as unknown as { buildLiveActiveShot(): { grinderId?: string | null; grinderModel: string | null } }).buildLiveActiveShot();
-		expect(none.grinderId ?? null).toBeNull();
-		expect(none.grinderModel).toBeNull();
+		const none = selections();
+		expect(none.grinderId).toBeUndefined();
+		expect(none.grinderName).toBeUndefined();
 	});
 
 	it('the completion hands the core no grinder or grind: it froze them at shot start (REVIEW-CORE H3)', () => {
@@ -54,9 +59,7 @@ describe('the shot records its grinder', () => {
 			bean: null,
 			profileName: null,
 			dose: 18,
-			brewParams: { yieldTarget: 36, brewTemp: 93, preinfuseTarget: 0, stopOnWeight: true, autoTare: true, grind: '2.25' },
-			grinderModel: 'Niche Zero',
-			grinderId: 'grinder:niche',
+			brewParams: { yieldTarget: 36, brewTemp: 93, preinfuseTarget: 0, stopOnWeight: true, autoTare: true },
 			source: 'live'
 		});
 		const takeStoredShot = vi.fn((_ctx: ShotCaptureContext) => null);
