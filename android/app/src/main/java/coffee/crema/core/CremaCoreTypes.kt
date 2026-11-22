@@ -1010,6 +1010,77 @@ data class BrewOverrides (
 	val preinf: Float? = null
 )
 
+/// What a shell stores for the selection: the profile key it has today and
+/// the recipe key beside it. `None` (or an unusable id) = not set.
+@Serializable
+data class StoredBrewSelection (
+	/// The selected profile, also the one Espresso uses while a recipe is
+	/// selected. On a remote, the hub's active profile.
+	val activeProfileId: String? = null,
+	/// The selected recipe; set means Manual. Never relayed.
+	val activeRecipeId: String? = null
+)
+
+/// Which kind of thing Brew has selected.
+@Serializable
+enum class BrewSelectionKind(val string: String) {
+	/// A DE1 profile.
+	@SerialName("profile")
+	Profile("profile"),
+	/// A brew recipe.
+	@SerialName("recipe")
+	Recipe("recipe"),
+}
+
+/// Brew's selection: `Profile(id)` or `Recipe(id)`. A struct with a kind
+/// rather than a data-carrying enum, so both shells read it as plain JSON
+/// (`{"kind":"recipe","id":"recipe:…"}`).
+@Serializable
+data class BrewSelection (
+	val kind: BrewSelectionKind,
+	val id: String
+)
+
+/// [`pick_brew_selection`]'s input, for the JSON bridges.
+@Serializable
+data class BrewPickInput (
+	val stored: StoredBrewSelection? = null,
+	val pick: BrewSelection
+)
+
+/// Why the picker's rows are disabled.
+@Serializable
+enum class BrewPickLockReason(val string: String) {
+	@SerialName("shot")
+	Shot("shot"),
+	@SerialName("guidedBrew")
+	GuidedBrew("guidedBrew"),
+}
+
+/// The picker is locked: the profile rows are disabled, and the recipe rows
+/// too when [`recipes_locked`](Self::recipes_locked). The tabs still browse.
+/// The hub refuses a remote's `setActiveProfile` with [`note`](Self::note).
+@Serializable
+data class BrewPickLock (
+	val reason: BrewPickLockReason,
+	/// The recipe rows are disabled as well (a guided brew runs here).
+	val recipesLocked: Boolean,
+	/// The note under the disabled rows, and the hub's refusal.
+	val note: String
+)
+
+/// What runs, for [`brew_pick_lock`].
+@Serializable
+data class BrewPickLockInput (
+	/// A DE1 espresso shot is running on the machine this device shows: its
+	/// own, or on a remote the hub's (from the relayed machine state).
+	val shotRunning: Boolean,
+	/// This device is running a guided brew (armed, running or paused; not
+	/// done). Guided brews run on the device that started them, so a remote
+	/// never knows of the hub's, and the hub checks its own.
+	val guidedBrewRunning: Boolean
+)
+
 /// What a [`BrewStep`] is, for its icon / default label. Lowercase wire
 /// spelling, like [`BeverageType`](crate::BeverageType).
 @Serializable
@@ -1117,6 +1188,37 @@ data class BrewSample (
 	val weightG: Float,
 	/// Estimated pour rate, g/s, when derivable.
 	val flowGS: Float? = null
+)
+
+/// [`brew_selection`]'s input, for the JSON bridges.
+@Serializable
+data class BrewSelectionInput (
+	/// As [`StoredBrewSelection::active_profile_id`].
+	val activeProfileId: String? = null,
+	/// As [`StoredBrewSelection::active_recipe_id`].
+	val activeRecipeId: String? = null,
+	/// The stored recipe is one this device can brew now: a built-in, or a
+	/// custom recipe that isn't deleted.
+	val recipeLive: Boolean
+)
+
+/// Brew's mode, derived from the selection ([`BrewSelection::mode`]).
+@Serializable
+enum class BrewMode(val string: String) {
+	/// The DE1 dashboard. Also the mode with nothing selected.
+	@SerialName("espresso")
+	Espresso("espresso"),
+	/// A guided brew with a recipe.
+	@SerialName("manual")
+	Manual("manual"),
+}
+
+/// The selection and the mode it decides.
+@Serializable
+data class BrewSelectionView (
+	/// `None` = nothing selected (a fresh install).
+	val selection: BrewSelection? = null,
+	val mode: BrewMode
 )
 
 /// A recipe-step boundary as it actually happened in a session.
@@ -4022,6 +4124,13 @@ data class HotWaterTarget (
 	val stopWeightG: Float? = null
 )
 
+/// [`follow_hub_profile`]'s input, for the JSON bridges.
+@Serializable
+data class HubProfileInput (
+	val stored: StoredBrewSelection,
+	val hubProfileId: String? = null
+)
+
 /// An unbound local row, or unbound tombstone, a remote row may be the upload of.
 @Serializable
 data class KeyCandidate (
@@ -4969,6 +5078,23 @@ data class RecipeTimeEstimate (
 	/// Some step holds for an unknown time (no duration, no water
 	/// target) — the shells append "+" ("~2:45+").
 	val openEnded: Boolean
+)
+
+/// What the header block, the phone strip and the picker's Manual rows show
+/// of a recipe: "RECIPE · ‹method›", the name, and dose · water · temp · time.
+@Serializable
+data class RecipeSummary (
+	val id: String,
+	val name: String,
+	/// The normalized method id; the shells label it as they do elsewhere
+	/// (a custom method's id resolves through its record).
+	val method: String,
+	val doseG: Float,
+	val waterG: Float,
+	val tempC: Float? = null,
+	/// [`BrewRecipe::estimated_duration`]; `None` = show no time.
+	val estimated: RecipeTimeEstimate? = null,
+	val stepCount: UInt
 )
 
 /// What [`edited_remaining`] reads: the bag editor's size and remaining.

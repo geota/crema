@@ -1153,6 +1153,78 @@ export interface BrewOverrides {
 }
 
 /**
+ * What a shell stores for the selection: the profile key it has today and
+ * the recipe key beside it. `None` (or an unusable id) = not set.
+ */
+export interface StoredBrewSelection {
+	/**
+	 * The selected profile, also the one Espresso uses while a recipe is
+	 * selected. On a remote, the hub's active profile.
+	 */
+	activeProfileId?: string;
+	/** The selected recipe; set means Manual. Never relayed. */
+	activeRecipeId?: string;
+}
+
+/** Which kind of thing Brew has selected. */
+export enum BrewSelectionKind {
+	/** A DE1 profile. */
+	Profile = "profile",
+	/** A brew recipe. */
+	Recipe = "recipe",
+}
+
+/**
+ * Brew's selection: `Profile(id)` or `Recipe(id)`. A struct with a kind
+ * rather than a data-carrying enum, so both shells read it as plain JSON
+ * (`{"kind":"recipe","id":"recipe:…"}`).
+ */
+export interface BrewSelection {
+	kind: BrewSelectionKind;
+	id: string;
+}
+
+/** [`pick_brew_selection`]'s input, for the JSON bridges. */
+export interface BrewPickInput {
+	stored?: StoredBrewSelection;
+	pick: BrewSelection;
+}
+
+/** Why the picker's rows are disabled. */
+export enum BrewPickLockReason {
+	Shot = "shot",
+	GuidedBrew = "guidedBrew",
+}
+
+/**
+ * The picker is locked: the profile rows are disabled, and the recipe rows
+ * too when [`recipes_locked`](Self::recipes_locked). The tabs still browse.
+ * The hub refuses a remote's `setActiveProfile` with [`note`](Self::note).
+ */
+export interface BrewPickLock {
+	reason: BrewPickLockReason;
+	/** The recipe rows are disabled as well (a guided brew runs here). */
+	recipesLocked: boolean;
+	/** The note under the disabled rows, and the hub's refusal. */
+	note: string;
+}
+
+/** What runs, for [`brew_pick_lock`]. */
+export interface BrewPickLockInput {
+	/**
+	 * A DE1 espresso shot is running on the machine this device shows: its
+	 * own, or on a remote the hub's (from the relayed machine state).
+	 */
+	shotRunning: boolean;
+	/**
+	 * This device is running a guided brew (armed, running or paused; not
+	 * done). Guided brews run on the device that started them, so a remote
+	 * never knows of the hub's, and the hub checks its own.
+	 */
+	guidedBrewRunning: boolean;
+}
+
+/**
  * What a [`BrewStep`] is, for its icon / default label. Lowercase wire
  * spelling, like [`BeverageType`](crate::BeverageType).
  */
@@ -1260,6 +1332,34 @@ export interface BrewSample {
 	weightG: number;
 	/** Estimated pour rate, g/s, when derivable. */
 	flowGS?: number;
+}
+
+/** [`brew_selection`]'s input, for the JSON bridges. */
+export interface BrewSelectionInput {
+	/** As [`StoredBrewSelection::active_profile_id`]. */
+	activeProfileId?: string;
+	/** As [`StoredBrewSelection::active_recipe_id`]. */
+	activeRecipeId?: string;
+	/**
+	 * The stored recipe is one this device can brew now: a built-in, or a
+	 * custom recipe that isn't deleted.
+	 */
+	recipeLive: boolean;
+}
+
+/** Brew's mode, derived from the selection ([`BrewSelection::mode`]). */
+export enum BrewMode {
+	/** The DE1 dashboard. Also the mode with nothing selected. */
+	Espresso = "espresso",
+	/** A guided brew with a recipe. */
+	Manual = "manual",
+}
+
+/** The selection and the mode it decides. */
+export interface BrewSelectionView {
+	/** `None` = nothing selected (a fresh install). */
+	selection?: BrewSelection;
+	mode: BrewMode;
 }
 
 /** A recipe-step boundary as it actually happened in a session. */
@@ -3986,6 +4086,12 @@ export interface HotWaterTarget {
 	stopWeightG?: number;
 }
 
+/** [`follow_hub_profile`]'s input, for the JSON bridges. */
+export interface HubProfileInput {
+	stored: StoredBrewSelection;
+	hubProfileId?: string;
+}
+
 /** An unbound local row, or unbound tombstone, a remote row may be the upload of. */
 export interface KeyCandidate {
 	localId: string;
@@ -4938,6 +5044,26 @@ export interface RecipeTimeEstimate {
 	 * target) — the shells append "+" ("~2:45+").
 	 */
 	openEnded: boolean;
+}
+
+/**
+ * What the header block, the phone strip and the picker's Manual rows show
+ * of a recipe: "RECIPE · ‹method›", the name, and dose · water · temp · time.
+ */
+export interface RecipeSummary {
+	id: string;
+	name: string;
+	/**
+	 * The normalized method id; the shells label it as they do elsewhere
+	 * (a custom method's id resolves through its record).
+	 */
+	method: string;
+	doseG: number;
+	waterG: number;
+	tempC?: number;
+	/** [`BrewRecipe::estimated_duration`]; `None` = show no time. */
+	estimated?: RecipeTimeEstimate;
+	stepCount: number;
 }
 
 /** What [`edited_remaining`] reads: the bag editor's size and remaining. */
