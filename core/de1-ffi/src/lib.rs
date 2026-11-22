@@ -2318,6 +2318,18 @@ pub fn roaster_write_request(roaster_json: String) -> Result<String, CremaError>
     de1_domain::roaster_write_request_json(&roaster_json).map_err(crema_err)
 }
 
+/// The Visualizer id to push as a bag's `roaster_id` (`{"bean", "roasters"}`
+/// JSON in, every roaster, tombstones included). See
+/// [`de1_domain::bag_roaster_remote_id`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] on malformed input.
+#[uniffi::export]
+pub fn bag_roaster_remote_id(payload: String) -> Result<Option<String>, CremaError> {
+    de1_domain::bag_roaster_remote_id_json(&payload).map_err(crema_err)
+}
+
 /// A roaster's catalogue link for a write (`{"roaster", "beans"}` JSON in).
 /// Mirrors the wasm `resolveRoasterCatalogueLink`; see
 /// [`de1_domain::resolve_roaster_catalogue_link_json`].

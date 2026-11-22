@@ -4003,6 +4003,10 @@ class LibraryController(
                     doseG = shot.doseG,
                     remote = s.mirror != null,
                     replay = shot.replay,
+                    // On a remote a row with no recorded debit is its mirror copy
+                    // of the hub's shot: before `shot_debit` this shell wrote null
+                    // for those, and they took nothing (REVIEW-518 follow-up 1).
+                    mirrorRow = s.mirror != null,
                 ),
             )
             planned = plan

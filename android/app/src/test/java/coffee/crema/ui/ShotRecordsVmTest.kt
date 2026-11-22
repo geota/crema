@@ -121,27 +121,37 @@ class ShotRecordsVmTest {
         assertEquals(emptyList(), offered, "the hub uploads its own row")
     }
 
-    /** REVIEW-FINAL-2 MF1 repro: the remote moves its mirror copy of the hub's
-     *  shot to another bag in History. The bag it named gets back nothing it
-     *  never lost, and the new bag isn't debited on a remote (core `shot_bag_move`). */
+    /** REVIEW-FINAL-2 MF1 repro: a remote moves its mirror copy of the hub's
+     *  18 g shot to another bag in History. The bag it named gets back nothing
+     *  it never lost, and the new bag isn't debited on a remote (core
+     *  `shot_bag_move`). Both a row written now (0) and one an older build
+     *  wrote (null, REVIEW-518 follow-up 1). */
     @Test
     fun `a remote's mirror shot moved in History credits and debits nothing`() {
+        fun mirrorRow(id: String, bagDebit: Float?) = coffee.crema.history.StoredShot(
+            id = id, completedAtMs = 1_700_000_000_000, durationMs = 28_000, doseG = 18f, bagDebitG = bagDebit,
+            bean = coffee.crema.core.ShotBean(beanId = RemoteFixture.BEAN_S, name = "Bag ${RemoteFixture.BEAN_S}"),
+        )
+        kotlinx.coroutines.runBlocking {
+            coffee.crema.history.HistoryStore(VmHarness.app(), coreJson).save(listOf(mirrorRow("now", 0f), mirrorRow("older", null)))
+        }
         val library = BeanLibrary(listOf(bag(RemoteFixture.BEAN_P), bag(RemoteFixture.BEAN_S)), emptyList(), RemoteFixture.BEAN_P)
         val vm = fixture.start(library = library)
-        fixture.push() // the hub's active bag is BEAN_S
-        pour(vm)
-        VmHarness.idleUntil("the mirror copy to be recorded", 5_000) { VmHarness.rows(vm).isNotEmpty() }
-        val id = VmHarness.rows(vm).first().id
-        vm.setShotBean(id, RemoteFixture.BEAN_P)
-        VmHarness.idle()
-        assertEquals(RemoteFixture.BEAN_P, VmHarness.rows(vm).first().bean?.beanId, "the row moved")
-        assertEquals(200f, vm.bean(RemoteFixture.BEAN_S).remaining, "no coffee that doesn't exist")
-        assertEquals(200f, vm.bean(RemoteFixture.BEAN_P).remaining, "a remote never debits its own copy")
-        assertEquals(0f, VmHarness.rows(vm).first().bagDebitG)
-        vm.setShotBean(id, null)
+        fixture.push()
+        VmHarness.idleUntil("the rows") { VmHarness.rows(vm).size == 2 }
+        for (id in listOf("now", "older")) {
+            vm.setShotBean(id, RemoteFixture.BEAN_P)
+            VmHarness.idle()
+            val row = VmHarness.rows(vm).single { it.id == id }
+            assertEquals(RemoteFixture.BEAN_P, row.bean?.beanId, "$id moved")
+            assertEquals(0f, row.bagDebitG, "$id took nothing here")
+            assertEquals(200f, vm.bean(RemoteFixture.BEAN_S).remaining, "$id: no coffee that doesn't exist")
+            assertEquals(200f, vm.bean(RemoteFixture.BEAN_P).remaining, "$id: a remote never debits its own copy")
+        }
+        vm.setShotBean("older", null)
         VmHarness.idle()
         assertEquals(200f, vm.bean(RemoteFixture.BEAN_P).remaining, "to no bag credits nothing either")
-        assertNull(VmHarness.rows(vm).first().bagDebitG, "no bag, no debit")
+        assertNull(VmHarness.rows(vm).single { it.id == "older" }.bagDebitG, "no bag, no debit")
     }
 
     /** A completed shot's side effects are the core's rule (REVIEW-CORE M4). */
@@ -153,9 +163,8 @@ class ShotRecordsVmTest {
         assertTrue(remote.record)
         assertFalse(remote.debit || remote.autoSave || remote.upload, "a remote's mirror copy is history only")
         val replay = shotEffects(ShotDisposition.Record, recordedHere = true, replay = true)
-        // Owner decision (#488 batch 6): kept in History, never uploaded.
-        assertFalse(replay.debit || replay.autoSave || replay.upload, "a replay touches nothing real and never uploads")
-        assertTrue(replay.record, "but it is recorded")
+        assertTrue(replay.record, "a replay is kept in History")
+        assertFalse(replay.debit || replay.autoSave || replay.webhook || replay.upload, "and never uploads (#488 batch 6)")
         val aborted = shotEffects(ShotDisposition.DiscardAborted, recordedHere = true, replay = false)
         assertTrue(aborted.offerUndo && aborted.debit && !aborted.record, "the dose was ground; the row waits for the Undo")
         val cleaning = shotEffects(ShotDisposition.SkipCleaning, recordedHere = true, replay = false)
