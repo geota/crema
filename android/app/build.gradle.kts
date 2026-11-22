@@ -658,6 +658,14 @@ tasks.withType<Test>().configureEach {
     // A hang fails the run instead of holding CI for hours (#310 A5: a store-lock
     // deadlock hung the android job for over two; the suite takes about 21 minutes).
     timeout.set(Duration.ofMinutes(40))
+    // Every class shares one test JVM, and Gradle's default heap is 512 MB.
+    // ShotHistorySizeTest alone fills that (the 1000-shot single file and the
+    // 5,000-row design size: 480 MB live after a full GC), so after the rest of
+    // the suite it ran out, and a CI job hung until the timeout. A bounded heap
+    // with room for it, and an out-of-memory error ends the worker at once
+    // (the task fails naming the executor) instead of leaving threads stuck.
+    maxHeapSize = "2g"
+    jvmArgs("-XX:+ExitOnOutOfMemoryError")
 }
 
 // ---------------------------------------------------------------------------
