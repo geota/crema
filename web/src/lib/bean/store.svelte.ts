@@ -842,15 +842,19 @@ export class BeanLibraryStore {
 	 * its old grind as a saved grind. The old fields and `updatedAt` are never
 	 * written. Skipped over a library that couldn't be read (its rows would
 	 * look absent), and with `settingsReadable` false (the settings grinder
-	 * would look blank). Whether anything changed.
+	 * would look blank). With `settingsAbsent` (no settings key at all) over a
+	 * library with bags, only the bags that name their own grinder migrate
+	 * (the core's gate, PLAN follow-up 40): the settings may have been kept
+	 * aside. Whether anything changed.
 	 */
-	migrateGrinders(grinderModel: string, settingsReadable = true): boolean {
+	migrateGrinders(grinderModel: string, settingsReadable = true, settingsAbsent = false): boolean {
 		if (!this.canMigrate || !settingsReadable) return false;
 		let m;
 		try {
 			m = migrateGrinderLibrary(this.allGrinders, this.beans, grinderModel, {
 				library: this.canMigrate,
-				settings: settingsReadable
+				settings: settingsReadable,
+				settingsAbsent
 			});
 		} catch (e) {
 			// Malformed rows: keep what there is; a later load tries again.
@@ -944,7 +948,7 @@ export function runGrinderMigration(
 	const settings = getSettingsStore();
 	const health = storeHealth(SETTINGS_KEY);
 	const readable = health === 'ok' || health === 'absent';
-	return lib.migrateGrinders(settings.current.grinderModel ?? '', readable);
+	return lib.migrateGrinders(settings.current.grinderModel ?? '', readable, health === 'absent');
 }
 
 /**

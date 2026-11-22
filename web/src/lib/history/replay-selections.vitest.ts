@@ -172,4 +172,21 @@ describe('a shot records the selections the core froze at its start', () => {
 			grind: '2.25'
 		});
 	});
+
+	it('a shot with no bag carries its grind in the META too (PLAN follow-up 36)', async () => {
+		const { buildAtShotStartMeta } = await import('./shot-persistence');
+		const { replayMetaToSelections } = await import('#lib/services/replay.js');
+		const recorded = {
+			id: 'shot:2',
+			metadata: { grinderSetting: '4⅓' },
+			grinderModel: 'Fellow Ode',
+			bean: null
+		} as unknown as StoredShot;
+		const entry = buildAtShotStartMeta(5_000, recorded, {})!;
+		expect(entry.meta).toMatchObject({ grinderModel: 'Fellow Ode', grind: '4⅓' });
+		expect(entry.meta).not.toHaveProperty('bean');
+		const selections = replayMetaToSelections(parseCapture(JSON.stringify(entry)).meta);
+		expect(selections.bean).toBeUndefined();
+		expect(selections.grind).toBe('4⅓');
+	});
 });

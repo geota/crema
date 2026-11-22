@@ -776,6 +776,165 @@ pub fn staged_grinders_on_save(input: &StagedGrindersInput, now_ms: i64) -> Stag
     out
 }
 
+// ── History lookups (REVIEW-CORE M1) ──
+
+/// One shot row on a bag, as a shell holds it in memory, for
+/// [`last_grinds_from_rows`]: the same columns the history's
+/// `last_grinds_for_bag` reads.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LastGrindRow {
+    /// When the shot completed, Unix epoch ms.
+    #[typeshare(serialized_as = "I64")]
+    pub completed_at: i64,
+    /// The shot's id: the tie-break among rows that completed at the same
+    /// time (the higher id is newer, as in the history query).
+    pub id: String,
+    /// The grinder id the shot was stamped with; `None` or blank on rows
+    /// from before grinder ids.
+    pub grinder_id: Option<String>,
+    /// The grinder name the shot was stamped with (`grinderModel`).
+    pub grinder_model: Option<String>,
+    /// The grind it recorded, as stored; a number reads as its text.
+    #[serde(deserialize_with = "grind_or_number")]
+    pub grind: Option<String>,
+}
+
+/// A stored grind that may be a number (old Android rows): its text.
+fn grind_or_number<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(match serde_json::Value::deserialize(d)? {
+        serde_json::Value::String(s) => Some(s),
+        serde_json::Value::Number(n) if n.as_f64().is_some_and(f64::is_finite) => {
+            Some(n.to_string())
+        }
+        _ => None,
+    })
+}
+
+/// The newest grind per grinder on a bag, newest first, from its shot rows:
+/// the grouping the history's `last_grinds_for_bag` applies, for shells
+/// that hold rows in memory (web's fallback, Android). Rows without a grind
+/// (or a blank one), and rows that name no grinder (no id and no name), are
+/// skipped. One entry per grinder id; rows without an id are grouped by
+/// name (trimmed, any case), and a blank name names no grinder.
+#[must_use]
+pub fn last_grinds_from_rows(rows: &[LastGrindRow]) -> Vec<LastGrind> {
+    let mut sorted: Vec<&LastGrindRow> = rows.iter().collect();
+    sorted.sort_by(|a, b| {
+        b.completed_at
+            .cmp(&a.completed_at)
+            .then_with(|| b.id.cmp(&a.id))
+    });
+    let mut out: Vec<LastGrind> = Vec::new();
+    for row in sorted {
+        let Some(grind) = row
+            .grind
+            .as_deref()
+            .map(str::trim)
+            .filter(|g| !g.is_empty())
+        else {
+            continue;
+        };
+        let grinder_id = row
+            .grinder_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned);
+        let grinder = row.grinder_model.clone().unwrap_or_default();
+        let seen = match grinder_id.as_deref() {
+            Some(id) => out.iter().any(|l| l.grinder_id.as_deref() == Some(id)),
+            None => {
+                crate::grinder::grinder_key(&grinder).is_empty()
+                    || out.iter().any(|l| {
+                        l.grinder_id.is_none() && crate::grinder::same_grinder(&l.grinder, &grinder)
+                    })
+            }
+        };
+        if seen {
+            continue;
+        }
+        out.push(LastGrind {
+            grinder_id,
+            grinder,
+            grind: grind.to_owned(),
+            completed_at: row.completed_at,
+        });
+    }
+    out
+}
+
+/// One grinder row in Brew's grinder pickers, for the selected bag
+/// ([`grinder_pick_rows`]). The shells word it: "This bag's grinder · …",
+/// "Saved 480 μm", "Nothing saved · last shot 32", "Nothing saved"; with no
+/// bag, the grinder's range.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrinderPickRow {
+    /// The grinder's id.
+    pub grinder_id: String,
+    /// The bag's row for it is starred ("This bag's grinder").
+    pub starred: bool,
+    /// The bag's saved grind for it, when there is one (not blank).
+    pub saved: Option<String>,
+    /// With nothing saved: the newest shot grind on the bag with it
+    /// ([`newest_shot_grind`]: by id, or an older row by name through the
+    /// catalogue's exact aliases, so "Niche" finds the Niche Zero).
+    pub last_shot: Option<String>,
+}
+
+/// The pickers' rows for `grinders` (the live ones, as listed) with `bag`
+/// selected (`None` = no bag: every row empty), from the bag's
+/// `last_grinds` (REVIEW-CORE M1: the same lookups as [`pick_grind`], so a
+/// row never says "Nothing saved" where selecting the bag loads a grind).
+#[must_use]
+pub fn grinder_pick_rows(
+    grinders: &[Grinder],
+    bag: Option<&Bean>,
+    last_grinds: &[LastGrind],
+) -> Vec<GrinderPickRow> {
+    grinders
+        .iter()
+        .map(|g| {
+            let row = bag.and_then(|b| saved_grind(b, &g.id));
+            let saved = row
+                .map(|r| r.grind.trim())
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned);
+            let last_shot = match (bag, &saved) {
+                (Some(_), None) => {
+                    newest_shot_grind(last_grinds, g).map(|l| l.grind.trim().to_owned())
+                }
+                _ => None,
+            };
+            GrinderPickRow {
+                grinder_id: g.id.clone(),
+                starred: row.is_some_and(|r| r.starred),
+                saved,
+                last_shot,
+            }
+        })
+        .collect()
+}
+
+/// The row the bag editor adds for `grinder` (REVIEW-CORE M1, the editor
+/// seed): its grind starts as the newest shot grind on the bag with that
+/// grinder ([`newest_shot_grind`] over the bag's `last_grinds`), else empty
+/// (the editor asks for one). Not starred.
+#[must_use]
+pub fn new_bag_grind_row(grinder: &Grinder, last_grinds: &[LastGrind]) -> BagGrind {
+    BagGrind {
+        grinder_id: grinder.id.clone(),
+        grinder_name: grinder.name.clone(),
+        grind: newest_shot_grind(last_grinds, grinder)
+            .map(|l| l.grind.trim().to_owned())
+            .unwrap_or_default(),
+        starred: false,
+    }
+}
+
 // ── JSON bridges ──
 
 fn parse<T: serde::de::DeserializeOwned>(json: &str) -> Result<T, String> {
@@ -881,6 +1040,68 @@ pub fn resolve_grinder_switch_json(input_json: &str) -> Result<String, String> {
 /// The JSON parse error string on malformed input.
 pub fn auto_save_shot_grind_json(input_json: &str, now_ms: i64) -> Result<String, String> {
     to_json(&auto_save_shot_grind(&parse(input_json)?, now_ms))
+}
+
+/// What the history-lookup bridges read: a bag's `lastGrinds` and a grinder
+/// or the grinders, and the bag.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LookupIn {
+    #[serde(default)]
+    last_grinds: Vec<LastGrind>,
+    #[serde(default)]
+    grinder: Option<Grinder>,
+    #[serde(default)]
+    grinders: Vec<Grinder>,
+    #[serde(default)]
+    bag: Option<Bean>,
+}
+
+/// JSON-bridged [`newest_shot_grind`]: `{"lastGrinds": LastGrind[],
+/// "grinder": Grinder}` in, a `LastGrind` JSON or `null` out.
+///
+/// # Errors
+/// The JSON parse error string on malformed input, or a missing grinder.
+pub fn newest_shot_grind_json(input_json: &str) -> Result<String, String> {
+    let inp: LookupIn = parse(input_json)?;
+    let grinder = inp.grinder.ok_or("missing grinder")?;
+    to_json(&newest_shot_grind(&inp.last_grinds, &grinder))
+}
+
+/// JSON-bridged [`last_grinds_from_rows`]: a `LastGrindRow` array in, a
+/// `LastGrind` array out.
+///
+/// # Errors
+/// The JSON parse error string on malformed input.
+pub fn last_grinds_from_rows_json(rows_json: &str) -> Result<String, String> {
+    let rows: Vec<LastGrindRow> = parse(rows_json)?;
+    to_json(&last_grinds_from_rows(&rows))
+}
+
+/// JSON-bridged [`grinder_pick_rows`]: `{"grinders": Grinder[], "bag":
+/// Bean | null, "lastGrinds": LastGrind[]}` in, a `GrinderPickRow` array
+/// out.
+///
+/// # Errors
+/// The JSON parse error string on malformed input.
+pub fn grinder_pick_rows_json(input_json: &str) -> Result<String, String> {
+    let inp: LookupIn = parse(input_json)?;
+    to_json(&grinder_pick_rows(
+        &inp.grinders,
+        inp.bag.as_ref(),
+        &inp.last_grinds,
+    ))
+}
+
+/// JSON-bridged [`new_bag_grind_row`]: `{"grinder": Grinder, "lastGrinds":
+/// LastGrind[]}` in, a `BagGrind` out.
+///
+/// # Errors
+/// The JSON parse error string on malformed input, or a missing grinder.
+pub fn new_bag_grind_row_json(input_json: &str) -> Result<String, String> {
+    let inp: LookupIn = parse(input_json)?;
+    let grinder = inp.grinder.ok_or("missing grinder")?;
+    to_json(&new_bag_grind_row(&grinder, &inp.last_grinds))
 }
 
 #[cfg(test)]
@@ -1780,5 +2001,163 @@ mod tests {
             .bean;
         assert_eq!(none.grinds.unwrap()[1].grinder_id, NO_GRINDER_ID);
         assert!(auto_save_shot_grind_json("{}", NOW).unwrap() == "null");
+    }
+
+    // ── History lookups (REVIEW-CORE M1) ──
+
+    fn niche_zero() -> Grinder {
+        add_grinder(&[], "", Some("niche-zero"), NOW)
+            .unwrap()
+            .grinder
+    }
+
+    fn shot_row(
+        at: i64,
+        id: &str,
+        gid: Option<&str>,
+        model: Option<&str>,
+        grind: Option<&str>,
+    ) -> LastGrindRow {
+        LastGrindRow {
+            completed_at: at,
+            id: id.into(),
+            grinder_id: gid.map(str::to_owned),
+            grinder_model: model.map(str::to_owned),
+            grind: grind.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn an_alias_named_old_shot_reaches_the_picker_row_and_the_editor_seed() {
+        // REVIEW-CORE M1 repro: a pre-#488 shot stamped "Niche", no id; the
+        // grinder record is the preset Niche Zero.
+        let nz = niche_zero();
+        let bag = bag_with(Vec::new());
+        let lasts = vec![last(None, "Niche", "14", 10)];
+        assert_eq!(pick_grind(&bag, Some(&nz), &lasts).as_deref(), Some("14"));
+        let rows = grinder_pick_rows(std::slice::from_ref(&nz), Some(&bag), &lasts);
+        assert_eq!(
+            rows,
+            vec![GrinderPickRow {
+                grinder_id: nz.id.clone(),
+                starred: false,
+                saved: None,
+                last_shot: Some("14".into()),
+            }],
+            "not \"Nothing saved\""
+        );
+        assert_eq!(new_bag_grind_row(&nz, &lasts).grind, "14");
+        // A typo isn't an alias.
+        let typo = vec![last(None, "Nich", "14", 10)];
+        assert_eq!(new_bag_grind_row(&nz, &typo).grind, "");
+    }
+
+    #[test]
+    fn picker_rows_show_the_saved_grind_and_the_star_else_the_last_shot() {
+        let ek = g("grinder:ek", "EK43");
+        let c40 = g("grinder:c40", "Comandante C40");
+        let bag = bag_with(vec![
+            row("grinder:ek", " 8 ", true),
+            row("grinder:c40", "", false),
+        ]);
+        let lasts = vec![
+            last(Some("grinder:ek"), "EK43", "9", 20),
+            last(Some("grinder:c40"), "C40", "22", 10),
+        ];
+        let rows = grinder_pick_rows(&[ek.clone(), c40.clone()], Some(&bag), &lasts);
+        assert_eq!(
+            (
+                rows[0].starred,
+                rows[0].saved.as_deref(),
+                rows[0].last_shot.as_deref()
+            ),
+            (true, Some("8"), None)
+        );
+        assert_eq!(
+            (rows[1].saved.as_deref(), rows[1].last_shot.as_deref()),
+            (None, Some("22")),
+            "a blank row is nothing saved"
+        );
+        // The newest of id and name matches, not the first by list order.
+        let lasts = vec![
+            last(Some("grinder:c40"), "C40", "22", 10),
+            last(None, "comandante c40", "24", 30),
+        ];
+        assert_eq!(
+            grinder_pick_rows(
+                std::slice::from_ref(&c40),
+                Some(&bag_with(Vec::new())),
+                &lasts
+            )[0]
+            .last_shot
+            .as_deref(),
+            Some("24")
+        );
+        // No bag: nothing.
+        let rows = grinder_pick_rows(&[ek], None, &lasts);
+        assert_eq!(
+            (
+                rows[0].starred,
+                rows[0].saved.as_deref(),
+                rows[0].last_shot.as_deref()
+            ),
+            (false, None, None)
+        );
+    }
+
+    #[test]
+    fn rows_group_into_the_newest_grind_per_grinder_as_the_history_does() {
+        let rows = vec![
+            shot_row(10, "shot:a", Some("grinder:ek"), Some("EK43"), Some("8")),
+            shot_row(30, "shot:b", Some("grinder:ek"), Some("EK43"), Some(" 9 ")),
+            shot_row(20, "shot:c", None, Some("Niche"), Some("14")),
+            shot_row(25, "shot:d", None, Some(" niche "), Some("15")),
+            shot_row(40, "shot:e", None, Some("  "), Some("1")),
+            shot_row(50, "shot:f", Some("grinder:c40"), None, Some("  ")),
+            shot_row(60, "shot:g", None, None, Some("3")),
+            shot_row(30, "shot:h", Some("grinder:x"), Some("X"), Some("5")),
+        ];
+        let out = last_grinds_from_rows(&rows);
+        assert_eq!(
+            out,
+            vec![
+                last(Some("grinder:x"), "X", "5", 30),
+                last(Some("grinder:ek"), "EK43", "9", 30),
+                last(None, " niche ", "15", 25),
+            ],
+            "newest first, ties by the higher id; blank grinds and names skipped"
+        );
+        let json: Vec<LastGrind> = serde_json::from_str(
+            &last_grinds_from_rows_json(
+                r#"[{"completedAt":1,"id":"s","grinderId":"grinder:ek","grind":14.5}]"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            json,
+            vec![last(Some("grinder:ek"), "", "14.5", 1)],
+            "a number reads as its text"
+        );
+    }
+
+    #[test]
+    fn the_lookup_bridges_round_trip() {
+        let nz = niche_zero();
+        let lasts = vec![last(None, "Niche", "14", 10)];
+        let input = serde_json::json!({ "grinder": nz, "lastGrinds": lasts }).to_string();
+        let got: Option<LastGrind> =
+            serde_json::from_str(&newest_shot_grind_json(&input).unwrap()).unwrap();
+        assert_eq!(got.unwrap().grind, "14");
+        let row: BagGrind = serde_json::from_str(&new_bag_grind_row_json(&input).unwrap()).unwrap();
+        assert_eq!(
+            (row.grinder_id.as_str(), row.grind.as_str()),
+            (nz.id.as_str(), "14")
+        );
+        let rows = serde_json::json!({ "grinders": [nz], "bag": bag_with(Vec::new()), "lastGrinds": lasts }).to_string();
+        let rows: Vec<GrinderPickRow> =
+            serde_json::from_str(&grinder_pick_rows_json(&rows).unwrap()).unwrap();
+        assert_eq!(rows[0].last_shot.as_deref(), Some("14"));
+        assert!(newest_shot_grind_json("{}").is_err());
     }
 }

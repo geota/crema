@@ -385,6 +385,9 @@ class GrinderLibraryVmTest {
         assertEquals(listOf(coffee.crema.persist.StoreHealth.OK, coffee.crema.persist.StoreHealth.ABSENT), read)
         assertFalse(coffee.crema.beans.migrationGate(coffee.crema.persist.StoreHealth.OK, coffee.crema.persist.StoreHealth.DAMAGED).settings)
         assertFalse(coffee.crema.beans.migrationGate(coffee.crema.persist.StoreHealth.UNAVAILABLE, coffee.crema.persist.StoreHealth.OK).library)
+        // PLAN follow-up 40: absent settings are flagged, so the core migrates only bags with their own grinder.
+        assertTrue(coffee.crema.beans.migrationGate(coffee.crema.persist.StoreHealth.OK, coffee.crema.persist.StoreHealth.ABSENT).settingsAbsent == true)
+        assertFalse(coffee.crema.beans.migrationGate(coffee.crema.persist.StoreHealth.OK, coffee.crema.persist.StoreHealth.OK).settingsAbsent == true)
     }
 
     /** N7: re-picking the bag already on Brew keeps an unsaved dial, with no message. */

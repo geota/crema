@@ -872,6 +872,90 @@ pub fn add_grinder_json(
         .map_err(crema_err)
 }
 
+/// Add **another** grinder of an owned model (#488 follow-up 18: two Niche
+/// Zeros): an archived one of that model comes back, else a new record
+/// "‹name› 2" with its own id. A `GrinderAdd` JSON or `null`. See
+/// [`de1_domain::add_another_grinder`].
+///
+/// # Errors
+/// When the grinders aren't a `Grinder[]` JSON.
+#[uniffi::export]
+pub fn add_another_grinder_json(
+    grinders_json: String,
+    name: String,
+    catalogue_id: String,
+    now_unix_ms: i64,
+) -> Result<String, CremaError> {
+    de1_domain::add_another_grinder_json(&grinders_json, &name, &catalogue_id, now_unix_ms)
+        .map_err(crema_err)
+}
+
+/// The newest shot grind for a grinder among a bag's last grinds, by id or
+/// through the catalogue's aliases (REVIEW-CORE M1): `{lastGrinds,
+/// grinder}` in, a `LastGrind` JSON or `null` out. See
+/// [`de1_domain::newest_shot_grind`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn newest_shot_grind_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::newest_shot_grind_json(&input_json).map_err(crema_err)
+}
+
+/// A bag's shot rows grouped into the newest grind per grinder, as the
+/// history does (REVIEW-CORE M1): a `LastGrindRow[]` JSON in, a
+/// `LastGrind[]` JSON out. See [`de1_domain::last_grinds_from_rows`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn last_grinds_from_rows_json(rows_json: String) -> Result<String, CremaError> {
+    de1_domain::last_grinds_from_rows_json(&rows_json).map_err(crema_err)
+}
+
+/// Brew's grinder picker rows for the selected bag (REVIEW-CORE M1):
+/// `{grinders, bag, lastGrinds}` in, a `GrinderPickRow[]` JSON out. See
+/// [`de1_domain::grinder_pick_rows`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn grinder_pick_rows_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::grinder_pick_rows_json(&input_json).map_err(crema_err)
+}
+
+/// The bag editor's new row for a grinder, seeded from the newest shot
+/// (REVIEW-CORE M1): `{grinder, lastGrinds}` in, a `BagGrind` JSON out. See
+/// [`de1_domain::new_bag_grind_row`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn new_bag_grind_row_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::new_bag_grind_row_json(&input_json).map_err(crema_err)
+}
+
+/// Quick Controls' Save plan (REVIEW-CORE M2): a `QuickSaveInput` JSON in,
+/// a `QuickSavePlan` JSON out. See [`de1_domain::quick_save_plan`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn quick_save_plan_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::quick_save_plan_json(&input_json).map_err(crema_err)
+}
+
+/// The guarded Undo of an in-place Quick Controls Save (REVIEW-CORE M2): a
+/// `QuickSaveUndoInput` JSON in, a `QuickSaveUndoPlan` JSON out. See
+/// [`de1_domain::quick_save_undo`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn quick_save_undo_json(input_json: String, now_unix_ms: i64) -> Result<String, CremaError> {
+    de1_domain::quick_save_undo_json(&input_json, now_unix_ms).map_err(crema_err)
+}
+
 /// Remove a grinder from Devices: archive it, clearing the active pointer
 /// when it was the active one (`active_id`, empty for none) (#488): a
 /// `GrinderArchive` JSON. See [`de1_domain::archive_grinder`].

@@ -131,6 +131,12 @@ export interface ReplayMeta {
 	};
 	/** Equipment-level grinder model at shot start (e.g. "Niche Zero"). */
 	readonly grinderModel?: string;
+	/**
+	 * The grind the shot recorded, with or without a bag (PLAN follow-up
+	 * 36). The core's fold falls back to `bean.grinderSetting` for a capture
+	 * from before this key.
+	 */
+	readonly grind?: string;
 }
 
 /**

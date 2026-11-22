@@ -14421,7 +14421,10 @@ mod tests {
                 #[test]
                 fn the_selections_are_frozen_at_shot_start_for_either_start() {
                     for app_start in [false, true] {
-                        let p = library("Daily");
+                        // The held profile is the selected one (its name),
+                        // so the frozen selection's id is stamped (PLAN
+                        // follow-up 8).
+                        let p = library("Profile A");
                         let mut core = connected();
                         let _ = desire(&mut core, &p, &BrewOverrides::default(), 0);
                         let first = sweep(&mut core, 0);

@@ -3705,7 +3705,12 @@ data class GrinderLibraryMigration (
 	val grindersMigrated: Boolean,
 	/// Why nothing ran: an input wasn't read ([`MigrationGate`]). `None` when
 	/// the migration ran (even with nothing to do).
-	val skipped: MigrationSkip? = null
+	val skipped: MigrationSkip? = null,
+	/// Bags left unmigrated (`grinds` still `None`) because the settings were
+	/// absent and the bag names no grinder of its own
+	/// ([`MigrationGate::settings_absent`], PLAN follow-up 40): they migrate
+	/// on a later load that reads the settings.
+	val leftForSettings: UInt? = null
 )
 
 /// Which list a [`GrinderMatch`] comes from, in the order they are listed.
@@ -3748,6 +3753,24 @@ data class GrinderPickInput (
 	val id: String,
 	/// The typed name ("+ Create").
 	val name: String
+)
+
+/// One grinder row in Brew's grinder pickers, for the selected bag
+/// ([`grinder_pick_rows`]). The shells word it: "This bag's grinder · …",
+/// "Saved 480 μm", "Nothing saved · last shot 32", "Nothing saved"; with no
+/// bag, the grinder's range.
+@Serializable
+data class GrinderPickRow (
+	/// The grinder's id.
+	val grinderId: String,
+	/// The bag's row for it is starred ("This bag's grinder").
+	val starred: Boolean,
+	/// The bag's saved grind for it, when there is one (not blank).
+	val saved: String? = null,
+	/// With nothing saved: the newest shot grind on the bag with it
+	/// ([`newest_shot_grind`]: by id, or an older row by name through the
+	/// catalogue's exact aliases, so "Niche" finds the Niche Zero).
+	val lastShot: String? = null
 )
 
 /// What [`resolve_grinder_switch`] reads.
@@ -3959,6 +3982,25 @@ data class KnownRow (
 	val tombstoned: Boolean? = null
 )
 
+/// One shot row on a bag, as a shell holds it in memory, for
+/// [`last_grinds_from_rows`]: the same columns the history's
+/// `last_grinds_for_bag` reads.
+@Serializable
+data class LastGrindRow (
+	/// When the shot completed, Unix epoch ms.
+	val completedAt: Long,
+	/// The shot's id: the tie-break among rows that completed at the same
+	/// time (the higher id is newer, as in the history query).
+	val id: String,
+	/// The grinder id the shot was stamped with; `None` or blank on rows
+	/// from before grinder ids.
+	val grinderId: String? = null,
+	/// The grinder name the shot was stamped with (`grinderModel`).
+	val grinderModel: String? = null,
+	/// The grind it recorded, as stored; a number reads as its text.
+	val grind: String? = null
+)
+
 /// A `GET /shots` list row.
 @Serializable
 data class ListRow (
@@ -4160,7 +4202,14 @@ data class MigrationGate (
 	/// The settings read, or there were none. `false` when they exist but
 	/// couldn't be read: `grinder_model` would look blank and every bag's
 	/// old grind would land under "no grinder" for good.
-	val settings: Boolean
+	val settings: Boolean,
+	/// The settings were absent: no file or key at all (with `settings`
+	/// true). That is a true first run only when the library has no bags;
+	/// with bags, the settings may have been quarantined (kept aside after a
+	/// failed read), so their `grinder_model` is unknown, not blank (PLAN
+	/// follow-up 40). Then only the bags that name their own grinder
+	/// migrate; the rest wait for a load that reads the settings.
+	val settingsAbsent: Boolean? = null
 )
 
 /// One selectable display/behaviour mode a scale exposes.
@@ -4618,6 +4667,173 @@ data class QuickControlBounds (
 	val overrideYieldG: StepRange
 )
 
+/// The grind half of an in-place Save's Undo: the one (bag, grinder) row as
+/// it was before the Save and as the Save wrote it.
+@Serializable
+data class QuickSaveGrindUndo (
+	/// The bag.
+	val beanId: String,
+	/// The row's grinder id ([`crate::NO_GRINDER_ID`] for the "no grinder"
+	/// slot).
+	val grinderId: String,
+	/// The row before the Save; `None` = there was none (Undo removes it).
+	val before: BagGrind? = null,
+	/// The row as the Save wrote it.
+	val written: BagGrind? = null
+)
+
+/// The kind of profile Save would write to.
+@Serializable
+enum class QuickSaveProfileKind(val string: String) {
+	/// No active profile: Save saves the grind only.
+	@SerialName("none")
+	None("none"),
+	/// A user-owned profile: updated in place.
+	@SerialName("custom")
+	Custom("custom"),
+	/// A read-only built-in: copied under a new name.
+	@SerialName("builtin")
+	Builtin("builtin"),
+}
+
+/// The active profile, as the plan needs it.
+@Serializable
+data class QuickSaveProfile (
+	/// Its library id.
+	val id: String,
+	/// Its name.
+	val name: String,
+	/// Custom or built-in (`None` is read as no profile).
+	val kind: QuickSaveProfileKind
+)
+
+/// What [`quick_save_plan`] reads: the state on screen (on a remote, the
+/// hub's).
+@Serializable
+data class QuickSaveInput (
+	/// The bag on Brew, if any.
+	val bag: Bean? = null,
+	/// The active grinder; `None` = the "no grinder" slot.
+	val grinder: Grinder? = null,
+	/// Brew's grind (the per-device session value); `None` = not set.
+	val brewGrind: String? = null,
+	/// The active profile, if any.
+	val profile: QuickSaveProfile? = null,
+	/// The Quick Controls override as stored, normalized by the core's
+	/// lifecycle rule (`normalize_brew_overrides`): a dial back at the
+	/// profile's own value is no override, so an empty one is no change.
+	val recipeOverrides: BrewOverrides
+)
+
+/// How Save writes the recipe.
+@Serializable
+enum class QuickSaveProfileWrite(val string: String) {
+	/// The recipe isn't written (unchanged, or no profile).
+	@SerialName("none")
+	None("none"),
+	/// The custom profile is updated in place; the message offers Undo.
+	@SerialName("inPlace")
+	InPlace("inPlace"),
+	/// A built-in is copied under a name the user gives; the copy is made
+	/// active.
+	@SerialName("copy")
+	Copy("copy"),
+}
+
+/// What Save would write, for the state on screen.
+@Serializable
+data class QuickSavePlan (
+	/// The bag the grind would be saved to.
+	val beanId: String? = null,
+	/// Its name, for the message.
+	val beanName: String? = null,
+	/// The active grinder's id; `None` = the "no grinder" slot.
+	val grinderId: String? = null,
+	/// Its name, for the message.
+	val grinderName: String? = null,
+	/// Brew's grind to save to the (bag, grinder) row, when it differs from
+	/// the saved one ([`crate::BrewGrindView::save_grind`]); else `None`.
+	val grind: String? = null,
+	/// The active profile's id.
+	val profileId: String? = null,
+	/// The active profile's name.
+	val profileName: String? = null,
+	/// The kind of profile Save writes to.
+	val profileKind: QuickSaveProfileKind,
+	/// The recipe dials differ from the active profile's own.
+	val recipeChanged: Boolean,
+	/// How the recipe is written ("Save" with nothing else chosen).
+	val profileWrite: QuickSaveProfileWrite,
+	/// Save writes the recipe to a profile (there is one to write to).
+	val writesRecipe: Boolean,
+	/// Save has something to write; else the button is off.
+	val enabled: Boolean,
+	/// Save asks for a name first: a built-in is read-only, so it's a copy.
+	val needsName: Boolean,
+	/// "Save as new…" is offered: a custom profile would otherwise be
+	/// updated in place.
+	val offersSaveAsNew: Boolean,
+	/// Save includes the grind: the button carries the unsaved-grind dot.
+	val includesGrind: Boolean,
+	/// The name a copy's prompt starts from: "‹name› (copy)", or empty.
+	val copyNameSeed: String
+)
+
+/// What an in-place Save wrote, for its Undo.
+@Serializable
+data class QuickSaveUndo (
+	/// The profile updated in place.
+	val profileId: String,
+	/// Its name, for the message.
+	val profileName: String,
+	/// Its stored body as the Save wrote it (the shell's stored JSON): Undo
+	/// restores the profile only over this, compared by value.
+	val writtenProfile: kotlinx.serialization.json.JsonElement,
+	/// The grind the same Save wrote, if it wrote one.
+	val grind: QuickSaveGrindUndo? = null
+)
+
+/// What [`quick_save_undo`] reads: the Undo and the state now.
+@Serializable
+data class QuickSaveUndoInput (
+	/// What the Save wrote.
+	val undo: QuickSaveUndo,
+	/// The profile's stored body now (as JSON); `null` = it is gone.
+	val nowProfile: kotlinx.serialization.json.JsonElement,
+	/// The bag as stored now; `None` = it is gone.
+	val nowBag: Bean? = null
+)
+
+/// How an Undo came out; the shells word the message.
+@Serializable
+enum class QuickSaveUndoOutcome(val string: String) {
+	/// Everything the Save wrote came back: "Save undone".
+	@SerialName("undone")
+	Undone("undone"),
+	/// The profile came back; the grind changed since and stands.
+	@SerialName("profileOnly")
+	ProfileOnly("profileOnly"),
+	/// The grind came back; the profile changed since and stands: "Grind put
+	/// back; “X” changed since, not undone".
+	@SerialName("grindOnly")
+	GrindOnly("grindOnly"),
+	/// Nothing came back: "“X” changed since; not undone".
+	@SerialName("notUndone")
+	NotUndone("notUndone"),
+}
+
+/// What an Undo writes.
+@Serializable
+data class QuickSaveUndoPlan (
+	/// Store the profile's body from before the Save (the shell kept it).
+	val restoreProfile: Boolean,
+	/// The bag to store with the row put back (`updated_at` moved), or `None`
+	/// to leave the bag alone.
+	val restoreBean: Bean? = null,
+	/// How it came out.
+	val outcome: QuickSaveUndoOutcome
+)
+
 /// The inclusive `[min, max]` bounds of a ranged scale setting.
 /// 
 /// A ranged setting (the beeper volume, the auto-standby timeout) carries its
@@ -4742,7 +4958,12 @@ data class ReplayMeta (
 	/// Active bean snapshot at shot start.
 	val bean: ReplayMetaBean? = null,
 	/// Equipment-level grinder model at shot start.
-	val grinderModel: String? = null
+	val grinderModel: String? = null,
+	/// The grind the shot recorded (Brew's grind at shot start, as text),
+	/// with or without a bag (PLAN follow-up 36). Read from the top-level
+	/// `grind` key; a capture from before it carries the grind only in the
+	/// bag block, so the fold falls back to [`ReplayMetaBean::grinder_setting`].
+	val grind: String? = null
 )
 
 /// What the user chose in the report.

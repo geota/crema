@@ -195,6 +195,17 @@ describe('the library migration runs only over a loaded library', () => {
 		expect(lib.allGrinders).toEqual([]);
 		expect(lib.getBean('bean:old')!.grinds ?? null).toBeNull();
 	});
+
+	it('with absent settings, migrates only bags that name their own grinder (PLAN follow-up 40)', () => {
+		const own = { ...blankBean('bean:own'), name: 'Own', grinder: 'Niche', grinderSetting: '12', grinds: undefined };
+		const none = { ...blankBean('bean:none'), name: 'None', grinder: '', grinderSetting: '14', grinds: undefined };
+		localStorage.setItem(LIBRARY_KEY, JSON.stringify({ schemaVersion: 1, beans: [own, none], roasters: [] }));
+		const lib = reloaded();
+		expect(lib.migrateGrinders('', true, true)).toBe(true);
+		expect(lib.getBean('bean:own')!.grinds).toHaveLength(1);
+		expect(lib.getBean('bean:none')!.grinds ?? null, 'waits for the settings, not filed under "no grinder"').toBeNull();
+		expect(lib.activeGrinder).toBeNull();
+	});
 });
 
 describe('adding a grinder with none active (#499 review)', () => {

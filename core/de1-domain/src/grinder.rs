@@ -179,18 +179,23 @@ pub fn names_grinder(grinder: &Grinder, name: &str) -> bool {
         || catalogue_entry_for_name(&grinder.name).is_some_and(|e| e.id == entry.id)
 }
 
-/// The grinder `name` names among `grinders` that aren't deleted, live ones
-/// first, if any ([`names_grinder`]).
+/// The grinder `name` names among `grinders` that aren't deleted, if any
+/// ([`names_grinder`]): one with exactly that name first (live, then
+/// archived), so "Niche Zero 2" is the second Niche Zero, not the first
+/// (#488 follow-up 18); then one through the catalogue (live, then archived).
 #[must_use]
 pub fn grinder_named<'a>(grinders: &'a [Grinder], name: &str) -> Option<&'a Grinder> {
     if grinder_key(name).is_empty() {
         return None;
     }
     let not_deleted = || grinders.iter().filter(|g| g.deleted_at.is_none());
-    not_deleted()
-        .filter(|g| g.is_live())
-        .find(|g| names_grinder(g, name))
-        .or_else(|| not_deleted().find(|g| names_grinder(g, name)))
+    let find = |matches: &dyn Fn(&Grinder) -> bool| {
+        not_deleted()
+            .filter(|g| g.is_live())
+            .find(|g| matches(g))
+            .or_else(|| not_deleted().find(|g| matches(g)))
+    };
+    find(&|g| same_grinder(&g.name, name)).or_else(|| find(&|g| names_grinder(g, name)))
 }
 
 /// The active grinder: the live grinder `active_id` names. `None` when no id
@@ -331,6 +336,70 @@ pub fn add_grinder(
     })
 }
 
+/// Add **another** grinder of a model the user already owns (#488
+/// follow-up 18: two Niche Zeros). When no live record is that entry or
+/// that name, this is [`add_grinder`]. Otherwise:
+///
+/// - an archived record of that entry or name comes back (same id, its bag
+///   grinds with it), the one whose name matches exactly first;
+/// - else a new record named "‹name› 2" (then 3, …: the first number no
+///   record that isn't deleted already has, and that doesn't name another
+///   catalogue entry), from the same entry (its verified scale and
+///   `preset_id`), with its own id ([`mint_id`]: `grinder:niche-zero-2`).
+///
+/// Matching keeps working: the new name names this record exactly
+/// ([`grinder_named`] prefers exact names), and old shot rows stamped with
+/// the model name still match through the catalogue. `None` as for
+/// [`add_grinder`].
+#[must_use]
+pub fn add_another_grinder(
+    grinders: &[Grinder],
+    name: &str,
+    catalogue_id: Option<&str>,
+    now_ms: i64,
+) -> Option<GrinderAdd> {
+    let first = add_grinder(grinders, name, catalogue_id, now_ms)?;
+    if first.kind != GrinderAddKind::Existing {
+        return Some(first);
+    }
+    let entry = match catalogue_id.filter(|id| !id.trim().is_empty()) {
+        Some(id) => catalogue_entry(id),
+        None => None,
+    };
+    let base = if grinder_key(name).is_empty() {
+        entry?.name()
+    } else {
+        name.trim().to_owned()
+    };
+    let entry = entry.or_else(|| catalogue_entry_for_name(&base));
+    let not_deleted = || grinders.iter().filter(|g| g.deleted_at.is_none());
+    let is_model = |g: &Grinder| {
+        names_grinder(g, &base) || entry.is_some_and(|e| g.preset_id.as_deref() == Some(e.id))
+    };
+    let archived = || not_deleted().filter(|g| !g.is_live() && is_model(g));
+    let revive = archived()
+        .find(|g| same_grinder(&g.name, &base))
+        .or_else(|| archived().next());
+    if let Some(found) = revive {
+        return Some(GrinderAdd {
+            grinder: restore_grinder(found, now_ms),
+            kind: GrinderAddKind::Revived,
+        });
+    }
+    let free = |candidate: &str| {
+        !not_deleted().any(|g| same_grinder(&g.name, candidate))
+            && catalogue_entry_for_name(candidate)
+                .is_none_or(|e| entry.is_some_and(|m| m.id == e.id))
+    };
+    let numbered = (2_u32..1000)
+        .map(|n| format!("{base} {n}"))
+        .find(|c| free(c))?;
+    Some(GrinderAdd {
+        grinder: new_grinder(&numbered, entry, grinders, now_ms),
+        kind: GrinderAddKind::Created,
+    })
+}
+
 /// What [`archive_grinder`] answers.
 #[typeshare]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -437,6 +506,12 @@ pub struct GrinderLibraryMigration {
     /// Why nothing ran: an input wasn't read ([`MigrationGate`]). `None` when
     /// the migration ran (even with nothing to do).
     pub skipped: Option<MigrationSkip>,
+    /// Bags left unmigrated (`grinds` still `None`) because the settings were
+    /// absent and the bag names no grinder of its own
+    /// ([`MigrationGate::settings_absent`], PLAN follow-up 40): they migrate
+    /// on a later load that reads the settings.
+    #[serde(default)]
+    pub left_for_settings: u32,
 }
 
 /// Whether the migration's inputs were read (REVIEW-CORE H5). A shell
@@ -452,6 +527,14 @@ pub struct MigrationGate {
     /// couldn't be read: `grinder_model` would look blank and every bag's
     /// old grind would land under "no grinder" for good.
     pub settings: bool,
+    /// The settings were absent: no file or key at all (with `settings`
+    /// true). That is a true first run only when the library has no bags;
+    /// with bags, the settings may have been quarantined (kept aside after a
+    /// failed read), so their `grinder_model` is unknown, not blank (PLAN
+    /// follow-up 40). Then only the bags that name their own grinder
+    /// migrate; the rest wait for a load that reads the settings.
+    #[serde(default)]
+    pub settings_absent: bool,
 }
 
 impl MigrationGate {
@@ -459,6 +542,7 @@ impl MigrationGate {
     pub const READ: Self = Self {
         library: true,
         settings: true,
+        settings_absent: false,
     };
 }
 
@@ -491,7 +575,12 @@ pub enum MigrationSkip {
 /// **The gate** (REVIEW-CORE H5): nothing runs unless `gate` says both the
 /// library and the settings were read; the answer is then empty with
 /// [`GrinderLibraryMigration::skipped`] set (the library first). A later
-/// load that reads both runs it.
+/// load that reads both runs it. **Absent settings** with bags in the library
+/// ([`MigrationGate::settings_absent`], PLAN follow-up 40) are no settings
+/// grinder, not a blank one: `grinder_model` is ignored, no grinder is made
+/// active, and a bag that names no grinder of its own is left as it is
+/// ([`GrinderLibraryMigration::left_for_settings`]), so its old grind isn't
+/// filed under "no grinder" for good.
 #[must_use]
 pub fn migrate_grinder_library(
     grinders: &[Grinder],
@@ -510,6 +599,10 @@ pub fn migrate_grinder_library(
         return out;
     }
     let live_beans = || beans.iter().filter(|b| b.deleted_at.is_none());
+    // Absent settings over a library with bags: the settings grinder is
+    // unknown, so nothing falls back to it.
+    let unknown_settings = gate.settings_absent && live_beans().next().is_some();
+    let grinder_model = if unknown_settings { "" } else { grinder_model };
     let mut all: Vec<Grinder> = grinders.to_vec();
     if grinders.is_empty() {
         out.grinders_migrated = true;
@@ -522,6 +615,10 @@ pub fn migrate_grinder_library(
         all.clone_from(&out.new_grinders);
     }
     for bean in live_beans().filter(|b| b.grinds.is_none()) {
+        if unknown_settings && grinder_key(&bean.grinder).is_empty() {
+            out.left_for_settings += 1;
+            continue;
+        }
         let (migrated, added) =
             crate::bag_grind::migrate_bag_grinds(bean, &all, grinder_model, now_ms);
         if let Some(g) = added {
@@ -707,6 +804,21 @@ pub fn add_grinder_json(
 ) -> Result<String, String> {
     let grinders: Vec<Grinder> = serde_json::from_str(grinders_json).map_err(|e| e.to_string())?;
     let out = add_grinder(&grinders, name, Some(catalogue_id), now_ms);
+    serde_json::to_string(&out).map_err(|e| e.to_string())
+}
+
+/// JSON-bridged [`add_another_grinder`]: as [`add_grinder_json`].
+///
+/// # Errors
+/// The JSON parse error string when the grinders are malformed.
+pub fn add_another_grinder_json(
+    grinders_json: &str,
+    name: &str,
+    catalogue_id: &str,
+    now_ms: i64,
+) -> Result<String, String> {
+    let grinders: Vec<Grinder> = serde_json::from_str(grinders_json).map_err(|e| e.to_string())?;
+    let out = add_another_grinder(&grinders, name, Some(catalogue_id), now_ms);
     serde_json::to_string(&out).map_err(|e| e.to_string())
 }
 
@@ -1053,6 +1165,87 @@ mod tests {
         assert_eq!(merge_grinder_edit(&base, &base, &current, NOW), current);
     }
 
+    // ── Two of the same model (follow-up 18) ──
+
+    #[test]
+    fn a_second_grinder_of_an_owned_model_gets_its_own_id_and_name() {
+        let first = add_grinder(&[], "", Some("niche-zero"), NOW)
+            .unwrap()
+            .grinder;
+        let owned = vec![first.clone()];
+        // Plain add still answers the owned one.
+        assert_eq!(
+            add_grinder(&owned, "", Some("niche-zero"), NOW)
+                .unwrap()
+                .kind,
+            GrinderAddKind::Existing
+        );
+        let second = add_another_grinder(&owned, "", Some("niche-zero"), NOW).unwrap();
+        assert_eq!(second.kind, GrinderAddKind::Created);
+        let g2 = second.grinder;
+        assert_eq!(g2.name, "Niche Zero 2");
+        assert_eq!(g2.id, "grinder:niche-zero-2");
+        assert_ne!(g2.id, first.id);
+        assert_eq!(g2.preset_id.as_deref(), Some("niche-zero"));
+        assert_eq!(g2.scale, first.scale, "the verified scale, not the default");
+        // A third by typed name.
+        let two = vec![first.clone(), g2.clone()];
+        let third = add_another_grinder(&two, "Niche Zero", None, NOW)
+            .unwrap()
+            .grinder;
+        assert_eq!(
+            (third.name.as_str(), third.id.as_str()),
+            ("Niche Zero 3", "grinder:niche-zero-3")
+        );
+        // Matching: the exact name finds each record, the model name the first.
+        assert_eq!(grinder_named(&two, "Niche Zero 2").unwrap().id, g2.id);
+        assert_eq!(grinder_named(&two, "niche zero").unwrap().id, first.id);
+        assert_eq!(
+            add_grinder(&two, "Niche Zero 2", None, NOW)
+                .unwrap()
+                .grinder
+                .id,
+            g2.id,
+            "typing its name finds it"
+        );
+        // A model nobody owns yet is a plain add.
+        let ek = add_another_grinder(&two, "EK43", None, NOW).unwrap();
+        assert_eq!(
+            (ek.kind, ek.grinder.name.as_str()),
+            (GrinderAddKind::Created, "EK43")
+        );
+    }
+
+    #[test]
+    fn adding_another_revives_an_archived_one_of_that_model_first() {
+        let first = add_grinder(&[], "", Some("niche-zero"), NOW)
+            .unwrap()
+            .grinder;
+        let g2 = add_another_grinder(std::slice::from_ref(&first), "", Some("niche-zero"), NOW)
+            .unwrap()
+            .grinder;
+        let archived = archive_grinder(&g2, None, NOW).grinder;
+        let lib = vec![first.clone(), archived];
+        let again = add_another_grinder(&lib, "", Some("niche-zero"), NOW + 1).unwrap();
+        assert_eq!(again.kind, GrinderAddKind::Revived);
+        assert_eq!(again.grinder.id, g2.id, "same id: its bag grinds come back");
+        // A tombstone is never revived, and its id stays taken.
+        let mut dead = g2.clone();
+        dead.deleted_at = Some(NOW);
+        let lib = vec![first, dead];
+        let fresh = add_another_grinder(&lib, "", Some("niche-zero"), NOW)
+            .unwrap()
+            .grinder;
+        assert_eq!(fresh.name, "Niche Zero 2");
+        assert_eq!(fresh.id, "grinder:niche-zero-2-2");
+        let out: Option<GrinderAdd> = serde_json::from_str(
+            &add_another_grinder_json(&serde_json::to_string(&lib).unwrap(), "", "niche-zero", NOW)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out.unwrap().grinder.id, "grinder:niche-zero-2-2");
+    }
+
     // ── Names ──
 
     #[test]
@@ -1191,6 +1384,7 @@ mod tests {
         let no_settings = skipped(MigrationGate {
             library: true,
             settings: false,
+            settings_absent: false,
         });
         assert_eq!(
             no_settings,
@@ -1202,6 +1396,7 @@ mod tests {
         let no_library = skipped(MigrationGate {
             library: false,
             settings: true,
+            settings_absent: false,
         });
         assert_eq!(no_library.skipped, Some(MigrationSkip::LibraryUnreadable));
         assert!(no_library.new_grinders.is_empty() && no_library.updated_beans.is_empty());
@@ -1216,6 +1411,56 @@ mod tests {
         let rows = ran.updated_beans[0].grinds.as_deref().unwrap();
         assert_eq!(rows[0].grinder_id, "grinder:niche-zero");
         assert_eq!(rows[0].grind, "14");
+    }
+
+    #[test]
+    fn absent_settings_over_bags_migrate_only_bags_with_their_own_grinder() {
+        // PLAN follow-up 40: the settings were quarantined on the upgrade
+        // launch, so this one reads them as absent.
+        let bags = [bag("b1", "", "14"), bag("b2", "EK43", "8")];
+        let absent = MigrationGate {
+            settings_absent: true,
+            ..MigrationGate::READ
+        };
+        let m = migrate_grinder_library(&[], &bags, "Niche Zero", absent, NOW);
+        assert_eq!(m.skipped, None);
+        assert_eq!(
+            names(&m.new_grinders),
+            ["EK43"],
+            "no settings grinder is made"
+        );
+        assert_eq!(m.active_grinder_id, None);
+        assert_eq!(m.updated_beans.len(), 1);
+        assert_eq!(m.updated_beans[0].id, "b2");
+        assert_eq!(m.left_for_settings, 1);
+        // A later load that reads the settings files b1 under their grinder.
+        let mut all = m.new_grinders.clone();
+        let later =
+            migrate_grinder_library(&all, &bags[..1], "Niche Zero", MigrationGate::READ, NOW);
+        all.extend(later.new_grinders.clone());
+        let rows = later.updated_beans[0].grinds.as_deref().unwrap();
+        assert_eq!(rows[0].grinder_id, "grinder:niche-zero");
+        assert_eq!(later.left_for_settings, 0);
+        // A true first run (no bags) reads absent settings as readable.
+        let first = migrate_grinder_library(&[], &[], "", absent, NOW);
+        assert_eq!(first.skipped, None);
+        assert!(first.grinders_migrated);
+        // Deleted bags don't count as a library.
+        let mut gone = bag("b9", "", "14");
+        gone.deleted_at = Some(1);
+        let m = migrate_grinder_library(&[], &[gone], "", absent, NOW);
+        assert_eq!(m.left_for_settings, 0);
+        // Over the JSON bridge too (`settingsAbsent` is false when missing).
+        let json = serde_json::json!({
+            "beans": [bag("b1", "", "14")],
+            "grinderModel": "EK43",
+            "gate": { "library": true, "settings": true, "settingsAbsent": true },
+        });
+        let out: GrinderLibraryMigration =
+            serde_json::from_str(&migrate_grinder_library_json(&json.to_string(), NOW).unwrap())
+                .unwrap();
+        assert!(out.updated_beans.is_empty());
+        assert_eq!(out.left_for_settings, 1);
     }
 
     #[test]

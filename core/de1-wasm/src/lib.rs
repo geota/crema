@@ -764,6 +764,81 @@ pub fn add_grinder_json(
     de1_domain::add_grinder_json(grinders_json, name, catalogue_id, f64_to_ms(now_ms))
 }
 
+/// Add **another** grinder of an owned model (#488 follow-up 18): a
+/// `GrinderAdd` JSON or `null`. See `de1_domain::add_another_grinder`.
+///
+/// # Errors
+/// Throws when the grinders aren't a `Grinder[]` JSON.
+#[wasm_bindgen(js_name = addAnotherGrinderJson)]
+pub fn add_another_grinder_json(
+    grinders_json: &str,
+    name: &str,
+    catalogue_id: &str,
+    now_ms: f64,
+) -> Result<String, String> {
+    de1_domain::add_another_grinder_json(grinders_json, name, catalogue_id, f64_to_ms(now_ms))
+}
+
+/// The newest shot grind for a grinder (REVIEW-CORE M1): a `LastGrind` JSON
+/// or `null`. See `de1_domain::newest_shot_grind`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = newestShotGrindJson)]
+pub fn newest_shot_grind_json(input_json: &str) -> Result<String, String> {
+    de1_domain::newest_shot_grind_json(input_json)
+}
+
+/// A bag's shot rows grouped into the newest grind per grinder (REVIEW-CORE
+/// M1). See `de1_domain::last_grinds_from_rows`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = lastGrindsFromRowsJson)]
+pub fn last_grinds_from_rows_json(rows_json: &str) -> Result<String, String> {
+    de1_domain::last_grinds_from_rows_json(rows_json)
+}
+
+/// Brew's grinder picker rows for the selected bag (REVIEW-CORE M1). See
+/// `de1_domain::grinder_pick_rows`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = grinderPickRowsJson)]
+pub fn grinder_pick_rows_json(input_json: &str) -> Result<String, String> {
+    de1_domain::grinder_pick_rows_json(input_json)
+}
+
+/// The bag editor's new row for a grinder, seeded from the newest shot
+/// (REVIEW-CORE M1). See `de1_domain::new_bag_grind_row`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = newBagGrindRowJson)]
+pub fn new_bag_grind_row_json(input_json: &str) -> Result<String, String> {
+    de1_domain::new_bag_grind_row_json(input_json)
+}
+
+/// Quick Controls' Save plan (REVIEW-CORE M2). See
+/// `de1_domain::quick_save_plan`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = quickSavePlanJson)]
+pub fn quick_save_plan_json(input_json: &str) -> Result<String, String> {
+    de1_domain::quick_save_plan_json(input_json)
+}
+
+/// The guarded Undo of an in-place Quick Controls Save (REVIEW-CORE M2). See
+/// `de1_domain::quick_save_undo`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = quickSaveUndoJson)]
+pub fn quick_save_undo_json(input_json: &str, now_ms: f64) -> Result<String, String> {
+    de1_domain::quick_save_undo_json(input_json, f64_to_ms(now_ms))
+}
+
 /// Archive a grinder, clearing the active pointer when it was the active one
 /// (#488): a `GrinderArchive` JSON. See `de1_domain::archive_grinder`.
 ///

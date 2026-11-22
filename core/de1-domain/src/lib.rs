@@ -110,6 +110,7 @@ pub mod profile_fingerprint;
 pub mod profile_import;
 pub mod profile_roast;
 pub mod pull_run;
+pub mod quick_save;
 pub mod replay;
 pub mod saw_learning;
 pub mod scale_trust;
@@ -156,11 +157,13 @@ pub use backup_retention::{
 };
 pub use bag_grind::{
     AutoSaveInput, BagGrind, BagSelectInput, BagSelection, GrindSave, GrinderPickInput,
-    GrinderSwitchInput, LastGrind, NO_GRINDER_ID, SelectionChange, SelectionState, SetTo,
-    StagedGrinderPick, StagedGrindersInput, StagedGrindersSave, auto_save_shot_grind,
-    auto_save_shot_grind_json, bag_editor_grinders, bag_editor_grinders_json, bag_grinds_to_fix,
-    bag_grinds_to_fix_json, bag_selection_undo, bag_selection_undo_json, migrate_bag_grinds,
-    newest_shot_grind, pick_grind, resolve_bag_selection, resolve_bag_selection_json,
+    GrinderPickRow, GrinderSwitchInput, LastGrind, LastGrindRow, NO_GRINDER_ID, SelectionChange,
+    SelectionState, SetTo, StagedGrinderPick, StagedGrindersInput, StagedGrindersSave,
+    auto_save_shot_grind, auto_save_shot_grind_json, bag_editor_grinders, bag_editor_grinders_json,
+    bag_grinds_to_fix, bag_grinds_to_fix_json, bag_selection_undo, bag_selection_undo_json,
+    grinder_pick_rows, grinder_pick_rows_json, last_grinds_from_rows, last_grinds_from_rows_json,
+    migrate_bag_grinds, new_bag_grind_row, new_bag_grind_row_json, newest_shot_grind,
+    newest_shot_grind_json, pick_grind, resolve_bag_selection, resolve_bag_selection_json,
     resolve_grinder_switch, resolve_grinder_switch_json, save_bag_grind, save_bag_grind_json,
     stage_grinder_pick, stage_grinder_pick_json, staged_grinders_on_save,
     staged_grinders_on_save_json,
@@ -308,11 +311,12 @@ pub use grind_value::{
 pub use grinder::{
     GrindScale, Grinder, GrinderAdd, GrinderAddKind, GrinderArchive, GrinderLibraryMigration,
     GrinderMatch, GrinderMatchKind, MigrationGate, MigrationSkip, active_grind_scale,
-    active_grinder, active_grinder_json, add_grinder, add_grinder_json, archive_grinder,
-    archive_grinder_json, grinder_key, grinder_named, grinders_for_names, grinders_for_names_json,
-    match_grinders, match_grinders_json, merge_grinder_edit, merge_grinder_edit_json,
-    migrate_grinder_library, migrate_grinder_library_json, names_grinder, restore_grinder,
-    restore_grinder_json, same_grinder,
+    active_grinder, active_grinder_json, add_another_grinder, add_another_grinder_json,
+    add_grinder, add_grinder_json, archive_grinder, archive_grinder_json, grinder_key,
+    grinder_named, grinders_for_names, grinders_for_names_json, match_grinders,
+    match_grinders_json, merge_grinder_edit, merge_grinder_edit_json, migrate_grinder_library,
+    migrate_grinder_library_json, names_grinder, restore_grinder, restore_grinder_json,
+    same_grinder,
 };
 pub use grinder_catalogue::{
     CatalogueGrinder, CatalogueGrinderInfo, CatalogueScale, GRINDER_CATALOGUE, GrinderKind,
@@ -367,6 +371,12 @@ pub use pull_run::{
     choose_bind, end_run, finish_run, health_probe_due, note_poison_retry, note_rate_limit, pace,
     plan_page, poison_due, pull_run_call, record_health_probe, record_row, row_failure_action,
     settle_poison,
+};
+pub use quick_save::{
+    QuickSaveGrindUndo, QuickSaveInput, QuickSavePlan, QuickSaveProfile, QuickSaveProfileKind,
+    QuickSaveProfileWrite, QuickSaveUndo, QuickSaveUndoInput, QuickSaveUndoOutcome,
+    QuickSaveUndoPlan, quick_save_plan, quick_save_plan_json, quick_save_undo,
+    quick_save_undo_json,
 };
 pub use replay::{ReplayMeta, ReplayMetaBean, fold_meta_jsonl, fold_meta_jsonl_json};
 pub use session::SessionTimer;

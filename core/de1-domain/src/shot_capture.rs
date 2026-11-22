@@ -20,7 +20,7 @@
 //!   loaded) the shot keeps the profile's name only and no Quick Controls.
 //! - **Profile id.** The library id of the profile the DE1 held, else the
 //!   frozen [`ShotSelections::profile_id`] when the shot's name is that
-//!   profile's; stored next to the name snapshot (save-boundaries review F4).
+//!   profile's (whether or not the core held the profile); stored next to the name snapshot (save-boundaries review F4).
 //! - **Grinder.** The active grinder record's id and its name as a snapshot
 //!   (#488, review F4), frozen at shot start (review F9), so switching
 //!   grinder mid-shot can't mislabel it. Not the settings `grinder_model`,
@@ -150,6 +150,17 @@ fn non_blank(s: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The selected profile's id, only when `name` (the shot's profile name) is
+/// that profile's: a title the DE1 reported, or a held profile with no id,
+/// may be a profile another app loaded (PLAN follow-ups 8 and 14). One rule
+/// for both branches of [`assemble_stored_shot`].
+fn selected_id_for(sel: &ShotSelections, name: Option<&str>) -> Option<String> {
+    let name = non_blank(name)?;
+    (Some(name) == non_blank(sel.profile_name.as_deref()))
+        .then(|| non_blank(sel.profile_id.as_deref()))
+        .flatten()
+}
+
 /// Build the [`StoredShot`] for a finished shot — see the module docs for
 /// the rules. `None` when the record holds no telemetry.
 #[must_use]
@@ -165,8 +176,8 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
     if let Some(as_run) = &shot.as_run {
         let effective = effective_crema_profile(&as_run.profile, &as_run.qc);
         s.profile_name = non_blank(Some(&effective.name));
-        s.profile_id =
-            non_blank(Some(&as_run.profile.id)).or_else(|| non_blank(sel.profile_id.as_deref()));
+        s.profile_id = non_blank(Some(&as_run.profile.id))
+            .or_else(|| selected_id_for(&sel, s.profile_name.as_deref()));
         s.metadata.dose = Some(effective.dose).filter(|d| *d > 0.0);
         s.yield_target = Some(effective.yield_out).filter(|y| *y > 0.0);
         s.brew_temp_target = Some(effective.brew_temp).filter(|t| t.is_finite());
@@ -175,11 +186,7 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
     } else {
         s.profile_name = non_blank(shot.profile_title.as_deref())
             .or_else(|| non_blank(sel.profile_name.as_deref()));
-        // The selected id only when the name is its profile's: a title the
-        // DE1 reported may be a profile another app loaded.
-        if s.profile_name.is_some() && s.profile_name == non_blank(sel.profile_name.as_deref()) {
-            s.profile_id = non_blank(sel.profile_id.as_deref());
-        }
+        s.profile_id = selected_id_for(&sel, s.profile_name.as_deref());
     }
     // An estimated stop is stored as `Weight`, which older builds parse,
     // flagged `stop_estimated` (`DESIGN.md` §3.5).
@@ -381,6 +388,48 @@ mod tests {
         assert_eq!(shot.profile_id, None);
         let shot = assemble_stored_shot(completed(None), ShotCaptureContext::default()).unwrap();
         assert_eq!(shot.profile_id, None);
+    }
+
+    #[test]
+    fn a_held_profile_without_an_id_takes_the_selected_one_only_for_its_name() {
+        // PLAN follow-ups 8 / 14: the `as_run` fallback applies the same
+        // name check as the name-only branch.
+        let mut held = profile();
+        held.id = String::new();
+        let run = |sel: ShotSelections| {
+            assemble_stored_shot(
+                with(
+                    sel,
+                    completed(Some(AsRunShot {
+                        profile: held.clone(),
+                        qc: BrewOverrides::default(),
+                    })),
+                ),
+                ShotCaptureContext::default(),
+            )
+            .unwrap()
+        };
+        let other = run(ShotSelections {
+            profile_id: Some("profile:other".into()),
+            profile_name: Some("Other".into()),
+            ..ShotSelections::default()
+        });
+        assert_eq!(other.profile_name.as_deref(), Some("Test"));
+        assert_eq!(
+            other.profile_id, None,
+            "another profile's id is never stamped"
+        );
+        let nameless = run(ShotSelections {
+            profile_id: Some("profile:other".into()),
+            ..ShotSelections::default()
+        });
+        assert_eq!(nameless.profile_id, None);
+        let same = run(ShotSelections {
+            profile_id: Some("profile:test".into()),
+            profile_name: Some(" Test ".into()),
+            ..ShotSelections::default()
+        });
+        assert_eq!(same.profile_id.as_deref(), Some("profile:test"));
     }
 
     fn grind_of(grind: Option<&str>) -> Option<String> {

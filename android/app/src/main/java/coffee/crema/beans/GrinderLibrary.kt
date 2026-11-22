@@ -113,7 +113,9 @@ fun lastGrindsForBag(beanId: String, shots: List<ShotMeta>): List<LastGrind> {
  */
 fun migrationGate(library: coffee.crema.persist.StoreHealth, settings: coffee.crema.persist.StoreHealth): MigrationGate {
     fun read(h: coffee.crema.persist.StoreHealth) = h == coffee.crema.persist.StoreHealth.OK || h == coffee.crema.persist.StoreHealth.ABSENT
-    return MigrationGate(library = read(library), settings = read(settings))
+    // Absent settings over a library with bags may be a quarantined file: the
+    // core then migrates only bags with their own grinder (PLAN follow-up 40).
+    return MigrationGate(library = read(library), settings = read(settings), settingsAbsent = settings == coffee.crema.persist.StoreHealth.ABSENT)
 }
 
 /** The library migration (core `migrate_grinder_library`), run once the library and the settings have loaded.
