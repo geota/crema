@@ -203,8 +203,8 @@ describe('adding a grinder with none active (#499 review)', () => {
 		const g = library.takeGrinderChoice({ kind: 'create', name: "Dad's Zassenhaus" })!;
 		expect(library.activeGrinder?.id).toBe(g.id);
 		// With one active, another addition leaves it as it is.
-		const df = library.takeGrinderChoice({ kind: 'catalogue', id: 'df64', name: 'DF64' });
-		expect(df).not.toBeNull();
+		const ek = library.takeGrinderChoice({ kind: 'catalogue', id: 'mahlkonig-ek43', name: 'Mahlkönig EK43' });
+		expect(ek).not.toBeNull();
 		expect(library.activeGrinder?.id).toBe(g.id);
 		// Archiving the active clears it; restoring one makes it active again.
 		library.archiveGrinder(g.id);
