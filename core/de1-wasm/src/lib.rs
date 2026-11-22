@@ -880,6 +880,68 @@ pub fn auto_save_shot_grind_json(input_json: &str, now_ms: f64) -> Result<String
     de1_domain::auto_save_shot_grind_json(input_json, f64_to_ms(now_ms))
 }
 
+/// A grind dial number as stored text on a scale (round 2, H1). See
+/// `de1_domain::grind_text`.
+///
+/// # Errors
+/// Throws on a malformed scale.
+#[wasm_bindgen(js_name = grindTextJson)]
+pub fn grind_text_json(dial: f64, scale_json: &str) -> Result<String, String> {
+    de1_domain::grind_text_json(dial, scale_json)
+}
+
+/// Whether two grinds are the same: numeric when both parse, else trimmed
+/// text. See `de1_domain::same_grind`.
+#[wasm_bindgen(js_name = sameGrind)]
+#[must_use]
+pub fn same_grind(a: &str, b: &str) -> bool {
+    de1_domain::same_grind(a, b)
+}
+
+/// A grind with its scale's unit ("480 μm", "2.1.3", "—"). See
+/// `de1_domain::format_grind`.
+///
+/// # Errors
+/// Throws on a malformed scale.
+#[wasm_bindgen(js_name = formatGrindJson)]
+pub fn format_grind_json(grind: &str, scale_json: &str) -> Result<String, String> {
+    de1_domain::format_grind_json(grind, scale_json)
+}
+
+/// Why a typed scale can't be stored: a `ScaleRefusal` JSON or `null`. See
+/// `de1_domain::grind_scale_refusal`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = grindScaleRefusalJson)]
+pub fn grind_scale_refusal_json(scale_json: &str) -> Result<String, String> {
+    de1_domain::grind_scale_refusal_json(scale_json)
+}
+
+/// What Brew's grind is (round 2, H2): a `BrewGrindView` JSON. See
+/// `de1_domain::brew_grind_view`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = brewGrindViewJson)]
+pub fn brew_grind_view_json(input_json: &str) -> Result<String, String> {
+    de1_domain::brew_grind_view_json(input_json)
+}
+
+/// The Quick Controls grind chips around Brew's grind (round 2, L1): a
+/// `GrindChip` array JSON. See `de1_domain::grind_chips`.
+///
+/// # Errors
+/// Throws on a malformed scale.
+#[wasm_bindgen(js_name = grindChipsJson)]
+pub fn grind_chips_json(
+    scale_json: &str,
+    around: Option<String>,
+    count: u32,
+) -> Result<String, String> {
+    de1_domain::grind_chips_json(scale_json, around.as_deref(), count)
+}
+
 /// "Restore defaults": the current `CommonSettings` JSON and line-frequency
 /// override in, a `SettingsReset` JSON out. See
 /// `de1_domain::app_settings::reset_settings`.

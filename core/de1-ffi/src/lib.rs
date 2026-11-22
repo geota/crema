@@ -1002,6 +1002,70 @@ pub fn auto_save_shot_grind_json(
     de1_domain::auto_save_shot_grind_json(&input_json, now_unix_ms).map_err(crema_err)
 }
 
+/// A grind dial number as stored text on a scale (round 2, H1): a
+/// `GrindScale` JSON in. See [`de1_domain::grind_text`].
+///
+/// # Errors
+/// On a malformed scale.
+#[uniffi::export]
+pub fn grind_text_json(dial: f64, scale_json: String) -> Result<String, CremaError> {
+    de1_domain::grind_text_json(dial, &scale_json).map_err(crema_err)
+}
+
+/// Whether two grinds are the same: numeric when both parse, else trimmed
+/// text. See [`de1_domain::same_grind`].
+#[uniffi::export]
+#[must_use]
+pub fn same_grind(a: String, b: String) -> bool {
+    de1_domain::same_grind(&a, &b)
+}
+
+/// A grind with its scale's unit ("480 μm", "2.1.3", "—"): a `GrindScale`
+/// JSON in. See [`de1_domain::format_grind`].
+///
+/// # Errors
+/// On a malformed scale.
+#[uniffi::export]
+pub fn format_grind_json(grind: String, scale_json: String) -> Result<String, CremaError> {
+    de1_domain::format_grind_json(&grind, &scale_json).map_err(crema_err)
+}
+
+/// Why a typed scale can't be stored: a `GrindScale` JSON in (a number that
+/// didn't parse is `null`), a `ScaleRefusal` JSON or `null` out. See
+/// [`de1_domain::grind_scale_refusal`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn grind_scale_refusal_json(scale_json: String) -> Result<String, CremaError> {
+    de1_domain::grind_scale_refusal_json(&scale_json).map_err(crema_err)
+}
+
+/// What Brew's grind is (round 2, H2): a `BrewGrindInput` JSON in, a
+/// `BrewGrindView` JSON out. See [`de1_domain::brew_grind_view`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn brew_grind_view_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::brew_grind_view_json(&input_json).map_err(crema_err)
+}
+
+/// The Quick Controls grind chips around Brew's grind (round 2, L1): a
+/// `GrindScale` JSON in, a `GrindChip` array JSON out (empty when `around`
+/// is unset or not a plain number). See [`de1_domain::grind_chips`].
+///
+/// # Errors
+/// On a malformed scale.
+#[uniffi::export]
+pub fn grind_chips_json(
+    scale_json: String,
+    around: Option<String>,
+    count: u32,
+) -> Result<String, CremaError> {
+    de1_domain::grind_chips_json(&scale_json, around.as_deref(), count).map_err(crema_err)
+}
+
 /// "Restore defaults": the current `CommonSettings` JSON and line-frequency
 /// override in, a `SettingsReset` JSON out (defaults, keeping the weight unit
 /// and the line frequency). See [`de1_domain::app_settings::reset_settings`].
