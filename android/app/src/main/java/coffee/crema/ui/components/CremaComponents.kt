@@ -1141,6 +1141,9 @@ fun TapToEditValue(
     editStyle: TextStyle,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    /** False keeps a typed value outside [min]..[max] as typed (a grind, #488:
+     *  values are never clamped; the caller warns). */
+    clampTyped: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     var editing by remember { mutableStateOf(false) }
@@ -1168,7 +1171,7 @@ fun TapToEditValue(
     fun commit() {
         if (!editing) return
         editing = false
-        text.trim().replace(',', '.').toDoubleOrNull()?.let { onCommit(it.coerceIn(min, max)) }
+        text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }?.let { onCommit(if (clampTyped) it.coerceIn(min, max) else it) }
     }
     BasicTextField(
         value = text,
@@ -1997,10 +2000,16 @@ fun CremaStepper(
     chipActive: ((Double) -> Boolean)? = null,
     // One more chip after [chips] that isn't a number (hot water's No limit).
     extraChip: StepperExtraChip? = null,
+    // The chip with a copper ring (the bag's saved grind, #488), if any.
+    chipRing: ((Double) -> Boolean)? = null,
+    // A typed value is kept as typed, outside [min]..[max] too (a grind, #488);
+    // the steps still stay in range.
+    clampTyped: Boolean = true,
 ) {
     val chipLabel = gate.fmt(chipFmt ?: fmt)
     val fmt = gate.fmt(fmt)
     fun snap(x: Double) = (kotlin.math.round(x * 100) / 100).coerceIn(min, max)
+    fun typed(x: Double) = if (clampTyped) snap(x) else kotlin.math.round(x * 100) / 100
     val dec = { onChange(snap(value - step)) }
     val inc = { onChange(snap(value + step)) }
 
@@ -2015,7 +2024,8 @@ fun CremaStepper(
                         value = value,
                         min = min,
                         max = max,
-                        onCommit = { onChange(snap(it)) },
+                        onCommit = { onChange(typed(it)) },
+                        clampTyped = clampTyped,
                         editStyle = CremaTheme.readout.readoutSm,
                         enabled = enabled,
                     ) {
@@ -2072,7 +2082,8 @@ fun CremaStepper(
                         value = value,
                         min = min,
                         max = max,
-                        onCommit = { onChange(snap(it)) },
+                        onCommit = { onChange(typed(it)) },
+                        clampTyped = clampTyped,
                         editStyle = TextStyle(fontFamily = JetBrainsMono, fontSize = style.valueSize),
                         enabled = enabled,
                     ) {
@@ -2086,7 +2097,7 @@ fun CremaStepper(
             if (chips != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     chips.forEach { c ->
-                        StepperChip(chipLabel(c), chipActive?.invoke(c) ?: (kotlin.math.abs(value - c) < 0.05)) { onChange(snap(c)) }
+                        StepperChip(chipLabel(c), chipActive?.invoke(c) ?: (kotlin.math.abs(value - c) < 0.05), ringed = chipRing?.invoke(c) == true) { onChange(snap(c)) }
                     }
                     if (extraChip != null) {
                         StepperChip(
@@ -2105,7 +2116,8 @@ fun CremaStepper(
 // Small circular −/+ button (surfaceContainerHighest) used by every compact stepper.
 @Composable
 private fun StepperCircleBtn(icon: String, size: Dp, iconSize: Int, onClick: () -> Unit) {
-    Surface(onClick = onClick, shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(size)) {
+    // Held, it repeats with acceleration (#488).
+    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(size).clip(CircleShape).repeatingPress(icon, onClick)) {
         Box(contentAlignment = Alignment.Center) { PhIcon(icon, sizeDp = iconSize) }
     }
 }
@@ -2113,12 +2125,14 @@ private fun StepperCircleBtn(icon: String, size: Dp, iconSize: Int, onClick: () 
 // Quick-select value chip — copper fill when it matches the current value, faint
 // hairline otherwise (Quick Controls .qchip).
 @Composable
-private fun RowScope.StepperChip(label: String, active: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun RowScope.StepperChip(label: String, active: Boolean, modifier: Modifier = Modifier, ringed: Boolean = false, onClick: () -> Unit) {
     Box(
         modifier
             .weight(1f)
             .clip(RoundedCornerShape(8.dp))
             .then(if (active) Modifier.background(MaterialTheme.colorScheme.primary) else Modifier.border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f), RoundedCornerShape(8.dp)))
+            // The bag's saved value (#488): a copper ring, over the fill when it's also the value.
+            .then(if (ringed) Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = if (active) 0.55f else 1f), RoundedCornerShape(8.dp)).semantics { contentDescription = "$label, saved on the bag" } else Modifier)
             .clickable(onClick = onClick)
             .padding(vertical = 5.dp),
         contentAlignment = Alignment.Center,
@@ -2145,7 +2159,7 @@ private val cremaRailItems = listOf(
     RailItem("profiles", "list-bullets", "Profiles"),
     RailItem("beans", "coffee-bean", "Beans"),
     RailItem("history", "chart-line", "History"),
-    RailItem("scale", "scales", "Scale"),
+    RailItem("scale", "scales", "Devices"),
     RailItem("settings", "gear-six", "Settings"),
 )
 

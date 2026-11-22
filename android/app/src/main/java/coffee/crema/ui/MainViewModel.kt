@@ -1544,6 +1544,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         setActiveGrinder(g.id)
     }
 
+    /** The grinder a type-or-pick box pick stands for: added, brought back or as it is. */
+    fun resolveGrinderPick(pick: GrinderPick): coffee.crema.core.Grinder? = when (pick) {
+        is GrinderPick.Owned -> _ui.value.liveGrinders.firstOrNull { it.id == pick.id }
+        is GrinderPick.Catalogue -> library.addGrinder("", pick.id)
+        is GrinderPick.Archived -> {
+            library.restoreGrinder(pick.id)
+            _ui.value.liveGrinders.firstOrNull { it.id == pick.id }
+        }
+        is GrinderPick.Create -> library.addGrinder(pick.name, null)
+    }
+
+    /** Open Devices on [tab] ("scale" | "grinder"); the caller navigates to it. */
+    fun openDevicesTab(tab: String) = _ui.update { it.copy(devicesTab = tab) }
+
     /** Devices → Grinder "Remove": archive it; the active one is cleared. */
     fun archiveGrinder(id: String) = library.archiveGrinder(id)
 

@@ -44,6 +44,11 @@ import coffee.crema.ui.hotWaterSubLine
 import coffee.crema.ui.components.StepperExtraChip
 import coffee.crema.ui.YieldRatioMode
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.activeGrindScale
+import coffee.crema.ui.grindSeed
+import coffee.crema.ui.savedGrindForBrew
+import coffee.crema.ui.unsavedGrind
+import coffee.crema.ui.unsavedGrindExplanation
 import coffee.crema.ui.effectiveBrew
 import coffee.crema.ui.quickSavePlan
 import coffee.crema.ui.components.*
@@ -88,11 +93,11 @@ fun PhoneQuickSheet(
     // was never recorded onto shots.
     // Seed from the active bean's saved grind when the dial is untouched
     // (issue #16) — matches the tablet sheet's qcGrindSeed.
-    val grindSeed = remember(ui.activeBeanId, ui.beans) {
-        ui.beans.firstOrNull { it.id == ui.activeBeanId }
-            ?.grinderSetting?.trim()?.replace(',', '.')?.toFloatOrNull()
-    } ?: 4.2f
-    val grind = (ui.qcGrind ?: grindSeed).toDouble()
+    // The bag's saved grind for the active grinder (#488), on its scale.
+    val grind = ui.qcGrind?.toDouble() ?: ui.grindSeed()
+    val grindScale = ui.activeGrindScale()
+    val savedGrind = coffee.crema.beans.grindDouble(ui.savedGrindForBrew()?.grind)
+    val unsaved = ui.unsavedGrind()
     var yieldRatioMode by remember { mutableStateOf(YieldRatioMode.Yield) }
     var piFlushMode by remember { mutableStateOf(PiFlushMode.Preinf) }
     val preinf = preinfOverride ?: brewDial?.preinfS ?: 8.0
@@ -136,13 +141,17 @@ fun PhoneQuickSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                CremaButton(
-                    onClick = onSave,
-                    variant = CremaButtonVariant.Text,
-                    icon = "bookmark-simple",
-                    label = quickSave.label,
-                    enabled = quickSave.enabled,
-                )
+                Box {
+                    CremaButton(
+                        onClick = onSave,
+                        variant = CremaButtonVariant.Text,
+                        icon = "bookmark-simple",
+                        label = quickSave.label,
+                        enabled = quickSave.enabled,
+                    )
+                    // The dot: Save includes the grind (#488).
+                    if (quickSave.includesGrind) coffee.crema.ui.components.SaveGrindDot(Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 4.dp))
+                }
             }
 
             // Tabs (proto .pf-qc-tabs).
@@ -182,19 +191,27 @@ fun PhoneQuickSheet(
                             QcCell(
                                 modifier = Modifier.weight(1f),
                                 header = {
-                                    CremaSplitLabel(
-                                        prefix = "",
-                                        options = listOf(SplitOption("dose", "Dose"), SplitOption("grind", "Grind")),
-                                        value = doseGrindMode.value, onChange = { doseGrindMode = DoseGrindMode.of(it) },
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(Modifier.weight(1f)) {
+                                            CremaSplitLabel(
+                                                prefix = "",
+                                                options = listOf(SplitOption("dose", "Dose"), SplitOption("grind", "Grind")),
+                                                value = doseGrindMode.value, onChange = { doseGrindMode = DoseGrindMode.of(it) },
+                                            )
+                                        }
+                                        // "● Bag 4.5" while the grind differs from the bag's (#488).
+                                        if (unsaved != null) coffee.crema.ui.components.UnsavedGrindMarker(unsaved, ui.unsavedGrindExplanation())
+                                    }
                                 },
                                 value = if (doseGrindMode == DoseGrindMode.Dose) dose else grind,
-                                unit = if (doseGrindMode == DoseGrindMode.Dose) "g" else "",
-                                step = 0.1,
-                                min = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MIN_G else QcBounds.GRIND_MIN,
-                                max = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MAX_G else QcBounds.GRIND_MAX,
-                                presets = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 18.0, 19.0, 20.0) else listOf(3.5, 4.0, 4.5, 5.0),
-                                fmt = { fmt("%.1f", it) },
+                                unit = if (doseGrindMode == DoseGrindMode.Dose) "g" else grindScale.unit,
+                                step = if (doseGrindMode == DoseGrindMode.Dose) 0.1 else grindScale.step.toDouble().takeIf { it.isFinite() && it > 0 } ?: 0.1,
+                                min = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MIN_G else minOf(grindScale.min, grindScale.max).toDouble(),
+                                max = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MAX_G else maxOf(grindScale.min, grindScale.max).toDouble(),
+                                presets = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 18.0, 19.0, 20.0) else coffee.crema.ui.grindChips(savedGrind ?: grind, grindScale).take(4),
+                                presetRing = if (doseGrindMode == DoseGrindMode.Grind && savedGrind != null) { p -> kotlin.math.abs(p - savedGrind) < 1e-6 } else null,
+                                clampTyped = doseGrindMode == DoseGrindMode.Dose,
+                                fmt = if (doseGrindMode == DoseGrindMode.Dose) ({ fmt("%.1f", it) }) else ({ v -> coffee.crema.ui.scaleNumber(v.toFloat()) }),
                                 onChange = { if (doseGrindMode == DoseGrindMode.Dose) vm.quickAdjustBrew(it, yieldOut, brewTemp, preinfOverride) else vm.setQcGrind(it.toFloat()) },
                                 gate = if (doseGrindMode == DoseGrindMode.Dose) brewGate else ui.gate(Setting.QC_GRIND),
                             )
@@ -448,6 +465,10 @@ private fun QcCell(
     presetActive: ((Double) -> Boolean)? = null,
     /** One more preset after [presets] that isn't a number (hot water's No limit). */
     extra: StepperExtraChip? = null,
+    /** The preset with a copper ring (the bag's saved grind, #488). */
+    presetRing: ((Double) -> Boolean)? = null,
+    /** False keeps a typed value outside [min]..[max] as typed (a grind, #488). */
+    clampTyped: Boolean = true,
 ) {
     val presetLabel = gate.fmt(presetFmt ?: fmt)
     val fmt = gate.fmt(fmt)
@@ -472,6 +493,7 @@ private fun QcCell(
                         onCommit = onChange,
                         editStyle = TextStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Medium, fontSize = 23.sp),
                         enabled = enabled,
+                        clampTyped = clampTyped,
                     ) {
                         Text(
                             fmt(value),
@@ -491,7 +513,7 @@ private fun QcCell(
             footer()
             Row(Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.4f).gated(gate), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 presets.forEach { p ->
-                    QcPreset(presetLabel(p), presetActive?.invoke(p) ?: (kotlin.math.abs(p - value) < 0.001)) { onChange(p) }
+                    QcPreset(presetLabel(p), presetActive?.invoke(p) ?: (kotlin.math.abs(p - value) < 0.001), ringed = presetRing?.invoke(p) == true) { onChange(p) }
                 }
                 if (extra != null) {
                     QcPreset(extra.label, extra.active, Modifier.semantics { contentDescription = extra.description }, onClick = extra.onClick)
@@ -504,12 +526,14 @@ private fun QcCell(
 
 /** One preset chip under a [QcCell] stepper; secondary-container fill when on. */
 @Composable
-private fun RowScope.QcPreset(label: String, on: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun RowScope.QcPreset(label: String, on: Boolean, modifier: Modifier = Modifier, ringed: Boolean = false, onClick: () -> Unit) {
     Box(
         modifier
             .weight(1f)
             .clip(RoundedCornerShape(8.dp))
             .background(if (on) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest)
+            // The bag's saved value (#488): a copper ring.
+            .then(if (ringed) Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp)).semantics { contentDescription = "$label, saved on the bag" } else Modifier)
             .clickable(onClick = onClick)
             .padding(vertical = 5.dp),
         contentAlignment = Alignment.Center,
@@ -524,7 +548,8 @@ private fun RowScope.QcPreset(label: String, on: Boolean, modifier: Modifier = M
 
 @Composable
 private fun QcRoundBtn(icon: String, onClick: () -> Unit) {
-    Surface(onClick = onClick, shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(34.dp)) {
+    // Held, it repeats with acceleration (#488).
+    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(34.dp).clip(CircleShape).repeatingPress(icon, onClick)) {
         Box(contentAlignment = Alignment.Center) { PhIcon(icon, sizeDp = 15) }
     }
 }

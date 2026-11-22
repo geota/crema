@@ -63,6 +63,10 @@ fun CremaHeaderBlock(
      *  takes the slack); its profile block lets the caret hug the name. */
     caretAtEnd: Boolean = false,
     onClick: (() -> Unit)? = null,
+    /** After the title (the grinder block's ★ for the bag's starred grinder). */
+    titleTrailing: (@Composable () -> Unit)? = null,
+    /** Under the lines (the grinder block's grind with its unsaved-grind marker, #488). */
+    extra: (@Composable () -> Unit)? = null,
 ) {
     Column(
         // IntrinsicSize.Max caps the fillMaxWidth rows below at the widest
@@ -101,6 +105,7 @@ fun CremaHeaderBlock(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            titleTrailing?.invoke()
             if (showCaret) PhIcon("caret-down", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         lines.forEach { line ->
@@ -128,6 +133,7 @@ fun CremaHeaderBlock(
                 )
             }
         }
+        extra?.invoke()
     }
 }
 

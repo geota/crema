@@ -491,14 +491,9 @@ private fun PeripheralsSection(
         }
     }
     SettingsGroup("Grinder") {
-        CremaSettingsRow("Grinder model", "Logged with shots & Visualizer uploads. Pairing isn't supported yet.", last = true, gate = ui?.gate(Setting.GRINDER_MODEL) ?: RowGate.Open) {
-            CremaTextField(
-                value = grinderModel,
-                onValueChange = vm::setGrinderModel,
-                placeholder = "e.g. Niche Zero",
-                singleLine = true,
-                modifier = Modifier.width(160.dp),
-            )
+        // Grinders are Devices → Grinder's now (#488).
+        CremaSettingsRow("Grinders", "Your grinders and their grind scales are on Devices.", last = true) {
+            CremaButton(onClick = { vm.openDevicesTab("grinder"); onOpenScale() }, variant = CremaButtonVariant.Outlined, label = "Devices")
         }
     }
 }

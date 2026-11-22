@@ -22,6 +22,7 @@ import coffee.crema.core.bagGrindsToFixJson
 import coffee.crema.core.grindersForNamesJson
 import coffee.crema.core.matchGrindersJson
 import coffee.crema.core.mergeGrinderEditJson
+import coffee.crema.core.mergeBeanEditJson
 import coffee.crema.core.migrateGrinderLibraryJson
 import coffee.crema.core.resolveBagSelectionJson
 import coffee.crema.core.resolveGrinderSwitchJson
@@ -259,3 +260,23 @@ fun autoSaveShotGrind(
     val out = core(grinderJson.encodeToString(AutoSaveInput.serializer(), input), nowMs).trim()
     return if (out == "null") null else grinderJson.decodeFromString(GrindSave.serializer(), out)
 }
+
+/**
+ * The bag editor's grind rows ([edited] against [opened], the bag the editor
+ * opened on) applied onto [current], row by row by grinder id (the core's
+ * `merge_bean_edit`): a row auto-saved meanwhile survives, a removed row
+ * goes, the star moves to the editor's. Only `grinds` is taken from it.
+ */
+fun mergeBagGrinds(
+    opened: Bean,
+    edited: Bean,
+    current: Bean,
+    nowMs: Long,
+    core: (String, String, String, Long) -> String = ::mergeBeanEditJson,
+): List<BagGrind>? {
+    val enc = { b: Bean -> grinderJson.encodeToString(Bean.serializer(), b) }
+    return grinderJson.decodeFromString(Bean.serializer(), core(enc(opened), enc(edited), enc(current), nowMs)).grinds
+}
+
+/** [grindNumber] as a Double for a stepper, parsed from the text (4.2 stays 4.2). */
+fun grindDouble(text: String?): Double? = text?.trim()?.replace(',', '.')?.toDoubleOrNull()?.takeIf { it.isFinite() }

@@ -91,9 +91,11 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var archived by remember(bean.id) { mutableStateOf(bean.archivedAt != null) }
     var bagSize by remember(bean.id) { mutableStateOf((bean.bagSize ?: 0f).toDouble()) }
     var remaining by remember(bean.id) { mutableStateOf((bean.remaining ?: 0f).toDouble()) }
-    var grinder by remember(bean.id) { mutableStateOf(bean.grinder ?: "") }
+    // "Grind per grinder" (#488): the bag's rows as the editor's draft.
+    val grinds = remember(bean.id) { mutableStateListOf<coffee.crema.core.BagGrind>().apply { addAll(bean.grinds.orEmpty()) } }
+    var grindsToFix by remember(bean.id) { mutableStateOf(emptySet<String>()) }
+    val lastGrinds = remember(bean.id, ui.history.version) { vm.lastGrindsForBag(bean.id) }
     var linkedProfileId by remember(bean.id) { mutableStateOf(bean.linkedProfileId) }
-    var grind by remember(bean.id) { mutableStateOf(bean.grinderSetting ?: "") }
     var country by remember(bean.id) { mutableStateOf(bean.origin?.country ?: "") }
     var region by remember(bean.id) { mutableStateOf(bean.origin?.region ?: "") }
     var farm by remember(bean.id) { mutableStateOf(bean.origin?.farm ?: "") }
@@ -174,7 +176,11 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
 
     val datesValid = roasted.isBlank() || opened.isBlank() || opened >= roasted
 
-    val save: () -> Unit = {
+    val save: () -> Unit = save@{
+        // A row with no grind can't be saved: "Enter a grind or remove this row".
+        val draftGrinds = if (bean.grinds == null && grinds.isEmpty()) null else grinds.toList()
+        grindsToFix = coffee.crema.beans.bagGrindsToFix(bean.copy(grinds = draftGrinds)).toSet()
+        if (grindsToFix.isNotEmpty()) return@save
         commitPendingTag(tags, tagPending)
         vm.updateBean(bean.id, roaster, pickedRoaster?.takeIf { it.stillNamedBy(roaster) }, asOpened) { b ->
             applyBeanEdits(b, BeanDraft(
@@ -183,7 +189,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 decaf = decaf, pinned = pinned, bagSize = bagSize, remaining = remaining,
                 country = country, region = region, farm = farm, farmer = farmer, variety = variety,
                 elevation = elevation, processing = processing, harvestTime = harvestTime,
-                grinder = grinder, grind = grind,
+                grinds = draftGrinds,
                 linkedProfileId = linkedProfileId, rating = rating, qualityScore = qualityScore,
                 tastingNotes = tastingNotes, placeOfPurchase = placeOfPurchase, cost = cost,
                 url = url, notes = notes, tags = tags.toList(),
@@ -355,8 +361,21 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     // at 0 (tablet + web use a fixed cap for the same reason, issue #14).
                     CremaStepper(value = remaining, unit = "g", step = 5.0, min = 0.0, max = 2000.0, fmt = { fmt("%.0f", it) }, onChange = { remaining = it }, style = CremaStepperStyle.BareCompact)
                 }
-                CremaTextField(value = grinder, onValueChange = { grinder = it }, label = "Grinder", placeholder = "e.g. Niche Zero")
-                CremaTextField(value = grind, onValueChange = { grind = it }, label = "Grind setting", placeholder = "e.g. 4.2, 6 + a tooth")
+                Text(
+                    "Bag size auto-debits per shot. Grind is saved per grinder; ★ is the grinder Brew switches to for this bag.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                // The old Grinder + Grind setting fields stay stored, no longer edited (#488).
+                coffee.crema.ui.beans.BagGrindsEditor(
+                    rows = grinds,
+                    opened = asOpened.grinds.orEmpty(),
+                    grinders = ui.grinders,
+                    lastGrinds = lastGrinds,
+                    onPick = vm::resolveGrinderPick,
+                    toFix = grindsToFix,
+                    compact = true,
+                )
                 // Linked profile — bean → profile auto-load (feature parity with web/tablet).
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Linked profile", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

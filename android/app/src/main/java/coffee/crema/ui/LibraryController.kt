@@ -2651,7 +2651,14 @@ class LibraryController(
                 val edited = when {
                     current == null -> transform(existing)
                     opened == null -> transform(current)
-                    else -> applyBeanDraft(current, transform(opened), opened, json)
+                    else -> {
+                        val draft = transform(opened)
+                        val merged = applyBeanDraft(current, draft, opened, json)
+                        // The grind rows merge row by row (#488, the core's rule), so
+                        // a grind auto-saved while the editor was open survives.
+                        if (draft.grinds == opened.grinds) merged
+                        else merged.copy(grinds = runCatching { coffee.crema.beans.mergeBagGrinds(opened, draft, current, now) }.getOrElse { draft.grinds })
+                    }
                 }
                 val updated = edited.copy(roasterId = roasterId, updatedAt = now)
                 rows.copy(
@@ -2846,8 +2853,7 @@ class LibraryController(
     /**
      * A grinder was picked (the commit of `SetActiveGrinder`, here or relayed
      * from a remote): Brew's grind takes the pick order (the bag's saved grind
-     * for it, else the newest shot on the bag with it, else as it is), and a
-     * dial left from the old grinder is dropped (review F9).
+     * for it, else the newest shot on the bag with it, else as it is; review F9).
      */
     fun onGrinderSelected(id: String?) {
         val s = uiState()
@@ -2859,9 +2865,8 @@ class LibraryController(
                 )
             }.onFailure { e -> appendLog("Grinder switch failed: ${e.message}") }.getOrNull()
         }
-        // A switch with nothing to take drops the old grinder's dial: the seed
-        // (the bag's saved grind for the new grinder) shows instead.
-        setGrindDial(grind?.let(::grindNumber))
+        // Nothing saved and no shot with it: the grind stays as it is (the core's pick order).
+        grind?.let { setGrindDial(grindNumber(it)) }
         persistLibrary()
     }
 

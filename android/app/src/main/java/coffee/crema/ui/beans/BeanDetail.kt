@@ -98,6 +98,8 @@ fun BeanDetailContent(
     /** This bag's brews' doses, g, newest first (0 = not recorded) — the
      *  core's "≈N brews" estimate (issue #10). */
     recentDosesG: List<Float> = emptyList(),
+    /** The grinder records, for the read-only "Grind per grinder" list (#488). */
+    grinders: List<coffee.crema.core.Grinder> = emptyList(),
 ) {
     val days = beanDaysOffRoast(bean)
     val frozen = bean.isFrozen
@@ -149,8 +151,14 @@ fun BeanDetailContent(
                 "Remaining",
                 remaining.takeIf { it > 0f || bagSize > 0f }?.let { "${it.toInt()} g" },
             )
-            DetailRow("Grinder", bean.grinder)
-            DetailRow("Setting", bean.grinderSetting)
+            // The saved grinds per grinder (#488), read-only; the editor changes them.
+            if (!bean.grinds.isNullOrEmpty()) {
+                Column(Modifier.padding(top = 6.dp)) { BagGrindsList(bean, grinders) }
+            } else {
+                // A bag not migrated yet still shows its old fields.
+                DetailRow("Grinder", bean.grinder)
+                DetailRow("Setting", bean.grinderSetting)
+            }
         }
 
         DetailGroup("Origin") {

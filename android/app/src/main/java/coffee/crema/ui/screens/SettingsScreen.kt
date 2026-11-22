@@ -339,17 +339,10 @@ fun SettingsScreen(
                                 else CremaButton(onClick = { onConnect("scale") }, variant = CremaButtonVariant.Outlined, label = "Pair")
                             }
                             RememberedDeviceRow("scale", ui.rememberedScaleAddress != null, vm::forgetScale)
-                            CremaSettingsRow("Grinder", "No grinder support yet.") { CremaStatusDot(false) }
-                            // Equipment-level grinder model (web `grinderModel`): free
-                            // text, persisted, shown on Brew + sent to Visualizer.
-                            CremaSettingsRow("Grinder model", "Stamped on shots and Visualizer uploads.", last = true, gate = ui.gate(Setting.GRINDER_MODEL)) {
-                                CremaTextField(
-                                    value = ui.grinderModel,
-                                    onValueChange = vm::setGrinderModel,
-                                    placeholder = "e.g. Niche Zero",
-                                    singleLine = true,
-                                    modifier = Modifier.width(240.dp),
-                                )
+                            // Grinders are Devices → Grinder's now (#488): their scales,
+                            // the active one, and what's stamped on shots.
+                            CremaSettingsRow("Grinders", "Your grinders and their grind scales are on Devices.", last = true) {
+                                CremaButton(onClick = { vm.openDevicesTab("grinder"); onNav("scale") }, variant = CremaButtonVariant.Outlined, label = "Devices → Grinder")
                             }
                         }
                         // Cup warmer — Bengle hardware only (model >= 128, the web's

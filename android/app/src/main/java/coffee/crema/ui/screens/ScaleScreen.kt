@@ -21,6 +21,7 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.liveGrinders
 import coffee.crema.ui.activeProfile
 import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatWeight
@@ -120,6 +121,22 @@ fun ScaleScreen(
             Modifier.fillMaxSize().padding(start = sp.edge, top = sp.s4, end = sp.edge, bottom = sp.s5),
             verticalArrangement = Arrangement.spacedBy(sp.s5),
         ) {
+            // Devices (#488): Scale | Grinder, pills like Beans' Bags | Roasters.
+            Column(verticalArrangement = Arrangement.spacedBy(sp.s3)) {
+                Eyebrow("Devices")
+                coffee.crema.ui.components.CremaTabSwitch(
+                    options = listOf(
+                        coffee.crema.ui.components.TabOption("scale", "Scale"),
+                        coffee.crema.ui.components.TabOption("grinder", "Grinder", ui.liveGrinders.size),
+                    ),
+                    value = ui.devicesTab,
+                    onChange = vm::openDevicesTab,
+                )
+            }
+            if (ui.devicesTab == "grinder") {
+                DevicesGrinderContent(vm, ui, wide = true, modifier = Modifier.weight(1f))
+                return@Column
+            }
             // Weigh | Brew segment (issue #10): the scale is the instrument
             // for both — Weigh is the classic standalone weighing surface,
             // Brew the guided session. The mode is VM-held (it survives the

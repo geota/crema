@@ -348,6 +348,10 @@ class SaveBoundariesVmTest {
         VmHarness.awaitStartupLoaded(vm)
         vm.setGrinderModel("Settings grinder")
         activeBuiltin(vm)
+        // Auto-save on (#488): the kept shot's grind goes to its bag, for its grinder.
+        vm.setGrindAutoSave(true)
+        vm.setQcGrind(16f)
+        VmHarness.idle()
         val bridge = VmHarness.bridge(vm)
         apply(vm, bridge.onNotification(NotificationSource.DE1_STATE, byteArrayOf(4, 5), 1_000uL))
         for (i in 1..48) {
@@ -365,6 +369,9 @@ class SaveBoundariesVmTest {
         assertEquals("Niche Zero", shot.grinderModel, "its name, not the settings grinder")
         VmHarness.idleUntil("the shot's row in history.db") { VmHarness.truthField(vm, shot.id, "grinderId") != null }
         assertEquals(niche.id, VmHarness.truthField(vm, shot.id, "grinderId"))
+        // Auto-save: this device recorded the shot, so its grind is the bag's for that grinder.
+        assertEquals("16", vm.bean("a").savedGrind(niche.id)?.grind)
+        assertNull(vm.bean("a").savedGrind(c40.id), "not the grinder picked mid-shot")
     }
 
     /** F4: Android's own shot shape keeps the core's `profileId` through the

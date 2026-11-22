@@ -29,7 +29,7 @@ class BeanEditsTest {
         roasted = "", opened = "", frozen = false, archived = false,
         decaf = false, pinned = false, bagSize = 0.0, remaining = 0.0,
         country = "", region = "", farm = "", farmer = "", variety = "",
-        elevation = "", processing = "", harvestTime = "", grinder = "", grind = "",
+        elevation = "", processing = "", harvestTime = "", grinds = null,
         linkedProfileId = null, rating = 0, qualityScore = "", tastingNotes = "",
         placeOfPurchase = "", cost = "", url = "", notes = "", tags = emptyList(),
     )
