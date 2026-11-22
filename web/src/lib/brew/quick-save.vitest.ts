@@ -7,6 +7,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { blankBean, getBeanStore, type Bean } from '#lib/bean/index.js';
+import { grindText } from '#lib/bean/grinder.js';
 import {
 	effectiveCremaProfile,
 	getProfileStore,
@@ -50,11 +51,12 @@ function custom(): CremaProfile {
 	return profiles.get(p.id)!;
 }
 
-/** The plan and the run's options for a dialled dose on `profile`. */
+/** The plan and the run's options for a dialled dose on `profile`, with Brew's grind as the stepper writes `dial`. */
 function dialled(profile: CremaProfile | null, dial: number, dose?: number) {
 	const overrides = profile && dose !== undefined ? normalizeBrewOverrides(profile, { dose }) : {};
+	const brewGrind = grindText(dial, beans.activeGrinder?.scale ?? null);
 	return {
-		plan: quickSavePlan({ bean: beans.activeBean, grinder: beans.activeGrinder, brewGrind: dial, profile, overrides }),
+		plan: quickSavePlan({ bean: beans.activeBean, grinder: beans.activeGrinder, brewGrind, profile, overrides }),
 		opts: { profile, overrides }
 	};
 }
@@ -113,8 +115,30 @@ describe('Quick Controls Save', () => {
 		beans.setActiveBean('bean:a');
 		const plan = quickSavePlan({ bean: beans.activeBean, grinder: null, brewGrind: null, profile: null, overrides: {} });
 		expect(saveEnabled(plan)).toBe(false);
-		const moved = quickSavePlan({ bean: beans.activeBean, grinder: null, brewGrind: 4.4, profile: null, overrides: {} });
+		const moved = quickSavePlan({ bean: beans.activeBean, grinder: null, brewGrind: '4.4', profile: null, overrides: {} });
 		expect(moved.grind).toBe('4.4');
+	});
+
+	it('a step finer than 0.1 saves the dial as it shows: 2.25 on a 0.05 step (review M2)', () => {
+		const fine = beans.addGrinder('Fine')!;
+		const g = beans.saveGrinderEdit(fine, { ...fine, scale: { min: 0, max: 10, step: 0.05, unit: '' } })!;
+		beans.setActiveGrinder(g.id);
+		bag('2.2');
+		beans.setActiveBean('bean:a');
+		expect(grindText(2.25, g.scale)).toBe('2.25');
+		const { plan, opts } = dialled(null, 2.25);
+		expect(plan.grind, 'not rounded to one decimal').toBe('2.25');
+		runQuickSave(plan, deps, opts);
+		expect(saved()).toBe('2.25');
+	});
+
+	it('a grind that isn\'t a plain number saves as typed, and matches as trimmed text (review N2)', () => {
+		bag('2.1.3');
+		beans.setActiveBean('bean:a');
+		const same = quickSavePlan({ bean: beans.activeBean, grinder: null, brewGrind: ' 2.1.3 ', profile: null, overrides: {} });
+		expect(saveEnabled(same), 'the same text: nothing to save').toBe(false);
+		const moved = quickSavePlan({ bean: beans.activeBean, grinder: null, brewGrind: '2.1.4', profile: null, overrides: {} });
+		expect(moved.grind).toBe('2.1.4');
 	});
 
 	it('a grind saved as "12,5" is the dial at 12.5', () => {

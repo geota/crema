@@ -23,7 +23,6 @@ import { getHistoryReads, lastGrinds } from '#lib/history/reads.svelte.js';
 import {
 	DEFAULT_GRIND_SCALE,
 	formatGrind,
-	grindText,
 	resolveBagSelection,
 	resolveGrinderSwitch,
 	type LastGrind
@@ -43,7 +42,7 @@ async function bagLastGrinds(beanId: string): Promise<LastGrind[]> {
 function applyChange(c: SelectionChange): void {
 	if (c.profileId) getProfileStore().setActive(c.profileId.value ?? null);
 	if (c.grinderId) getBeanStore().setActiveGrinder(c.grinderId.value ?? null);
-	if (c.grind) getBrewGrind().setText(c.grind.value ?? null);
+	if (c.grind) getBrewGrind().set(c.grind.value ?? null);
 }
 
 /**
@@ -72,7 +71,7 @@ export async function activateBean(id: string, opts: { shotInProgress?: boolean 
 		activeProfileId: profiles.activeId ?? undefined,
 		linkedProfileMissing: linkedMissing || opts.shotInProgress === true,
 		activeGrinderId: library.activeGrinderId ?? undefined,
-		grind: brewGrind === null ? undefined : grindText(brewGrind),
+		grind: brewGrind ?? undefined,
 		grinders: library.allGrinders,
 		lastGrinds: history
 	});
@@ -125,5 +124,5 @@ export async function selectGrinder(id: string | null): Promise<void> {
 		grinders: library.allGrinders,
 		lastGrinds: history
 	});
-	if (grind !== null) getBrewGrind().setText(grind);
+	if (grind !== null) getBrewGrind().set(grind);
 }

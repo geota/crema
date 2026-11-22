@@ -47,7 +47,7 @@ export interface UseStepperOptions {
 	 * Decimals used to trim float error after `value + dir*step` in the
 	 * non-dimension `inc` path. QuickStepper used 2, StStepper 4. Default 4.
 	 */
-	incPrecision?: number;
+	incPrecision?: number | (() => number);
 	/** Whether click-to-type is allowed (reactive). Default: always. */
 	canEdit?: () => boolean;
 	/**
@@ -56,6 +56,13 @@ export interface UseStepperOptions {
 	 * values are never clamped or rewritten, only warned about.
 	 */
 	clampTyped?: () => boolean;
+	/**
+	 * Whether the value is blank (reactive): not set, shown empty (Brew's
+	 * grind, DESIGN "No grind set is its own state"). The first ± from blank
+	 * commits `value()` itself (the caller's start-from-blank), not a step
+	 * from it, and click-to-type starts with an empty draft.
+	 */
+	blank?: () => boolean;
 }
 
 export interface Stepper {
@@ -112,10 +119,17 @@ export function useStepper(opts: UseStepperOptions): Stepper {
 		return n;
 	}
 
-	const precision = opts.incPrecision ?? 4;
+	const precision = (): number => {
+		const p = opts.incPrecision;
+		return typeof p === 'function' ? p() : (p ?? 4);
+	};
 
 	function inc(dir: number): void {
 		const value = opts.value();
+		if (opts.blank?.()) {
+			opts.commit(value);
+			return;
+		}
 		if (opts.dimension?.()) {
 			// Work in display units so every click moves the visible digit — a
 			// canonical step finer than the display grid would otherwise round to
@@ -129,7 +143,7 @@ export function useStepper(opts: UseStepperOptions): Stepper {
 			if (next !== value) opts.commit(next);
 			return;
 		}
-		const next = clamp(Number((value + dir * opts.step()).toFixed(precision)));
+		const next = clamp(Number((value + dir * opts.step()).toFixed(precision())));
 		if (next !== value) opts.commit(next);
 	}
 
@@ -139,7 +153,7 @@ export function useStepper(opts: UseStepperOptions): Stepper {
 
 	function beginEdit(): void {
 		if (opts.canEdit && !opts.canEdit()) return;
-		draft = String(Number(toDisplay(opts.value()).toFixed(effectiveDecimals)));
+		draft = opts.blank?.() ? '' : String(Number(toDisplay(opts.value()).toFixed(effectiveDecimals)));
 		editing = true;
 		queueMicrotask(() => {
 			inputEl?.focus();
@@ -149,11 +163,13 @@ export function useStepper(opts: UseStepperOptions): Stepper {
 	function commit(): void {
 		if (!editing) return;
 		editing = false;
+		// An emptied field is no edit (not 0).
+		if (String(draft).trim() === '') return;
 		const n = Number(draft);
 		if (!Number.isFinite(n)) return;
 		const typed = fromDisplay(n);
 		const next = opts.clampTyped?.() === false ? typed : clamp(typed);
-		if (next !== opts.value()) opts.commit(next);
+		if (opts.blank?.() || next !== opts.value()) opts.commit(next);
 	}
 	function onKey(e: KeyboardEvent): void {
 		if (e.key === 'Enter') {

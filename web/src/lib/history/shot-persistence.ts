@@ -369,7 +369,9 @@ function captureContext(activeShot: ActiveShotData | null): ShotCaptureContext {
 		// The active grinder at shot start (#488): its name snapshot and id.
 		settingsGrinder: activeShot?.grinderModel?.trim() || undefined,
 		grinderId: activeShot?.grinderId ?? undefined,
-		grindDial: activeShot?.brewParams?.grind ?? undefined,
+		// Brew's grind as text (#488 round 2): recorded as Brew showed it, a
+		// fine step (2.25) or a text grind (2.1.3) included.
+		grind: activeShot?.brewParams?.grind ?? undefined,
 		barista: settings.baristaName?.trim() || undefined,
 		tags: liveBean?.tags && liveBean.tags.length > 0 ? [...liveBean.tags] : undefined,
 		// The DE1 this ran on — frozen here so a later upload (Decent shot

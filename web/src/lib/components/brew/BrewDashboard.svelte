@@ -99,7 +99,7 @@
 		type Bean,
 		type Roaster, activateBean } from '#lib/bean/index.js';
 	import { scoreMap, searchBeans } from '#lib/bean/search.js';
-	import { DEFAULT_GRIND_SCALE, grindPlaceholder, type GrinderChoice, type LastGrind } from '#lib/bean/grinder.js';
+	import type { GrinderChoice, LastGrind } from '#lib/bean/grinder.js';
 	import { grinderRowLine, grindView } from '#lib/brew/grind-view.js';
 	import { selectGrinder } from '#lib/bean/activate.js';
 	import { devicesHref } from '#lib/components/grinders/devices-link.js';
@@ -533,10 +533,6 @@
 			// core's desired profile (the effect below), and the core takes the
 			// stop target from there (`DESIGN.md` §3.10), Reset included.
 			switch (key) {
-				case 'grind':
-					// Brew's grind, per device and persisted (#488, review F9).
-					brewGrind.set(value);
-					break;
 				case // Steam temp/time + the hot-water temperature share the one
 				// cuuid_0B packet with the hot-water dose — persist, then the
 				// app's one push sends them from the settings store (issue 14).
@@ -685,19 +681,12 @@
 	 * the primary view; the header's QuickPill opens the sheet, and its Close
 	 * button or a scrim tap dismisses it again.
 	 */
-	// The grind dial shows Brew's grind (#488, review F9): per device,
-	// persisted, and reset only by a bag or grinder pick (`activateBean`,
-	// `selectGrinder`, through the core's pick order). A library write — a
-	// shot's debit, a sync, a favourite — never touches it, so an unsaved
-	// dial is never snapped back (REVIEW-497 M1). With no grind yet the dial
-	// shows a placeholder on the active scale, which is not a grind.
-	const activeGrindScale = $derived(beanLibrary.activeGrinder?.scale ?? DEFAULT_GRIND_SCALE);
-	$effect(() => {
-		const next = brewGrind.value ?? grindPlaceholder(activeGrindScale);
-		if (untrack(() => params.current.grind) !== next) {
-			untrack(() => params.seedGrind(next));
-		}
-	});
+	// The grind stepper shows Brew's grind (#488, review F9; DESIGN "No grind
+	// set is its own state"): per device, persisted, and reset only by a bag
+	// or grinder pick (`activateBean`, `selectGrinder`, through the core's
+	// pick order). A library write — a shot's debit, a sync, a favourite —
+	// never touches it, so an unsaved grind is never snapped back
+	// (REVIEW-497 M1). Not set, it shows blank: no placeholder number.
 
 	let quickSheetOpen = $state(false);
 	/**
@@ -906,9 +895,10 @@
 		}
 		// 3. Lay the shot's recorded dial on top of the fresh seeds.
 		await tick();
-		const grindRaw = effectiveGrindSetting(shot)?.replace(',', '.');
-		const grind = grindRaw ? Number.parseFloat(grindRaw) : NaN;
-		if (Number.isFinite(grind)) params.set('grind', grind);
+		// The grind as the shot recorded it, as text (#488 round 2): a fine
+		// step or a grind that isn't a plain number comes back as it was.
+		const grind = effectiveGrindSetting(shot)?.trim();
+		if (grind) brewGrind.set(grind);
 		if (shot.metadata.dose != null) params.set('dose', shot.metadata.dose);
 		if (shot.yieldTarget != null) params.set('yield', shot.yieldTarget);
 		if (shot.brewTempTarget != null) params.set('brewTemp', shot.brewTempTarget);
@@ -1496,7 +1486,7 @@
 	/** The strip's bottom row (#488, board PhoneBrew2): "Grind 480 μm · Motto 80". */
 	const stripSpecLine = $derived.by(() => {
 		const g = beanLibrary.activeGrinder;
-		return [brewGrind.value !== null ? grindInfo.label : null, g?.name ?? null].filter(Boolean).join(' · ') || null;
+		return [grindInfo.recorded !== null ? grindInfo.label : null, g?.name ?? null].filter(Boolean).join(' · ') || null;
 	});
 	/** The swap dropdown's rows: the loaded item leads, then favourites. */
 	const stripProfiles = $derived.by<StripProfileRow[]>(() =>
@@ -1804,11 +1794,8 @@
 			// snapshot pattern — capture-time-frozen, not live-read at
 			// export, so a later dial change cannot rewrite history.
 			const live = params.current;
-			// Per-shot grind snapshot (issue #30, Android `qcGrind` parity):
-			// capture the QC grind dial when it carries signal — the active
-			// bean seeded it, or the user dialed it. The bare placeholder
-			// (no bean grind, untouched dial) records nothing, so history
-			// falls back to the frozen bean snapshot as before.
+			// Per-shot grind snapshot (issue #30): Brew's grind, the value
+			// the header shows; not set, the shot records none.
 			// The brew temp and pre-infusion the shot actually runs with
 			// (after the core's clamp), so history records what was sent.
 			const qc = effectiveOverrides();
@@ -1818,8 +1805,9 @@
 				preinfuseTarget: qc.preinf ?? paramSeed.preinf,
 				stopOnWeight: live.stopOnWeight,
 				autoTare: live.autoTare,
-				// Brew's grind (#488); none set records none.
-				grind: brewGrind.value
+				// Brew's grind as the header shows it (#488, the core's
+				// `brew_grind_view`); not set records none.
+				grind: grindInfo.recorded
 			});
 			// The fingerprint compare + lazy re-upload happens inside
 			// `startShot()`; when no upload is needed the call returns

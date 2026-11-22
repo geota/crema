@@ -1,16 +1,17 @@
 /**
- * `#lib/brew/grind-view.js` — what Brew shows about the grind (#488): the
- * value with the active grinder's unit, and the unsaved-grind marker
- * (DESIGN.md "Unsaved grind marker"): shown when a bag is selected and Brew's
- * grind differs from the bag's saved grind for the active grinder; "Bag —"
- * when nothing is saved yet; no bag, no marker.
+ * `#lib/brew/grind-view.js` — what Brew shows about the grind (#488), read
+ * from the core's `brew_grind_view` (round 2, REVIEW-CORE H2) so the header,
+ * the stepper, the shot and Save agree: the value with the active grinder's
+ * unit, or blank when not set; the unsaved-grind marker (DESIGN.md
+ * "Unsaved grind marker"): shown when a bag is selected and Brew's grind
+ * differs from the bag's saved grind for the active grinder; "Bag —" when
+ * nothing is saved yet; no bag or no grind, no marker. The shell keeps only
+ * the tooltip's wording.
  */
 import type { Bean } from '#lib/bean/model.js';
 import {
-	DEFAULT_GRIND_SCALE,
+	brewGrindView,
 	formatGrind,
-	grindNumber,
-	grindUnsaved,
 	savedGrindRow,
 	type Grinder,
 	type GrindScale,
@@ -20,42 +21,48 @@ import {
 export interface GrindView {
 	/** The active grinder's scale, or the default. */
 	readonly scale: GrindScale;
-	/** "Grind 480 μm", or "Grind —" with no grind on Brew. */
+	/** "Grind 480 μm", or "Grind —" when not set. */
 	readonly label: string;
-	/** Brew's grind with its unit ("480 μm"), or "—". */
+	/** Brew's grind with its unit ("480 μm", "2.1.3"), or "—". */
 	readonly value: string;
+	/** Brew's grind as a shot records it, or `null` when not set. */
+	readonly recorded: string | null;
+	/** The stepper's number; `null` when not set or not a plain number (the stepper shows blank, or the text). */
+	readonly dial: number | null;
+	/** Where the stepper's first + or − goes when {@link dial} is `null`. */
+	readonly startFromBlank: number;
 	/** The marker ("Bag 4.2", "Bag —") while the grind is unsaved; else `null`. */
 	readonly marker: string | null;
 	/** What the marker means, for its tooltip and accessible name. */
 	readonly markerTitle: string;
-	/** The bag's saved value for the active grinder, as a number (the ringed chip). */
-	readonly savedNumber: number | null;
-	/** Save would include the grind (the dot on Save). */
-	readonly unsaved: boolean;
+	/** The bag's saved grind for the active grinder, or `null` (the ringed chip). */
+	readonly saved: string | null;
+	/** Save's grind part: the value Save writes to the bag, or `null` (no dot on Save). */
+	readonly saveGrind: string | null;
 }
 
-export function grindView(input: { bag: Bean | null; grinder: Grinder | null; brewGrind: number | null }): GrindView {
-	const { bag, grinder, brewGrind } = input;
-	const scale = grinder?.scale ?? DEFAULT_GRIND_SCALE;
-	const value = formatGrind(brewGrind, scale);
-	const row = savedGrindRow(bag, grinder?.id ?? null);
-	const saved = row && row.grind.trim() !== '' ? row.grind.trim() : null;
-	const unsaved = grindUnsaved(bag, grinder?.id ?? null, brewGrind);
+export function grindView(input: { bag: Bean | null; grinder: Grinder | null; brewGrind: string | null }): GrindView {
+	const { bag, grinder } = input;
+	const v = brewGrindView(input);
+	const saved = v.saved ?? null;
 	const who = grinder ? grinder.name : 'no grinder';
 	const markerTitle =
-		bag && unsaved
+		bag && v.marker
 			? saved
-				? `${bag.name} has ${formatGrind(saved, scale)} saved for ${who}. Brew is at ${value} for the next shot. Save in Quick Controls saves it.`
-				: `${bag.name} has no grind saved for ${who}. Brew is at ${value} for the next shot. Save in Quick Controls saves it.`
+				? `${bag.name} has ${formatGrind(saved, v.scale)} saved for ${who}. Brew is at ${v.display} for the next shot. Save in Quick Controls saves it.`
+				: `${bag.name} has no grind saved for ${who}. Brew is at ${v.display} for the next shot. Save in Quick Controls saves it.`
 			: '';
 	return {
-		scale,
-		label: `Grind ${value}`,
-		value,
-		marker: unsaved ? `Bag ${saved ?? '—'}` : null,
+		scale: v.scale,
+		label: `Grind ${v.display}`,
+		value: v.display,
+		recorded: v.value ?? null,
+		dial: v.dial ?? null,
+		startFromBlank: v.startFromBlank,
+		marker: v.marker?.label ?? null,
 		markerTitle,
-		savedNumber: grindNumber(saved),
-		unsaved
+		saved,
+		saveGrind: v.saveGrind ?? null
 	};
 }
 
@@ -75,29 +82,4 @@ export function grinderRowLine(grinder: Grinder, bag: Bean | null, lastGrinds: r
 		lastGrinds.find((l) => l.grinderId === grinder.id) ??
 		lastGrinds.find((l) => !l.grinderId && l.grinder.trim().toLowerCase() === key);
 	return `${star}Nothing saved${last ? ` · last shot ${formatGrind(last.grind, s)}` : ''}`;
-}
-
-/**
- * The grind preset chips on `scale`: today's chips on the default scale,
- * else five steps around the middle, or around `around` (Brew's grind)
- * when it's inside the scale.
- */
-export function grindChips(scale: GrindScale, around: number | null, count = 5): number[] {
-	const { min, max, step } = scale;
-	if (min === 0 && max === 20 && Math.abs(step - 0.1) < 1e-9) {
-		return count === 4 ? [3.5, 4.0, 4.5, 5.0] : [3.8, 4.0, 4.2, 4.4, 4.6];
-	}
-	const st = step > 0 ? step : 1;
-	// A chip a few steps apart, so the row spans a useful bit of the scale.
-	const gap = st * Math.max(1, Math.round((max - min) / st / 50));
-	const centre = around !== null && around >= min && around <= max ? around : (min + max) / 2;
-	const snapped = min + Math.round((centre - min) / st) * st;
-	const half = Math.floor(count / 2);
-	const out: number[] = [];
-	for (let i = -half; out.length < count; i++) {
-		const v = Number((snapped + i * gap).toFixed(4));
-		if (v >= min && v <= max) out.push(v);
-		if (i > count * 4) break;
-	}
-	return out;
 }
