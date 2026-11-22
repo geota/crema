@@ -74,10 +74,10 @@ import coffee.crema.ui.MainUiState
 import coffee.crema.ui.activeBag
 import coffee.crema.ui.activeGrinder
 import coffee.crema.ui.activeGrindScale
-import coffee.crema.ui.brewGrind
+import coffee.crema.ui.brewGrindView
 import coffee.crema.ui.gate
 import coffee.crema.ui.liveGrinders
-import coffee.crema.ui.unsavedGrind
+import coffee.crema.ui.headerText
 import coffee.crema.ui.unsavedGrindExplanation
 import coffee.crema.ui.remoteBrewCue
 import coffee.crema.ui.activeProfile
@@ -164,7 +164,7 @@ fun PhoneBrewScreen(
                     // "Grind 480 μm · Motto 80" (#488): the grind with its unsaved-grind
                     // marker, then the active grinder (board PhoneGrindUnsavedRest).
                     specLine = beanSpecLine(ui),
-                    specMarker = ui.unsavedGrind()?.let { m -> { coffee.crema.ui.components.UnsavedGrindMarker(m, ui.unsavedGrindExplanation()) } },
+                    specMarker = ui.brewGrindView().marker?.let { m -> { coffee.crema.ui.components.UnsavedGrindMarker(m, ui.unsavedGrindExplanation()) } },
                     specSuffix = ui.activeGrinder()?.name?.let { " · $it" },
                     freshLabel = when {
                         activeBean == null -> null
@@ -363,8 +363,8 @@ internal fun beanLine(ui: MainUiState): String {
  *  the active grinder's scale; the grinder's name follows it ([ProfileStrip]'s
  *  suffix), after the unsaved-grind marker. Null with neither a grind nor a grinder. */
 internal fun beanSpecLine(ui: MainUiState): String? {
-    val grind = ui.brewGrind()?.let { "Grind ${coffee.crema.beans.grindLabel(it, ui.activeGrindScale())}" }
-    return grind ?: if (ui.activeGrinder() != null) "Grind —" else null
+    val view = ui.brewGrindView()
+    return if (view.value != null || ui.activeGrinder() != null) view.headerText() else null
 }
 
 // ── Profile strip (proto .pf-profilestrip) ───────────────────────────────────

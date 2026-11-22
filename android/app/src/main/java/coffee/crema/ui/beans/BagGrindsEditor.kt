@@ -13,6 +13,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -20,8 +21,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coffee.crema.beans.DEFAULT_GRIND_SCALE
-import coffee.crema.beans.grindLabel
-import coffee.crema.beans.grindNumber
+import coffee.crema.beans.formatGrind
+import coffee.crema.beans.sameGrind
 import coffee.crema.beans.isLive
 import coffee.crema.core.BagGrind
 import coffee.crema.core.Bean
@@ -34,7 +35,6 @@ import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.GrinderAddBox
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.newestShotGrind
-import coffee.crema.ui.scaleNumber
 
 /*
  * The bag editor's "Grind per grinder" block (#488, boards WideBagGrind,
@@ -71,9 +71,9 @@ fun BagGrindsEditor(
             val sub = when {
                 !onDevices -> "No longer on Devices · kept until you remove it"
                 row.grinderId in toFix -> "Enter a grind or remove this row"
-                before != null && before.grind != row.grind -> "Changed from ${grindLabel(before.grind, scale)} · saved when you tap Save"
-                row.starred -> listOfNotNull("This bag's grinder", grinder?.let { g -> newestShotGrind(lastGrinds, g)?.let { "last shot ${grindLabel(it.grind, scale)}" } }).joinToString(" · ")
-                else -> grinder?.let { g -> newestShotGrind(lastGrinds, g)?.let { "Last shot ${grindLabel(it.grind, scale)}" } }
+                before != null && !sameGrind(before.grind, row.grind) -> "Changed from ${formatGrind(before.grind, scale)} · saved when you tap Save"
+                row.starred -> listOfNotNull("This bag's grinder", grinder?.let { g -> newestShotGrind(lastGrinds, g)?.let { "last shot ${formatGrind(it.grind, scale)}" } }).joinToString(" · ")
+                else -> grinder?.let { g -> newestShotGrind(lastGrinds, g)?.let { "Last shot ${formatGrind(it.grind, scale)}" } }
             }
             fun update(next: BagGrind) {
                 val i = rows.indexOfFirst { it.grinderId == row.grinderId }
@@ -114,7 +114,7 @@ fun BagGrindsEditor(
                             }
                         }
                         if (!onDevices || compact) {
-                            if (!onDevices) Text(grindLabel(row.grind, scale), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 8.dp))
+                            if (!onDevices) Text(formatGrind(row.grind, scale), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 8.dp))
                         } else {
                             GrindStepper(row, scale, Modifier.width(190.dp)) { update(row.copy(grind = it)) }
                         }
@@ -148,17 +148,20 @@ private fun GrindStepper(row: BagGrind, scale: coffee.crema.core.GrindScale, mod
     val lo = minOf(scale.min, scale.max).toDouble()
     val hi = maxOf(scale.min, scale.max).toDouble()
     val value = coffee.crema.beans.grindDouble(row.grind)
+    // Blank ("—") or text ("2.1.3"): the first + or − goes to the middle of the scale on its step (the core's rule, as on Brew).
+    val blank = if (value == null) coffee.crema.ui.components.StepperBlank(row.grind.trim().ifEmpty { "—" }, remember(scale) { coffee.crema.beans.grindStartFromBlank(scale) }) else null
     CremaStepper(
         modifier = modifier,
         value = value ?: ((lo + hi) / 2),
         unit = scale.unit.takeIf { it.isNotBlank() },
-        onChange = { onChange(coffee.crema.beans.grindText(it.toFloat())) },
+        onChange = { onChange(coffee.crema.beans.grindText(it, scale)) },
         step = scale.step.toDouble().takeIf { it.isFinite() && it > 0 } ?: 0.1,
         min = lo,
         max = hi,
-        fmt = { v -> if (value == null && row.grind.isBlank()) "—" else if (value == null) row.grind else scaleNumber(v.toFloat()) },
+        fmt = { v -> coffee.crema.beans.grindText(v, scale) },
         style = CremaStepperStyle.BareCompact,
         clampTyped = false,
+        blank = blank,
     )
 }
 
@@ -174,7 +177,7 @@ fun BagGrindsList(bean: Bean, grinders: List<Grinder>) {
             Row(Modifier.fillMaxWidth().alpha(if (onDevices) 1f else 0.6f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (row.starred) PhIcon("star-fill", sizeDp = 13, tint = MaterialTheme.colorScheme.primary, contentDescription = "this bag's grinder")
                 Text(g?.name ?: row.grinderName.ifBlank { "No grinder" }, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(grindLabel(row.grind, g?.scale), style = MaterialTheme.typography.bodyMedium.copy(fontFamily = coffee.crema.ui.theme.JetBrainsMono))
+                Text(formatGrind(row.grind, g?.scale), style = MaterialTheme.typography.bodyMedium.copy(fontFamily = coffee.crema.ui.theme.JetBrainsMono))
             }
         }
     }

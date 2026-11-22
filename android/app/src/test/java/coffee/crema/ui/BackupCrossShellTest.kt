@@ -39,8 +39,8 @@ class BackupCrossShellTest {
 
     private fun fixture(name: String) = File(fixtures, name).readText()
 
-    /** The Android seed behind `android-backup.crema.jsonl`. */
-    private fun seed(): BackupSnapshot {
+    /** The Android seed behind `android-backup.crema.jsonl`; [withShot] in place of its shot. */
+    private fun seed(withShot: StoredShot? = null): BackupSnapshot {
         val profile = json.parseToJsonElement(blankCremaProfile(brewDefaultsJson())).jsonObject.let {
             JsonObject(
                 it + mapOf(
@@ -101,14 +101,14 @@ class BackupCrossShellTest {
         )
         return BackupSnapshot(
             customs = listOf(json.encodeToString(JsonObject.serializer(), profile)),
-            full = wholeFrom(listOf(shot)),
+            full = wholeFrom(listOf(withShot ?: shot)),
             state = state,
             pinned = setOf("builtin:londinium"),
             hidden = emptySet(),
             prefs = AppPrefs(tempUnit = "F", maxShotDurationS = 90f),
             visualizerPrefs = DEFAULT_VISUALIZER_SYNC_PREFS,
             userRecipes = listOf(recipe),
-            shots = listOf(shot).rows(),
+            shots = listOf(withShot ?: shot).rows(),
         )
     }
 
@@ -167,6 +167,27 @@ class BackupCrossShellTest {
     fun `today's Android export restores on Android`() {
         val jsonl = backupBundleJsonl(seed(), json, 1_790_000_000_000, "test", "Android test").jsonl
         assertAndroidSeed(parseBackupBytes(jsonl.toByteArray(), json, 0L))
+    }
+
+    /** REVIEW-FINAL M1: a shot's grind is text on Android, as on web. */
+    @Test
+    fun `a web backup's text grinds survive Android, and come back to web as they left`() {
+        for (grind in listOf("2.1.3", "18 clicks", "15", "2.25")) {
+            val web = fixture("web-backup.crema.jsonl").replace(
+                "\"grinderSetting\":\"2.5\",\"nextPlan\"",
+                "\"grinderSetting\":\"$grind\",\"nextPlan\"",
+            )
+            assertTrue(web.contains("\"grinderSetting\":\"$grind\""), "the fixture's shot carries $grind")
+            val restored = parseBackupBytes(web.toByteArray(), json, 0L).shots.single()
+            assertEquals(grind, restored.grindSetting, "restored on Android as typed")
+            // Backed up again on Android, then read by the core (what web restores through).
+            val snapshot = seed(withShot = restored)
+            val jsonl = backupBundleJsonl(snapshot, json, 1_790_000_000_000, "test", "Android test").jsonl
+            val shotLine = jsonl.lines().single { it.contains("\"id\":\"shot:web-1\"") }
+            val metadata = json.parseToJsonElement(shotLine).jsonObject["metadata"]!!.jsonObject
+            assertEquals(JsonPrimitive(grind), metadata["grinderSetting"], "the Android backup writes $grind as text (no 15.0)")
+            assertEquals(grind, parseBackupBytes(jsonl.toByteArray(), json, 0L).shots.single().grindSetting)
+        }
     }
 
     private fun assertAndroidSeed(parsed: ParsedBackup) {

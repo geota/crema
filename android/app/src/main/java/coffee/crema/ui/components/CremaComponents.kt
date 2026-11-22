@@ -2005,13 +2005,20 @@ fun CremaStepper(
     // A typed value is kept as typed, outside [min]..[max] too (a grind, #488);
     // the steps still stay in range.
     clampTyped: Boolean = true,
+    // No number to show (a grind not set, or one that isn't a plain number,
+    // #488 round 2): its text shows instead of [value] and no unit, and the
+    // first + or − goes to its start.
+    blank: StepperBlank? = null,
 ) {
     val chipLabel = gate.fmt(chipFmt ?: fmt)
     val fmt = gate.fmt(fmt)
     fun snap(x: Double) = (kotlin.math.round(x * 100) / 100).coerceIn(min, max)
     fun typed(x: Double) = if (clampTyped) snap(x) else kotlin.math.round(x * 100) / 100
-    val dec = { onChange(snap(value - step)) }
-    val inc = { onChange(snap(value + step)) }
+    val dec = { onChange(blank?.start ?: snap(value - step)) }
+    val inc = { onChange(blank?.start ?: snap(value + step)) }
+    val shown = blank?.text ?: fmt(value)
+    val shownUnit = unit.takeIf { blank == null }
+    val editValue = blank?.start ?: value
 
     // Telemetry keeps its exact original chrome (big tonal buttons, readoutSm).
     if (style.tonalButtons) {
@@ -2021,7 +2028,7 @@ fun CremaStepper(
                 FilledTonalIconButton(onClick = dec) { PhIcon("minus") }
                 Row(verticalAlignment = Alignment.Bottom) {
                     TapToEditValue(
-                        value = value,
+                        value = editValue,
                         min = min,
                         max = max,
                         onCommit = { onChange(typed(it)) },
@@ -2029,9 +2036,9 @@ fun CremaStepper(
                         editStyle = CremaTheme.readout.readoutSm,
                         enabled = enabled,
                     ) {
-                        Text(fmt(value), style = CremaTheme.readout.readoutSm, color = MaterialTheme.colorScheme.onSurface)
+                        Text(shown, style = CremaTheme.readout.readoutSm, color = MaterialTheme.colorScheme.onSurface)
                     }
-                    if (unit != null) Text(" $unit", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (shownUnit != null) Text(" $shownUnit", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 FilledTonalIconButton(onClick = inc) { PhIcon("plus") }
             }
@@ -2079,7 +2086,7 @@ fun CremaStepper(
                         )
                     }
                     TapToEditValue(
-                        value = value,
+                        value = editValue,
                         min = min,
                         max = max,
                         onCommit = { onChange(typed(it)) },
@@ -2087,7 +2094,7 @@ fun CremaStepper(
                         editStyle = TextStyle(fontFamily = JetBrainsMono, fontSize = style.valueSize),
                         enabled = enabled,
                     ) {
-                        CremaValueUnit(fmt(value), unit, valueSize = style.valueSize)
+                        CremaValueUnit(shown, shownUnit, valueSize = style.valueSize)
                     }
                 }
                 if (sub != null) Box(Modifier.align(Alignment.BottomCenter).offset(y = 7.dp)) { sub() }
@@ -2097,7 +2104,7 @@ fun CremaStepper(
             if (chips != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     chips.forEach { c ->
-                        StepperChip(chipLabel(c), chipActive?.invoke(c) ?: (kotlin.math.abs(value - c) < 0.05), ringed = chipRing?.invoke(c) == true) { onChange(snap(c)) }
+                        StepperChip(chipLabel(c), chipActive?.invoke(c) ?: (blank == null && kotlin.math.abs(value - c) < 0.05), ringed = chipRing?.invoke(c) == true) { onChange(snap(c)) }
                     }
                     if (extraChip != null) {
                         StepperChip(
@@ -2112,6 +2119,11 @@ fun CremaStepper(
         }
     }
 }
+
+/** A stepper with no number to show ([CremaStepper]'s `blank`): [text] in
+ *  the value's place ("—", or a grind like "2.1.3"), and where the first + or
+ *  − goes ([start], the middle of a grind scale on its step). */
+data class StepperBlank(val text: String, val start: Double)
 
 // Small circular −/+ button (surfaceContainerHighest) used by every compact stepper.
 @Composable

@@ -252,7 +252,7 @@ data class ParsedBackup(
     val grinders: List<coffee.crema.core.Grinder> = emptyList(),
     val prefs: AppPrefs?,
     val common: CommonSettings?,
-    val qcGrind: Float?,
+    val qcGrind: String?,
     val profileMeta: JsonObject?,
     val maintenance: MaintenanceState?,
     val visualizerPrefs: VisualizerSyncPrefs?,
@@ -289,7 +289,7 @@ private fun parseImportPlan(plan: JsonObject, json: Json, nowMs: Long): ParsedBa
 
     var prefs: AppPrefs? = null
     var common: CommonSettings? = null
-    var qcGrind: Float? = null
+    var qcGrind: String? = null
     obj("settings")?.let { settings ->
         val shell = (settings["_shell"] as? JsonPrimitive)?.content
         val commonObj = settings["common"] as? JsonObject
@@ -298,7 +298,7 @@ private fun parseImportPlan(plan: JsonObject, json: Json, nowMs: Long): ParsedBa
             // from any shell); `qcGrind` is Android-only.
             // The core's sanitize: a wrong-typed field falls back on its own.
             common = coffee.crema.settings.sanitizeCommonSettings(commonObj)
-            if (shell == null || shell == "android") qcGrind = (settings["qcGrind"] as? JsonPrimitive)?.floatOrNull
+            if (shell == null || shell == "android") qcGrind = coffee.crema.beans.grindTextOf(settings["qcGrind"] as? JsonPrimitive)
         } else if (shell == null || shell == "android") {
             // Pre-unification Android backup — a flat AppPrefs settings line.
             prefs = runCatching { json.decodeFromJsonElement(AppPrefs.serializer(), settings) }.getOrNull()

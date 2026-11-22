@@ -3,6 +3,7 @@ package coffee.crema.visualizer
 import coffee.crema.core.ShotBean
 import coffee.crema.core.ShotPatchInputs
 import coffee.crema.history.StoredShot
+import coffee.crema.history.effectiveGrindSetting
 import coffee.crema.ui.TelemetrySample
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.int
@@ -46,7 +47,7 @@ class BackupShotRoundTripTest {
             durationMs = 28_500,
             yieldG = 36.2f,
             doseG = 18.0f,
-            grindSetting = 4.5f,
+            grindSetting = "4.5",
             profileName = "Blooming espresso",
             bean = ShotBean(
                 beanId = "bean:b3", name = "Monarch", roasterName = "Onyx",
@@ -72,7 +73,7 @@ class BackupShotRoundTripTest {
         assertEquals(original.durationMs, restored.durationMs)
         assertEquals(original.yieldG!!, restored.yieldG!!, 1e-3f)
         assertEquals(original.doseG!!, restored.doseG!!, 1e-3f)
-        assertEquals(original.grindSetting!!, restored.grindSetting!!, 1e-3f)
+        assertEquals(original.grindSetting, restored.grindSetting)
         assertEquals(original.profileName, restored.profileName)
         assertEquals(original.rating, restored.rating)
         assertEquals(original.notes, restored.notes)
@@ -185,5 +186,36 @@ class BackupShotRoundTripTest {
         assertNull(bare["machine"])
         assertNull(bare["decentId"])
         assertNull(storedShotFromBackupJson(bare, json)!!.machineSerial)
+    }
+
+    /** REVIEW-FINAL M1: an older row's Float grind reads as its digits, text survives, and the backup writes text. */
+    @Test
+    fun `a shot's grind is text in the store, the backup and the restore`() {
+        // An older history row (row_json / history.json): the grind was a Float.
+        fun row(grind: String) = """{"id":"s","completedAtMs":1,"durationMs":1,"grindSetting":$grind}"""
+        assertEquals("15", json.decodeFromString(StoredShot.serializer(), row("15.0")).grindSetting)
+        assertEquals("4.2", json.decodeFromString(StoredShot.serializer(), row("4.2")).grindSetting)
+        assertEquals("2.25", json.decodeFromString(StoredShot.serializer(), row("2.25")).grindSetting)
+        assertNull(json.decodeFromString(StoredShot.serializer(), row("null")).grindSetting)
+        for (grind in listOf("2.1.3", "18 clicks", "15", "0.05")) {
+            val shot = StoredShot(id = "s", completedAtMs = 1, durationMs = 1, grindSetting = grind)
+            // The store writes it as text and reads it back.
+            val stored = json.encodeToString(StoredShot.serializer(), shot)
+            assertTrue(stored.contains("\"grindSetting\":\"$grind\""), stored)
+            assertEquals(grind, json.decodeFromString(StoredShot.serializer(), stored).grindSetting)
+            // The backup writes it as text, and the restore (and capture) adapter keeps it.
+            val wire = wireShotJson(shot, forBackup = true)
+            assertEquals(grind, wire["metadata"]!!.jsonObject["grinderSetting"]!!.jsonPrimitive.content)
+            assertTrue(wire["metadata"]!!.jsonObject["grinderSetting"]!!.jsonPrimitive.isString)
+            assertEquals(grind, storedShotFromBackupJson(wire, json)!!.grindSetting)
+            // What History shows and the upload sends.
+            assertEquals(grind, shot.effectiveGrindSetting)
+            assertEquals(grind, wireShotJson(shot)["metadata"]!!.jsonObject["grinderSetting"]!!.jsonPrimitive.content)
+        }
+        // A core-shape shot whose grind is a JSON number (an older writer): its digits.
+        val numeric = wireShotJson(StoredShot(id = "n", completedAtMs = 1, durationMs = 1), forBackup = true).let { w ->
+            kotlinx.serialization.json.JsonObject(w + ("metadata" to kotlinx.serialization.json.JsonObject(w["metadata"]!!.jsonObject + ("grinderSetting" to kotlinx.serialization.json.JsonPrimitive(15.0)))))
+        }
+        assertEquals("15", storedShotFromBackupJson(numeric, json)!!.grindSetting)
     }
 }

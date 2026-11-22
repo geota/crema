@@ -52,8 +52,6 @@ import coffee.crema.history.HistoryStore
 import coffee.crema.machine.CommandOutcome
 import coffee.crema.beans.savedGrind
 import coffee.crema.beans.activeGrinder
-import coffee.crema.beans.grindNumber
-import coffee.crema.beans.grindText
 import coffee.crema.history.HistoryHealth
 import coffee.crema.history.ShotRow
 import coffee.crema.history.StoredShot
@@ -194,7 +192,7 @@ class LibraryController(
     private val onShotAnnotationsEdited: (shotId: String) -> Unit = {},
     /** Set Brew's grind dial (#488: a bag or grinder pick resets it, review F9):
      *  stored with the prefs and pushed to remotes; null = no dial. */
-    private val setGrindDial: (Float?) -> Unit = {},
+    private val setGrindDial: (String?) -> Unit = {},
     /** Push the hub's config snapshot (a grinder record edit changes what a remote shows). */
     private val pushConfig: () -> Unit = {},
 ) {
@@ -962,7 +960,7 @@ class LibraryController(
             val out = saved
             if (out != null && out.changed) {
                 persistLibrary()
-                val label = coffee.crema.beans.grindLabel(grind, grinder?.scale)
+                val label = coffee.crema.beans.formatGrind(grind, grinder?.scale)
                 val where = listOfNotNull(plan.beanName, grinder?.name).joinToString(" · ")
                 parts += if (parts.isEmpty()) "Grind $label saved to $where" else "grind $label saved to $where"
                 undo = undo?.copy(grind = GrindUndo(beanId, slot, before, out.bean.savedGrind(slot)))
@@ -2569,7 +2567,7 @@ class LibraryController(
                     durationMs = durationMs,
                     yieldG = meta?.num("yieldOut")?.toFloat(),
                     doseG = meta?.num("dose")?.toFloat(),
-                    grindSetting = meta?.str("grinderSetting")?.replace(',', '.')?.toFloatOrNull(),
+                    grindSetting = coffee.crema.beans.grindTextOf(meta?.get("grinderSetting") as? JsonPrimitive),
                     profileName = null,
                     bean = bean,
                     rating = meta?.num("rating")?.toInt()?.takeIf { it > 0 },
@@ -2844,7 +2842,7 @@ class LibraryController(
      * stored. Refused (false) when the scale isn't usable.
      */
     fun saveGrinderEdit(base: coffee.crema.core.Grinder, edited: coffee.crema.core.Grinder, now: Long = System.currentTimeMillis()): Boolean {
-        coffee.crema.beans.scaleRefusal(edited.scale.min, edited.scale.max, edited.scale.step)?.let { notify(it); return false }
+        coffee.crema.beans.scaleRefusal(edited.scale.min, edited.scale.max, edited.scale.step, edited.scale.unit)?.let { notify(it); return false }
         if (edited.name.isBlank()) { notify("Enter a name"); return false }
         val current = uiState().grinders.firstOrNull { it.id == base.id } ?: return false
         val merged = runCatching { coffee.crema.beans.mergeGrinderEdit(base, edited.copy(name = edited.name.trim()), current, now) }.getOrElse {
@@ -2876,7 +2874,8 @@ class LibraryController(
             }.onFailure { e -> appendLog("Grinder switch failed: ${e.message}") }.getOrNull()
         }
         // Nothing saved and no shot with it: the grind stays as it is (the core's pick order).
-        grind?.let { setGrindDial(grindNumber(it)) }
+        // A text grind ("2.1.3") is Brew's grind too: a pick never clears it.
+        grind?.let { setGrindDial(it) }
         persistLibrary()
     }
 
@@ -2906,7 +2905,7 @@ class LibraryController(
                     activeProfileId = s.activeProfileId,
                     linkedProfileMissing = missing,
                     activeGrinderId = s.activeGrinderId,
-                    grind = s.qcGrind?.let(::grindText),
+                    grind = s.brewGrindView().value,
                     grinders = s.grinders,
                     lastGrinds = lastGrindsForBag(bag.id),
                 ),
@@ -2929,7 +2928,7 @@ class LibraryController(
         val grinderAfter = uiState().activeGrinder()
         val parts = buildList {
             if (change.profileId != null) add("${profileName ?: "linked"} profile")
-            val grindLabel = change.grind?.value?.let { coffee.crema.beans.grindLabel(it, grinderAfter?.scale) }
+            val grindLabel = change.grind?.value?.let { coffee.crema.beans.formatGrind(it, grinderAfter?.scale) }
             when {
                 change.grinderId != null -> add(listOfNotNull(resolved.grinderName ?: grinderAfter?.name ?: "No grinder", grindLabel?.let { "at $it" }).joinToString(" "))
                 grindLabel != null -> add("grind $grindLabel")
@@ -2958,7 +2957,7 @@ class LibraryController(
             persistLibrary()
             pushConfig()
         }
-        change.grind?.let { to -> setGrindDial(to.value?.let(::grindNumber)) }
+        change.grind?.let { to -> setGrindDial(to.value) }
     }
 
     /** Undo the bag selection [seq]: each part goes back only while it's still
@@ -2971,7 +2970,7 @@ class LibraryController(
         val still = coffee.crema.core.SelectionChange(
             profileId = u.undo.profileId?.takeIf { s.activeProfileId == u.change.profileId?.value },
             grinderId = u.undo.grinderId?.takeIf { s.activeGrinderId == u.change.grinderId?.value },
-            grind = u.undo.grind?.takeIf { s.qcGrind?.let(::grindText) == u.change.grind?.value?.let { v -> coffee.crema.beans.grindNumber(v)?.let(::grindText) ?: v } },
+            grind = u.undo.grind?.takeIf { stillGrind(s.qcGrind, u.change.grind?.value) },
         )
         applySelectionChange(still)
     }
@@ -3004,7 +3003,7 @@ class LibraryController(
                             shotBeanId = beanId,
                             shotGrinderId = shot.grinderId,
                             shotGrinderName = shot.grinderModel,
-                            shotGrind = shot.grindSetting?.let(::grindText),
+                            shotGrind = shot.grindSetting?.takeIf { it.isNotBlank() },
                             bag = b,
                         ),
                         now,
@@ -3017,9 +3016,9 @@ class LibraryController(
         val out = saved ?: return
         if (!out.changed) return
         persistLibrary()
-        val grind = shot.grindSetting?.let(::grindText) ?: return
+        val grind = shot.grindSetting?.takeIf { it.isNotBlank() } ?: return
         val scale = s.grinders.firstOrNull { it.id == shot.grinderId }?.scale
-        notify("Grind ${coffee.crema.beans.grindLabel(grind, scale)} saved to ${listOfNotNull(out.bean.name, shot.grinderModel).joinToString(" · ")}")
+        notify("Grind ${coffee.crema.beans.formatGrind(grind, scale)} saved to ${listOfNotNull(out.bean.name, shot.grinderModel).joinToString(" · ")}")
     }
 
     /**
@@ -3241,7 +3240,8 @@ class LibraryController(
         val bean: Bean?,
         val roasterName: String?,
         val profile: CremaProfile?,
-        val grindDial: Float?,
+        /** Brew's grind at the start (#488 round 2): what the header showed. */
+        val grind: String?,
         /** The active grinder's name and id at the start (#488, review F4). */
         val settingsGrinder: String?,
         val grinderId: String?,
@@ -3262,7 +3262,7 @@ class LibraryController(
             bean = bean,
             roasterName = bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name },
             profile = s.activeProfile(),
-            grindDial = s.qcGrind,
+            grind = s.brewGrindView().value,
             settingsGrinder = s.activeGrinder()?.name?.trim()?.ifEmpty { null },
             grinderId = s.activeGrinder()?.id,
         )
@@ -3339,8 +3339,9 @@ class LibraryController(
             // Not the old settings grinderModel.
             settingsGrinder = if (started != null) started.settingsGrinder else s.activeGrinder()?.name?.trim()?.ifEmpty { null },
             grinderId = if (started != null) started.grinderId else s.activeGrinder()?.id,
-            // The QC grind dial actually used (issue 15) — null until the user sets one.
-            grindDial = if (started != null) started.grindDial else s.qcGrind,
+            // Brew's grind at the start (issue 15, #488 round 2): what the
+            // header showed, text included; none when it isn't set.
+            grind = if (started != null) started.grind else s.brewGrindView().value,
             // The Settings default barista (dye2 audit #1), editable later.
             barista = s.baristaName.trim().ifEmpty { null },
             tags = bean?.tags?.takeIf { it.isNotEmpty() },
@@ -3480,7 +3481,8 @@ class LibraryController(
         val doseG: Float?,
         val waterG: Float?,
         val yieldG: Float?,
-        val grindSetting: Float?,
+        /** The grind as text ("15", "2.25"); null = none. */
+        val grindSetting: String?,
         val brewTempC: Float?,
         val durationMs: Long?,
         val rating: Int?,
@@ -3689,7 +3691,7 @@ class LibraryController(
      * #16 follow-up: dialing-in spans shots, so the log needs fixing up after
      * the fact). Persisted; mirrors to the uploaded copy like [updateShot].
      */
-    fun setShotGrind(id: String, grind: Float?) {
+    fun setShotGrind(id: String, grind: String?) {
         val marked = markForVisualizer(id, annotations = true)
         historyStore.update(id) { it.copy(grindSetting = grind) }
         saveMarkedEdit(marked)

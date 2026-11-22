@@ -1042,14 +1042,8 @@ private fun PhoneShotDetail(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Eyebrow("Grind")
-                        CremaStepper(
-                            value = shot.effectiveGrindSetting?.toDoubleOrNull() ?: 0.0,
-                            onChange = { vm.setShotGrind(shot.id, it.toFloat()) },
-                            step = 0.1,
-                            min = 0.0,
-                            max = 200.0,
-                            fmt = { v -> if (v % 1.0 == 0.0) fmt("%.0f", v) else fmt("%.1f", v) },
-                        )
+                        val grinders by remember { vm.ui.map { it.grinders }.distinctUntilChanged() }.collectAsStateWithLifecycle(vm.ui.value.grinders)
+                        coffee.crema.ui.components.ShotGrindStepper(shot, grinders, { g, scale -> vm.setShotGrind(shot.id, g, scale) })
                     }
                     // Only the name lists, recomputed when the history list changes
                     // — not a second collect of the whole UI state, which ticks

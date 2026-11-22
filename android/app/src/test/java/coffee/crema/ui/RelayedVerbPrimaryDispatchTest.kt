@@ -65,7 +65,7 @@ class RelayedVerbPrimaryDispatchTest {
         "setActiveBean.none" to Effect(prime = { it.setActiveBean("bean-2") }) { it.activeBeanId == null },
         "setStopOnWeight" to Effect(prime = { it.setStopOnWeight(false) }) { it.stopOnWeight },
         "setAutoTare" to Effect(prime = { it.setAutoTare(true) }) { !it.autoTare },
-        "setQcGrind" to Effect { it.qcGrind == 14.5f },
+        "setQcGrind" to Effect { it.qcGrind == "14.5" },
         "quickAdjustBrew" to Effect { it.brewParams == BrewParams(18.0, 36.0, 93.0, 8.0) },
         "quickAdjustBrew.noPreinf" to Effect { it.brewParams == BrewParams(18.0, 36.0, 93.0, null) },
         "resetBrew" to Effect(prime = { it.quickAdjustBrew(18.0, 36.0, 93.0) }) { it.brewParams == null },

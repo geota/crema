@@ -50,12 +50,15 @@ data class StoredShot(
      */
     override val bagDebitG: Float? = null,
     /**
-     * Grinder click dialed in Quick Controls at capture (issue 15), or null when
-     * the user never set one. The grind actually used for this shot — distinct
-     * from the bean's catalog [ShotBean.grinderSetting] (the bag's reference
-     * setting). Additive — older records deserialise cleanly.
+     * Brew's grind at capture (issue 15), or null when none was set: the grind
+     * actually used for this shot, distinct from the bean's catalog
+     * [ShotBean.grinderSetting] (the bag's reference setting). Text, as the
+     * core and web keep it (REVIEW-FINAL M1): "15", "2.25", "2.1.3", "18
+     * clicks" as typed, never rounded. An older row's number reads as its
+     * digits (15.0 as "15"). Mirrors core `ShotMetadata.grinder_setting`.
      */
-    override val grindSetting: Float? = null,
+    @Serializable(with = coffee.crema.beans.GrindTextSerializer::class)
+    override val grindSetting: String? = null,
     /**
      * The stop-at-weight target the user dialled for THIS shot, g, or null.
      * The shot-quality yield arms key off it (falling back to the profile's
@@ -281,16 +284,13 @@ val StoredShot.isManualLog: Boolean
 
 /**
  * The grind THIS shot was pulled at, as a raw setting string (issue #16): the
- * recorded QC-dial value (trailing .0 trimmed), else the bean snapshot's
- * reference setting; null when neither. ONE precedence shared by the history
- * rows/detail ([grindLabel]) and the Visualizer wire (upload + PATCH) — what
- * the app displays is exactly what syncs.
+ * recorded grind as stored, else the bean snapshot's reference setting; null
+ * when neither. ONE precedence shared by the history rows/detail
+ * ([grindLabel]) and the Visualizer wire (upload + PATCH) — what the app
+ * displays is exactly what syncs.
  */
 val ShotMeta.effectiveGrindSetting: String?
-    get() = grindSetting?.let { g ->
-        if (g % 1f == 0f) String.format(java.util.Locale.US, "%.0f", g)
-        else String.format(java.util.Locale.US, "%.1f", g)
-    } ?: bean?.grinderSetting?.takeIf { it.isNotBlank() }
+    get() = grindSetting?.trim()?.takeIf { it.isNotEmpty() } ?: bean?.grinderSetting?.takeIf { it.isNotBlank() }
 
 /** "Grind N" display form of [effectiveGrindSetting]. */
 val ShotMeta.grindLabel: String?

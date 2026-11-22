@@ -58,7 +58,7 @@ class AppPrefsDefaultsTest {
         val mine = AppPrefs(
             themeMode = "light", weightUnit = "oz", tempUnit = "F", grinderModel = "Niche",
             baristaName = "Ana", qcSteamTempC = 150f, idleSleepMin = 120, waterWarnMl = 300f,
-            qcGrind = 12f, proxyRole = "primary",
+            qcGrind = "12", proxyRole = "primary",
         )
         val (reset, hz) = mine.resetCommon(50f)
         assertEquals(50f, hz)
@@ -73,7 +73,7 @@ class AppPrefsDefaultsTest {
         assertEquals(30, reset.idleSleepMin)
         assertEquals(null, reset.waterWarnMl)
         // Android-only extras and bindings stay.
-        assertEquals(12f, reset.qcGrind)
+        assertEquals("12", reset.qcGrind)
         assertEquals("primary", reset.proxyRole)
         assertTrue(mine.resetCommon(55f).second == 0f, "an invalid line frequency reads as auto")
     }
@@ -87,5 +87,15 @@ class AppPrefsDefaultsTest {
         assertEquals("g", p.weightUnit)
         assertEquals(true, p.autoTare)
         assertEquals("primary", p.proxyRole, "platform fields still decode")
+    }
+
+    /** #488 round 2: Brew's grind is text; a prefs file from before keeps its number as digits. */
+    @org.junit.Test
+    fun `an older prefs file's grind number reads as text`() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        kotlin.test.assertEquals("15", json.decodeFromString(AppPrefs.serializer(), """{"qcGrind":15.0}""").qcGrind)
+        kotlin.test.assertEquals("4.2", json.decodeFromString(AppPrefs.serializer(), """{"qcGrind":4.2}""").qcGrind)
+        kotlin.test.assertEquals("2.1.3", json.decodeFromString(AppPrefs.serializer(), """{"qcGrind":"2.1.3"}""").qcGrind)
+        kotlin.test.assertEquals("\"2.1.3\"", json.parseToJsonElement(json.encodeToString(AppPrefs.serializer(), AppPrefs(qcGrind = "2.1.3"))).let { (it as kotlinx.serialization.json.JsonObject)["qcGrind"].toString() })
     }
 }

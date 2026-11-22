@@ -132,7 +132,11 @@ fun adopt(own: MainUiState, cfg: ConfigSnapshot, changes: Set<Setting>, hasBean:
             Setting.STEAM_PURGE -> s.copy(steamPurge = cfg.steamPurge)
             Setting.IDLE_SLEEP -> idleSleepChoices().let { c -> s.copy(idleSleepMin = c[idleSleepIndex(cfg.idleSleepMin, c)]) }
             Setting.GRINDER_MODEL -> s.copy(grinderModel = cfg.grinderModel)
-            Setting.QC_GRIND -> cfg.qcGrind?.let { g -> s.qc(QcField.GRIND, g) { copy(qcGrind = it) } } ?: s.copy(qcGrind = null)
+            // The hub's grind as text; a number is still held to the sanity bound.
+            Setting.QC_GRIND -> when (val g = cfg.qcGrind?.trim()?.takeIf { it.isNotEmpty() }) {
+                null -> s.copy(qcGrind = null)
+                else -> if (coffee.crema.beans.grindDouble(g)?.let { QcField.GRIND.refusal(it.toFloat()) } == null) s.copy(qcGrind = g) else s
+            }
             Setting.ACTIVE_PROFILE -> cfg.activeProfileId?.let { s.copy(activeProfileId = it) } ?: s
             Setting.ACTIVE_BEAN -> s.copy(activeBeanId = cfg.activeBeanId?.takeIf(hasBean))
             Setting.BREW_PARAMS -> when (val p = hubValue(cfg, Setting.BREW_PARAMS) as BrewParams?) {

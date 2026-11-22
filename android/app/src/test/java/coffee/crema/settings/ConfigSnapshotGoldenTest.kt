@@ -27,7 +27,7 @@ class ConfigSnapshotGoldenTest {
         activeProfileId = "019e5fb5-63b5-7333-a2ac-34c516215b2c", activeBeanId = "bean:s", activeBeanSummary = "S bag",
         stopOnWeight = true, autoTare = true, maxShotDurationS = 44f, grinderModel = "Niche",
         qcSteamTimeS = 30f, qcSteamFlowMlS = 1.6f, qcSteamTempC = 150f, qcHotWaterTempC = 85f, qcHotWaterVolumeMl = 200f,
-        qcFlushTimeS = 6f, qcFlushTempC = 93f, qcGrind = 15f,
+        qcFlushTimeS = 6f, qcFlushTempC = 93f, qcGrind = "15",
         qcHotWaterMode = HotWaterMode.Time, qcHotWaterTimeS = 45f, qcHotWaterTimeNoLimit = true, qcHotWaterRatio = 2.5f,
         hotWaterTarget = HotWaterTarget(
             mode = HotWaterMode.Time, timeS = 45f, basis = HotWaterBasis.NotApplicable,
@@ -47,6 +47,19 @@ class ConfigSnapshotGoldenTest {
         for (gone in listOf("settingsSchema", "weightUnit", "tempUnit", "pressureUnit", "volumeUnit")) {
             assertTrue(gone !in keys, "$gone is not sent")
         }
+    }
+
+    /** #488 round 2: the hub's Brew grind is text ("2.1.3" too); an older hub's number reads as its digits. */
+    @Test
+    fun `the hub's grind is text, and an older hub's number reads as text`() {
+        val full = coreJson.parseToJsonElement(Golden.require("config-snapshot/schema.json")).jsonObject
+        assertTrue(full["qcGrind"].toString() == "\"15\"", "sent as text: ${full["qcGrind"]}")
+        fun with(grind: kotlinx.serialization.json.JsonElement) =
+            coreJson.decodeFromString(ConfigSnapshot.serializer(), JsonObject(full + ("qcGrind" to grind)).toString()).qcGrind
+        kotlin.test.assertEquals("15", with(kotlinx.serialization.json.JsonPrimitive(15.0)))
+        kotlin.test.assertEquals("14.5", with(kotlinx.serialization.json.JsonPrimitive(14.5)))
+        kotlin.test.assertEquals("2.1.3", with(kotlinx.serialization.json.JsonPrimitive("2.1.3")))
+        kotlin.test.assertNull(with(kotlinx.serialization.json.JsonNull))
     }
 
     /** A snapshot without one of the fields every v4 hub sends (an older

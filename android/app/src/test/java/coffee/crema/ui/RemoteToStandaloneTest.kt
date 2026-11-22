@@ -72,7 +72,7 @@ class RemoteToStandaloneTest {
         fixture.holdReplies = true
         vm.setQcGrind(18f) // pending: never answered
         VmHarness.idleUntil("the edit at the hub") { fixture.handled.isNotEmpty() }
-        assertEquals(18f, vm.ui.value.qcGrind)
+        assertEquals("18", vm.ui.value.qcGrind)
         VmHarness.proxyController(vm).modeSwitchProbe = { r ->
             switches += r to savedPrefs()
             customOnDisk += File(VmHarness.app().filesDir, "customProfiles.json").let { it.exists() && "custom-on-the-hub" in it.readText() }
