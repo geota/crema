@@ -9,6 +9,13 @@
  */
 
 import { resolve } from '$app/paths';
+import {
+	devicesHref,
+	devicesTabOf,
+	isDevicesPath,
+	type DevicesTab,
+	type PageLocation
+} from '#lib/components/grinders/devices-link.js';
 
 export interface NavItem {
 	id: string;
@@ -19,6 +26,8 @@ export interface NavItem {
 	href: string;
 	/** The digit that jumps here on the rail. */
 	kbd: string;
+	/** The Devices tab a split rail item opens (`railItems`). */
+	devicesTab?: DevicesTab;
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
@@ -29,6 +38,35 @@ export const NAV_ITEMS: readonly NavItem[] = [
 	{ id: 'scale', icon: 'scales', label: 'Devices', href: resolve('/scale'), kbd: '5' },
 	{ id: 'settings', icon: 'gear-six', label: 'Settings', href: resolve('/settings'), kbd: '6' }
 ];
+
+/** The rail's Scale and Grinder items, in place of Devices when there's room. */
+const DEVICES_SPLIT: readonly NavItem[] = [
+	{ id: 'devices-scale', icon: 'scales', label: 'Scale', href: devicesHref('scale'), kbd: '', devicesTab: 'scale' },
+	{ id: 'devices-grinder', icon: 'funnel', label: 'Grinder', href: devicesHref('grinder'), kbd: '', devicesTab: 'grinder' }
+];
+
+/**
+ * The rail's items (brew-modes spec §1). With `split`, Devices becomes Scale
+ * and Grinder; otherwise it is one Devices item opening `lastTab`. The digits
+ * follow the order on show, so they always match the rail top to bottom.
+ */
+export function railItems(split: boolean, lastTab: DevicesTab): NavItem[] {
+	return NAV_ITEMS.flatMap((it): readonly NavItem[] => {
+		if (it.id !== 'scale') return [it];
+		return split ? DEVICES_SPLIT : [{ ...it, href: devicesHref(lastTab) }];
+	}).map((it, i) => ({ ...it, kbd: String(i + 1) }));
+}
+
+/**
+ * Is `url` this rail item's page? A split item matches only its own Devices
+ * tab; the others match their path exactly, as the rail always has.
+ */
+export function railItemActive(item: NavItem, url: PageLocation): boolean {
+	if (item.devicesTab) {
+		return isDevicesPath(url.pathname) && devicesTabOf(url.searchParams) === item.devicesTab;
+	}
+	return url.pathname === item.href.split('?')[0];
+}
 
 /** Android's bottom-nav order. */
 const PHONE_TAB_ORDER = ['brew', 'scale', 'profiles', 'beans', 'history'];
