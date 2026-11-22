@@ -175,6 +175,12 @@ class LibraryController(
     private val setActiveProfile: (String) -> Unit,
     /** The VM's resetBrewParams — relay-aware; clears the QC override. */
     private val resetBrewParams: () -> Unit,
+    /** The VM's quickAdjustBrew: put a Quick-Controls override back (a Save's Undo). */
+    private val restoreBrewParams: (BrewParams) -> Unit = {},
+    /** The active profile was cleared (its profile deleted or hidden): persist
+     *  the selection and push the stop targets and the desired profile, as a
+     *  pick would. */
+    private val onProfileCleared: () -> Unit = {},
     /**
      * A stored shot's record-carried annotations (rating, notes, grind, bean)
      * were edited — the Decent destination queues its debounced
@@ -306,7 +312,7 @@ class LibraryController(
             }
         }.getOrElse { emptyMap() }
         builtinProfiles = list.map { p -> p.copy(preinfusionS = builtinProfileJson[p.id]?.let(::corePreinfusion)) }
-        refreshProfiles()
+        refreshProfiles(seedEmpty = true)
     }
 
     /** The core's pre-infusion seconds for a full profile JSON (cards, brew
@@ -727,7 +733,7 @@ class LibraryController(
         // re-derived for customs saved before that rule.
         customProfilesJson = customProfileStore.load().map(::derivedBrewTemp)
         customProfileStore.openSaves()
-        refreshProfiles()
+        refreshProfiles(seedEmpty = true)
     }
 
     /** [raw] with its top-level brew temp derived from its first step by the
@@ -772,7 +778,7 @@ class LibraryController(
      * selection to the first profile when none is set. Called whenever the
      * built-in or custom sources change.
      */
-    private fun refreshProfiles() {
+    private fun refreshProfiles(seedEmpty: Boolean = false) {
         val customThin = customProfilesJson.mapNotNull { raw ->
             runCatching { json.decodeFromString(CremaProfile.serializer(), raw) }.getOrNull()
                 ?.copy(preinfusionS = corePreinfusion(raw))
@@ -787,11 +793,17 @@ class LibraryController(
                 profileIdOf(raw, json)?.takeIf { it.isNotEmpty() }?.let { put(it, raw) }
             }
         }
-        // Self-heal a stale selection (deleted custom, hidden built-in restored
-        // from prefs) by reseeding to the first visible profile.
-        val current = uiState().activeProfileId?.takeIf { id -> all.any { it.id == id } }
+        // Self-heal a stale selection (a hidden built-in restored from prefs,
+        // a custom a restore replaced) by reseeding to the first visible
+        // profile, and seed an empty one at the startup loads ([seedEmpty]).
+        // No selection is kept otherwise: deleting or hiding the active
+        // profile clears it (review 2026-11-21 F5), and a later refresh (a
+        // pin, an import) must not pick one behind the user's back.
+        val own = uiState().activeProfileId
+        val current = own?.takeIf { id -> all.any { it.id == id } }
         updateUi { st ->
-            val active = current ?: all.firstOrNull { it.id !in hiddenIds }?.id
+            val reseed = if (own != null || seedEmpty) all.firstOrNull { it.id !in hiddenIds }?.id else null
+            val active = current ?: reseed
             // A reseeded selection is a profile change: the override goes too.
             val reseeded = if (active == st.activeProfileId) st else st.withActiveProfileId(active)
             reseeded.copy(profiles = all, hiddenProfileIds = hiddenIds)
@@ -836,51 +848,139 @@ class LibraryController(
         }
     }
 
+    /** What an in-place Quick Controls Save replaced, until its Undo goes. */
+    private data class QuickSaveUndo(
+        val seq: Long,
+        val profileId: String,
+        /** The profile's body before the Save. */
+        val previousJson: String,
+        /** The body the Save wrote: Undo restores only over this one. */
+        val writtenJson: String,
+        /** The Quick-Controls override the Save folded into the profile. */
+        val previousBrew: BrewParams?,
+        /** The bag grind the same Save wrote: (bag, its grind before, the grind written). */
+        val grind: Triple<String, String?, String>?,
+    )
+
+    private var quickSaveUndo: QuickSaveUndo? = null
+    private var quickSaveSeq = 0L
+
     /**
-     * Persist the current Quick-Controls dial values into a profile. A user-defined
-     * (custom) active profile is UPDATED in place (id / name / segments preserved);
-     * a read-only built-in is COPIED to a new custom carrying the dialled dose /
-     * yield / brew-temp and made active. Either way the per-shot override is cleared
-     * afterwards (the values now live in the profile). Pure shell.
+     * Quick Controls' **Save** (review 2026-11-21 F1): write each changed part
+     * of [QuickSavePlan] to its owner, in one message. The grind goes to the
+     * active bag. The recipe dials go to the profile: a custom one is updated
+     * in place (Undo in the message) unless [asNew]; a built-in, or [asNew],
+     * becomes a copy named [copyName], made active. A copy without a name
+     * writes nothing (the prompt asks first), and a remote writes nothing
+     * (F8 interim: its library is its own copy).
      */
-    fun saveQuickPreset(name: String) {
-        // The profile and dial on screen: on a remote, the hub's.
+    fun quickSave(copyName: String? = null, asNew: Boolean = false) {
+        // The selections and dials on screen.
         val s = effectiveState()
-        val activeId = s.activeProfileId ?: return
-        val base = profileJsonById[activeId] ?: run {
-            // A hub's custom profile this library doesn't have.
-            if (s.mirror != null) notify("That profile is only on ${s.remoteHubLabel()}")
-            return
-        }
-        val active = s.profiles.firstOrNull { it.id == activeId }
-        // The dial baked in by the core exactly as a shot runs it: brew temp
-        // shifts every segment, pre-infusion rescales the leading segments,
-        // dose / yield replace (id / name / everything else preserved).
-        val effective = runCatching { effectiveCremaProfile(base, s.brewParams.overridesJson(json)) }.getOrElse {
-            appendLog("Save profile failed: ${it.message}")
-            return
-        }
-        if (active?.source == "custom") {
-            // User-defined: replace it by id in place, persist — it stays active.
-            val updated = effective
-            customProfilesJson = customProfilesJson.map { if (profileIdOf(it, json) == activeId) updated else it }
-            refreshProfiles()
-            persistCustomProfiles()
-            resetBrewParams()
-            notify("Profile updated")
-        } else {
-            // Predefined (read-only): save a NEW custom copy carrying the dialled
-            // values, then make it active.
-            val preset = runCatching { quickPresetJson(effective, name, json) }.getOrElse {
+        val plan = s.quickSavePlan()
+        plan.hubLabel?.let { notify("Save on $it"); return }
+        if (!plan.enabled) return
+        val copying = plan.writesRecipe && (asNew || plan.profileKind == QuickSaveProfileKind.BuiltIn)
+        val name = copyName?.trim()?.takeIf { it.isNotEmpty() }
+        if (copying && name == null) return
+        // Everything that can fail first: nothing is written unless all of it can be.
+        var base: String? = null
+        var written: String? = null
+        if (plan.writesRecipe) {
+            val id = plan.profileId ?: return
+            base = profileJsonById[id] ?: return
+            // The dial baked in by the core exactly as a shot runs it: brew temp
+            // shifts every segment, pre-infusion rescales the leading segments,
+            // dose / yield replace (id / name / everything else preserved).
+            val effective = runCatching { effectiveCremaProfile(base, s.brewParams.overridesJson(json)) }.getOrElse {
                 appendLog("Save profile failed: ${it.message}")
                 return
             }
-            customProfilesJson = listOf(preset) + customProfilesJson
+            written = if (copying) {
+                runCatching { quickPresetJson(effective, name!!, json) }.getOrElse {
+                    appendLog("Save profile failed: ${it.message}")
+                    return
+                }
+            } else {
+                effective
+            }
+        }
+        val parts = mutableListOf<String>()
+        var undo: QuickSaveUndo? = null
+        if (written != null && base != null) {
+            val id = plan.profileId!!
+            if (copying) {
+                customProfilesJson = listOf(written) + customProfilesJson
+                refreshProfiles()
+                persistCustomProfiles()
+                profileIdOf(written, json)?.let { setActiveProfile(it) }
+                parts += "Saved “$name”"
+            } else {
+                customProfilesJson = customProfilesJson.map { if (profileIdOf(it, json) == id) written else it }
+                refreshProfiles()
+                persistCustomProfiles()
+                // The values live in the profile now.
+                resetBrewParams()
+                parts += "“${plan.profileName}” updated"
+                undo = QuickSaveUndo(++quickSaveSeq, id, base, written, s.brewParams, null)
+            }
+        }
+        val grind = plan.grind
+        val beanId = plan.beanId
+        if (grind != null && beanId != null) {
+            val before = s.beans.firstOrNull { it.id == beanId }?.grinderSetting
+            mutateBean(beanId) { it.copy(grinderSetting = grind) }
+            parts += if (parts.isEmpty()) "Grind $grind saved to ${plan.beanName}" else "grind $grind saved to ${plan.beanName}"
+            undo = undo?.copy(grind = Triple(beanId, before, grind))
+        }
+        val message = parts.joinToString(" · ")
+        if (undo != null) {
+            quickSaveUndo = undo
+            appendLog(message)
+            updateUi { it.copy(quickSaveUndo = UndoNotice(message, undo.seq)) }
+        } else {
+            notify(message)
+        }
+    }
+
+    /** Undo the in-place Save [seq]: each half comes back only while it is
+     *  still what the Save wrote, so an edit made since (a star, a rename, a
+     *  new grind) stands. The profile's body brings its dial back, unless the
+     *  user dialled again since. */
+    fun undoQuickSave(seq: Long) {
+        val u = quickSaveUndo?.takeIf { it.seq == seq } ?: return
+        quickSaveUndo = null
+        updateUi { st -> if (st.quickSaveUndo?.seq == seq) st.copy(quickSaveUndo = null) else st }
+        val current = customProfilesJson.firstOrNull { profileIdOf(it, json) == u.profileId }
+        val profileBack = current == u.writtenJson
+        if (profileBack) {
+            customProfilesJson = customProfilesJson.map { if (profileIdOf(it, json) == u.profileId) u.previousJson else it }
             refreshProfiles()
             persistCustomProfiles()
-            profileIdOf(preset, json)?.let { setActiveProfile(it) }
-            notify("Profile saved")
+            val st = uiState()
+            if (st.activeProfileId == u.profileId && st.brewParams == null) u.previousBrew?.let(restoreBrewParams)
         }
+        var grindBack = false
+        u.grind?.let { (beanId, before, written) ->
+            if (uiState().beans.firstOrNull { it.id == beanId }?.grinderSetting == written) {
+                mutateBean(beanId) { it.copy(grinderSetting = before) }
+                grindBack = true
+            }
+        }
+        val name = uiState().profiles.firstOrNull { it.id == u.profileId }?.name
+        notify(
+            when {
+                profileBack -> "Save undone"
+                grindBack -> "Grind put back; ${name?.let { "“$it”" } ?: "the profile"} changed since, not undone"
+                else -> "${name?.let { "“$it”" } ?: "The profile"} changed since; not undone"
+            },
+        )
+    }
+
+    /** The Save [seq]'s message went without Undo: the save stands. */
+    fun consumeQuickSaveUndo(seq: Long) {
+        if (quickSaveUndo?.seq == seq) quickSaveUndo = null
+        updateUi { st -> if (st.quickSaveUndo?.seq == seq) st.copy(quickSaveUndo = null) else st }
     }
 
     // ── Profile editor (the `profile-edit` route) ─────────────────────────────
@@ -1039,8 +1139,9 @@ class LibraryController(
 
     /**
      * Delete a custom profile (built-ins are not deletable — they have no store
-     * entry, so this is a no-op for them). Clears the active selection if it was
-     * the deleted one; [refreshProfiles] then reseeds it to the first remaining.
+     * entry, so this is a no-op for them). Deleting the active one clears the
+     * selection: Brew shows "No profile" rather than a profile the user didn't
+     * pick (review 2026-11-21 F5).
      */
     fun deleteProfile(id: String) {
         if (customProfilesJson.none { profileIdOf(it, json) == id }) return
@@ -1048,35 +1149,35 @@ class LibraryController(
         val wasActive = uiState().activeProfileId == id
         if (wasActive) updateUi { it.withActiveProfileId(null) }
         // Cascade: a deleted custom is gone for good — clear bean links so
-        // the auto-load never chases a tombstone (web onDeleted parity).
+        // the auto-load never chases a tombstone, and stamp the bags so a
+        // sync sees the change (web onDeleted parity, review F9).
         if (uiState().beans.any { it.linkedProfileId == id }) {
-            editBeans { rows -> rows.mapped { if (it.linkedProfileId == id) it.copy(linkedProfileId = null) else it } }
+            val now = System.currentTimeMillis()
+            editBeans { rows -> rows.mapped { if (it.linkedProfileId == id) it.copy(linkedProfileId = null, updatedAt = now) else it } }
             persistLibrary()
         }
         refreshProfiles()
         persistCustomProfiles()
-        if (wasActive) activateReseeded()
+        if (wasActive) clearedActive()
     }
 
-    /** The active profile was deleted or hidden and [refreshProfiles] picked the
-     *  next visible one: select it like any other pick, so its stop targets,
-     *  the desired profile and the mirrors follow (on this device's own
-     *  selection; a remote's screen shows its hub's). */
-    private fun activateReseeded() {
+    /** The active profile was deleted or hidden and is now none: the stop
+     *  targets, the desired profile and the mirrors follow, as on a pick (on
+     *  this device's own selection; a remote's screen shows its hub's). */
+    private fun clearedActive() {
         if (uiState().mirror != null) return
-        uiState().activeProfileId?.let(setActiveProfile)
+        onProfileCleared()
     }
 
     /** Archive (hide) a built-in profile — built-ins can't be deleted, so this
      *  hides it from the active grid. Restored from the "Hidden" filter. Persisted. */
     fun archiveBuiltinProfile(id: String) {
         hiddenIds = hiddenIds + id
-        // If the hidden profile was active, drop the selection so refreshProfiles
-        // re-seeds the Brew header to a still-visible profile.
+        // Hiding the active profile clears the selection (F5), as a delete does.
         val wasActive = uiState().activeProfileId == id
         if (wasActive) updateUi { it.withActiveProfileId(null) }
         refreshProfiles()
-        if (wasActive) activateReseeded()
+        if (wasActive) clearedActive()
         val snapshot = hiddenIds
         scope.launch { hiddenProfileStore.save(snapshot) }
     }
@@ -2024,7 +2125,8 @@ class LibraryController(
             { it.copy(beans = it.beans.with(emptyList()), roasters = it.roasters.with(emptyList())) },
             { it.copy(activeBeanId = null, activeProfileId = null) },
         )
-        refreshProfiles()
+        // Back to a fresh install's selection.
+        refreshProfiles(seedEmpty = true)
     }
 
     /**
@@ -2580,21 +2682,17 @@ class LibraryController(
     }
 
     /**
-     * Remove a bean bag; reselect the first remaining if it was active.
-     * [alsoOnVisualizer] then deletes its Visualizer copy (best-effort; the id
-     * is captured before the local row goes). Persisted.
+     * Remove a bean bag; deleting the active one clears the selection (Brew
+     * shows "No bag", review 2026-11-21 F5). [alsoOnVisualizer] then deletes
+     * its Visualizer copy (best-effort; the id is captured before the local
+     * row goes). Persisted.
      */
     fun deleteBean(id: String, alsoOnVisualizer: Boolean = false) {
         val doomed = uiState().beans.firstOrNull { it.id == id }
         val wasActive = uiState().activeBeanId == id
-        var firstLeft: String? = null
         editRows(
-            { rows ->
-                val left = rows.beans.filtered { it.id != id }
-                firstLeft = left.firstOrNull()?.id
-                rows.copy(beans = left)
-            },
-            { if (wasActive) it.copy(activeBeanId = firstLeft) else it },
+            { rows -> rows.copy(beans = rows.beans.filtered { it.id != id }) },
+            { if (wasActive) it.copy(activeBeanId = null) else it },
         )
         // Drop the bag's photo too, so a deleted bean leaves no orphan blob.
         scope.launch(Dispatchers.IO) { BeanImageStore.delete(app, id) }
@@ -2794,9 +2892,42 @@ class LibraryController(
 
     // ── Shot history ──────────────────────────────────────────────────────────
 
+    /** What a shot records of the selections, read when it started (review
+     *  2026-11-21 F9, web parity): switching the bag, the profile or the
+     *  grind mid-shot can't relabel or debit the wrong bag. */
+    private data class ShotStartSelections(
+        val atMs: Long,
+        val bean: Bean?,
+        val roasterName: String?,
+        val profile: CremaProfile?,
+        val grindDial: Float?,
+        val settingsGrinder: String?,
+    )
+
+    private var shotStart: ShotStartSelections? = null
+
+    /**
+     * A shot started (`ShotStarted`): freeze the selections on screen (on a
+     * remote, the hub's: its mirror copy of the shot is labelled the same way)
+     * for [captureCompletedShot].
+     */
+    fun freezeShotSelections(now: Long = System.currentTimeMillis()) {
+        val s = effectiveState()
+        val bean = s.beans.firstOrNull { it.id == s.activeBeanId }
+        shotStart = ShotStartSelections(
+            atMs = now,
+            bean = bean,
+            roasterName = bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name },
+            profile = s.activeProfile(),
+            grindDial = s.qcGrind,
+            settingsGrinder = s.grinderModel.trim().ifEmpty { null },
+        )
+    }
+
     /**
      * Capture a completed shot into the log (newest first, capped) and persist.
-     * Profile / bean names come from the active selections at completion. v1
+     * Profile / bean names come from the selections at the shot's start
+     * ([freezeShotSelections]), else those at completion. v1
      * stores a summary only — the telemetry slice for the detail chart is a
      * later increment.
      */
@@ -2811,9 +2942,13 @@ class LibraryController(
         peakWeightG: Float? = null,
     ) {
         // The selections on screen: on a remote, the hub's (02 F2 — a remote
-        // still records the shot it watched).
+        // still records the shot it watched). Those of the shot's start when
+        // this device saw it start; a start older than the shot (a missed
+        // ShotStarted, a link lost mid-shot) is not this shot's.
         val s = effectiveState()
-        val profile = s.activeProfile()
+        val started = shotStart?.takeIf { now - it.atMs in 0..(durationMs + SHOT_START_SLACK_MS) }
+        shotStart = null
+        val profile = if (started != null) started.profile else s.activeProfile()
         // The core classified this completion (review #40 —
         // `de1_domain::shot_disposition`, same rule on web). SkipCleaning:
         // machine maintenance runs in the DE1's Espresso state, so a
@@ -2828,8 +2963,12 @@ class LibraryController(
             appendLog("Cleaning run finished — not recorded as a shot")
             return
         }
-        val bean = s.beans.firstOrNull { it.id == s.activeBeanId }
-        val roasterName = bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
+        val bean = if (started != null) started.bean else s.beans.firstOrNull { it.id == s.activeBeanId }
+        val roasterName = if (started != null) {
+            started.roasterName
+        } else {
+            bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
+        }
         // The core assembles the shot (F10, the rule set web uses too): its own
         // record (the full series with frames and scale overlays), the profile
         // the DE1 held and its dose / yield / brew temp / pre-infusion, the
@@ -2851,9 +2990,9 @@ class LibraryController(
                     notes = b.notes?.takeIf { it.isNotBlank() },
                 )
             },
-            settingsGrinder = s.grinderModel.trim().ifEmpty { null },
+            settingsGrinder = if (started != null) started.settingsGrinder else s.grinderModel.trim().ifEmpty { null },
             // The QC grind dial actually used (issue 15) — null until the user sets one.
-            grindDial = s.qcGrind,
+            grindDial = if (started != null) started.grindDial else s.qcGrind,
             // The Settings default barista (dye2 audit #1), editable later.
             barista = s.baristaName.trim().ifEmpty { null },
             tags = bean?.tags?.takeIf { it.isNotEmpty() },
@@ -2864,6 +3003,9 @@ class LibraryController(
             // mirror core never uploads, so it knows no profile title (on a
             // remote the screen shows the hub's selection).
             profileName = profile?.name,
+            // Its library id (save boundaries F4), from the shot's start: the
+            // core stamps it when the DE1 held no profile it knows of.
+            profileId = profile?.id,
         )
         assembling()
         val assembled = runCatching {
@@ -3374,3 +3516,7 @@ internal fun backupContentHash(jsonl: String, images: List<Pair<String, ByteArra
     }
     return md.digest().joinToString("") { "%02x".format(it) }
 }
+
+/** How much later than its duration says a shot may complete after the start
+ *  this device saw and still be that start's shot (event and clock lag). */
+private const val SHOT_START_SLACK_MS = 120_000L

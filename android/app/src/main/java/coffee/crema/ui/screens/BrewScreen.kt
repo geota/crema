@@ -4,6 +4,7 @@ import coffee.crema.ui.LiveReadouts
 import coffee.crema.ui.LiveTelemetry
 import coffee.crema.ui.BrewParams
 import coffee.crema.ui.effectiveBrew
+import coffee.crema.ui.quickSavePlan
 
 import coffee.crema.ui.UNKNOWN_VALUE
 import coffee.crema.ui.awaitingHubValues
@@ -483,7 +484,8 @@ fun BrewScreen(
                     onSelectBean = vm::setActiveBean,
                     onAdjustBrew = vm::quickAdjustBrew,
                     onResetBrew = vm::resetBrewParams,
-                    onSavePreset = vm::saveQuickPreset,
+                    quickSave = ui.quickSavePlan(),
+                    onQuickSave = vm::quickSave,
                     onAutoTare = vm::setAutoTare,
                     onStopOnWeight = vm::setStopOnWeight,
                     onSteamEco = vm::setSteamEco,
@@ -502,7 +504,6 @@ fun BrewScreen(
                             ?.grinderSetting?.trim()?.replace(',', '.')?.toDoubleOrNull()
                     } ?: 4.2,
                     onGrind = { vm.setQcGrind(it.toFloat()) },
-                    onSaveGrindToBean = vm::saveQuickGrindToBean,
                     onToggleChannel = vm::toggleChartChannel,
                     onDismiss = { quickOpen = false },
                     gate = ui::gate,

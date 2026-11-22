@@ -64,6 +64,10 @@ export interface ActiveShotBrewParams {
 export interface ActiveShotData {
 	readonly bean: ShotBean | null;
 	readonly profileName: string | null;
+	/** The library id of the profile active at shot start (save-boundaries
+	 *  review F4/F9): the core's fallback for the shot's `profileId`, stamped
+	 *  only when the shot's name is this profile's. Absent on a replay. */
+	readonly profileId?: string | null;
 	readonly dose: number | null;
 	readonly brewParams: ActiveShotBrewParams | null;
 	readonly grinderModel: string | null;

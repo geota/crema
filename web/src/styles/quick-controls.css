@@ -194,6 +194,7 @@
 .qsheet-cta.is-primary {
   background: var(--copper-500); border-color: var(--copper-500); color: var(--fg-on-accent);
 }
+.qsheet-cta:disabled { opacity: 0.45; cursor: default; }
 .qsheet-scrim {
   position: absolute; inset: 0; background: rgba(var(--scrim-rgb), 0.6);
   backdrop-filter: blur(4px);

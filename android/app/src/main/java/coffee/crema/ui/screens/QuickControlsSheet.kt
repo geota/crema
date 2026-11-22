@@ -45,14 +45,11 @@ import coffee.crema.ui.formatRatio
 import coffee.crema.ui.UNKNOWN_VALUE
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.theme.JetBrainsMono
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -69,6 +66,10 @@ import coffee.crema.ui.BrewParams
 import coffee.crema.ui.effectiveBrew
 import androidx.compose.ui.draw.alpha
 import coffee.crema.ui.components.CremaButton
+import coffee.crema.ui.components.QuickSaveNameDialog
+import coffee.crema.ui.components.QuickSavePrompt
+import coffee.crema.ui.components.title
+import coffee.crema.ui.QuickSavePlan
 import coffee.crema.ui.components.CremaSearchPill
 import coffee.crema.ui.components.CremaStepper
 import coffee.crema.ui.components.CremaStepperStyle
@@ -130,7 +131,10 @@ fun QuickControlsSheet(
     onSelectBean: (String) -> Unit,
     onAdjustBrew: (dose: Double, yieldOut: Double, brewTemp: Double, preinf: Double?) -> Unit,
     onResetBrew: () -> Unit,
-    onSavePreset: (String) -> Unit,
+    /** What Quick Controls' Save would write ([quickSavePlan]). */
+    quickSave: QuickSavePlan = QuickSavePlan(),
+    /** Run the Save: a copy's name (null: none needed), and "Save as new…". */
+    onQuickSave: (copyName: String?, asNew: Boolean) -> Unit = { _, _ -> },
     onAutoTare: (Boolean) -> Unit,
     onStopOnWeight: (Boolean) -> Unit,
     onSteamEco: (Boolean) -> Unit,
@@ -150,9 +154,6 @@ fun QuickControlsSheet(
      *  else a generic mid-range default. */
     qcGrindSeed: Double = 4.2,
     onGrind: (Double) -> Unit,
-    /** The bean half of the scope-aware Save (issue #16): write the grind
-     *  dial back to the active bean; returns true when it wrote. */
-    onSaveGrindToBean: () -> Boolean = { false },
     onToggleChannel: (String, Boolean) -> Unit,
     onDismiss: () -> Unit,
     /** Each machine or session control's gate (spec §7.6): on a remote the
@@ -176,8 +177,7 @@ fun QuickControlsSheet(
     // active bean's own setting (issue #16), else the generic seed.
     val grind = qcGrind ?: qcGrindSeed
 
-    var showSave by remember { mutableStateOf(false) }
-    var presetName by remember { mutableStateOf("") }
+    var savePrompt by remember { mutableStateOf<QuickSavePrompt?>(null) }
     // Per-stepper mode — which sub-value each combined stepper edits (local view state).
     var doseGrindMode by remember { mutableStateOf(DoseGrindMode.Dose) }
     var brewMode by remember { mutableStateOf(BrewMode.Temp) }
@@ -222,21 +222,24 @@ fun QuickControlsSheet(
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (active != null) {
-                        // Scope-aware Save (issue #16): the grind dial writes
-                        // back to the active bean, then the brew params to
-                        // the profile — custom updates in place; read-only
-                        // built-in → name + copy.
+                    // Save writes each changed part to its owner (review
+                    // 2026-11-21 F1): the grind to the bag, the recipe dials
+                    // to a custom profile in place or, for a built-in, to a
+                    // named copy. Shown with no profile too (the grind alone).
+                    if (quickSave.offersSaveAsNew) {
                         CremaButton(
-                            onClick = {
-                                onSaveGrindToBean()
-                                if (active.source == "custom") onSavePreset(active.name) else showSave = true
-                            },
+                            onClick = { savePrompt = QuickSavePrompt.AsNew },
                             variant = CremaButtonVariant.Text,
-                            icon = "bookmark-simple",
-                            label = "Save",
+                            label = "Save as new…",
                         )
                     }
+                    CremaButton(
+                        onClick = { if (quickSave.needsName) savePrompt = QuickSavePrompt.Copy else onQuickSave(null, false) },
+                        variant = CremaButtonVariant.Text,
+                        icon = "bookmark-simple",
+                        label = quickSave.label,
+                        enabled = quickSave.enabled,
+                    )
                     // Always visible like the web QuickSheet; enabled only once a
                     // tweak exists so it never reads as a dead control.
                     CremaButton(onClick = onResetBrew, variant = CremaButtonVariant.Text, icon = "arrow-counter-clockwise", label = "Reset", enabled = brewParams != null && brewGate.editable)
@@ -527,26 +530,12 @@ fun QuickControlsSheet(
         }
     }
 
-    if (showSave) {
-        AlertDialog(
-            onDismissRequest = { showSave = false },
-            title = { Text("Save as preset") },
-            text = {
-                OutlinedTextField(
-                    value = presetName,
-                    onValueChange = { presetName = it },
-                    label = { Text("Preset name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { onSavePreset(presetName); showSave = false; presetName = "" },
-                    enabled = presetName.isNotBlank(),
-                ) { Text("Save") }
-            },
-            dismissButton = { TextButton(onClick = { showSave = false }) { Text("Cancel") } },
+    savePrompt?.let { prompt ->
+        QuickSaveNameDialog(
+            title = prompt.title,
+            seed = quickSave.copyNameSeed,
+            onSave = { name -> savePrompt = null; onQuickSave(name, prompt == QuickSavePrompt.AsNew) },
+            onDismiss = { savePrompt = null },
         )
     }
 }

@@ -25,10 +25,11 @@
 	 * empty (mirroring {@link BeanEditPage}). The Save button is always
 	 * clickable.
 	 *
-	 * Edit-mode commits each patch immediately through the live store
-	 * (same pattern as the bean editor), so abandoning the page mid-edit
-	 * persists whatever you typed. Create-mode holds a draft locally and
-	 * writes once on Save — abandoning leaves no trace.
+	 * Both modes hold a draft and write once on Save; Cancel discards it
+	 * (save-boundaries review F2, as the bean editor). An existing roaster's
+	 * Save applies only the fields changed here onto the row as it is now
+	 * (`mergeRoasterEdit`, the core's three-way merge), so a sync during the
+	 * edit stands. Leaving with unsaved changes asks first.
 	 *
 	 * URL validation reuses {@link BeanEditPage}'s rule: a bare http(s)
 	 * URL passes; everything else (javascript:, data:, mailto:, file:)
@@ -40,9 +41,11 @@
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import { usePhoneBar } from '#lib/shell/phone-bar.svelte.js';
 	import { resolve } from '$app/paths';
-	import { getBeanStore, roasterMarkTone, type Roaster } from '#lib/bean/index.js';
+	import { getBeanStore, mergeRoasterEdit, roasterMarkTone, type Roaster } from '#lib/bean/index.js';
 	import RoasterDeleteSplit from './RoasterDeleteSplit.svelte';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { toast } from '#lib/components/shared/toast.svelte.js';
+	import { DISCARD_CHANGES, guardUnsavedChanges, sameRecord } from '#lib/beans/unsaved-guard.js';
 	import CatalogueSearch from './CatalogueSearch.svelte';
 	import {
 		catalogueFillStatus,
@@ -62,24 +65,22 @@
 
 	const library = getBeanStore();
 
-	// ── Draft state (new mode only) ────────────────────────────────────
-	const live = $derived(!isNew);
+	// ── Draft state (both modes) ───────────────────────────────────────
+	/** The roaster as the editor opened on it: what Save measures the edits from. */
+	const base: Roaster = untrack(() => JSON.parse(JSON.stringify(roaster)) as Roaster);
 	let draftRecord = $state<Roaster>(untrack(() => ({ ...roaster })));
-	const current: Roaster = $derived(live ? roaster : draftRecord);
+	const current: Roaster = $derived(draftRecord);
+	/** Anything here Save would write (Cancel and leaving ask only then). */
+	const dirty = $derived(!sameRecord(draftRecord, base));
 
-	// Bean count for the page subtitle — derived live in edit mode so the
-	// readout follows the store.
+	// Bean count for the page subtitle — follows the store.
 	const beanCount = $derived(library.beans.filter((b) => b.roasterId === current.id).length);
 
 	const mt = $derived(roasterMarkTone(current));
 
 	// ── Patch + commit ────────────────────────────────────────────────
 	function patch(p: Partial<Roaster>): void {
-		if (live) {
-			library.updateRoaster(roaster.id, p);
-		} else {
-			draftRecord = { ...draftRecord, ...p };
-		}
+		draftRecord = { ...draftRecord, ...p };
 	}
 
 	// ── Visualizer catalogue search (linked accounts only) ─────────────
@@ -172,32 +173,46 @@
 			return;
 		}
 
+		const name = draftRecord.name === base.name ? base.name : draftRecord.name.trim();
 		if (isNew) {
 			const persisted: Roaster = {
 				...draftRecord,
-				name: draftRecord.name.trim(),
+				name,
 				updatedAt: Date.now()
 			};
 			library.upsertRoaster(persisted);
+		} else {
+			// The fields changed here, onto the row as it is now.
+			const stored = library.getRoaster(base.id);
+			if (stored) {
+				let merged: Roaster;
+				try {
+					merged = mergeRoasterEdit(base, { ...draftRecord, name }, stored);
+				} catch (e) {
+					toast.error(`Could not save the roaster: ${e instanceof Error ? e.message : String(e)}`);
+					return;
+				}
+				if (!sameRecord(merged, stored)) library.saveEditedRoaster(merged);
+			}
 		}
-		// Live mode already saved each patch — just bounce back. The
-		// `?tab=roasters` query keeps the Roasters tab pinned on return so
+		// The `?tab=roasters` query keeps the Roasters tab pinned on return so
 		// the user lands where they came from rather than getting bumped
 		// to the Bags tab.
+		guard.release();
 		leaveEditor(resolve('beans?tab=roasters'));
 	}
+
+	// Leaving any other way than Save / Cancel / Delete asks first.
+	const guard = guardUnsavedChanges(() => dirty);
 
 	function back(): void {
 		leaveEditor(resolve('beans?tab=roasters'));
 	}
 
+	/** Cancel: drop the draft (asking first when there is one) and leave. */
 	async function discard(): Promise<void> {
-		if (isNew) {
-			// Nothing to lose unless the draft is non-empty.
-			const dirty = draftRecord.name.trim() || draftRecord.website || draftRecord.imageUrl || draftRecord.city || draftRecord.country || draftRecord.notes.trim();
-
-			if (dirty && !await confirmDialog({ message: 'Discard new roaster?', confirmLabel: 'Discard' })) return;
-		}
+		if (dirty && !(await confirmDialog(DISCARD_CHANGES))) return;
+		guard.release();
 		back();
 	}
 
@@ -220,6 +235,7 @@
 	);
 
 	function onRoasterDeleted(): void {
+		guard.release();
 		leaveEditor(resolve('beans?tab=roasters'));
 	}
 </script>

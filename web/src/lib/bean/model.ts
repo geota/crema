@@ -22,7 +22,9 @@ import {
 	coerceBean as wasmCoerceBean,
 	coerceRoaster as wasmCoerceRoaster,
 	duplicateBeanJson as wasmDuplicateBeanJson,
-	setBeanFrozenJson as wasmSetBeanFrozenJson
+	setBeanFrozenJson as wasmSetBeanFrozenJson,
+	mergeBeanEditJson as wasmMergeBeanEditJson,
+	mergeRoasterEditJson as wasmMergeRoasterEditJson
 } from '#lib/wasm/de1_wasm.js';
 
 // ── Wire types (mirrored from de1_domain::bean) ─────────────────────────
@@ -565,6 +567,32 @@ export function duplicateBean(src: Bean, newId: string = mintBeanId(), nowMs = D
  */
 export function setBeanFrozen(bean: Bean, frozen: boolean, nowMs = Date.now()): Bean {
 	return JSON.parse(wasmSetBeanFrozenJson(JSON.stringify(bean), frozen, nowMs)) as Bean;
+}
+
+/**
+ * A bag editor's Save — `de1_domain::merge_bean_edit`, the rule Android uses
+ * too (save-boundaries review F2): the fields the user changed (`edited`
+ * against `base`, the bag the editor opened on) applied onto `current`, the bag
+ * as stored now, so a shot's debit or a sync during the edit stands. Nested
+ * `origin` / `metadata` merge key by key. `updatedAt` is bumped only when the
+ * result differs from `current`. Throws on a row the core can't read.
+ */
+export function mergeBeanEdit(base: Bean, edited: Bean, current: Bean, nowMs = Date.now()): Bean {
+	return JSON.parse(
+		wasmMergeBeanEditJson(JSON.stringify(base), JSON.stringify(edited), JSON.stringify(current), nowMs)
+	) as Bean;
+}
+
+/** A roaster editor's Save — {@link mergeBeanEdit} for a roaster (`de1_domain::merge_roaster_edit`). */
+export function mergeRoasterEdit(
+	base: Roaster,
+	edited: Roaster,
+	current: Roaster,
+	nowMs = Date.now()
+): Roaster {
+	return JSON.parse(
+		wasmMergeRoasterEditJson(JSON.stringify(base), JSON.stringify(edited), JSON.stringify(current), nowMs)
+	) as Roaster;
 }
 
 /**

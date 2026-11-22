@@ -133,6 +133,18 @@ suspend fun SnackbarHostState.showDiscardMessage(
     if (result == SnackbarResult.ActionPerformed) onUndo() else onDrop()
 }
 
+/** Show an undoable [message] ("Undo"): Undo runs [onUndo]; a timeout or the ✕, [onDrop]. */
+suspend fun SnackbarHostState.showUndoMessage(
+    message: String,
+    onUndo: () -> Unit,
+    onDrop: () -> Unit,
+) {
+    val result = showSnackbar(
+        CremaMessageVisuals(message, actionLabel = "Undo", duration = SnackbarDuration.Long),
+    )
+    if (result == SnackbarResult.ActionPerformed) onUndo() else onDrop()
+}
+
 /** Show the kept-aside notice: it stays until Share or the ✕. */
 suspend fun SnackbarHostState.showKeptAsideMessage(
     message: String,

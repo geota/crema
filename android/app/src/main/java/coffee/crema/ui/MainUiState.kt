@@ -169,6 +169,9 @@ data class MainUiState(
     /** Non-null while an aborted-shot discard can be undone — the message
      *  MainActivity shows in an action snackbar ("Undo"). */
     val discardToastMessage: String? = null,
+    /** Non-null while a Quick Controls Save that updated a profile in place
+     *  can be undone — MainActivity shows it in an action snackbar ("Undo"). */
+    val quickSaveUndo: UndoNotice? = null,
     /** Non-null when a store file was unreadable at load and was kept aside
      *  ("Couldn't read your shot history; …") — MainActivity shows it once in an
      *  action snackbar whose "Share" sends the kept-aside copies. */
