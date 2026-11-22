@@ -11,6 +11,7 @@
 
 import type { Bean } from '#lib/bean/model.js';
 import type {
+	BrewLogGrind,
 	BrewLogPrefill,
 	BrewLogSeeds,
 	BrewMethodPreset as CoreBrewMethodPreset,
@@ -19,6 +20,7 @@ import type {
 	Grinder
 } from '#lib/core/crema-core.js';
 import {
+	brewLogGrindJson as wasmBrewLogGrind,
 	brewLogSeedsJson as wasmBrewLogSeeds,
 	brewMethodPresetsWithCustom as wasmBrewMethodPresetsWithCustom,
 	normalizeBrewMethod as wasmNormalize
@@ -280,4 +282,16 @@ export function brewLogSeeds(input: {
 			})
 		)
 	) as BrewLogSeeds;
+}
+
+/**
+ * The grinder and grind a logged brew records (REVIEW-FINAL S4,
+ * `de1_domain::brew_log_grind`): the active grinder's id and name, stamped
+ * the way a shot's are, and the form's grind as text on that grinder's
+ * scale. `grind` `null` = not set; 0 is a grind.
+ */
+export function brewLogGrind(grinder: Grinder | null, grind: number | null): BrewLogGrind {
+	return JSON.parse(
+		wasmBrewLogGrind(JSON.stringify({ grinder: grinder ?? undefined, grind: grind ?? undefined }))
+	) as BrewLogGrind;
 }

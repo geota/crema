@@ -171,8 +171,8 @@ export class BrewContext {
 	}
 
 	/**
-	 * The grinder name (#488): the in-flight shot's snapshot (taken at shot
-	 * start), else the active grinder's. `null` with no grinder.
+	 * The grinder name (#488): a replay's (its META), else the active
+	 * grinder's. `null` with no grinder.
 	 */
 	get grinderModel(): string | null {
 		const inFlight = this.active.grinderModel?.trim();

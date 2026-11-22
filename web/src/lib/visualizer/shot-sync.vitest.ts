@@ -170,22 +170,6 @@ function roastLevelToWire(level: number | null): string | null {
 	return 'Dark';
 }
 
-// ── Mirror of $lib/visualizer/shot-sync :: resolveGrinderModel ───────
-//
-// Snapshot wins (per-shot override or completion-time freeze); the
-// settings default is the legacy-fallback for shots that pre-date the
-// snapshot field. Trims both sides; `null` when neither carries a value.
-function resolveGrinderModel(
-	shot: StoredShot,
-	settingsDefault: string | undefined | null
-): string | null {
-	const fromShot = shot.grinderModel?.trim();
-	if (fromShot) return fromShot;
-	const fromSettings = settingsDefault?.trim();
-	if (fromSettings) return fromSettings;
-	return null;
-}
-
 // ── Wasm bootstrap ────────────────────────────────────────────────────
 // The `--target web` bundle's default init `fetch`es the `.wasm` by URL, which
 // vitest can't do over `file://`; `initTestWasm` reads the bytes off disk and
@@ -498,46 +482,3 @@ describe('storedShotFromWire', () => {
 	});
 });
 
-describe('resolveGrinderModel', () => {
-	it('returns null when the shot has no snapshot and the settings default is empty', () => {
-		assert.equal(resolveGrinderModel(shot(), ''), null);
-		assert.equal(resolveGrinderModel(shot(), null), null);
-		assert.equal(resolveGrinderModel(shot(), undefined), null);
-	});
-
-	it('snapshots the shot value wins when present', () => {
-		assert.equal(
-			resolveGrinderModel(shot({ grinderModel: 'Niche Zero' }), 'Eureka Mignon'),
-			'Niche Zero'
-		);
-	});
-
-	it('falls back to the settings default when the snapshot is null', () => {
-		assert.equal(
-			resolveGrinderModel(shot({ grinderModel: null }), 'Eureka Mignon Specialita'),
-			'Eureka Mignon Specialita'
-		);
-	});
-
-	it('treats whitespace-only values as empty (trim both sides)', () => {
-		assert.equal(resolveGrinderModel(shot({ grinderModel: '   ' }), '   '), null);
-		assert.equal(
-			resolveGrinderModel(shot({ grinderModel: '   ' }), '  Niche Zero  '),
-			'Niche Zero'
-		);
-		assert.equal(
-			resolveGrinderModel(shot({ grinderModel: '  Mythos One  ' }), 'Niche Zero'),
-			'Mythos One'
-		);
-	});
-
-	it('legacy shots without a grinderModel field cascade to the settings default', () => {
-		// Pre-#81 records have no `grinderModel` at all — defensive
-		// loader leaves it `null`, the cascade still resolves cleanly.
-		const legacy = shot();
-		// Force-clear via cast since the fixture defaults `grinderModel: null`.
-		delete (legacy as { grinderModel?: unknown }).grinderModel;
-		assert.equal(resolveGrinderModel(legacy, 'Niche Zero'), 'Niche Zero');
-		assert.equal(resolveGrinderModel(legacy, ''), null);
-	});
-});

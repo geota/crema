@@ -284,9 +284,7 @@ export function storedShotFromWire(
 		},
 		record: { duration: remote.duration_ms, samples: samples ? [...samples] : [] },
 		bean,
-		// Equipment-level grinder model from the remote journal, when set;
-		// the upload-time cascade in `shot-sync.ts` re-applies the user's
-		// current settings default if they push the row back.
+		// Equipment-level grinder model from the remote journal, when set.
 		grinderModel: wb?.grinder_model ?? null,
 		// Defensive `?? []` even though the type says `string[]` — the
 		// boundary in `shot-sync.ts` is the single producer of `tag_list`

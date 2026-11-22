@@ -26,7 +26,7 @@ import {
 	type CremaCore
 } from '#lib/core/index.js';
 import { MachineState, MmrRegister } from '#lib/core/crema-core.js';
-import type { BrewRecipe, MaintenanceFailure, ShotSelections, StartEnd } from '#lib/core/crema-core.js';
+import type { BrewRecipe, MaintenanceFailure, ShotBean as CoreShotBean, ShotSelections, StartEnd } from '#lib/core/crema-core.js';
 import { grindView } from '#lib/brew/grind-view.js';
 import { getBrewGrind } from '#lib/brew/grind-session.svelte.js';
 import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
@@ -45,6 +45,7 @@ import {
 	getHistoryStore,
 	snapshotFromBean,
 	extractCremaExtras,
+	type ShotBean as HistoryShotBean,
 	type StoredShot
 } from '#lib/history/index.js';
 import { commitShotCompletion } from '#lib/history/shot-persistence.js';
@@ -251,6 +252,19 @@ interface ShotStartBrewParams {
 	preinfuseTarget: number;
 	stopOnWeight: boolean;
 	autoTare: boolean;
+}
+
+/** A shot's bag snapshot in the core's shape (absent, not `null`, for a blank field). */
+function toCoreShotBean(snap: HistoryShotBean): CoreShotBean {
+	return {
+		beanId: snap.beanId ?? undefined,
+		name: snap.name,
+		roasterName: snap.roasterName ?? undefined,
+		roastedOn: snap.roastedOn ?? undefined,
+		roastLevel: snap.roastLevel ?? undefined,
+		tags: snap.tags,
+		notes: snap.notes
+	};
 }
 
 /** Two override sets with the same values (absent = absent). */
@@ -717,11 +731,12 @@ export class CremaApp {
 				void this.core.setStartSettings(s.groupFlushBeforeShot, s.requireScale, s.autoPurgeAfterSteam);
 			});
 			// What Brew has selected (REVIEW-CORE H3): the core freezes it at
-			// its own shot start, so a group-head start records it too.
-			// TODO(#488 batch 2 web): a replay's selections, and drop the
-			// shell's own freeze.
+			// its own shot start, so a group-head start records it too. Not
+			// during a replay: its shadow core holds the capture's selections,
+			// and the live core gets Brew's again when the replay ends.
 			$effect(() => {
-				this.core.setShotSelections(this.shotSelections());
+				const selections = this.shotSelections();
+				if (!this.#replaying) this.core.setShotSelections(selections);
 			});
 		});
 		// A hidden tab gets no wake-up tick (the regular tick covers the
@@ -1008,9 +1023,9 @@ export class CremaApp {
 
 	/**
 	 * Build an `ActiveShotData` from current shell state — the active
-	 * library bean, the active profile (for dose + name), the pre-tap
-	 * Quick Sheet snapshot, and the grinder-model cascade. Called at
-	 * `ShotStarted` to populate the in-flight context.
+	 * library bean, the active profile (for dose + name) and the pre-tap
+	 * Quick Sheet snapshot. Called at `ShotStarted` to populate the
+	 * in-flight context the Brew screen shows.
 	 *
 	 * The replay path populates `ActiveShot` directly from `parsed.meta`
 	 * and never invokes this helper — so live-store reads are scoped
@@ -1029,13 +1044,6 @@ export class CremaApp {
 			? profiles.get(profiles.activeId)
 			: undefined;
 
-		// The active grinder at shot start (#488, review F4/F9): its id and
-		// a snapshot of its name, so switching mid-shot can't mislabel the
-		// shot and a later rename can't rewrite it.
-		const grinder = library.activeGrinder;
-		const grinderModel = grinder?.name.trim() || null;
-		const grinderId = grinder?.id ?? null;
-
 		const snapshot = this.state.current;
 		const profileName = snapshot.activeProfileName ?? activeProfile?.name ?? null;
 		const dose = activeProfile?.dose ?? null;
@@ -1044,14 +1052,14 @@ export class CremaApp {
 		const brewParams =
 			this.brewParamsAtShotStart ?? (activeProfile ? this.pushedBrewParams(activeProfile) : null);
 
+		// The bag, profile, grinder and grind the shot records are the core's,
+		// frozen at its own shot start from `setShotSelections` (REVIEW-CORE
+		// H3); this snapshot is for the Brew screen and the capture's META.
 		return {
 			bean: beanSnapshot,
 			profileName,
-			profileId: activeProfile?.id ?? null,
 			dose,
 			brewParams: brewParams ? { ...brewParams } : null,
-			grinderModel,
-			grinderId,
 			source: 'live'
 		};
 	}
@@ -1065,17 +1073,7 @@ export class CremaApp {
 		const profile = profiles.activeId ? profiles.get(profiles.activeId) : undefined;
 		const grinder = library.activeGrinder;
 		return {
-			bean: snap
-				? {
-						beanId: snap.beanId ?? undefined,
-						name: snap.name,
-						roasterName: snap.roasterName ?? undefined,
-						roastedOn: snap.roastedOn ?? undefined,
-						roastLevel: snap.roastLevel ?? undefined,
-						tags: snap.tags,
-						notes: snap.notes
-					}
-				: undefined,
+			bean: snap ? toCoreShotBean(snap) : undefined,
 			profileId: profile?.id,
 			profileName: profile?.name,
 			grinderId: grinder?.id,
@@ -1606,6 +1604,8 @@ export class CremaApp {
 
 	/** The profile and overrides last given to the core as its desired profile. */
 	#desiredOverrides: { profileId: string; qc: ProfileFingerprintOverrides } | null = null;
+	/** A capture replay owns the core's shot selections (from start to its end). */
+	#replaying = false;
 
 	/**
 	 * Set the live overrides for `profile` (the dial moved). They become the
@@ -2372,8 +2372,6 @@ export class CremaApp {
 		preinfuseTarget: number;
 		stopOnWeight: boolean;
 		autoTare: boolean;
-		/** Brew's grind as text, or `null` when not set. */
-		grind?: string | null;
 	}): void {
 		this.brewParamsAtShotStart = { ...snapshot };
 	}
@@ -2620,6 +2618,9 @@ export class CremaApp {
 		// gated `AppRuntime` never mounts. The fiber is held for `cancelReplay`
 		// → `Fiber.interrupt`; the program restores the live core + clears
 		// ActiveShot in its `acquireUseRelease` release, no matter how it ends.
+		// From here the shadow core holds the capture's selections: Brew's
+		// changes wait for the live core (see the selections effect).
+		this.#replaying = true;
 		const fiber = Effect.runFork(
 			replayCaptureProgram({
 				core: this.core,
@@ -2628,6 +2629,7 @@ export class CremaApp {
 				speed: opts.speed,
 				clearedReadout: CLEARED_DE1_READOUT,
 				applyOutput: (output) => this.applyCoreOutput(output),
+				setShotSelections: (selections) => this.core.setShotSelections(selections),
 				patch: (snapshot) => this.state.patch(snapshot),
 				setActiveShot: (data) => getActiveShotStore().set(data),
 				clearActiveShot: () => getActiveShotStore().clear(),
@@ -2639,6 +2641,10 @@ export class CremaApp {
 			await Effect.runPromise(Fiber.await(fiber));
 		} finally {
 			this.replayFiber = null;
+			// The live core is back: hand it Brew's selections, which may have
+			// changed during the replay.
+			this.#replaying = false;
+			this.core.setShotSelections(this.shotSelections());
 		}
 	}
 

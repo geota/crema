@@ -251,16 +251,11 @@ export interface Settings {
 
 	// ── Equipment ────────────────────────────────────────────────────────
 	/**
-	 * Free-text grinder model — used as the equipment-level default on
-	 * shot uploads to Visualizer (`grinder_model` on `ShotUpdateRequest`).
-	 * Empty string means "no default", and the upload omits the field
-	 * unless the shot itself carries an override.
-	 *
-	 * Unlike `bean.grinderSetting` (which is the per-bag click setting),
-	 * this is a property of the user's gear — e.g. "Niche Zero",
-	 * "Eureka Mignon Specialita". Free text because there's no canonical
-	 * grinder catalogue. Captured into a shot's `grinderModel` snapshot
-	 * at completion; a shot may override it in the shot-detail panel.
+	 * The pre-#488 free-text grinder model (e.g. "Niche Zero"). Retired: it
+	 * can't be edited, and only the grinder migration reads it (it names the
+	 * grinder that becomes active). Shots take the active grinder's name at
+	 * shot start, and uploads never fall back to this (REVIEW-FINAL S3, N8).
+	 * Kept in the settings and backups so the migration still has it.
 	 */
 	grinderModel: string;
 	/**
