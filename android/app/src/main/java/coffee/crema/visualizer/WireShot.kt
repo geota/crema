@@ -51,6 +51,8 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
         // `?.let { put } ?: put(JsonNull)` form silently overwrote a set value
         // with null (put returns the previous value, so the elvis always fired).
         put("profileName", shot.profileName)
+        // Omitted when absent, as the core writes it (existing bytes unchanged).
+        shot.profileId?.let { put("profileId", it) }
         // Embed the recipe (#12) so the uploaded shot round-trips through Visualizer
         // as a real, importable profile — not an empty stub. Absent for shots
         // captured before this field existed (older records ride without it).
@@ -295,6 +297,7 @@ fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Jso
         peakPressure = samples.maxOfOrNull { it.pressure },
         peakTemp = samples.maxOfOrNull { it.headTemp },
         profileName = str("profileName"),
+        profileId = str("profileId")?.takeIf { it.isNotBlank() },
         bean = bean,
         rating = metaStr("rating")?.toIntOrNull()?.takeIf { it > 0 },
         notes = metaStr("notes"),

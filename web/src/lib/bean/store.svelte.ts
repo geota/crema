@@ -44,6 +44,7 @@ import {
 	coerceRoaster,
 	migrateLegacyCurrentBean
 } from './model';
+import { getBeanImageStore } from './image-storage';
 
 // ── localStorage keys (versioned envelope) ─────────────────────────────
 
@@ -288,14 +289,46 @@ export class BeanLibraryStore {
 	 * which a module-scope store can't do under Option 3.
 	 */
 	deleteBean(id: string): void {
+		const doomed = this.envelope.beans.filter((b) => b.id === id);
+		if (doomed.length === 0) return;
 		const beans = this.envelope.beans.filter((b) => b.id !== id);
-		if (beans.length === this.envelope.beans.length) return;
 		this.envelope = { ...this.envelope, beans };
 		this.persist();
 		if (this.activeId === id) {
 			this.activeId = null;
 			this.persistActive();
 		}
+		this.dropPhotos(doomed);
+	}
+
+	/**
+	 * Delete the photo blobs of bags just removed (save-boundaries review F9,
+	 * as Android does), unless a remaining bag still points at the same blob.
+	 * Best-effort: a failed delete leaves an orphan, never blocks the delete.
+	 */
+	private dropPhotos(removed: readonly Bean[]): void {
+		const inUse = new Set(this.envelope.beans.map((b) => b.imageRef).filter((r) => r != null));
+		for (const ref of new Set(removed.map((b) => b.imageRef))) {
+			if (ref == null || inUse.has(ref)) continue;
+			void getBeanImageStore()
+				.delete(ref)
+				.catch(() => {});
+		}
+	}
+
+	/**
+	 * Store an editor's Save (`mergeBeanEdit`'s result) as it is, its
+	 * `updatedAt` included. A row deleted meanwhile stays deleted: `false`.
+	 */
+	saveEditedBean(bean: Bean): boolean {
+		const idx = this.envelope.beans.findIndex((b) => b.id === bean.id);
+		if (idx < 0) return false;
+		this.envelope = {
+			...this.envelope,
+			beans: [...this.envelope.beans.slice(0, idx), bean, ...this.envelope.beans.slice(idx + 1)]
+		};
+		this.persist();
+		return true;
 	}
 
 	/** Toggle the favourite flag. */
@@ -449,6 +482,22 @@ export class BeanLibraryStore {
 		this.persist();
 	}
 
+	/** {@link saveEditedBean} for a roaster editor's Save. */
+	saveEditedRoaster(roaster: Roaster): boolean {
+		const idx = this.envelope.roasters.findIndex((r) => r.id === roaster.id);
+		if (idx < 0) return false;
+		this.envelope = {
+			...this.envelope,
+			roasters: [
+				...this.envelope.roasters.slice(0, idx),
+				roaster,
+				...this.envelope.roasters.slice(idx + 1)
+			]
+		};
+		this.persist();
+		return true;
+	}
+
 	/**
 	 * Delete a roaster locally. Beans pointing at it have their `roasterId`
 	 * cleared rather than disappearing — losing a roastery's name is
@@ -479,9 +528,8 @@ export class BeanLibraryStore {
 		// than N `deleteBean` calls (each persisting) + a trailing `deleteRoaster`
 		// (another). Removing every bean that points at the roaster means no
 		// survivor needs its `roasterId` detached.
-		const beanIds = this.envelope.beans
-			.filter((b) => b.roasterId === id)
-			.map((b) => b.id);
+		const doomed = this.envelope.beans.filter((b) => b.roasterId === id);
+		const beanIds = doomed.map((b) => b.id);
 		const beans = this.envelope.beans.filter((b) => b.roasterId !== id);
 		const roasters = this.envelope.roasters.filter((r) => r.id !== id);
 		const changed =
@@ -496,6 +544,7 @@ export class BeanLibraryStore {
 			this.activeId = null;
 			this.persistActive();
 		}
+		this.dropPhotos(doomed);
 	}
 
 	/**

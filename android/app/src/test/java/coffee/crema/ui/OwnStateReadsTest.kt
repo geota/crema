@@ -72,8 +72,10 @@ class OwnStateReadsTest {
             "refreshProfiles" to setOf("activeProfileId", "withActiveProfileId()"),
             "deleteProfile" to setOf("activeProfileId", "withActiveProfileId()"),
             "archiveBuiltinProfile" to setOf("activeProfileId", "withActiveProfileId()"),
-            "activateReseeded" to setOf("activeProfileId"),
             "deleteBean" to setOf("activeBeanId"),
+            // A Save's Undo puts the override back on this device's own
+            // selection (Save is off on a remote, F8).
+            "undoQuickSave" to setOf("activeProfileId", "brewParams"),
             // Own-state writers (§7.4): a restore and a bean import.
             // A restore writes the library's own active bean, and plans against it.
             "restoreSink" to setOf("activeBeanId"),
@@ -115,11 +117,11 @@ class OwnStateReadsTest {
     /** §7.2 effective reads: these act on what is on screen. */
     private val effectiveMembers: Map<String, Set<String>> = mapOf(
         "MainViewModel.kt" to setOf(
-            "startFromShot", "saveQuickGrindToBean",
+            "startFromShot",
             // Decent buildRecord.grinderModel; Visualizer grinderModel and beanLibrary.
             "decent", "visualizer",
         ),
-        "LibraryController.kt" to setOf("saveQuickPreset", "captureCompletedShot"),
+        "LibraryController.kt" to setOf("quickSave", "captureCompletedShot", "freezeShotSelections"),
         "GuidedBrewController.kt" to setOf(
             "guidedBeanId", "openGuidedLogBrew", "openLogBrew", "defaultBrewRecipeFor", "resolveGuidedSetup",
         ),

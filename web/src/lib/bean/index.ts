@@ -20,6 +20,8 @@ export {
 	daysOffRoast,
 	duplicateBean,
 	setBeanFrozen,
+	mergeBeanEdit,
+	mergeRoasterEdit,
 	beanDaysOffRoast,
 	migrateLegacyCurrentBean,
 	mintBeanId,
@@ -65,7 +67,8 @@ export {
 export {
 	BeanImageStore,
 	getBeanImageStore,
-	refForBean as beanImageRefFor
+	refForBean as beanImageRefFor,
+	draftRefForBean as beanImageDraftRefFor
 } from './image-storage';
 
 // Account identity now comes from the `BeanSync` service (it owns the authed

@@ -12,8 +12,9 @@
  * call from any tab — IndexedDB serialises concurrent writes per
  * object-store transaction.
  *
- * GC: orphan blobs (refs whose bean was deleted from the library)
- * accumulate. Nothing deletes from a listing (#325): delete by ref.
+ * GC: deleting a bag deletes its blob (`BeanLibraryStore.deleteBean`), and
+ * the bag editor deletes the blobs a Save or Cancel leaves unreferenced.
+ * Nothing deletes from a listing (#325): delete by ref.
  */
 
 export const DB_NAME = 'crema-bean-images';
@@ -23,6 +24,14 @@ const STORE = 'images';
 /** Build the canonical ref string for a bean's image. */
 export function refForBean(beanId: string): string {
 	return `idb:bean-image:${beanId}`;
+}
+
+/**
+ * A fresh ref for a photo picked in the bag editor: the draft points at it
+ * until Save, so Cancel can drop it without touching the photo the bag has.
+ */
+export function draftRefForBean(beanId: string, nowMs = Date.now()): string {
+	return `${refForBean(beanId)}#${nowMs.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
 /** Open (or create / upgrade) the bean-images database. */

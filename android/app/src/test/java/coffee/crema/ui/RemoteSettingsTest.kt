@@ -25,6 +25,7 @@ import org.robolectric.annotation.Config
 import java.io.ByteArrayInputStream
 import java.util.zip.ZipInputStream
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -190,38 +191,24 @@ class RemoteSettingsTest {
         assertTrue(VmHarness.log(vm).any { "Config snapshot 3 dropped" in it }, "the rev-3 snapshot was dropped")
     }
 
-    /** AC-30, the behaviour half: on a remote, library actions act on what is
-     *  on screen (the hub's), not on this device's own values. */
+    /** Review 2026-11-21 F8 (interim): on a remote, Quick Controls' Save is
+     *  off and says where to save. It used to write the hub's dial into this
+     *  device's own copy of the bag and profile, which the hub never reads. */
     @Test
-    fun `library actions use the values on screen`() {
+    fun `quick save on a remote writes nothing and names the hub`() {
         val vm = fixture.start()
         fixture.push()
-        assertTrue(vm.saveQuickGrindToBean())
-        VmHarness.idle()
-        assertEquals("15", vm.ui.value.beans.first { it.id == BEAN_S }.grinderSetting, "S's dial on S's bean")
-        assertEquals("", vm.ui.value.beans.first { it.id == BEAN_P }.grinderSetting)
-
-        // The startup load must not replace the saved copy (it loads the
-        // custom profiles after the prefs).
         VmHarness.awaitStartupLoaded(vm)
-        vm.saveQuickPreset("Hub dial")
-        // Saving a built-in's copy makes it active, an edit relayed to the
-        // hub. Until the hub answers, that pending edit is what the screen
-        // shows (and what the next library action acts on), so let it settle.
-        VmHarness.idleUntil("the hub's answer") { VmHarness.ownState(vm).mirror?.pending?.isEmpty() == true }
-        val saved = vm.ui.value.profiles.firstOrNull { it.name == "Hub dial" }
-        assertNotNull(saved, "a copy of S's built-in profile")
-        assertEquals(20f, saved.dose, "with S's brew override")
-        assertEquals(40f, saved.yieldOut)
-
-        // A hub custom profile this library lacks: refused.
-        val customJson = vm.ui.value.profiles.first { it.id == PROFILE_S }.let { coreJson.encodeToString(coffee.crema.profiles.CremaProfile.serializer(), it.copy(id = "custom-on-the-hub", source = "custom")) }
-        fixture.push(S.copy(activeProfileId = "custom-on-the-hub", activeProfileJson = customJson))
-        val count = vm.ui.value.profiles.size
-        vm.saveQuickPreset("Nope")
+        val plan = vm.ui.value.quickSavePlan()
+        assertTrue(plan.grind != null && plan.recipeChanged, "the hub's dial differs from the bag and the profile: $plan")
+        assertFalse(plan.enabled)
+        assertEquals("Save on Kitchen tablet", plan.label)
+        val profiles = vm.ui.value.profiles.size
+        vm.quickSave("Hub dial")
         VmHarness.idle()
-        assertEquals(count, vm.ui.value.profiles.size)
-        assertTrue(vm.ui.value.userMessages.any { it == "That profile is only on Kitchen tablet" }, "${vm.ui.value.userMessages}")
+        assertEquals("", vm.ui.value.beans.first { it.id == BEAN_S }.grinderSetting, "no grind saved to the bag")
+        assertEquals(profiles, vm.ui.value.profiles.size, "no profile copy")
+        assertTrue(vm.ui.value.userMessages.any { it == "Save on Kitchen tablet" }, "${vm.ui.value.userMessages}")
     }
 
     /** AC-31: the remote's core (its stop-target projection) follows the
