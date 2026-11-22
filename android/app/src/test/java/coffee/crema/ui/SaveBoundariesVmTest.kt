@@ -328,6 +328,8 @@ class SaveBoundariesVmTest {
         assertEquals(200f, vm.bean("b").remaining)
         // F4: the profile's library id next to its name, in the store too.
         assertEquals(profile.id, shot.profileId)
+        // The row reaches history.db on the store's own save, after the row shows.
+        VmHarness.idleUntil("the shot's row in history.db") { VmHarness.truthField(vm, shot.id, "profileId") != null }
         assertEquals(profile.id, VmHarness.truthField(vm, shot.id, "profileId"))
     }
 
