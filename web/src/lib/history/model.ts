@@ -405,6 +405,12 @@ export interface StoredShot {
 	 * the field and on a row with no bag. Core `StoredShot::bag_debit`.
 	 */
 	bagDebit?: number | null;
+	/**
+	 * The shot is a replay of a capture, not a live pull (#488 batch 6): it is
+	 * recorded and marked in History, but never uploaded and never debits a
+	 * bag. Core `StoredShot::replay`; absent when false.
+	 */
+	replay?: boolean;
 }
 
 /**

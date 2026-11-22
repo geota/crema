@@ -32,11 +32,10 @@ import {
 	writeJsonChecked
 } from '#lib/utils/storage.js';
 import {
-	credit_shot_debit,
-	debit_remaining,
-	debit_taken,
 	resettle_remaining,
-	resettled_bag_debit
+	resettled_bag_debit,
+	shotBagMoveJson as wasmShotBagMoveJson,
+	shotDebitJson as wasmShotDebitJson
 } from '#lib/wasm/de1_wasm.js';
 import {
 	type Grinder,
@@ -56,7 +55,14 @@ import {
 	saveBagGrind as coreSaveBagGrind,
 	stagedGrindersOnSave
 } from './grinder';
-import type { RoasterDeletePlan } from '#lib/core/crema-core.js';
+import type {
+	BagWeight,
+	RoasterDeletePlan,
+	ShotBagMove,
+	ShotBagMoveInput,
+	ShotDebit,
+	ShotDebitInput
+} from '#lib/core/crema-core.js';
 import {
 	type Bean,
 	type Roaster,
@@ -192,6 +198,11 @@ export interface BagDebit {
 	taken: number;
 	/** This debit took the bag from above 0 to 0. */
 	emptied: boolean;
+}
+
+/** A bag's weight as the core's debit rules read it. */
+function bagWeight(bean: Bean): BagWeight {
+	return { remaining: bean.remaining, bagSize: bean.bagSize };
 }
 
 export class BeanLibraryStore {
@@ -499,43 +510,71 @@ export class BeanLibraryStore {
 	}
 
 	/**
-	 * Auto-debit `doseG` from a specific bean's `remaining` when a shot
-	 * completes, via the shared core rule (`de1_domain::debit_remaining` over
-	 * the wasm bridge): floors at 0 so the readout never goes negative, and
-	 * no-ops (no write, no `updatedAt` touch) when the bag is already empty.
-	 * Debits the shot's *own* bean (not whatever is active now), so switching
-	 * the active bag after pulling can't bill the wrong bag.
-	 *
-	 * Returns the grams actually taken, for the row's `bagDebit` (0 when the
-	 * bag had nothing to give), and whether this shot just **emptied** the bag
-	 * (remaining went from > 0 to exactly 0), the caller's cue to prompt
-	 * switch / archive / rate.
+	 * A completed shot's bag change, by the core's rule (`de1_domain::shot_debit`,
+	 * REVIEW-FINAL-2 MF1): with `debit` (the core's `ShotEffects.debit`) the
+	 * dose comes off the shot's *own* bag (not whatever is active now),
+	 * floored at 0; an empty bag or a bad dose is left alone (no write, no
+	 * `updatedAt` touch). The answer carries the row's `bagDebit`: the grams
+	 * taken, 0 for a bag that wasn't debited (a replay, an empty or unheld
+	 * bag), `undefined` only for a row with no bag. `emptied` is the caller's
+	 * cue to prompt switch / archive / rate.
 	 */
+	shotDebit(beanId: string | null, doseG: number | null, debit: boolean): ShotDebit {
+		const bean = beanId ? this.getBean(beanId) : null;
+		const out = JSON.parse(
+			wasmShotDebitJson(
+				JSON.stringify({
+					hasBag: !!beanId,
+					bag: bean ? bagWeight(bean) : undefined,
+					doseG: doseG ?? undefined,
+					debit
+				} satisfies ShotDebitInput)
+			)
+		) as ShotDebit;
+		if (bean && out.remaining != null) this.updateBean(bean.id, { remaining: out.remaining });
+		return out;
+	}
+
+	/** {@link shotDebit} for a debit: what one debit took from bag `beanId`. */
 	debitBean(beanId: string, doseG: number): BagDebit {
-		const bean = this.envelope.beans.find((b) => b.id === beanId);
-		if (!bean) return { taken: 0, emptied: false };
-		// The core decides whether there is anything to debit (returns `undefined`
-		// when the bag is already empty or the dose is bad), so we persist — and
-		// touch `updatedAt` — ONLY on a real debit.
-		const next = debit_remaining(bean.remaining, doseG);
-		if (next === undefined) return { taken: 0, emptied: false };
-		const taken = debit_taken(bean.remaining, doseG);
-		this.updateBean(bean.id, { remaining: next });
-		return { taken, emptied: next === 0 };
+		const out = this.shotDebit(beanId, doseG, true);
+		return { taken: out.bagDebit ?? 0, emptied: out.emptied };
 	}
 
 	/**
-	 * Undo a row's debit when its shot moves off this bag: the grams the row
-	 * took (`bagDebit`) go back, capped at `bagSize`, and an untracked bag gains
-	 * nothing. A row from before `bagDebit` (`null`) credits its dose only while
-	 * the bag holds grams (`de1_domain::credit_shot_debit`).
+	 * A logged shot moved to bag `toBagId` (`null` = none) in History, by the
+	 * core's plan (`de1_domain::shot_bag_move`, REVIEW-FINAL-2 MF1): the old
+	 * bag gets back only what the row took; the new bag is debited only where
+	 * a recorded shot would be (never for a replay), and the plan's `bagDebit`
+	 * is what the row records. The bags' new weights are written here.
 	 */
-	creditShotDebit(beanId: string, bagDebit: number | null, doseG: number): void {
-		const bean = this.envelope.beans.find((b) => b.id === beanId);
-		if (!bean) return;
-		const next = credit_shot_debit(bean.remaining, bean.bagSize, bagDebit ?? undefined, doseG);
-		if (next === undefined) return;
-		this.updateBean(bean.id, { remaining: next });
+	moveShotDebit(input: {
+		fromBagId: string | null;
+		toBagId: string | null;
+		bagDebit: number | null;
+		doseG: number | null;
+		replay: boolean;
+	}): ShotBagMove {
+		const from = input.fromBagId ? this.getBean(input.fromBagId) : null;
+		const to = input.toBagId ? this.getBean(input.toBagId) : null;
+		const plan = JSON.parse(
+			wasmShotBagMoveJson(
+				JSON.stringify({
+					fromBagId: input.fromBagId ?? undefined,
+					fromBag: from ? bagWeight(from) : undefined,
+					toBagId: input.toBagId ?? undefined,
+					toBag: to ? bagWeight(to) : undefined,
+					bagDebit: input.bagDebit ?? undefined,
+					doseG: input.doseG ?? undefined,
+					// The web is never a remote: it records every shot it sees.
+					remote: false,
+					replay: input.replay
+				} satisfies ShotBagMoveInput)
+			)
+		) as ShotBagMove;
+		if (from && plan.fromRemaining != null) this.updateBean(from.id, { remaining: plan.fromRemaining });
+		if (to && plan.toRemaining != null) this.updateBean(to.id, { remaining: plan.toRemaining });
+		return plan;
 	}
 
 	/**

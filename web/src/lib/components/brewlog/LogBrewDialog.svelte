@@ -8,7 +8,7 @@
 	 *
 	 * Saving builds a telemetry-less `StoredShot` via
 	 * `HistoryStore.addManualBrew` and debits the bean exactly like a
-	 * live shot (`debitBean` → bag-empty prompt). A guided session's
+	 * live shot (`shotDebit` → bag-empty prompt). A guided session's
 	 * summary arrives through `prefill` with the weight series attached.
 	 *
 	 * "+ Add method…" (after "Other…") creates one of the user's own
@@ -329,12 +329,11 @@
 			brewSeries: seed?.brewSeries ?? null,
 			barista: getSettingsStore().current.baristaName?.trim() || null
 		});
-		if (bean && dose > 0) {
-			const debit = library.debitBean(bean.id, dose);
-			history.setBagDebit(record.id, debit.taken);
+		if (bean) {
+			// The core's debit (`shot_debit`): the grams taken, 0 with no dose.
+			const debit = library.shotDebit(bean.id, dose, true);
+			history.setBagDebit(record.id, debit.bagDebit ?? null);
 			if (debit.emptied) void promptBagEmpty(bean.id);
-		} else if (bean) {
-			history.setBagDebit(record.id, 0);
 		}
 		rememberMethod(storedMethod);
 		toast.success('Brew logged');

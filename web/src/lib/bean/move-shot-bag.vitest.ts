@@ -17,7 +17,7 @@ function bag(id: string, bagSize: number, remaining: number): void {
 const remaining = (id: string): number | undefined => getBeanStore().getBean(id)?.remaining;
 
 /** A logged 18 g row on `beanId`, with `bagDebit` as given (omit for an old row). */
-function row(beanId: string, bagDebit?: number): AnyShot {
+function row(beanId: string, bagDebit?: number, replay = false): AnyShot {
 	const shot = getHistoryStore().addManualBrew({
 		method: 'espresso',
 		completedAt: 1_700_000_000_000,
@@ -33,7 +33,8 @@ function row(beanId: string, bagDebit?: number): AnyShot {
 		nextPlan: null
 	});
 	if (bagDebit !== undefined) getHistoryStore().setBagDebit(shot.id, bagDebit);
-	return getHistoryStore().get(shot.id)!;
+	const stored = getHistoryStore().get(shot.id)!;
+	return replay ? { ...stored, replay: true } : stored;
 }
 
 beforeAll(async () => {
@@ -132,6 +133,24 @@ describe('moveShotBag', () => {
 		const shot = row('a', 18);
 		moveShotBag(shot, null);
 		expect(getHistoryStore().get(shot.id)?.bagDebit).toBeUndefined();
+	});
+
+	it('never debits the new bag for a replay, and records 0 (REVIEW-FINAL-2 MF1)', () => {
+		bag('a', 250, 100);
+		bag('b', 250, 200);
+		const shot = row('a', 0, true);
+		moveShotBag(shot, 'b');
+		expect(remaining('a')).toBe(100);
+		expect(remaining('b')).toBe(200);
+		expect(getHistoryStore().get(shot.id)?.bagDebit).toBe(0);
+	});
+
+	it('records 0 moving to a bag this library doesn\'t hold', () => {
+		bag('a', 250, 100);
+		const shot = row('a', 18);
+		moveShotBag(shot, 'gone');
+		expect(remaining('a')).toBe(118);
+		expect(getHistoryStore().get(shot.id)?.bagDebit).toBe(0);
 	});
 
 	it('leaves a pick of the same bag alone', () => {

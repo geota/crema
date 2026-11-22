@@ -4430,6 +4430,7 @@ export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | nul
 		...(brewMethod != null ? { brewMethod } : {}),
 		...(brewMethodLabel ? { brewMethodLabel } : {}),
 		...(bagDebit !== null ? { bagDebit } : {}),
+		...(obj.replay === true ? { replay: true } : {}),
 		...(recipeName ? { recipeName } : {}),
 		...(brewSeries ? { brewSeries } : {})
 	};
