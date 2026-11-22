@@ -339,7 +339,7 @@ function recordedDose(
  * shot start, the Settings grinder (the core applies bean → Settings), the
  * grind dial, the barista, the bean's tags (a one-shot copy: a later edit to
  * the bean's tags does NOT rewrite history), the machine, and the profile
- * name — the fallback a replay's shadow core needs.
+ * name and id — the fallback a replay's shadow core needs.
  */
 function captureContext(activeShot: ActiveShotData | null): ShotCaptureContext {
 	const bean = activeShot?.bean ?? null;
@@ -368,7 +368,10 @@ function captureContext(activeShot: ActiveShotData | null): ShotCaptureContext {
 		// history, #84) carries the serial the server verifies, even after
 		// the machine disconnects or another one is paired.
 		machine: liveMachineIdentity() ?? undefined,
-		profileName: activeShot?.profileName ?? undefined
+		profileName: activeShot?.profileName ?? undefined,
+		// The profile active at shot start (frozen with the bag, F9): the
+		// core stamps it when it didn't hold the profile it ran itself.
+		profileId: activeShot?.profileId ?? undefined
 	};
 }
 

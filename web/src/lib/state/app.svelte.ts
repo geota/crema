@@ -1040,6 +1040,7 @@ export class CremaApp {
 		return {
 			bean: beanSnapshot,
 			profileName,
+			profileId: activeProfile?.id ?? null,
 			dose,
 			brewParams: brewParams ? { ...brewParams } : null,
 			grinderModel,

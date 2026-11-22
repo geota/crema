@@ -31,7 +31,9 @@
 		onToggleStopOnWeight,
 		onToggleAutoTare,
 		onToggleSteamEco,
-		onSavePreset
+		onSave,
+		saveEnabled = false,
+		onSaveAsNew
 	}: {
 		params: BrewParamState;
 		open: boolean;
@@ -41,8 +43,12 @@
 		onToggleStopOnWeight: (enabled: boolean) => void;
 		onToggleAutoTare: (enabled: boolean) => void;
 		onToggleSteamEco: (enabled: boolean) => void;
-		/** Save the dial as a new profile; `undefined` with no active profile. */
-		onSavePreset?: () => void;
+		/** Save: each changed part to its owner (`#lib/brew/quick-save.js`). */
+		onSave?: () => void;
+		/** Save has something to write; off otherwise. */
+		saveEnabled?: boolean;
+		/** "Save as new…": set when Save would update a custom profile in place. */
+		onSaveAsNew?: () => void;
 	} = $props();
 
 	const settings = getSettingsStore();
@@ -141,9 +147,12 @@
 			<button type="button" class="pqs-btn" onclick={() => params.reset()}>
 				<ArrowCounterClockwiseIcon aria-hidden="true" /> Reset
 			</button>
-			{#if onSavePreset}
-				<button type="button" class="pqs-btn is-primary" onclick={onSavePreset}>
-					<BookmarkSimpleIcon aria-hidden="true" /> Save profile
+			{#if onSaveAsNew}
+				<button type="button" class="pqs-btn" onclick={onSaveAsNew}>Save as new…</button>
+			{/if}
+			{#if onSave}
+				<button type="button" class="pqs-btn is-primary" onclick={onSave} disabled={!saveEnabled}>
+					<BookmarkSimpleIcon aria-hidden="true" /> Save
 				</button>
 			{/if}
 		</div>
@@ -394,5 +403,9 @@
 	}
 	.pqs-btn :global(svg) {
 		font-size: 18px;
+	}
+	.pqs-btn:disabled {
+		opacity: 0.45;
+		cursor: default;
 	}
 </style>
