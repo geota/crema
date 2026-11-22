@@ -364,4 +364,142 @@ class GrinderLibraryVmTest {
         val summary = coffee.crema.history.unknownSeriesSummary(shot)
         assertEquals(niche.id, shot.toRow(summary).grinderId)
     }
+
+    // ── Round 2 batch 3: editors and selection (REVIEW-CORE H4–H6, M3; FINAL S7, S9, N7) ──
+
+    /** H5 / PLAN follow-up 20: unreadable settings would read as no grinder; the migration waits for a load that reads. */
+    @Test
+    fun `an unreadable settings file skips the migration`() {
+        File(app.filesDir, "prefs.json").writeText("{ not json")
+        writeLibrary(BeanLibrary(listOf(bag("a", setting = "14"))))
+        val vm = vm()
+        assertNull(vm.bean("a").grinds, "the old grind isn't filed under \"no grinder\" for good")
+        assertTrue(vm.own().grinders.isEmpty())
+        assertTrue(VmHarness.log(vm).any { "Grinder migration skipped" in it && "settings" in it }, "${VmHarness.log(vm)}")
+    }
+
+    @Test
+    fun `the migration gate reads a store as read only when it loaded or was absent`() {
+        val h = coffee.crema.persist.StoreHealth.entries
+        val read = h.filter { coffee.crema.beans.migrationGate(it, it).let { g -> g.library && g.settings } }
+        assertEquals(listOf(coffee.crema.persist.StoreHealth.OK, coffee.crema.persist.StoreHealth.ABSENT), read)
+        assertFalse(coffee.crema.beans.migrationGate(coffee.crema.persist.StoreHealth.OK, coffee.crema.persist.StoreHealth.DAMAGED).settings)
+        assertFalse(coffee.crema.beans.migrationGate(coffee.crema.persist.StoreHealth.UNAVAILABLE, coffee.crema.persist.StoreHealth.OK).library)
+    }
+
+    /** N7: re-picking the bag already on Brew keeps an unsaved dial, with no message. */
+    @Test
+    fun `re-picking the active bag changes nothing`() {
+        val a = bag("a", grinds = listOf(BagGrind(niche.id, niche.name, "14", starred = true)))
+        writeLibrary(BeanLibrary(listOf(a), activeBeanId = "a", grinders = listOf(niche), activeGrinderId = niche.id))
+        val vm = vm()
+        vm.setQcGrind(15f)
+        VmHarness.idle()
+        vm.setActiveBean("a")
+        VmHarness.idle()
+        assertEquals("15", vm.ui.value.qcGrind, "the unsaved dial stays")
+        assertNull(vm.ui.value.bagSelectUndo, "no message, no Undo")
+    }
+
+    /** H4 / S9: mid-shot, Undo leaves the profile (loading one would upload it to the machine); the grind goes back. */
+    @Test
+    fun `a bag pick's Undo during a shot leaves the profile`() {
+        val a = bag("a", grinds = listOf(BagGrind(niche.id, niche.name, "14", starred = false)))
+        val b = bag("b", grinds = listOf(BagGrind(niche.id, niche.name, "18", starred = false)))
+        writeLibrary(BeanLibrary(listOf(a, b), activeBeanId = "a", grinders = listOf(niche), activeGrinderId = niche.id))
+        val vm = vm()
+        val (first, linked) = vm.ui.value.profiles.filter { it.source != "custom" }.take(2)
+        vm.setActiveProfile(first.id)
+        vm.updateBean("b", "") { it.copy(linkedProfileId = linked.id) }
+        vm.setQcGrind(14f)
+        VmHarness.idle()
+        vm.setActiveBean("b")
+        VmHarness.idle()
+        assertEquals(linked.id, vm.ui.value.activeProfileId)
+        assertEquals("18", vm.ui.value.qcGrind)
+        val undo = assertNotNull(vm.ui.value.bagSelectUndo)
+        VmHarness.deliverCoreOutput(vm, """{"events":[{"type":"ShotStarted"}],"commands":[]}""")
+        VmHarness.drainCoreLane(vm)
+        VmHarness.idle()
+        assertTrue(vm.ui.value.shotInProgress)
+        vm.undoBagSelection(undo.seq)
+        VmHarness.idle()
+        assertEquals(linked.id, vm.ui.value.activeProfileId, "the profile stays mid-shot")
+        assertEquals("14", vm.ui.value.qcGrind, "the grind goes back")
+    }
+
+    /** M3: a roaster cascade that deletes the active bag leaves Brew with no bag, not another one. */
+    @Test
+    fun `deleting a roaster with the active bag selects no other bag`() {
+        val sey = coffee.crema.beans.newRoaster("Sey", 1).copy(id = "roaster:sey")
+        val onyx = coffee.crema.beans.newRoaster("Onyx", 1).copy(id = "roaster:onyx")
+        val beans = listOf(bag("a").copy(roasterId = sey.id), bag("b").copy(roasterId = sey.id), bag("c").copy(roasterId = onyx.id))
+        writeLibrary(BeanLibrary(beans, listOf(sey, onyx), activeBeanId = "a"))
+        val vm = vm()
+        vm.deleteRoaster(sey.id, cascade = true)
+        VmHarness.idle()
+        assertEquals(listOf("c"), vm.own().beans.map { it.id })
+        assertNull(vm.own().activeBeanId, "Brew shows \"No bag\"")
+    }
+
+    @Test
+    fun `a roaster cascade that spares the active bag keeps it`() {
+        val sey = coffee.crema.beans.newRoaster("Sey", 1).copy(id = "roaster:sey")
+        val onyx = coffee.crema.beans.newRoaster("Onyx", 1).copy(id = "roaster:onyx")
+        val beans = listOf(bag("a").copy(roasterId = sey.id), bag("c").copy(roasterId = onyx.id))
+        writeLibrary(BeanLibrary(beans, listOf(sey, onyx), activeBeanId = "c"))
+        val vm = vm()
+        vm.deleteRoaster(sey.id, cascade = true)
+        VmHarness.idle()
+        assertEquals("c", vm.own().activeBeanId)
+    }
+
+    /** S7: the bag editor's "Add a grinder" stores nothing and changes no pointer until Save; Cancel leaves nothing. */
+    @Test
+    fun `a grinder added in the bag editor is stored only on Save`() {
+        writeLibrary(BeanLibrary(listOf(bag("a", grinds = emptyList()))))
+        val vm = vm()
+        val typo = assertNotNull(vm.stageGrinderPick(GrinderPick.Create("Nich"), emptyList()))
+        VmHarness.idle()
+        assertTrue(vm.own().grinders.isEmpty(), "a typo never reaches Devices at the pick")
+        assertNull(vm.own().activeGrinderId, "nor Brew's grinder")
+        // Cancel: the editor drops its staged list; nothing to undo.
+
+        // Again, and Save with a row for it.
+        val picked = assertNotNull(vm.stageGrinderPick(GrinderPick.Create("Niche Zero"), emptyList()))
+        assertEquals(listOf(picked.grinder), picked.staged)
+        vm.updateBean("a", "") { it.copy(grinds = listOf(BagGrind(picked.grinder.id, picked.grinder.name, "14", starred = true))) }
+        vm.saveStagedGrinders("a", picked.staged)
+        VmHarness.idle()
+        assertEquals(listOf(picked.grinder.id), vm.own().grinders.map { it.id })
+        assertEquals(picked.grinder.id, vm.own().activeGrinderId, "with none active, the saved one becomes Brew's (review 499, at Save)")
+        assertTrue(vm.own().grinders.none { it.name == typo.grinder.name })
+    }
+
+    @Test
+    fun `a staged grinder whose row was removed before Save writes nothing`() {
+        writeLibrary(BeanLibrary(listOf(bag("a", grinds = emptyList())), grinders = listOf(niche), activeGrinderId = niche.id))
+        val vm = vm()
+        val picked = assertNotNull(vm.stageGrinderPick(GrinderPick.Create("Comandante C40"), emptyList()))
+        vm.updateBean("a", "") { it.copy(grinds = emptyList()) }
+        vm.saveStagedGrinders("a", picked.staged)
+        VmHarness.idle()
+        assertEquals(listOf(niche.id), vm.own().grinders.map { it.id })
+        assertEquals(niche.id, vm.own().activeGrinderId)
+    }
+
+    @Test
+    fun `an archived grinder picked in the bag editor comes back only on Save`() {
+        val archived = niche.copy(archivedAt = 5L)
+        writeLibrary(BeanLibrary(listOf(bag("a", grinds = emptyList())), grinders = listOf(archived)))
+        val vm = vm()
+        val picked = assertNotNull(vm.stageGrinderPick(GrinderPick.Archived(niche.id), emptyList()))
+        assertEquals(coffee.crema.core.GrinderAddKind.Revived, picked.kind)
+        assertNotNull(vm.grinder(niche.id).archivedAt, "still archived at the pick")
+        vm.updateBean("a", "") { it.copy(grinds = listOf(BagGrind(niche.id, niche.name, "14", starred = false))) }
+        vm.saveStagedGrinders("a", picked.staged)
+        VmHarness.idle()
+        assertNull(vm.grinder(niche.id).archivedAt, "restored on Save")
+        assertTrue("Niche Zero is back, with its saved grinds" in vm.ui.value.userMessages, "${vm.ui.value.userMessages}")
+    }
 }

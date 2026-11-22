@@ -2740,10 +2740,17 @@ class LibraryController(
      */
     fun migrateGrinderLibrary(now: Long = System.currentTimeMillis()) {
         val s = uiState()
-        // Not yet wired to the read status (Android shell PR, REVIEW-CORE H5): runs as before.
-        val gate = coffee.crema.core.MigrationGate(library = true, settings = true)
+        // Only over a library and settings that read (REVIEW-CORE H5): the core runs nothing otherwise.
+        val gate = coffee.crema.beans.migrationGate(
+            library = coffee.crema.persist.Stores.health(java.io.File(app.filesDir, LibraryStore.FILE_NAME)),
+            settings = coffee.crema.persist.Stores.health(java.io.File(app.filesDir, coffee.crema.settings.SettingsStore.FILE_NAME)),
+        )
         val out = runCatching { coffee.crema.beans.migrateGrinderLibrary(s.grinders, s.beans, s.grinderModel, gate, now) }.getOrElse {
             appendLog("Grinder migration failed (runs again next load): ${it.message}")
+            return
+        }
+        out.skipped?.let { why ->
+            appendLog("Grinder migration skipped (runs again next load): ${if (why == coffee.crema.core.MigrationSkip.LibraryUnreadable) "the bean library" else "the settings"} couldn't be read")
             return
         }
         val pointerChanges = out.grindersMigrated && s.activeGrinderId != out.activeGrinderId
@@ -2822,6 +2829,62 @@ class LibraryController(
     }
 
     /**
+     * The bag editor's "Add a grinder" pick, staged in its draft (FINAL S7,
+     * core `stage_grinder_pick`): nothing is stored and the active grinder
+     * stays until Save. Null when the pick names nothing.
+     */
+    fun stageGrinderPick(pick: GrinderPick, staged: List<coffee.crema.core.Grinder>, now: Long = System.currentTimeMillis()): coffee.crema.core.StagedGrinderPick? {
+        val (kind, id, name) = when (pick) {
+            is GrinderPick.Owned -> Triple(coffee.crema.core.GrinderMatchKind.Owned, pick.id, "")
+            is GrinderPick.Catalogue -> Triple(coffee.crema.core.GrinderMatchKind.Catalogue, pick.id, "")
+            is GrinderPick.Archived -> Triple(coffee.crema.core.GrinderMatchKind.Archived, pick.id, "")
+            is GrinderPick.Create -> Triple(null, "", pick.name)
+        }
+        val input = coffee.crema.core.GrinderPickInput(grinders = uiState().grinders, staged = staged, kind = kind, id = id, name = name)
+        return runCatching { coffee.crema.beans.stageGrinderPick(input, now) }.getOrElse {
+            appendLog("Add grinder failed: ${it.message}")
+            null
+        }
+    }
+
+    /**
+     * The bag editor's Save of its [staged] grinders, after the bag [beanId]
+     * is stored (core `staged_grinders_on_save`): the grinders its rows still
+     * name are stored (an archived one restored from the row as stored now),
+     * and with no grinder active the bag's starred one, else the first picked,
+     * becomes Brew's (review 499), on the device that owns the session.
+     */
+    fun saveStagedGrinders(beanId: String, staged: List<coffee.crema.core.Grinder>, now: Long = System.currentTimeMillis()) {
+        if (staged.isEmpty()) return
+        val s = uiState()
+        val input = coffee.crema.core.StagedGrindersInput(
+            grinders = s.grinders,
+            staged = staged,
+            bag = s.beans.firstOrNull { it.id == beanId },
+            activeGrinderId = s.activeGrinderId,
+        )
+        val out = runCatching { coffee.crema.beans.stagedGrindersOnSave(input, now) }.getOrElse {
+            appendLog("Saving the bag's grinders failed: ${it.message}")
+            return
+        }
+        if (out.grinders.isNotEmpty()) {
+            editRows(
+                { rows -> rows.copy(grinders = rows.grinders.with(rows.grinders.replacingById(out.grinders) { it.id } + out.grinders.filter { g -> rows.grinders.none { it.id == g.id } })) },
+                { it },
+            )
+            persistLibrary()
+            out.grinders.filter { g -> s.grinders.any { it.id == g.id } }.forEach { notify("${it.name} is back, with its saved grinds") }
+        }
+        // A remote's pick goes to its hub: the pointer only on the device that owns the session.
+        val active = out.activeGrinderId?.value
+        if (active != null && uiState().mirror == null) {
+            updateUi { it.copy(activeGrinderId = active) }
+            onGrinderSelected(active)
+            pushConfig()
+        }
+    }
+
+    /**
      * Devices → Grinder "Remove": archive [id]. Shots and bag grinds keep it;
      * the active one is cleared (Brew shows "No grinder", review F5).
      */
@@ -2890,8 +2953,8 @@ class LibraryController(
         persistLibrary()
     }
 
-    /** The one Undo of a bag selection's change (review F6). */
-    private data class BagSelectUndo(val seq: Long, val change: coffee.crema.core.SelectionChange, val undo: coffee.crema.core.SelectionChange)
+    /** The one Undo of a bag selection's change (review F6): the selection as applied. */
+    private data class BagSelectUndo(val seq: Long, val selection: coffee.crema.core.BagSelection)
 
     private var bagSelectUndo: BagSelectUndo? = null
     private var bagSelectSeq = 0L
@@ -2902,13 +2965,16 @@ class LibraryController(
      * linked profile, the starred grinder, its grind) into one change, shown
      * in one message with one Undo (review F6). No message when nothing
      * besides the bag changed. Replaces the old linked-profile auto-load.
+     * [activeBeanIdBefore] is the bag selected before this pick: picking the
+     * one already selected changes nothing (FINAL N7), so an unsaved grind on
+     * Brew stays.
      */
-    fun onBagSelected(beanId: String) {
+    fun onBagSelected(beanId: String, activeBeanIdBefore: String?) {
         val s = uiState()
         val bag = s.beans.firstOrNull { it.id == beanId } ?: return
         val linked = bag.linkedProfileId
         val missing = linked != null && s.profiles.none { it.id == linked }
-        if (missing) notify("${bag.name}’s linked profile no longer exists")
+        if (missing && beanId != activeBeanIdBefore) notify("${bag.name}’s linked profile no longer exists")
         val resolved = runCatching {
             coffee.crema.beans.resolveBagSelection(
                 coffee.crema.core.BagSelectInput(
@@ -2919,6 +2985,7 @@ class LibraryController(
                     grind = s.brewGrindView().value,
                     grinders = s.grinders,
                     lastGrinds = lastGrindsForBag(bag.id),
+                    activeBeanId = activeBeanIdBefore,
                 ),
             )
         }.getOrElse {
@@ -2948,7 +3015,7 @@ class LibraryController(
         val message = "${bag.name}: ${parts.joinToString(", ")}"
         appendLog(message)
         val seq = ++bagSelectSeq
-        bagSelectUndo = BagSelectUndo(seq, change, undo)
+        bagSelectUndo = BagSelectUndo(seq, resolved.copy(change = change, undo = undo))
         updateUi { it.copy(bagSelectUndo = UndoNotice(message, seq)) }
     }
 
@@ -2971,18 +3038,24 @@ class LibraryController(
         change.grind?.let { to -> setGrindDial(to.value) }
     }
 
-    /** Undo the bag selection [seq]: each part goes back only while it's still
-     *  what the selection set, so a change made since stands. */
+    /** Undo the bag selection [seq] (core `bag_selection_undo`, REVIEW-CORE H4):
+     *  each part goes back only while it's still what the selection set, so a
+     *  change made since stands; mid-shot the profile stays (no upload). */
     fun undoBagSelection(seq: Long) {
         val u = bagSelectUndo?.takeIf { it.seq == seq } ?: return
         bagSelectUndo = null
         updateUi { st -> if (st.bagSelectUndo?.seq == seq) st.copy(bagSelectUndo = null) else st }
         val s = uiState()
-        val still = coffee.crema.core.SelectionChange(
-            profileId = u.undo.profileId?.takeIf { s.activeProfileId == u.change.profileId?.value },
-            grinderId = u.undo.grinderId?.takeIf { s.activeGrinderId == u.change.grinderId?.value },
-            grind = u.undo.grind?.takeIf { stillGrind(s.qcGrind, u.change.grind?.value) },
+        val now = coffee.crema.core.SelectionState(
+            profileId = s.activeProfileId,
+            grinderId = s.activeGrinderId,
+            grind = s.qcGrind,
+            shotInProgress = s.shotInProgress,
         )
+        val still = runCatching { coffee.crema.beans.bagSelectionUndo(u.selection, now) }.getOrElse {
+            appendLog("Bag selection undo failed: ${it.message}")
+            return
+        }
         applySelectionChange(still)
     }
 
@@ -3175,7 +3248,7 @@ class LibraryController(
     fun deleteRoaster(id: String, alsoOnVisualizer: Boolean = false, cascade: Boolean = false) {
         val s = uiState()
         val plan = runCatching {
-            coffee.crema.beans.planRoasterDelete(json, s.roasters, s.beans, id, cascade)
+            coffee.crema.beans.planRoasterDelete(json, s.roasters, s.beans, id, cascade, s.activeBeanId)
         }.getOrNull() ?: return
         val name = s.roasters.firstOrNull { it.id == id }?.name.orEmpty()
         val now = System.currentTimeMillis()
@@ -3185,9 +3258,14 @@ class LibraryController(
                 after = coffee.crema.beans.applyRoasterDelete(BeanLibrary(rows.beans, rows.roasters, s.activeBeanId), plan, now)
                 rows.copy(roasters = rows.roasters.with(after.roasters), beans = rows.beans.with(after.beans))
             },
+            // The pointer as the core plans it (REVIEW-CORE M3): cleared when the
+            // cascade deletes the active bag (F5, Brew shows "No bag"); no other bag
+            // is made active. One picked since the plan stands unless it went too.
             { st ->
-                val activeGone = st.activeBeanId != null && after.activeBeanId == null
-                st.copy(activeBeanId = if (activeGone) after.beans.firstOrNull()?.id else st.activeBeanId)
+                st.copy(
+                    activeBeanId = if (st.activeBeanId == s.activeBeanId) plan.activeBeanIdAfter
+                    else st.activeBeanId?.takeUnless { it in plan.deletedBeanIds },
+                )
             },
         )
         // Cascaded bags leave no orphan photos.

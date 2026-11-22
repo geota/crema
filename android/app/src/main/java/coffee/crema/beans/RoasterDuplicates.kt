@@ -71,13 +71,15 @@ fun mergeSuggestions(
 
 // ── Roaster delete (web RoasterDeleteSplit parity) ───────────────────────────
 
-/** The delete plan — detach or cascade + the Visualizer ids (core `plan_roaster_delete`); null = unknown roaster. */
-fun planRoasterDelete(json: Json, roasters: List<Roaster>, beans: List<Bean>, roasterId: String, cascade: Boolean): coffee.crema.core.RoasterDeletePlan? {
+/** The delete plan — detach or cascade, the Visualizer ids, and the active-bag
+ *  pointer afterwards from [activeBeanId] (core `plan_roaster_delete`); null = unknown roaster. */
+fun planRoasterDelete(json: Json, roasters: List<Roaster>, beans: List<Bean>, roasterId: String, cascade: Boolean, activeBeanId: String?): coffee.crema.core.RoasterDeletePlan? {
     val payload = buildJsonObject {
         put("roasters", json.encodeToJsonElement(ListSerializer(Roaster.serializer()), roasters))
         put("beans", json.encodeToJsonElement(ListSerializer(Bean.serializer()), beans))
         put("roasterId", roasterId)
         put("cascade", cascade)
+        put("activeBeanId", activeBeanId)
     }
     val out = coffee.crema.core.planRoasterDelete(payload.toString())
     return if (out == "null") null else json.decodeFromString(coffee.crema.core.RoasterDeletePlan.serializer(), out)
