@@ -340,6 +340,10 @@ class LibraryController(
     @androidx.annotation.VisibleForTesting
     internal var assembling: () -> Unit = {}
 
+    /** Test seam: a kept shot offered to the upload destinations. */
+    @androidx.annotation.VisibleForTesting
+    internal var offeredForUpload: (ShotRow) -> Unit = {}
+
     /**
      * An edit of the whole list (a merge, the legacy backend's cap) on the
      * history store's rows as they stand (#310 A3b): the rows it adds or
@@ -3380,7 +3384,10 @@ class LibraryController(
     private fun kept(row: ShotRow, effects: ShotEffects) {
         // Auto-upload to every armed destination (Visualizer, Decent), one
         // notice for the batch; each reads the shot whole, from the stage.
-        if (effects.upload) autoUploadShot(row)
+        if (effects.upload) {
+            offeredForUpload(row)
+            autoUploadShot(row)
+        }
         if (effects.autoSave) autoSaveGrind(row)
     }
 

@@ -84,13 +84,29 @@ class ShotRecordsVmTest {
         apply(vm, bridge.onNotification(NotificationSource.DE1_STATE, byteArrayOf(2, 0), (1_000 + 250 * 49).toULong()))
     }
 
-    /** Owner decision (round 2): a remote's mirror copy of the hub's shot is
-     *  labelled with the hub's selections, and never debits this device's own
-     *  copy of the hub's bag (the hub debits its own). */
+    /** The device that records a shot debits its bag and offers it for upload. */
     @Test
-    fun `a remote records the hub's bag and debits nothing`() {
+    fun `a shot recorded here debits its bag and is offered for upload`() {
+        val vm = vmWith(BeanLibrary(listOf(bag("a")), emptyList(), "a"))
+        val offered = mutableListOf<String>()
+        VmHarness.library(vm).offeredForUpload = { offered += it.id }
+        pour(vm)
+        VmHarness.idleUntil("the shot to be recorded", 5_000) { VmHarness.rows(vm).isNotEmpty() }
+        val shot = VmHarness.whole(vm, VmHarness.rows(vm).first().id)
+        assertEquals("a", shot.bean?.beanId)
+        assertTrue(vm.bean("a").remaining!! < 200f, "debited")
+        assertEquals(listOf(shot.id), offered)
+    }
+
+    /** Owner decision (round 2): a remote's mirror copy of the hub's shot is
+     *  labelled with the hub's selections, never debits this device's own copy
+     *  of the hub's bag and is never uploaded (the hub does both). */
+    @Test
+    fun `a remote records the hub's bag and neither debits nor uploads it`() {
         val library = BeanLibrary(listOf(bag(RemoteFixture.BEAN_P), bag(RemoteFixture.BEAN_S)), emptyList(), RemoteFixture.BEAN_P)
         val vm = fixture.start(library = library)
+        val offered = mutableListOf<String>()
+        VmHarness.library(vm).offeredForUpload = { offered += it.id }
         fixture.push() // the hub's active bag is BEAN_S
         assertEquals(RemoteFixture.BEAN_S, vm.ui.value.activeBeanId)
         assertEquals(RemoteFixture.BEAN_P, VmHarness.ownState(vm).activeBeanId, "this device's own pick is its own")
@@ -101,6 +117,7 @@ class ShotRecordsVmTest {
         assertNull(shot.bagDebitG, "a remote's copy takes nothing")
         assertEquals(200f, vm.bean(RemoteFixture.BEAN_S).remaining, "the hub debits its own bag")
         assertEquals(200f, vm.bean(RemoteFixture.BEAN_P).remaining)
+        assertEquals(emptyList(), offered, "the hub uploads its own row")
     }
 
     /** A completed shot's side effects are the core's rule (REVIEW-CORE M4). */
