@@ -15,7 +15,18 @@ import coffee.crema.core.GrinderLibraryMigration
 import coffee.crema.core.GrinderMatch
 import coffee.crema.core.GrinderSwitchInput
 import coffee.crema.core.LastGrind
+import coffee.crema.core.GrinderPickInput
+import coffee.crema.core.MigrationGate
+import coffee.crema.core.SelectionChange
+import coffee.crema.core.SelectionState
+import coffee.crema.core.StagedGrinderPick
+import coffee.crema.core.StagedGrindersInput
+import coffee.crema.core.StagedGrindersSave
 import coffee.crema.core.addGrinderJson
+import coffee.crema.core.bagEditorGrindersJson
+import coffee.crema.core.bagSelectionUndoJson
+import coffee.crema.core.stageGrinderPickJson
+import coffee.crema.core.stagedGrindersOnSaveJson
 import coffee.crema.core.archiveGrinderJson
 import coffee.crema.core.autoSaveShotGrindJson
 import coffee.crema.core.bagGrindsToFixJson
@@ -93,13 +104,25 @@ fun lastGrindsForBag(beanId: String, shots: List<ShotMeta>): List<LastGrind> {
     }
 }
 
+/**
+ * Whether the migration's inputs read (REVIEW-CORE H5, PLAN follow-up 20),
+ * from this session's loads of the library and the settings files: read, or
+ * absent (a first run). One that came out damaged or unavailable, or hasn't
+ * loaded, isn't: its rows or its `grinderModel` would look blank, and the
+ * migration would file every old grind under "no grinder" for good.
+ */
+fun migrationGate(library: coffee.crema.persist.StoreHealth, settings: coffee.crema.persist.StoreHealth): MigrationGate {
+    fun read(h: coffee.crema.persist.StoreHealth) = h == coffee.crema.persist.StoreHealth.OK || h == coffee.crema.persist.StoreHealth.ABSENT
+    return MigrationGate(library = read(library), settings = read(settings))
+}
+
 /** The library migration (core `migrate_grinder_library`), run once the library and the settings have loaded.
  *  The core runs nothing unless [gate] says both read (REVIEW-CORE H5). */
 fun migrateGrinderLibrary(
     grinderRows: List<Grinder>,
     beans: List<Bean>,
     grinderModel: String,
-    gate: coffee.crema.core.MigrationGate,
+    gate: MigrationGate,
     nowMs: Long,
     core: (payload: String, nowMs: Long) -> String = ::migrateGrinderLibraryJson,
 ): GrinderLibraryMigration {
@@ -107,7 +130,7 @@ fun migrateGrinderLibrary(
         put("grinders", grinderJson.encodeToJsonElement(grinders, grinderRows))
         put("beans", grinderJson.encodeToJsonElement(ListSerializer(Bean.serializer()), beans))
         put("grinderModel", JsonPrimitive(grinderModel))
-        put("gate", grinderJson.encodeToJsonElement(coffee.crema.core.MigrationGate.serializer(), gate))
+        put("gate", grinderJson.encodeToJsonElement(MigrationGate.serializer(), gate))
     }
     return grinderJson.decodeFromString(GrinderLibraryMigration.serializer(), core(payload.toString(), nowMs))
 }
@@ -214,6 +237,55 @@ fun resolveBagSelection(
     input: BagSelectInput,
     core: (String) -> String = ::resolveBagSelectionJson,
 ): BagSelection = grinderJson.decodeFromString(BagSelection.serializer(), core(grinderJson.encodeToString(BagSelectInput.serializer(), input)))
+
+/**
+ * The Undo of [selection] (core `bag_selection_undo`, REVIEW-CORE H4): only
+ * the parts Brew still holds as the selection set them ([now]), so a dial,
+ * grinder or profile change made since stands; with a shot in progress the
+ * profile part is left out.
+ */
+fun bagSelectionUndo(
+    selection: BagSelection,
+    now: SelectionState,
+    core: (String) -> String = ::bagSelectionUndoJson,
+): SelectionChange {
+    val payload = buildJsonObject {
+        put("selection", grinderJson.encodeToJsonElement(BagSelection.serializer(), selection))
+        put("now", grinderJson.encodeToJsonElement(SelectionState.serializer(), now))
+    }
+    return grinderJson.decodeFromString(SelectionChange.serializer(), core(payload.toString()))
+}
+
+/** The grinders as the bag editor sees them: [stored] with its [staged] picks over them (core `bag_editor_grinders`, FINAL S7). */
+fun bagEditorGrinders(
+    stored: List<Grinder>,
+    staged: List<Grinder>,
+    core: (String, String) -> String = ::bagEditorGrindersJson,
+): List<Grinder> =
+    if (staged.isEmpty()) stored
+    else grinderJson.decodeFromString(grinders, core(grinderJson.encodeToString(grinders, stored), grinderJson.encodeToString(grinders, staged)))
+
+/**
+ * A pick in the bag editor's Add box, staged in its draft (core
+ * `stage_grinder_pick`, FINAL S7): nothing is stored and the active grinder
+ * doesn't change until Save. Null when the pick names nothing.
+ */
+fun stageGrinderPick(
+    input: GrinderPickInput,
+    nowMs: Long,
+    core: (String, Long) -> String = ::stageGrinderPickJson,
+): StagedGrinderPick? {
+    val out = core(grinderJson.encodeToString(GrinderPickInput.serializer(), input), nowMs).trim()
+    return if (out == "null") null else grinderJson.decodeFromString(StagedGrinderPick.serializer(), out)
+}
+
+/** The bag editor's Save of its staged grinders (core `staged_grinders_on_save`): the records to upsert and the active pointer to set. */
+fun stagedGrindersOnSave(
+    input: StagedGrindersInput,
+    nowMs: Long,
+    core: (String, Long) -> String = ::stagedGrindersOnSaveJson,
+): StagedGrindersSave =
+    grinderJson.decodeFromString(StagedGrindersSave.serializer(), core(grinderJson.encodeToString(StagedGrindersInput.serializer(), input), nowMs))
 
 /** The grind Brew takes on switching grinder, or null to keep the grind as it is. */
 fun resolveGrinderSwitch(

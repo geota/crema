@@ -4,6 +4,8 @@ import coffee.crema.core.Bean
 import coffee.crema.core.BeanMix
 import coffee.crema.core.BeanOrigin
 import coffee.crema.core.BeanRoastType
+import coffee.crema.core.editedRemainingJson
+import kotlinx.serialization.builtins.serializer
 
 /** Bag-size quick-pick presets (grams), shared by both bean editors (issue 31). */
 val BAG_PRESETS = listOf(113, 227, 250, 340, 454, 1000)
@@ -27,6 +29,8 @@ data class BeanDraft(
     val pinned: Boolean,
     val bagSize: Double,
     val remaining: Double,
+    /** The user set Remaining in this editor: their value stands ([editedRemaining]). */
+    val remainingTouched: Boolean,
     val country: String,
     val region: String,
     val farm: String,
@@ -55,21 +59,27 @@ data class BeanDraft(
     val canonicalRoasterId: String? = null,
 )
 
+private val remainingJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
 /**
- * The bag's `remaining` after an edit. A first size given to a bag fills it, or
- * 0 would read as an empty bag the moment it was sized. Only a bag with no size
- * before this edit: a size corrected on a bag that ran out leaves it empty. And
- * only with Remaining untouched: a value the user set stands.
+ * The bag's `remaining` after a bag-editor edit (core `edited_remaining`,
+ * REVIEW-CORE H6), both to show while editing and on Save: a Remaining the
+ * user set stands; a new bag, or one with no size before ([base] unsized),
+ * starts full; a bag that had a size keeps its remaining (one that ran out
+ * stays empty when its size is corrected). [base] is the bag the editor
+ * opened on (a new bag's draft has no size). If the core can't answer, the
+ * editor's value stands.
  */
-private fun editedRemaining(b: Bean, draft: BeanDraft): Float {
-    val wasUnsized = (b.bagSize ?: 0f) <= 0f
-    val remainingUntouched = (b.remaining ?: 0f).toDouble() == draft.remaining
-    return if (wasUnsized && remainingUntouched && draft.remaining == 0.0) {
-        draft.bagSize.toFloat()
-    } else {
-        draft.remaining.toFloat()
-    }
-}
+fun editedRemaining(
+    base: Bean?,
+    bagSize: Double,
+    remaining: Double,
+    remainingTouched: Boolean,
+    core: (String) -> String = ::editedRemainingJson,
+): Float = runCatching {
+    val input = coffee.crema.core.RemainingEdit(base, bagSize.toFloat(), remaining.toFloat(), remainingTouched)
+    remainingJson.decodeFromString(Float.serializer(), core(remainingJson.encodeToString(coffee.crema.core.RemainingEdit.serializer(), input)))
+}.getOrElse { remaining.toFloat() }
 
 /**
  * Apply the editor [draft] onto [b], returning the updated [Bean] — the
@@ -103,7 +113,7 @@ private fun applyDraft(b: Bean, draft: BeanDraft, frozenOn: String?, defrostedOn
     decaf = draft.decaf,
     favourite = draft.pinned,
     bagSize = draft.bagSize.toFloat(),
-    remaining = editedRemaining(b, draft),
+    remaining = editedRemaining(b, draft.bagSize, draft.remaining, draft.remainingTouched),
     origin = (b.origin ?: BeanOrigin()).copy(
         country = draft.country.ifBlank { null },
         region = draft.region.ifBlank { null },

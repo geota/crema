@@ -173,7 +173,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pushConfig = { proxy.pushConfig() },
         profileJson = { library.profileJson(it) },
         persistLibrary = { library.persistLibrary() },
-        onBagSelected = { library.onBagSelected(it) },
+        onBagSelected = { id, before -> library.onBagSelected(id, before) },
         onGrinderSelected = { library.onGrinderSelected(it) },
         pushStopTargets = { state -> session.pushStopTargets(state) },
         refreshStopTargetProjection = { session.refreshStopTargetProjection() },
@@ -1561,6 +1561,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         is GrinderPick.Create -> library.addGrinder(pick.name, null)
     }
+
+    /** The bag editor's "Add a grinder": staged in its draft, stored only on Save (FINAL S7). */
+    fun stageGrinderPick(pick: GrinderPick, staged: List<coffee.crema.core.Grinder>): coffee.crema.core.StagedGrinderPick? =
+        library.stageGrinderPick(pick, staged)
+
+    /** The bag editor's Save of the grinders it staged, after the bag itself is saved. */
+    fun saveStagedGrinders(beanId: String, staged: List<coffee.crema.core.Grinder>) = library.saveStagedGrinders(beanId, staged)
 
     /** Open Devices on [tab] ("scale" | "grinder"); the caller navigates to it. */
     fun openDevicesTab(tab: String) = _ui.update { it.copy(devicesTab = tab) }

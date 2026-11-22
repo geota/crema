@@ -5,7 +5,6 @@ import coffee.crema.beans.DEFAULT_GRIND_SCALE
 import coffee.crema.beans.activeGrinder
 import coffee.crema.beans.formatGrind
 import coffee.crema.beans.isLive
-import coffee.crema.beans.sameGrind
 import coffee.crema.beans.savedGrind
 import coffee.crema.core.BagGrind
 import coffee.crema.core.Bean
@@ -72,10 +71,6 @@ fun MainUiState.brewGrindView(): BrewGrindView {
     grindViewMemo = GrindViewMemo(bag, grinder, qcGrind, view)
     return view
 }
-
-/** Whether Brew's grind [now] is still the one a change set ([set]): an Undo only reverts what's still its own. */
-internal fun stillGrind(now: String?, set: String?): Boolean =
-    if (now.isNullOrBlank() || set.isNullOrBlank()) now.isNullOrBlank() && set.isNullOrBlank() else sameGrind(now, set)
 
 /** "Grind 480 μm" or "Grind —": Brew's grind in the header and the phone strip. */
 fun BrewGrindView.headerText(): String = "Grind $display"

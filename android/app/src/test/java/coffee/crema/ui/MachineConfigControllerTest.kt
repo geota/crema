@@ -60,7 +60,7 @@ class MachineConfigControllerTest {
         pushConfig = { calls += "pushConfig" },
         profileJson = { null },
         persistLibrary = { calls += "persistLibrary" },
-        onBagSelected = { calls += "linkedProfile($it)" },
+        onBagSelected = { id, before -> calls += "linkedProfile($id, before=$before)" },
         onGrinderSelected = { calls += "grinderSelected($it)" },
         pushStopTargets = { s -> pushed = s; calls += "pushStopTargets" },
         refreshStopTargetProjection = { calls += "refreshStopTargetProjection" },
@@ -80,7 +80,23 @@ class MachineConfigControllerTest {
     @Test
     fun `a new active bean persists the library, pushes it to mirrors, then loads its linked profile`() {
         controller.commitConfig(MachineCommand.SetActiveBean("b"))
-        assertEquals(listOf("persistLibrary", "pushConfig", "linkedProfile(b)"), calls)
+        assertEquals(listOf("persistLibrary", "pushConfig", "linkedProfile(b, before=null)"), calls)
+    }
+
+    /** FINAL N7: the commit learns the bag selected before the pick, so the core can make a re-pick a no-op. */
+    @Test
+    fun `a bag pick's commit gets the bag selected before it`() {
+        state.update { it.copy(activeBeanId = "a") }
+        val pick = MachineCommand.SetActiveBean("b")
+        controller.showConfig(pick)
+        controller.commitConfig(pick)
+        val again = MachineCommand.SetActiveBean("b")
+        controller.showConfig(again)
+        controller.commitConfig(again)
+        assertEquals(
+            listOf("linkedProfile(b, before=a)", "linkedProfile(b, before=b)"),
+            calls.filter { it.startsWith("linkedProfile") },
+        )
     }
 
     @Test
