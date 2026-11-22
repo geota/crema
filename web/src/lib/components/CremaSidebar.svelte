@@ -10,22 +10,29 @@
 	 * route. The DE1 + scale status buttons at the bottom
 	 * (`RailDeviceButton`) follow the shared `CremaApp`'s live link state:
 	 * connect when disconnected, Retry now while reconnecting, a small menu
-	 * with Disconnect when connected. Number keys `1`–`6` jump between the
-	 * routes.
+	 * with Disconnect when connected. Number keys jump between the items, top
+	 * to bottom.
+	 *
+	 * Devices shows as two items, Scale and Grinder, when the window is tall
+	 * enough (`railHasRoom`), else as one item opening the tab used last.
 	 */
 	import { page } from '$app/state';
-	import { goto } from '$app/navigation';
+	import { afterNavigate, goto } from '$app/navigation';
 	import type { CremaApp } from '#lib/state/index.js';
 	import CremaMark from './CremaMark.svelte';
 	import RailDevices from './RailDevices.svelte';
-	import { NAV_ITEMS } from '#lib/shell/nav-items.js';
+	import { railItemActive, railItems } from '#lib/shell/nav-items.js';
+	import { lastDevicesTab, noteDevicesVisit, railHasRoom } from '#lib/shell/rail.svelte.js';
 
 	let { app }: { app: CremaApp | null } = $props();
 
-	/** The active item is the one whose href matches the current path. */
-	const activeHref = $derived(page.url.pathname);
+	const items = $derived(railItems(railHasRoom.current, lastDevicesTab()));
 
-	/** Keys 1–5 navigate to the matching route — design parity. */
+	afterNavigate(({ to }) => {
+		if (to) noteDevicesVisit(to.url);
+	});
+
+	/** Digit keys navigate to the matching item — design parity. */
 	function onKeydown(event: KeyboardEvent) {
 		// Ignore digits typed into inputs so forms keep working.
 		const target = event.target as HTMLElement | null;
@@ -38,7 +45,7 @@
 			return;
 		}
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
-		const item = NAV_ITEMS.find((it) => it.kbd === event.key);
+		const item = items.find((it) => it.kbd === event.key);
 		if (item) {
 			event.preventDefault();
 			void goto(item.href);
@@ -53,12 +60,12 @@
 		<CremaMark size={34} />
 	</div>
 	<div class="cside-items">
-		{#each NAV_ITEMS as it (it.id)}
+		{#each items as it (it.id)}
+			{@const active = railItemActive(it, page.url)}
 			<a
-				class="cside-item"
-				class:is-active={activeHref === it.href}
+				class={['cside-item', { 'is-active': active }]}
 				href={it.href}
-				aria-current={activeHref === it.href ? 'page' : undefined}
+				aria-current={active ? 'page' : undefined}
 			>
 				<Icon cls={'ph-duotone ph-' + it.icon} aria-hidden="true" />
 				<span>{it.label}</span>

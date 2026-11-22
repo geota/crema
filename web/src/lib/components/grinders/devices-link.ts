@@ -17,3 +17,14 @@ export function devicesHref(tab: DevicesTab = 'scale'): string {
 export function devicesTabOf(params: { get(name: string): string | null }): DevicesTab {
 	return params.get('tab') === 'grinder' ? 'grinder' : 'scale';
 }
+
+/** The parts of a URL that say which page and tab it names. */
+export interface PageLocation {
+	pathname: string;
+	searchParams: { get(name: string): string | null };
+}
+
+/** Is `pathname` the Devices page? */
+export function isDevicesPath(pathname: string): boolean {
+	return pathname === resolve('/scale');
+}
