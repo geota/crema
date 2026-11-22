@@ -71,7 +71,6 @@ private fun MainUiState.withSnapshot(cfg: ConfigSnapshot, m: MirroredSettings): 
         stopOnWeight = cfg.stopOnWeight,
         autoTare = cfg.autoTare,
         maxShotDurationS = cfg.maxShotDurationS,
-        grinderModel = cfg.grinderModel,
         qcSteamTimeS = cfg.qcSteamTimeS,
         qcSteamFlowMlS = cfg.qcSteamFlowMlS,
         qcSteamTempC = cfg.qcSteamTempC,

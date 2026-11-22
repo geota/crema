@@ -98,7 +98,7 @@ class BagDebitVmTest {
     private fun MainViewModel.logBrew(beanId: String, doseG: Float, yieldG: Float? = 36f): StoredShot = addManualBrew(
         LibraryController.ManualBrewInput(
             method = "espresso", completedAtMs = 1_700_000_000_000, beanId = beanId, doseG = doseG, waterG = null,
-            yieldG = yieldG, grindSetting = null, brewTempC = null, durationMs = 28_000, rating = null, notes = null, nextPlan = null,
+            yieldG = yieldG, grind = null, brewTempC = null, durationMs = 28_000, rating = null, notes = null, nextPlan = null,
         ),
     )
 

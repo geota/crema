@@ -110,32 +110,33 @@ class BackupShotRoundTripTest {
     }
 
     @Test
-    fun `a shot's own grinder model survives a backup round trip and wins over the Settings grinder`() {
+    fun `a shot's own grinder model survives a backup round trip`() {
         val s = StoredShot(id = "shot:g", completedAtMs = 1, durationMs = 1, grinderModel = "Niche Zero")
         val restored = storedShotFromBackupJson(wireShotJson(s, forBackup = true), json)!!
         assertEquals("Niche Zero", restored.grinderModel)
-        assertEquals("Niche Zero", wireShotJson(s, grinderModel = "EK43")["grinderModel"]!!.jsonPrimitive.content)
-        // A shot captured here carries none: the Settings grinder fills in.
-        val local = StoredShot(id = "shot:h", completedAtMs = 1, durationMs = 1)
-        assertEquals("EK43", wireShotJson(local, grinderModel = "EK43")["grinderModel"]!!.jsonPrimitive.content)
+        assertEquals("Niche Zero", wireShotJson(s)["grinderModel"]!!.jsonPrimitive.content)
+        // A shot with no grinder goes with none (REVIEW-FINAL S3).
+        val local = StoredShot(id = "shot:h", completedAtMs = 1, durationMs = 1, grinderModel = " ")
+        assertEquals(kotlinx.serialization.json.JsonNull, wireShotJson(local)["grinderModel"])
+        assertEquals(kotlinx.serialization.json.JsonNull, wireShotJson(local, forBackup = true)["grinderModel"])
     }
 
     @Test
     fun `the edit PATCH carries the barista only after a barista edit, empty once cleared (final review 06 #1)`() {
         val cleared = StoredShot(id = "shot:p", completedAtMs = 1, durationMs = 1, barista = null)
         // Any other edit leaves the remote barista alone (null = omitted by the core).
-        assertNull(shotPatchInputs(cleared, includeNotes = true, defaultPrivacy = "unlisted", settingsGrinderModel = null).barista)
+        assertNull(shotPatchInputs(cleared, includeNotes = true, defaultPrivacy = "unlisted").barista)
         // A barista edit that cleared it still reaches Visualizer as "".
         assertEquals(
             "",
-            shotPatchInputs(cleared, includeNotes = true, defaultPrivacy = "unlisted", settingsGrinderModel = null, sendBarista = true).barista,
+            shotPatchInputs(cleared, includeNotes = true, defaultPrivacy = "unlisted", sendBarista = true).barista,
         )
         val set = cleared.copy(barista = " Ana ", grinderModel = "Niche Zero")
-        val inputs = shotPatchInputs(set, includeNotes = false, defaultPrivacy = "unlisted", settingsGrinderModel = "EK43", sendBarista = true)
+        val inputs = shotPatchInputs(set, includeNotes = false, defaultPrivacy = "unlisted", sendBarista = true)
         assertEquals("Ana", inputs.barista)
         assertEquals("Niche Zero", inputs.grinderModel)
         assertNull(inputs.notes)
-        assertNull(shotPatchInputs(set, includeNotes = false, defaultPrivacy = "unlisted", settingsGrinderModel = null).barista)
+        assertNull(shotPatchInputs(set, includeNotes = false, defaultPrivacy = "unlisted").barista)
     }
 
     @Test
@@ -143,7 +144,7 @@ class BackupShotRoundTripTest {
         val shot = StoredShot(
             id = "shot:j", completedAtMs = 1, durationMs = 1, rating = 4, notes = "juicy", barista = "Ana", grinderModel = "Niche Zero",
         )
-        val inputs = shotPatchInputs(shot, includeNotes = true, defaultPrivacy = "unlisted", settingsGrinderModel = "EK43", sendBarista = true, sendJournal = false)
+        val inputs = shotPatchInputs(shot, includeNotes = true, defaultPrivacy = "unlisted", sendBarista = true, sendJournal = false)
         assertEquals(ShotPatchInputs(barista = "Ana"), inputs)
     }
 

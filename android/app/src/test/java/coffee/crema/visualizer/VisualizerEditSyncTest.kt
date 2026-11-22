@@ -130,7 +130,7 @@ class VisualizerEditSyncTest {
     private val history = mutableMapOf<String, StoredShot>()
     private val fills = mutableListOf<Pair<String, String>>()
 
-    private fun sync(grinder: String? = null) = VisualizerSync(
+    private fun sync() = VisualizerSync(
         currentShot = { history[it]?.row() },
         loadShot = { history[it] },
         onApplyRemote = { id, patch, _ -> patch.barista?.let { fills += id to it } },
@@ -142,7 +142,6 @@ class VisualizerEditSyncTest {
         appVersion = "t",
         notify = { notices += it },
         onShotSynced = { _, _ -> },
-        grinderModel = { grinder },
         shotPatchBody = fakeCore,
         now = { clock },
         // The tests drain by hand; a timer would outlive a "restart".
@@ -271,7 +270,7 @@ class VisualizerEditSyncTest {
     fun `a free account probed at sign-in never sends the Premium-only fields`() {
         seed(premium = null, signedIn = false)
         probeStatus = HttpStatusCode.Forbidden
-        val s = sync(grinder = "EG-1").also { runBlocking { it.load() } }
+        val s = sync().also { runBlocking { it.load() } }
         s.handleCallback(code = "code", returnedState = "csrf", error = null)
         settle()
         val stored = runBlocking { store.load() }
@@ -281,7 +280,7 @@ class VisualizerEditSyncTest {
         assertTrue("no coffee-bag probe any more: $requests", requests.none { it.first.contains("/coffee_bags") })
 
         s.markShotEdited(edited.id, annotations = true)
-        s.patchEditedShot(edited.row())
+        s.patchEditedShot(edited.copy(grinderModel = "EG-1").row())
         settle()
         assertEquals(false, tiersSeen.last())
         assertEquals(1, patches().size)

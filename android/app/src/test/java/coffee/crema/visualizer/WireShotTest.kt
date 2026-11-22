@@ -88,7 +88,7 @@ class WireShotTest {
             durationMs = 1L,
             profileName = "Londinium Lever",
         )
-        val wire = wireShotJson(shot, grinderModel = "Niche Zero")
+        val wire = wireShotJson(shot.copy(grinderModel = "Niche Zero"))
         assertEquals("Londinium Lever", wire["profileName"]!!.jsonPrimitive.content)
         assertEquals("Niche Zero", wire["grinderModel"]!!.jsonPrimitive.content)
     }

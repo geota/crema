@@ -217,8 +217,8 @@ class CoreShotAssemblyTest {
         vm.addAndSelectGrinder("Niche Zero")
         VmHarness.idle()
         assertEquals("EK43", VmHarness.rows(vm).first().grinderModel)
-        // The upload / export uses the frozen one, not today's Settings.
-        assertEquals("EK43", (wireShotJson(shot, "Niche Zero")["grinderModel"] as kotlinx.serialization.json.JsonPrimitive).content)
+        // The upload / export uses the frozen one.
+        assertEquals("EK43", (wireShotJson(shot)["grinderModel"] as kotlinx.serialization.json.JsonPrimitive).content)
     }
 
     @Test
@@ -236,7 +236,7 @@ class CoreShotAssemblyTest {
         assertEquals(recorded.samples, again.samples)
         // Edits ride along.
         val shot = recorded.copy(tags = listOf("dial-in"))
-        val back = shotsFromCremaJsonl(shotHistoryJsonl(listOf(shot), null, 0L, "test"), coreJson)
+        val back = shotsFromCremaJsonl(shotHistoryJsonl(listOf(shot), 0L, "test"), coreJson)
         assertEquals(1, back.size)
         assertEquals(shot.id, back[0].id)
         assertEquals(shot.samples.size, back[0].samples.size)
@@ -276,7 +276,7 @@ class CoreShotAssemblyTest {
         VmHarness.awaitPrefsLoaded(vm)
         fixtures.mkdirs()
         File(fixtures, "android-shots.crema.jsonl")
-            .writeText(shotHistoryJsonl(listOf(recordedShot(vm)), null, 1_790_000_000_000, "fixture"))
+            .writeText(shotHistoryJsonl(listOf(recordedShot(vm)), 1_790_000_000_000, "fixture"))
     }
 
     @Test
@@ -290,7 +290,7 @@ class CoreShotAssemblyTest {
         val restored = storedShotFromBackupJson(wireShotJson(shot, forBackup = true), coreJson)!!
         assertEquals(frames, restored.samples.take(4).map { it.frameNumber }, "a restore")
         // The history export and its import.
-        val back = shotsFromCremaJsonl(shotHistoryJsonl(listOf(shot), null, 0L, "test"), coreJson).single()
+        val back = shotsFromCremaJsonl(shotHistoryJsonl(listOf(shot), 0L, "test"), coreJson).single()
         assertEquals(frames, back.samples.take(4).map { it.frameNumber }, "the history export")
         // The per-shot series file.
         val app = androidx.test.core.app.ApplicationProvider.getApplicationContext<Application>()

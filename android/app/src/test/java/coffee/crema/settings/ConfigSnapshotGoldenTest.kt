@@ -25,7 +25,7 @@ class ConfigSnapshotGoldenTest {
     /** A v4 hub's snapshot, every machine register known. */
     private val snapshot = ConfigSnapshot(
         activeProfileId = "019e5fb5-63b5-7333-a2ac-34c516215b2c", activeBeanId = "bean:s", activeBeanSummary = "S bag",
-        stopOnWeight = true, autoTare = true, maxShotDurationS = 44f, grinderModel = "Niche",
+        stopOnWeight = true, autoTare = true, maxShotDurationS = 44f,
         qcSteamTimeS = 30f, qcSteamFlowMlS = 1.6f, qcSteamTempC = 150f, qcHotWaterTempC = 85f, qcHotWaterVolumeMl = 200f,
         qcFlushTimeS = 6f, qcFlushTempC = 93f, qcGrind = "15",
         qcHotWaterMode = HotWaterMode.Time, qcHotWaterTimeS = 45f, qcHotWaterTimeNoLimit = true, qcHotWaterRatio = 2.5f,

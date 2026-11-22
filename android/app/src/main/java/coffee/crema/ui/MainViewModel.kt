@@ -203,7 +203,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         captureCompletedShot = { durationMs, yieldG, peakPressure, peakTemp, completedAtMs, id, disposition, peakWeightG ->
             library.captureCompletedShot(durationMs, yieldG, peakPressure, peakTemp, completedAtMs, id, disposition, peakWeightG = peakWeightG)
         },
-        onShotStarted = { library.freezeShotSelections() },
         setHotWaterTarget = { machineConfig.setHotWaterTarget(it) },
         pushConfig = { proxy.pushConfig() },
         armWake = { wake.arm(it) },
@@ -326,7 +325,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 shot = shot,
                 machine = machine,
                 appVersion = coffee.crema.BuildConfig.VERSION_NAME,
-                grinderModel = effectiveState().grinderModel.trim().takeIf { it.isNotEmpty() },
                 fullSamples = fullSamples,
             )
         },
@@ -362,7 +360,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrNull() ?: "dev",
         notify = { msg -> notifyUser(msg) },
         onShotSynced = { localId, visualizerId -> library.markShotSynced(localId, visualizerId) },
-        grinderModel = { effectiveState().grinderModel.trim().takeIf { it.isNotEmpty() } },
         onPulledShots = { stubs -> library.insertPulledShots(stubs) },
         onApplyRemote = { localId, patch, pulled -> library.applyRemoteShot(localId, patch, pulled) },
         onSignedIn = { sharing.offerCatchUp(UploadTargetId.Visualizer) },
@@ -1063,6 +1060,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         // What Brew has selected goes to the core as it changes: the core
         // freezes it at shot start, whoever starts the shot (REVIEW-CORE H3).
+        // [ui] is what the screens show: on a remote, the hub's selections, so
+        // its mirror copy of the hub's shot is labelled the way the hub's is.
         viewModelScope.launch {
             ui.map { library.shotSelectionsOf(it) }
                 .distinctUntilChanged()
@@ -3022,15 +3021,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Settings → "Remove": stop watching for the device and drop the association. */
     fun removeCompanion(device: coffee.crema.ble.companion.CompanionDevice) = presence.removeCompanion(device)
-
-    /** Equipment-level grinder model (free text). Persisted; rides Visualizer
-     *  uploads/patches as `grinder_model`. */
-    fun setGrinderModel(model: String) {
-        editOwnSetting(Setting.GRINDER_MODEL) {
-            _ui.update { it.copy(grinderModel = model) }
-            persistPrefs()
-        }
-    }
 
     /** Default barista name (free text), stamped on each new shot and brew log. Persisted. */
     fun setBaristaName(name: String) = settings.setBaristaName(name)

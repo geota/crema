@@ -55,7 +55,7 @@ class HubRestartReattachTest {
 
     @Test
     fun `a restarted hub is re-found on its new port and the remote reattaches`() {
-        val firstConfig = coffee.crema.settings.v4SnapshotJson(rev = 9) { it.copy(grinderModel = "Before the restart") }
+        val firstConfig = coffee.crema.settings.v4SnapshotJson(rev = 9) { it.copy(qcGrind = "11") }
         // Restored as a remote of the first lifetime, paired: each side pinned the other's key.
         val (relayStore, remote) = VmHarness.relayStore()
         val (first, firstHub) = lifetime(remote, configSource = { firstConfig })
@@ -70,7 +70,7 @@ class HubRestartReattachTest {
         proxy.overridePeers(peers)
         VmHarness.idleUntil("the first lifetime's welcome") { firstHub.remotes().isNotEmpty() && !vm.ui.value.mirrorReconnecting }
         firstHub.pushConfig(firstConfig)
-        VmHarness.idleUntil("the first lifetime's snapshot") { vm.ui.value.grinderModel == "Before the restart" }
+        VmHarness.idleUntil("the first lifetime's snapshot") { vm.ui.value.qcGrind == "11" }
         vm.setQcGrind(14f) // one relayed edit: the slice's generation becomes 1
         VmHarness.idleUntil("the edit settled") { VmHarness.ownState(vm).mirror?.let { it.generation == 1L && it.pending.isEmpty() } == true }
         val slice = assertNotNull(VmHarness.ownState(vm).mirror)
@@ -80,10 +80,10 @@ class HubRestartReattachTest {
         first.kill()
         VmHarness.idleUntil("the remote to notice") { vm.ui.value.mirrorReconnecting }
         // P2 (AC-10's slice clause, AC-26): the last values stay, marked reconnecting.
-        assertEquals("Before the restart", vm.ui.value.grinderModel)
+        assertEquals("11", vm.ui.value.qcGrind)
         assertTrue(VmHarness.ownState(vm).mirror!!.reconnecting)
         assertEquals("Reconnecting to Kitchen tablet…", vm.ui.value.remoteStatus())
-        val (second, secondHub) = lifetime(remote, configSource = { coffee.crema.settings.v4SnapshotJson(rev = 0) { it.copy(grinderModel = "After the restart", primaryName = "Kitchen tablet") } })
+        val (second, secondHub) = lifetime(remote, configSource = { coffee.crema.settings.v4SnapshotJson(rev = 0) { it.copy(qcGrind = "12", primaryName = "Kitchen tablet") } })
         peers.value = listOf(Peer("nsd-second-lifetime", "Kitchen tablet", "primary", holdsDe1 = false, host = "127.0.0.1", port = second.port))
 
         advanceStepped(REFIND_DELAY_MS + 500)
@@ -98,7 +98,7 @@ class HubRestartReattachTest {
         // The fresh attach: the remote's DE1 attaches to the second lifetime,
         // whose attach snapshot carries its config.
         VmHarness.idleUntil("the reattach") { second.received.any { "\"type\":\"attach\"" in it } }
-        VmHarness.idleUntil("the attach snapshot") { vm.ui.value.grinderModel == "After the restart" }
+        VmHarness.idleUntil("the attach snapshot") { vm.ui.value.qcGrind == "12" }
         // The slice was kept across the re-find (a recreated one starts at
         // generation 0), and the new lifetime's rev 0, below the 9 applied
         // before the restart, still applied because its Welcome reset it.

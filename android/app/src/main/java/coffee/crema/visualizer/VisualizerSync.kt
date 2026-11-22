@@ -89,8 +89,6 @@ class VisualizerSync(
     private val notify: (String) -> Unit,
     /** Persist a successful upload: stamp `visualizerId` onto the local shot. */
     private val onShotSynced: (localId: String, visualizerId: String) -> Unit,
-    /** The user's equipment-level grinder model (Settings → Machine); null = unset. */
-    private val grinderModel: () -> String? = { null },
     /** Insert pulled remote stubs into the local history (dedup by id); answers the ids a full history refused. */
     private val onPulledShots: (List<StoredShot>) -> Set<String> = { emptySet() },
     /**
@@ -815,7 +813,7 @@ class VisualizerSync(
      * `metadata.crema{localId, signature, appVersion}` escape valve.
      */
     internal fun buildShotPayload(shot: StoredShot): JsonObject {
-        val wire = wireShotJson(shot, grinderModel())
+        val wire = wireShotJson(shot)
         // A RE-upload (already bound) keeps the post-flow tail: Visualizer
         // de-dupes by a SHA over the telemetry columns, so reproducing the
         // original series updates the SAME remote row in place (fixing the
@@ -1294,7 +1292,6 @@ class VisualizerSync(
         shot,
         includeNotes = persisted.prefs.includeNotes,
         defaultPrivacy = persisted.prefs.privacy,
-        settingsGrinderModel = grinderModel(),
         sendJournal = edit.annotations,
         sendBarista = edit.barista,
     )
@@ -2418,14 +2415,13 @@ internal fun VisualizerState.withTombstoneBound(shotId: String, visualizerId: St
 }
 
 /**
- * The equipment-level grinder model for [shot]'s upload / PATCH: the shot's
- * own (an imported or restored shot carries the grinder it was pulled on),
- * else the Settings default. Blank counts as absent. Mirrors the web
- * `resolveGrinderModel`.
+ * The grinder model for [shot]'s upload / PATCH / export: the shot's own name
+ * snapshot, blank counting as absent. A shot with none goes with none, never
+ * the Settings grinder (REVIEW-FINAL S3: "No grinder" is a choice, and that
+ * setting can't be edited since #488).
  */
-internal fun resolveGrinderModel(shot: ShotMeta, settingsDefault: String?): String? =
+internal fun resolveGrinderModel(shot: ShotMeta): String? =
     shot.grinderModel?.trim()?.takeIf { it.isNotEmpty() }
-        ?: settingsDefault?.trim()?.takeIf { it.isNotEmpty() }
 
 /**
  * The shell-side inputs of an edit-sync PATCH (web `annotationsPatch`); the
@@ -2437,14 +2433,13 @@ internal fun shotPatchInputs(
     shot: ShotMeta,
     includeNotes: Boolean,
     defaultPrivacy: String?,
-    settingsGrinderModel: String?,
     sendBarista: Boolean = false,
     sendJournal: Boolean = true,
 ): ShotPatchInputs = ShotPatchInputs(
     rating = shot.rating?.toUByte()?.takeIf { sendJournal },
     notes = if (includeNotes && sendJournal) (shot.notes ?: "") else null,
     privacy = (shot.privacy ?: defaultPrivacy)?.takeIf { sendJournal },
-    grinderModel = resolveGrinderModel(shot, settingsGrinderModel)?.takeIf { sendJournal },
+    grinderModel = resolveGrinderModel(shot)?.takeIf { sendJournal },
     // Android has no tag editor, so it never sends tags: null omits
     // `tag_list`, which is an absolute list, and `[]` would clear the remote tags.
     tagList = null,

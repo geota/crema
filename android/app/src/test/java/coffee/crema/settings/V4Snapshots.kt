@@ -14,7 +14,6 @@ internal fun v4Snapshot(s: MainUiState = MainUiState(), rev: Long = 0): ConfigSn
     stopOnWeight = s.stopOnWeight,
     autoTare = s.autoTare,
     maxShotDurationS = s.maxShotDurationS,
-    grinderModel = s.grinderModel,
     qcSteamTimeS = s.qcSteamTimeS,
     qcSteamFlowMlS = s.qcSteamFlowMlS,
     qcSteamTempC = s.qcSteamTempC,
