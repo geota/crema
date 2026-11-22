@@ -196,15 +196,44 @@ describe('the library migration runs only over a loaded library', () => {
 		expect(lib.getBean('bean:old')!.grinds ?? null).toBeNull();
 	});
 
-	it('with absent settings, migrates only bags that name their own grinder (PLAN follow-up 40)', () => {
+	function twoBags(): void {
 		const own = { ...blankBean('bean:own'), name: 'Own', grinder: 'Niche', grinderSetting: '12', grinds: undefined };
 		const none = { ...blankBean('bean:none'), name: 'None', grinder: '', grinderSetting: '14', grinds: undefined };
 		localStorage.setItem(LIBRARY_KEY, JSON.stringify({ schemaVersion: 1, beans: [own, none], roasters: [] }));
+	}
+
+	it('with quarantined settings, migrates only bags that name their own grinder (PLAN follow-up 40)', () => {
+		twoBags();
 		const lib = reloaded();
 		expect(lib.migrateGrinders('', true, true)).toBe(true);
 		expect(lib.getBean('bean:own')!.grinds).toHaveLength(1);
 		expect(lib.getBean('bean:none')!.grinds ?? null, 'waits for the settings, not filed under "no grinder"').toBeNull();
 		expect(lib.activeGrinder).toBeNull();
+	});
+
+	it('settings never written read normally: every bag migrates (PLAN follow-up 40)', () => {
+		twoBags();
+		localStorage.removeItem('crema.settings.v1');
+		localStorage.removeItem('crema.settings.v1.corrupt');
+		const lib = reloaded();
+		expect(runGrinderMigration(lib)).toBe(true);
+		// The normal fallback: filed under the settings grinder (or "no grinder" with none), not left waiting.
+		expect(lib.getBean('bean:none')!.grinds?.map((g) => g.grind)).toEqual(['14']);
+		expect(lib.getBean('bean:own')!.grinds).toHaveLength(1);
+	});
+
+	it('settings absent with a kept-aside copy count as quarantined (PLAN follow-up 40)', () => {
+		twoBags();
+		localStorage.removeItem('crema.settings.v1');
+		localStorage.setItem('crema.settings.v1.corrupt', '{not json');
+		try {
+			const lib = reloaded();
+			runGrinderMigration(lib);
+			expect(lib.getBean('bean:none')!.grinds ?? null).toBeNull();
+			expect(lib.getBean('bean:own')!.grinds).toHaveLength(1);
+		} finally {
+			localStorage.removeItem('crema.settings.v1.corrupt');
+		}
 	});
 });
 

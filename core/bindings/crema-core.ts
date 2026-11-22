@@ -3658,9 +3658,9 @@ export interface GrinderLibraryMigration {
 	skipped?: MigrationSkip;
 	/**
 	 * Bags left unmigrated (`grinds` still `None`) because the settings were
-	 * absent and the bag names no grinder of its own
-	 * ([`MigrationGate::settings_absent`], PLAN follow-up 40): they migrate
-	 * on a later load that reads the settings.
+	 * quarantined and the bag names no grinder of its own
+	 * ([`MigrationGate::settings_quarantined`], PLAN follow-up 40): they
+	 * migrate on a later load whose settings read.
 	 */
 	leftForSettings?: number;
 }
@@ -4175,14 +4175,14 @@ export interface MigrationGate {
 	 */
 	settings: boolean;
 	/**
-	 * The settings were absent: no file or key at all (with `settings`
-	 * true). That is a true first run only when the library has no bags;
-	 * with bags, the settings may have been quarantined (kept aside after a
-	 * failed read), so their `grinder_model` is unknown, not blank (PLAN
-	 * follow-up 40). Then only the bags that name their own grinder
-	 * migrate; the rest wait for a load that reads the settings.
+	 * The settings read as absent because a damaged copy was kept aside
+	 * (quarantined on an earlier load), with `settings` true. Their
+	 * `grinder_model` is then unknown, not blank (PLAN follow-up 40): only
+	 * the bags that name their own grinder migrate, and the rest wait for a
+	 * load whose settings read. Settings that are absent because they were
+	 * never written are not this: they read, with no settings grinder.
 	 */
-	settingsAbsent?: boolean;
+	settingsQuarantined?: boolean;
 }
 
 /**

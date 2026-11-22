@@ -111,11 +111,16 @@ fun lastGrindsForBag(beanId: String, shots: List<ShotMeta>): List<LastGrind> {
  * loaded, isn't: its rows or its `grinderModel` would look blank, and the
  * migration would file every old grind under "no grinder" for good.
  */
-fun migrationGate(library: coffee.crema.persist.StoreHealth, settings: coffee.crema.persist.StoreHealth): MigrationGate {
+fun migrationGate(
+    library: coffee.crema.persist.StoreHealth,
+    settings: coffee.crema.persist.StoreHealth,
+    settingsKeptAside: Boolean = false,
+): MigrationGate {
     fun read(h: coffee.crema.persist.StoreHealth) = h == coffee.crema.persist.StoreHealth.OK || h == coffee.crema.persist.StoreHealth.ABSENT
-    // Absent settings over a library with bags may be a quarantined file: the
-    // core then migrates only bags with their own grinder (PLAN follow-up 40).
-    return MigrationGate(library = read(library), settings = read(settings), settingsAbsent = settings == coffee.crema.persist.StoreHealth.ABSENT)
+    // Settings absent because a damaged file was kept aside (not because never
+    // written): the core then migrates only bags with their own grinder (PLAN follow-up 40).
+    val quarantined = settings == coffee.crema.persist.StoreHealth.ABSENT && settingsKeptAside
+    return MigrationGate(library = read(library), settings = read(settings), settingsQuarantined = quarantined)
 }
 
 /** The library migration (core `migrate_grinder_library`), run once the library and the settings have loaded.

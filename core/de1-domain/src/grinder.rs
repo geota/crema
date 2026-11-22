@@ -507,9 +507,9 @@ pub struct GrinderLibraryMigration {
     /// the migration ran (even with nothing to do).
     pub skipped: Option<MigrationSkip>,
     /// Bags left unmigrated (`grinds` still `None`) because the settings were
-    /// absent and the bag names no grinder of its own
-    /// ([`MigrationGate::settings_absent`], PLAN follow-up 40): they migrate
-    /// on a later load that reads the settings.
+    /// quarantined and the bag names no grinder of its own
+    /// ([`MigrationGate::settings_quarantined`], PLAN follow-up 40): they
+    /// migrate on a later load whose settings read.
     #[serde(default)]
     pub left_for_settings: u32,
 }
@@ -527,14 +527,14 @@ pub struct MigrationGate {
     /// couldn't be read: `grinder_model` would look blank and every bag's
     /// old grind would land under "no grinder" for good.
     pub settings: bool,
-    /// The settings were absent: no file or key at all (with `settings`
-    /// true). That is a true first run only when the library has no bags;
-    /// with bags, the settings may have been quarantined (kept aside after a
-    /// failed read), so their `grinder_model` is unknown, not blank (PLAN
-    /// follow-up 40). Then only the bags that name their own grinder
-    /// migrate; the rest wait for a load that reads the settings.
+    /// The settings read as absent because a damaged copy was kept aside
+    /// (quarantined on an earlier load), with `settings` true. Their
+    /// `grinder_model` is then unknown, not blank (PLAN follow-up 40): only
+    /// the bags that name their own grinder migrate, and the rest wait for a
+    /// load whose settings read. Settings that are absent because they were
+    /// never written are not this: they read, with no settings grinder.
     #[serde(default)]
-    pub settings_absent: bool,
+    pub settings_quarantined: bool,
 }
 
 impl MigrationGate {
@@ -542,7 +542,7 @@ impl MigrationGate {
     pub const READ: Self = Self {
         library: true,
         settings: true,
-        settings_absent: false,
+        settings_quarantined: false,
     };
 }
 
@@ -575,12 +575,13 @@ pub enum MigrationSkip {
 /// **The gate** (REVIEW-CORE H5): nothing runs unless `gate` says both the
 /// library and the settings were read; the answer is then empty with
 /// [`GrinderLibraryMigration::skipped`] set (the library first). A later
-/// load that reads both runs it. **Absent settings** with bags in the library
-/// ([`MigrationGate::settings_absent`], PLAN follow-up 40) are no settings
-/// grinder, not a blank one: `grinder_model` is ignored, no grinder is made
-/// active, and a bag that names no grinder of its own is left as it is
-/// ([`GrinderLibraryMigration::left_for_settings`]), so its old grind isn't
-/// filed under "no grinder" for good.
+/// load that reads both runs it. **Quarantined settings** with bags in the
+/// library ([`MigrationGate::settings_quarantined`], PLAN follow-up 40) give
+/// an unknown settings grinder, not a blank one: `grinder_model` is ignored,
+/// no grinder is made active, and a bag that names no grinder of its own is
+/// left as it is ([`GrinderLibraryMigration::left_for_settings`]), so its old
+/// grind isn't filed under "no grinder" for good. Settings never written
+/// (absent, nothing kept aside) read as no settings grinder, as before.
 #[must_use]
 pub fn migrate_grinder_library(
     grinders: &[Grinder],
@@ -599,9 +600,9 @@ pub fn migrate_grinder_library(
         return out;
     }
     let live_beans = || beans.iter().filter(|b| b.deleted_at.is_none());
-    // Absent settings over a library with bags: the settings grinder is
-    // unknown, so nothing falls back to it.
-    let unknown_settings = gate.settings_absent && live_beans().next().is_some();
+    // Quarantined settings over a library with bags: the settings grinder
+    // is unknown, so nothing falls back to it.
+    let unknown_settings = gate.settings_quarantined && live_beans().next().is_some();
     let grinder_model = if unknown_settings { "" } else { grinder_model };
     let mut all: Vec<Grinder> = grinders.to_vec();
     if grinders.is_empty() {
@@ -1384,7 +1385,7 @@ mod tests {
         let no_settings = skipped(MigrationGate {
             library: true,
             settings: false,
-            settings_absent: false,
+            settings_quarantined: false,
         });
         assert_eq!(
             no_settings,
@@ -1396,7 +1397,7 @@ mod tests {
         let no_library = skipped(MigrationGate {
             library: false,
             settings: true,
-            settings_absent: false,
+            settings_quarantined: false,
         });
         assert_eq!(no_library.skipped, Some(MigrationSkip::LibraryUnreadable));
         assert!(no_library.new_grinders.is_empty() && no_library.updated_beans.is_empty());
@@ -1414,15 +1415,15 @@ mod tests {
     }
 
     #[test]
-    fn absent_settings_over_bags_migrate_only_bags_with_their_own_grinder() {
-        // PLAN follow-up 40: the settings were quarantined on the upgrade
-        // launch, so this one reads them as absent.
+    fn quarantined_settings_over_bags_migrate_only_bags_with_their_own_grinder() {
+        // PLAN follow-up 40: the settings were damaged on the upgrade launch
+        // and kept aside, so this one reads them as absent.
         let bags = [bag("b1", "", "14"), bag("b2", "EK43", "8")];
-        let absent = MigrationGate {
-            settings_absent: true,
+        let quarantined = MigrationGate {
+            settings_quarantined: true,
             ..MigrationGate::READ
         };
-        let m = migrate_grinder_library(&[], &bags, "Niche Zero", absent, NOW);
+        let m = migrate_grinder_library(&[], &bags, "Niche Zero", quarantined, NOW);
         assert_eq!(m.skipped, None);
         assert_eq!(
             names(&m.new_grinders),
@@ -1433,34 +1434,60 @@ mod tests {
         assert_eq!(m.updated_beans.len(), 1);
         assert_eq!(m.updated_beans[0].id, "b2");
         assert_eq!(m.left_for_settings, 1);
-        // A later load that reads the settings files b1 under their grinder.
-        let mut all = m.new_grinders.clone();
-        let later =
-            migrate_grinder_library(&all, &bags[..1], "Niche Zero", MigrationGate::READ, NOW);
-        all.extend(later.new_grinders.clone());
+        // A later load whose settings read files b1 under their grinder.
+        let later = migrate_grinder_library(
+            &m.new_grinders,
+            &bags[..1],
+            "Niche Zero",
+            MigrationGate::READ,
+            NOW,
+        );
         let rows = later.updated_beans[0].grinds.as_deref().unwrap();
         assert_eq!(rows[0].grinder_id, "grinder:niche-zero");
         assert_eq!(later.left_for_settings, 0);
-        // A true first run (no bags) reads absent settings as readable.
-        let first = migrate_grinder_library(&[], &[], "", absent, NOW);
-        assert_eq!(first.skipped, None);
-        assert!(first.grinders_migrated);
+        // No bags: nothing waits.
+        let first = migrate_grinder_library(&[], &[], "", quarantined, NOW);
+        assert_eq!((first.skipped, first.grinders_migrated), (None, true));
         // Deleted bags don't count as a library.
         let mut gone = bag("b9", "", "14");
         gone.deleted_at = Some(1);
-        let m = migrate_grinder_library(&[], &[gone], "", absent, NOW);
+        let m = migrate_grinder_library(&[], &[gone], "", quarantined, NOW);
         assert_eq!(m.left_for_settings, 0);
-        // Over the JSON bridge too (`settingsAbsent` is false when missing).
+        // Over the JSON bridge too (`settingsQuarantined` is false when missing).
         let json = serde_json::json!({
             "beans": [bag("b1", "", "14")],
             "grinderModel": "EK43",
-            "gate": { "library": true, "settings": true, "settingsAbsent": true },
+            "gate": { "library": true, "settings": true, "settingsQuarantined": true },
         });
         let out: GrinderLibraryMigration =
             serde_json::from_str(&migrate_grinder_library_json(&json.to_string(), NOW).unwrap())
                 .unwrap();
         assert!(out.updated_beans.is_empty());
         assert_eq!(out.left_for_settings, 1);
+    }
+
+    #[test]
+    fn settings_never_written_read_as_no_settings_grinder() {
+        // Absent with nothing kept aside (web writes its settings only on a
+        // change): every bag migrates, a bag with no grinder of its own
+        // under "no grinder", as before.
+        let bags = [bag("b1", "", "14"), bag("b2", "EK43", "8")];
+        let m = migrate_grinder_library(&[], &bags, "", MigrationGate::READ, NOW);
+        assert_eq!(m.updated_beans.len(), 2);
+        assert_eq!(m.left_for_settings, 0);
+        let rows = m.updated_beans[0].grinds.as_deref().unwrap();
+        assert_eq!(
+            (rows[0].grinder_id.as_str(), rows[0].grind.as_str()),
+            (crate::bag_grind::NO_GRINDER_ID, "14")
+        );
+        let json = serde_json::json!({
+            "beans": [bag("b1", "", "14")],
+            "gate": { "library": true, "settings": true },
+        });
+        let out: GrinderLibraryMigration =
+            serde_json::from_str(&migrate_grinder_library_json(&json.to_string(), NOW).unwrap())
+                .unwrap();
+        assert_eq!(out.updated_beans.len(), 1);
     }
 
     #[test]

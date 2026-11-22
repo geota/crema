@@ -22,6 +22,7 @@ import { getSettingsStore } from '#lib/settings/store.svelte.js';
 import {
 	followOtherTabs,
 	storeHealth,
+	hasKeptAside,
 	isIdOrNull,
 	isJsonObject,
 	keepSkippedRows,
@@ -842,19 +843,20 @@ export class BeanLibraryStore {
 	 * its old grind as a saved grind. The old fields and `updatedAt` are never
 	 * written. Skipped over a library that couldn't be read (its rows would
 	 * look absent), and with `settingsReadable` false (the settings grinder
-	 * would look blank). With `settingsAbsent` (no settings key at all) over a
-	 * library with bags, only the bags that name their own grinder migrate
-	 * (the core's gate, PLAN follow-up 40): the settings may have been kept
-	 * aside. Whether anything changed.
+	 * would look blank). With `settingsQuarantined` (the settings read as
+	 * absent because a damaged copy was kept aside) over a library with bags,
+	 * only the bags that name their own grinder migrate (the core's gate,
+	 * PLAN follow-up 40). Settings never written read normally. Whether
+	 * anything changed.
 	 */
-	migrateGrinders(grinderModel: string, settingsReadable = true, settingsAbsent = false): boolean {
+	migrateGrinders(grinderModel: string, settingsReadable = true, settingsQuarantined = false): boolean {
 		if (!this.canMigrate || !settingsReadable) return false;
 		let m;
 		try {
 			m = migrateGrinderLibrary(this.allGrinders, this.beans, grinderModel, {
 				library: this.canMigrate,
 				settings: settingsReadable,
-				settingsAbsent
+				settingsQuarantined
 			});
 		} catch (e) {
 			// Malformed rows: keep what there is; a later load tries again.
@@ -948,7 +950,9 @@ export function runGrinderMigration(
 	const settings = getSettingsStore();
 	const health = storeHealth(SETTINGS_KEY);
 	const readable = health === 'ok' || health === 'absent';
-	return lib.migrateGrinders(settings.current.grinderModel ?? '', readable, health === 'absent');
+	// Absent because a damaged copy was kept aside, not because never written (PLAN follow-up 40).
+	const quarantined = health === 'absent' && hasKeptAside(SETTINGS_KEY);
+	return lib.migrateGrinders(settings.current.grinderModel ?? '', readable, quarantined);
 }
 
 /**

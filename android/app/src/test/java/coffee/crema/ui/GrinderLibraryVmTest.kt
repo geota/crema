@@ -385,9 +385,12 @@ class GrinderLibraryVmTest {
         assertEquals(listOf(coffee.crema.persist.StoreHealth.OK, coffee.crema.persist.StoreHealth.ABSENT), read)
         assertFalse(coffee.crema.beans.migrationGate(coffee.crema.persist.StoreHealth.OK, coffee.crema.persist.StoreHealth.DAMAGED).settings)
         assertFalse(coffee.crema.beans.migrationGate(coffee.crema.persist.StoreHealth.UNAVAILABLE, coffee.crema.persist.StoreHealth.OK).library)
-        // PLAN follow-up 40: absent settings are flagged, so the core migrates only bags with their own grinder.
-        assertTrue(coffee.crema.beans.migrationGate(coffee.crema.persist.StoreHealth.OK, coffee.crema.persist.StoreHealth.ABSENT).settingsAbsent == true)
-        assertFalse(coffee.crema.beans.migrationGate(coffee.crema.persist.StoreHealth.OK, coffee.crema.persist.StoreHealth.OK).settingsAbsent == true)
+        // PLAN follow-up 40: settings absent with a kept-aside copy are quarantined; never written, or read, they aren't.
+        val ok = coffee.crema.persist.StoreHealth.OK
+        val absent = coffee.crema.persist.StoreHealth.ABSENT
+        assertTrue(coffee.crema.beans.migrationGate(ok, absent, settingsKeptAside = true).settingsQuarantined == true)
+        assertFalse(coffee.crema.beans.migrationGate(ok, absent, settingsKeptAside = false).settingsQuarantined == true)
+        assertFalse(coffee.crema.beans.migrationGate(ok, ok, settingsKeptAside = true).settingsQuarantined == true)
     }
 
     /** N7: re-picking the bag already on Brew keeps an unsaved dial, with no message. */
