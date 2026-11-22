@@ -20,8 +20,11 @@ class MachineCommandCodecTest {
         MachineCommand.SetActiveProfile("builtin:classic"),
         MachineCommand.SetActiveBean("bean-1"),
         MachineCommand.SetActiveBean(null),
-        MachineCommand.SetActiveGrinder("grinder:niche-zero"),
-        MachineCommand.SetActiveGrinder(null),
+        MachineCommand.SetActiveGrinder("grinder:niche-zero", "Niche Zero"),
+        MachineCommand.SetActiveGrinder(null, null),
+        MachineCommand.SetGrind("14.5"),
+        MachineCommand.SetGrind("2.1.3"),
+        MachineCommand.SetGrind("4⅓"),
         MachineCommand.QuickSave(null, asNew = false),
         MachineCommand.QuickSave("Blooming 2", asNew = false),
         MachineCommand.QuickSave("Blooming 2", asNew = true),
@@ -41,7 +44,6 @@ class MachineCommandCodecTest {
         QcField.HOT_WATER_VOLUME -> 250f
         QcField.FLUSH_TIME -> 5f
         QcField.FLUSH_TEMP -> 92f
-        QcField.GRIND -> 14.5f
     }
 
     private fun ok(method: String, args: String = "") =
@@ -93,9 +95,27 @@ class MachineCommandCodecTest {
     }
 
     @Test
-    fun `the relayed grind must be finite and in range`() {
-        ok("setQcGrind", "14.5")
-        for (bad in listOf("NaN", "Infinity", "-Infinity", "1e9", "-1", "", "abc")) refused("setQcGrind", bad)
+    fun `the relayed grind is text, and a number must be finite and in range`() {
+        // #488 round 2: a text grind travels as it is, end to end.
+        for (text in listOf("14.5", "15", "0", "2.1.3", "4⅓", "1 turn + 3", "14,5")) {
+            assertEquals(MachineCommand.SetGrind(text), ok("setQcGrind", text).command, text)
+        }
+        for (bad in listOf("NaN", "Infinity", "-Infinity", "1e9", "-1", "", "  ", "a\nb", "x".repeat(65))) refused("setQcGrind", bad)
+    }
+
+    /** Follow-up 19: a grinder pick carries the record's name, and a bare id (no name) is refused. */
+    @Test
+    fun `a grinder pick carries its name`() {
+        assertEquals(
+            MachineCommandCodec.Wire("setActiveGrinder", "grinder:niche-zero\nNiche Zero"),
+            MachineCommandCodec.encode(MachineCommand.SetActiveGrinder("grinder:niche-zero", "Niche Zero")),
+        )
+        assertEquals(MachineCommand.SetActiveGrinder("grinder:niche-zero", "Niche Zero"), ok("setActiveGrinder", "grinder:niche-zero\nNiche Zero").command)
+        assertEquals(MachineCommand.SetActiveGrinder(null, null), ok("setActiveGrinder", "").command)
+        refused("setActiveGrinder", "grinder:niche-zero")
+        refused("setActiveGrinder", "grinder:niche-zero\n")
+        refused("setActiveGrinder", "grinder:niche-zero\nNiche\nZero")
+        refused("setActiveGrinder", "\nNiche Zero")
     }
 
     /** AC-43 (relay v4 R4): the steam, hot-water and flush values are machine
@@ -104,7 +124,7 @@ class MachineCommandCodecTest {
     @Test
     fun `machine settings have no wire form and their methods are unknown`() {
         for (field in QcField.entries) {
-            assertEquals(field.sentByRemotes(), MachineCommandCodec.encode(MachineCommand.SetQc(field, inRange(field))) != null, "$field")
+            assertEquals(null, MachineCommandCodec.encode(MachineCommand.SetQc(field, inRange(field))), "$field")
         }
         val gone = listOf(
             "setQcSteamTime", "setQcSteamFlow", "setQcSteamTemp", "setQcHotWaterTemp",

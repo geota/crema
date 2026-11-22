@@ -53,7 +53,7 @@ class MirroredSettingsTest {
 
     @Test
     fun `a pending edit shows over the snapshot until it settles`() {
-        val edit = MachineCommand.SetQc(QcField.GRIND, 18f)
+        val edit = MachineCommand.SetGrind("18")
         val (slice, gen) = MirroredSettings(snapshot = snap).withPending(edit)
         assertEquals("18", own.copy(mirror = slice).effective().qcGrind)
         val accepted = slice.settled(Setting.QC_GRIND, gen, CommandOutcome.Accepted)
@@ -64,8 +64,8 @@ class MirroredSettingsTest {
 
     @Test
     fun `only the latest edit of a key settles it`() {
-        val (one, gen1) = MirroredSettings(snapshot = snap).withPending(MachineCommand.SetQc(QcField.GRIND, 16f))
-        val (two, gen2) = one.withPending(MachineCommand.SetQc(QcField.GRIND, 17f))
+        val (one, gen1) = MirroredSettings(snapshot = snap).withPending(MachineCommand.SetGrind("16"))
+        val (two, gen2) = one.withPending(MachineCommand.SetGrind("17"))
         val stale = two.settled(Setting.QC_GRIND, gen1, CommandOutcome.Accepted)
         assertEquals("17", own.copy(mirror = stale).effective().qcGrind, "an older answer doesn't drop the newer edit")
         assertEquals("15", own.copy(mirror = stale.settled(Setting.QC_GRIND, gen2, CommandOutcome.Accepted)).effective().qcGrind)
@@ -84,7 +84,7 @@ class MirroredSettingsTest {
 
     @Test
     fun `a snapshot doesn't override an edit still awaiting its answer`() {
-        val (slice, _) = MirroredSettings(snapshot = snap).withPending(MachineCommand.SetQc(QcField.GRIND, 18f))
+        val (slice, _) = MirroredSettings(snapshot = snap).withPending(MachineCommand.SetGrind("18"))
         val next = slice.applied(snap.copy(qcGrind = "12"), null, null)
         assertEquals("18", own.copy(mirror = next).effective().qcGrind)
     }

@@ -25,6 +25,8 @@ class ConfigSnapshotGoldenTest {
     /** A v4 hub's snapshot, every machine register known. */
     private val snapshot = ConfigSnapshot(
         activeProfileId = "019e5fb5-63b5-7333-a2ac-34c516215b2c", activeBeanId = "bean:s", activeBeanSummary = "S bag",
+        activeBagName = "S bag", activeBagGrind = coffee.crema.core.BagGrind("grinder:niche-zero", "Niche Zero", "2.1.3", starred = true),
+        activeGrinderId = "grinder:niche-zero", activeGrinderName = "Niche Zero", activeGrinderScale = coffee.crema.beans.DEFAULT_GRIND_SCALE,
         stopOnWeight = true, autoTare = true, maxShotDurationS = 44f,
         qcSteamTimeS = 30f, qcSteamFlowMlS = 1.6f, qcSteamTempC = 150f, qcHotWaterTempC = 85f, qcHotWaterVolumeMl = 200f,
         qcFlushTimeS = 6f, qcFlushTempC = 93f, qcGrind = "15",
@@ -60,6 +62,22 @@ class ConfigSnapshotGoldenTest {
         kotlin.test.assertEquals("14.5", with(kotlinx.serialization.json.JsonPrimitive(14.5)))
         kotlin.test.assertEquals("2.1.3", with(kotlinx.serialization.json.JsonPrimitive("2.1.3")))
         kotlin.test.assertNull(with(kotlinx.serialization.json.JsonNull))
+    }
+
+    /** #488 S8: the hub's active bag and its saved grind for the hub's
+     *  grinder travel as display data (a remote's library isn't the hub's),
+     *  the grind as text; a hub with none sends neither. */
+    @Test
+    fun `the hub's bag grind travels with the snapshot`() {
+        val full = coreJson.parseToJsonElement(Golden.require("config-snapshot/schema.json")).jsonObject
+        kotlin.test.assertEquals("\"S bag\"", full["activeBagName"].toString())
+        kotlin.test.assertEquals(
+            """{"grinderId":"grinder:niche-zero","grinderName":"Niche Zero","grind":"2.1.3","starred":true}""",
+            full["activeBagGrind"].toString(),
+        )
+        val none = coreJson.encodeToString(ConfigSnapshot.serializer(), snapshot.copy(activeBagName = null, activeBagGrind = null))
+        val keys = coreJson.parseToJsonElement(none).jsonObject.keys
+        assertTrue("activeBagName" !in keys && "activeBagGrind" !in keys, "$keys")
     }
 
     /** A snapshot without one of the fields every v4 hub sends (an older

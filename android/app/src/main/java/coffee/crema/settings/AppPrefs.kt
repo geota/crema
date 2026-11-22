@@ -614,6 +614,12 @@ data class ConfigSnapshot(
     /** The active bag is empty on the hub, for a remote's Brew banner (#302). A
      *  remote holds no live copy of the hub's stock. Display only. */
     val activeBagEmpty: Boolean = false,
+    /** The hub's active bag's name and its saved grind row for the hub's
+     *  active grinder (the "no grinder" slot with none), #488 S8: a remote's
+     *  libraries aren't synced, so its unsaved-grind marker and Quick Save
+     *  read these, not its own copy of the bag. Null = no bag / none saved. */
+    val activeBagName: String? = null,
+    val activeBagGrind: coffee.crema.core.BagGrind? = null,
     /** The hub's active grinder (#488): its id (a pointer into the hub's own
      *  library, review F3), and its name and scale so a remote shows the hub's
      *  grind range and unit without the record. Display only; null = none. */

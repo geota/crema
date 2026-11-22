@@ -654,7 +654,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         override fun commitConfig(cmd: MachineCommand.Config) = machineConfig.commitConfig(cmd)
         override fun hasProfile(id: String): Boolean = library.hasProfile(id)
         override fun hasBean(id: String): Boolean = _ui.value.beans.any { it.id == id }
-        override fun hasGrinder(id: String): Boolean = _ui.value.liveGrinders.any { it.id == id }
+        override fun liveGrinder(id: String): coffee.crema.core.Grinder? = _ui.value.liveGrinders.firstOrNull { it.id == id }
         override fun applyQuickSave(copyName: String?, asNew: Boolean): CommandOutcome = library.quickSave(copyName, asNew)
         // Someone is using Crema on a mirror: that's presence at the machine.
         override fun notePeerActivity() = presence.idleActivity(coffee.crema.core.IdleActivity.Mirror)
@@ -1067,10 +1067,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 .distinctUntilChanged()
                 .collect { library.pushShotSelections(it) }
         }
-        // A hub's remotes hold no live copy of its stock: a change to the active
-        // bag's weights re-sends the snapshot that carries its empty flag.
+        // A hub's remotes hold no live copy of its stock or its bags: a change
+        // to the active bag's weights, its name or its saved grind for the
+        // active grinder re-sends the snapshot that carries them (#302, #488 S8).
         viewModelScope.launch {
-            _ui.state.map { s -> s.beans.firstOrNull { it.id == s.activeBeanId }?.let { it.remaining to it.bagSize } }
+            _ui.state.map { s -> Triple(s.activeBag()?.let { it.remaining to it.bagSize }, s.activeBag()?.name, s.savedGrindForBrew()) }
                 .distinctUntilChanged()
                 .collect { proxy.pushConfig() }
         }
@@ -2307,12 +2308,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (match != null) setActiveProfile(match.id)
         // 3. Brew's grind: the shot's own (falling back to its bag snapshot's
         //    reference setting), as text (#488 round 2), then dose/yield over
-        //    the loaded recipe. A remote relays a number; a text grind is set
-        //    on the device that owns the session only.
-        shot.effectiveGrindSetting?.let { grind ->
+        //    the loaded recipe. A remote relays it as text too ("2.1.3").
+        shot.effectiveGrindSetting?.takeIf { it.isNotBlank() }?.let { grind ->
             when {
                 _ui.value.mirror == null -> setGrindDial(grind)
-                else -> coffee.crema.beans.grindNumber(grind)?.let { setQcGrind(it.toFloat()) }
+                else -> machine.execute(MachineCommand.SetGrind(grind))
             }
         }
         if (shot.doseG != null || shot.yieldTargetG != null) {
@@ -2847,7 +2847,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * next shot (issue 15). Grind never reaches the machine — it's a log/record
      * value — so there's no machine write, just persistence.
      */
-    fun setQcGrind(clicks: Float) = machine.execute(MachineCommand.SetQc(QcField.GRIND, clicks))
+    fun setQcGrind(clicks: Float) =
+        // As text on the active grinder's scale (on a remote, the hub's), the
+        // core's grind_text: no one-decimal rounding (#488 round 2).
+        machine.execute(MachineCommand.SetGrind(coffee.crema.beans.grindText(clicks.toDouble(), effectiveState().activeGrindScale())))
 
     /** Brew's grind, set by a bag or grinder pick on the device that owns
      *  the session (#488, review F9): persisted and pushed to remotes. Text
@@ -2965,8 +2968,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Set (or with `null`, clear) the active bean (the Brew bean block). Persisted. */
     fun setActiveBean(id: String?) = machine.execute(MachineCommand.SetActiveBean(id))
 
-    /** Pick Brew's grinder (#488), or none: on a remote, relayed to the hub like a bag pick. */
-    fun setActiveGrinder(id: String?) = machine.execute(MachineCommand.SetActiveGrinder(id))
+    /** Pick Brew's grinder (#488), or none: on a remote, relayed to the hub
+     *  like a bag pick, with the picked record's name, so the hub checks it
+     *  is the same grinder (follow-up 19). The pickers list this device's own. */
+    fun setActiveGrinder(id: String?) =
+        machine.execute(MachineCommand.SetActiveGrinder(id, id?.let { g -> _ui.value.grinders.firstOrNull { it.id == g }?.name }))
 
     // ── Maintenance — see [MaintenanceController] ───────────────────────────
 

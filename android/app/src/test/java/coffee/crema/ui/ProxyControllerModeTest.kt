@@ -320,8 +320,8 @@ class ProxyControllerModeTest {
 
     @Test
     fun `this device's commands run locally until it mirrors`() {
-        controller.machine.execute(MachineCommand.SetQc(QcField.GRIND, 14.5f))
-        assertEquals(listOf("commit(${MachineCommand.SetQc(QcField.GRIND, 14.5f)})"), actions.applied.toList())
+        controller.machine.execute(MachineCommand.SetGrind("14.5"))
+        assertEquals(listOf("commit(${MachineCommand.SetGrind("14.5")})"), actions.applied.toList())
 
         pinHub()
         controller.switchToSecondary("127.0.0.1", 9)

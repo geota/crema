@@ -103,10 +103,13 @@ class GrinderStateTest {
     fun `a stepped grind is text on the active scale`() {
         val fine = Grinder(id = "grinder:fine", name = "Fine", scale = GrindScale(0f, 10f, 0.25f, ""), updatedAt = 1L)
         val s = MainUiState(grinders = rowViewOf(listOf(fine)), activeGrinderId = fine.id)
-        val stepped = coffee.crema.machine.MachineCommand.SetQc(coffee.crema.machine.QcField.GRIND, 2.25f).applyTo(s)
-        assertEquals("2.25", stepped.qcGrind, "not 2.2 or 2.3")
-        assertEquals("4.2", coffee.crema.machine.MachineCommand.SetQc(coffee.crema.machine.QcField.GRIND, 4.2f).applyTo(MainUiState()).qcGrind, "no float noise")
-        assertEquals("15", coffee.crema.machine.MachineCommand.SetQc(coffee.crema.machine.QcField.GRIND, 15f).applyTo(MainUiState()).qcGrind, "not 15.0")
+        // What the stepper's setQcGrind sends: the number as text on the active scale.
+        fun stepped(state: MainUiState, v: Float) =
+            coffee.crema.machine.MachineCommand.SetGrind(coffee.crema.beans.grindText(v.toDouble(), state.activeGrindScale())).applyTo(state).qcGrind
+        assertEquals("2.25", stepped(s, 2.25f), "not 2.2 or 2.3")
+        assertEquals("4.2", stepped(MainUiState(), 4.2f), "no float noise")
+        assertEquals("15", stepped(MainUiState(), 15f), "not 15.0")
+        assertEquals("2.1.3", coffee.crema.machine.MachineCommand.SetGrind("2.1.3").applyTo(s).qcGrind, "a text grind as it is")
     }
 
     @Test

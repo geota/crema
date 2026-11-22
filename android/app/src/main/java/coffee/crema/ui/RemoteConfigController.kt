@@ -84,6 +84,9 @@ internal class RemoteConfigController(
                 activeBeanId = ui.activeBeanId,
                 activeBeanSummary = activeBeanSummaryLine(),
                 activeBagEmpty = ui.beans.firstOrNull { it.id == ui.activeBeanId }?.let { bagStock(it) == BagStock.Empty } ?: false,
+                // What a remote's unsaved-grind marker and Save compare with (S8).
+                activeBagName = ui.activeBag()?.name,
+                activeBagGrind = ui.savedGrindForBrew(),
                 // The hub's own active grinder (#488): a remote shows its name and scale.
                 activeGrinderId = ui.activeGrinder()?.id,
                 activeGrinderName = ui.activeGrinder()?.name,

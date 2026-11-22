@@ -162,7 +162,8 @@ internal class RemoteFixture(private val store: ViewModelStore) {
         current = when (method) {
             "setStopOnWeight" -> current.copy(stopOnWeight = args.toBoolean())
             "setAutoTare" -> current.copy(autoTare = args.toBoolean())
-            "setQcGrind" -> current.copy(qcGrind = coffee.crema.beans.grindText(args.toDouble()))
+            // As text, as sent (#488 round 2).
+            "setQcGrind" -> current.copy(qcGrind = args)
             "quickAdjustBrew" -> args.split(",").let { p ->
                 current.copy(brewDoseG = p[0].toDouble(), brewYieldG = p[1].toDouble(), brewTempC = p[2].toDouble(), brewPreinfuseS = p.getOrNull(3)?.toDoubleOrNull())
             }

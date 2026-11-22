@@ -585,6 +585,10 @@ data class MainUiState(
      *  scale, display only; review F3): the hub's records aren't in this
      *  device's library. Null on a hub or a device on its own. */
     val mirroredGrinder: coffee.crema.core.Grinder? = null,
+    /** A remote's view of the hub's active bag for Brew's grind (#488 S8):
+     *  its id, name and the hub's saved grind for the hub's grinder, from
+     *  the snapshot. Projected from [mirror]; null on a hub or a device on its own. */
+    val mirroredBag: coffee.crema.core.Bean? = null,
     /** Devices' open tab: "scale" or "grinder" (#488, the web's `?tab=grinder`). In memory only. */
     val devicesTab: String = "scale",
     /** A debit just emptied a bag: the prompt after the shot (#302). */

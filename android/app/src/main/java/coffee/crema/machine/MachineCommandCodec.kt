@@ -39,8 +39,11 @@ object MachineCommandCodec {
         is MachineCommand.SetActiveProfile -> Wire(SET_ACTIVE_PROFILE, cmd.id)
         // No bean travels as an empty argument.
         is MachineCommand.SetActiveBean -> Wire(SET_ACTIVE_BEAN, cmd.id.orEmpty())
+        // `<id>\n<name>`: the hub checks it is the same record (follow-up 19).
+        // Neither may hold a control character, so the first newline splits.
         // No grinder travels as an empty argument, like no bean.
-        is MachineCommand.SetActiveGrinder -> Wire(SET_ACTIVE_GRINDER, cmd.id.orEmpty())
+        is MachineCommand.SetActiveGrinder ->
+            Wire(SET_ACTIVE_GRINDER, cmd.id?.let { id -> cmd.name?.let { "$id$GRINDER_NAME$it" } ?: id }.orEmpty())
         // `` = Save; `copy:<name>` = a built-in's copy; `new:<name>` = Save as new.
         is MachineCommand.QuickSave -> Wire(
             QUICK_SAVE,
@@ -52,8 +55,10 @@ object MachineCommandCodec {
         )
         is MachineCommand.SetStopOnWeight -> Wire(SET_STOP_ON_WEIGHT, cmd.on.toString())
         is MachineCommand.SetAutoTare -> Wire(SET_AUTO_TARE, cmd.on.toString())
-        // Float.toString is locale-independent.
-        is MachineCommand.SetQc -> qcMethod(cmd.field)?.let { Wire(it, cmd.value.toString()) }
+        // No Quick Controls machine setting has a wire form (relay v4 R4).
+        is MachineCommand.SetQc -> null
+        // The grind as text ("14.5", "2.1.3", "4⅓"), end to end (#488 round 2).
+        is MachineCommand.SetGrind -> Wire(SET_QC_GRIND, cmd.grind)
         // `dose,yield,temp,preinf`, preinf empty = none.
         is MachineCommand.AdjustBrew ->
             Wire(QUICK_ADJUST_BREW, "${cmd.dose},${cmd.yieldOut},${cmd.brewTemp},${cmd.preinf ?: ""}")
@@ -71,8 +76,8 @@ object MachineCommandCodec {
         setOf(
             START_SHOT, MACHINE_STATE, CANCEL_MAINTENANCE, TARE_SCALE, SET_ACTIVE_PROFILE,
             SET_ACTIVE_BEAN, SET_STOP_ON_WEIGHT, SET_AUTO_TARE, QUICK_ADJUST_BREW, RESET_BREW,
-            SET_ACTIVE_GRINDER, QUICK_SAVE,
-        ) + QcField.entries.mapNotNull(::qcMethod)
+            SET_ACTIVE_GRINDER, QUICK_SAVE, SET_QC_GRIND,
+        )
     }
 
     /** The machine states a `machineState` control may carry. */
@@ -90,12 +95,7 @@ object MachineCommandCodec {
         }
     }
 
-    private val qcByMethod: Map<String, QcField> by lazy {
-        QcField.entries.mapNotNull { field -> qcMethod(field)?.let { it to field } }.toMap()
-    }
-
     private fun parse(method: String, args: String): MachineCommand.Relayable? {
-        qcByMethod[method]?.let { field -> return args.toFloatOrNull()?.let { MachineCommand.SetQc(field, it) } }
         return when (method) {
             START_SHOT -> noArgs(args, MachineCommand.StartShot)
             CANCEL_MAINTENANCE -> noArgs(args, MachineCommand.CancelMaintenance)
@@ -104,7 +104,8 @@ object MachineCommandCodec {
             MACHINE_STATE -> stateRequests[args]
             SET_ACTIVE_PROFILE -> MachineCommand.SetActiveProfile(args)
             SET_ACTIVE_BEAN -> MachineCommand.SetActiveBean(args.ifEmpty { null })
-            SET_ACTIVE_GRINDER -> MachineCommand.SetActiveGrinder(args.ifEmpty { null })
+            SET_ACTIVE_GRINDER -> grinderPick(args)
+            SET_QC_GRIND -> MachineCommand.SetGrind(args)
             QUICK_SAVE -> quickSave(args)
             SET_STOP_ON_WEIGHT -> flag(args)?.let { MachineCommand.SetStopOnWeight(it) }
             SET_AUTO_TARE -> flag(args)?.let { MachineCommand.SetAutoTare(it) }
@@ -115,7 +116,6 @@ object MachineCommandCodec {
 
     /** Why [parse] found nothing to run. */
     private fun parseRefusal(method: String, args: String): String = when {
-        method in qcByMethod -> "$method needs a number"
         method == MACHINE_STATE -> "machine state not relayable: ${args.take(32)}"
         method == SET_STOP_ON_WEIGHT || method == SET_AUTO_TARE -> "$method needs true or false"
         method == QUICK_ADJUST_BREW -> "quickAdjustBrew needs dose,yield,temp[,preinf]"
@@ -130,6 +130,18 @@ object MachineCommandCodec {
         "true" -> true
         "false" -> false
         else -> null
+    }
+
+    /** `` = none, `<id>\n<name>` = that grinder; a bare `<id>` (no name) is
+     *  decoded and then refused ([MachineCommand.SetActiveGrinder.refusal]). */
+    private fun grinderPick(args: String): MachineCommand.SetActiveGrinder {
+        if (args.isEmpty()) return MachineCommand.SetActiveGrinder(null, null)
+        val cut = args.indexOf(GRINDER_NAME)
+        return if (cut < 0) {
+            MachineCommand.SetActiveGrinder(args, null)
+        } else {
+            MachineCommand.SetActiveGrinder(args.substring(0, cut), args.substring(cut + 1))
+        }
     }
 
     /** `` = Save, `copy:<name>` = a named copy, `new:<name>` = Save as new. */
@@ -152,15 +164,6 @@ object MachineCommandCodec {
         return MachineCommand.AdjustBrew(dose, yieldOut, brewTemp, preinf)
     }
 
-    /** The relayed Quick Controls fields' methods: grind, a shot dial. The
-     *  steam, hot-water and flush values are machine settings a remote
-     *  doesn't send (relay v4 R4), so they have none. */
-    private fun qcMethod(field: QcField): String? = when (field) {
-        QcField.GRIND -> "setQcGrind"
-        QcField.STEAM_TIME, QcField.STEAM_FLOW, QcField.STEAM_TEMP, QcField.HOT_WATER_TEMP,
-        QcField.HOT_WATER_VOLUME, QcField.FLUSH_TIME, QcField.FLUSH_TEMP -> null
-    }
-
     private const val START_SHOT = "startShot"
     private const val MACHINE_STATE = "machineState"
     private const val CANCEL_MAINTENANCE = "cancelMaintenance"
@@ -173,6 +176,8 @@ object MachineCommandCodec {
     private const val RESET_BREW = "resetBrew"
     private const val SET_ACTIVE_GRINDER = "setActiveGrinder"
     private const val QUICK_SAVE = "quickSave"
+    private const val SET_QC_GRIND = "setQcGrind"
+    private const val GRINDER_NAME = '\n'
     private const val SAVE_COPY = "copy:"
     private const val SAVE_AS_NEW = "new:"
 }

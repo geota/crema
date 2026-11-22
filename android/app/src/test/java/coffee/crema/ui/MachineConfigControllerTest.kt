@@ -111,7 +111,7 @@ class MachineConfigControllerTest {
 
     @Test
     fun `grind is recorded and never reaches the machine`() {
-        controller.commitConfig(MachineCommand.SetQc(QcField.GRIND, 12f))
+        controller.commitConfig(MachineCommand.SetGrind("12"))
         assertEquals(listOf("persistPrefs"), calls)
         assertEquals(0, laneTasks)
     }

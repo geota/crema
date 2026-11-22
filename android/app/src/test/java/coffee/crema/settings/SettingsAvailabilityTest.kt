@@ -115,7 +115,7 @@ class SettingsAvailabilityTest {
 
     @Test
     fun `pending and unconfirmed edits`() {
-        val (slice, gen) = MirroredSettings(snapshot = v4, hubName = "Kitchen tablet").withPending(MachineCommand.SetQc(QcField.GRIND, 18f))
+        val (slice, gen) = MirroredSettings(snapshot = v4, hubName = "Kitchen tablet").withPending(MachineCommand.SetGrind("18"))
         val (both, _) = slice.withPending(MachineCommand.SetAutoTare(false))
         val ui = remote().copy(mirror = both.settled(Setting.QC_GRIND, gen, coffee.crema.machine.CommandOutcome.Unknown("no reply")))
         assertEquals(PENDING, ui.availability(Setting.AUTO_TARE))

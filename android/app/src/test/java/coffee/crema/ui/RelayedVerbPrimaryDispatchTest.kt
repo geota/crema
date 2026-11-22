@@ -66,11 +66,12 @@ class RelayedVerbPrimaryDispatchTest {
         "setStopOnWeight" to Effect(prime = { it.setStopOnWeight(false) }) { it.stopOnWeight },
         "setAutoTare" to Effect(prime = { it.setAutoTare(true) }) { !it.autoTare },
         "setQcGrind" to Effect { it.qcGrind == "14.5" },
+        "setQcGrind.text" to Effect { it.qcGrind == "2.1.3" },
         "quickAdjustBrew" to Effect { it.brewParams == BrewParams(18.0, 36.0, 93.0, 8.0) },
         "quickAdjustBrew.noPreinf" to Effect { it.brewParams == BrewParams(18.0, 36.0, 93.0, null) },
         "resetBrew" to Effect(prime = { it.quickAdjustBrew(18.0, 36.0, 93.0) }) { it.brewParams == null },
         // #488: a grinder this primary owns.
-        "setActiveGrinder" to Effect(prime = { vm -> vm.addGrinder("Niche Zero"); vm.setActiveGrinder(null) }) {
+        "setActiveGrinder" to Effect(prime = { vm -> vm.addGrinder(SAMPLE_GRINDER_NAME); vm.setActiveGrinder(null) }) {
             it.activeGrinderId == SAMPLE_GRINDER_ID
         },
         "setActiveGrinder.none" to Effect(prime = { it.setActiveGrinder(SAMPLE_GRINDER_ID) }) { it.activeGrinderId == null },
