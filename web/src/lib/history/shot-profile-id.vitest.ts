@@ -23,7 +23,6 @@ describe('the shot records its profile id', () => {
 		getActiveShotStore().set({
 			bean: null,
 			profileName: 'Mine',
-			profileId: 'profile:mine',
 			dose: 18,
 			brewParams: null,
 			grinderModel: null,
@@ -45,7 +44,7 @@ describe('the shot records its profile id', () => {
 		expect(ctx).not.toHaveProperty('profileId');
 	});
 
-	it('the live shot start freezes the active profile id', async () => {
+	it('Brew hands the core the active profile\'s id and name (REVIEW-CORE H3)', async () => {
 		const { loadCore } = await import('#lib/core/index.js');
 		const { CremaApp } = await import('#lib/state/app.svelte.js');
 		const { getProfileStore } = await import('#lib/profiles/index.js');
@@ -56,7 +55,8 @@ describe('the shot records its profile id', () => {
 		await profiles.ensureLoaded();
 		const [first] = profiles.all;
 		profiles.setActive(first.id);
-		const frozen = (app as unknown as { buildLiveActiveShot(): { profileId?: string | null } }).buildLiveActiveShot();
-		expect(frozen.profileId).toBe(first.id);
+		const selections = (app as unknown as { shotSelections(): { profileId?: string; profileName?: string } }).shotSelections();
+		expect(selections.profileId).toBe(first.id);
+		expect(selections.profileName).toBe(first.name);
 	});
 });

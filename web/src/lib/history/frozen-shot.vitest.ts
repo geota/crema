@@ -42,6 +42,8 @@ function finish(id: string): void {
 			id,
 			completedAt: 1_700_000_000_000,
 			metadata: { dose: 18 },
+			// The bag the core froze at shot start: the one the shot debits.
+			bean: { beanId: 'a', name: 'a' },
 			record: { duration: 28_000, samples: [{ elapsed: 0, sample: { groupPressure: 9 } }] }
 		}),
 		runtime: null

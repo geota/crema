@@ -3444,8 +3444,8 @@ export class HistoryStore {
 	/**
 	 * Update a shot's equipment-level grinder-model override and persist.
 	 * Pass `null` (or call with an empty string after trimming) to clear
-	 * the override — the upload-time cascade then falls back to the
-	 * settings default. Mirrors {@link setNotes}.
+	 * it: the shot then has no grinder and uploads none (no settings
+	 * fallback, REVIEW-FINAL S3). Mirrors {@link setNotes}.
 	 */
 	setGrinderModel(id: string, grinderModel: string | null): void {
 		// The id follows the name (#488, review M2): the owned grinder it names,
@@ -3884,6 +3884,8 @@ export class HistoryStore {
 				samples: []
 			},
 			bean: input.bean ?? null,
+			...(input.grinderId ? { grinderId: input.grinderId } : {}),
+			...(input.grinderModel ? { grinderModel: input.grinderModel } : {}),
 			// Never persist an empty method: blank → `null` (the one rule
 			// both shells follow; `isBrewLog` is presence-based).
 			brewMethod: input.method.trim() ? input.method : null,
@@ -3990,6 +3992,12 @@ export interface ManualBrewInput {
 	waterG: number | null;
 	yieldOut: number | null;
 	grinderSetting: string | null;
+	/**
+	 * The active grinder's id and name when the brew was logged (REVIEW-FINAL
+	 * S4, `brew_log_grind`), stamped as a shot's are; absent = no grinder.
+	 */
+	grinderId?: string | null;
+	grinderModel?: string | null;
 	brewTempC: number | null;
 	durationMs: number | null;
 	rating: number | null;

@@ -1794,8 +1794,6 @@
 			// snapshot pattern — capture-time-frozen, not live-read at
 			// export, so a later dial change cannot rewrite history.
 			const live = params.current;
-			// Per-shot grind snapshot (issue #30): Brew's grind, the value
-			// the header shows; not set, the shot records none.
 			// The brew temp and pre-infusion the shot actually runs with
 			// (after the core's clamp), so history records what was sent.
 			const qc = effectiveOverrides();
@@ -1804,10 +1802,7 @@
 				brewTemp: qc.brewTemp ?? paramSeed.brewTemp,
 				preinfuseTarget: qc.preinf ?? paramSeed.preinf,
 				stopOnWeight: live.stopOnWeight,
-				autoTare: live.autoTare,
-				// Brew's grind as the header shows it (#488, the core's
-				// `brew_grind_view`); not set records none.
-				grind: grindInfo.recorded
+				autoTare: live.autoTare
 			});
 			// The fingerprint compare + lazy re-upload happens inside
 			// `startShot()`; when no upload is needed the call returns

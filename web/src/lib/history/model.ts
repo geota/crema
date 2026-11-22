@@ -104,16 +104,14 @@ export interface ShotBean {
 	 */
 	readonly notes?: string;
 	/**
-	 * The bean's grinder click setting at shot-completion time
-	 * (e.g. `"2.5"`, `"40"`). Wires to Visualizer's `grinder_setting`
-	 * on shot upload.
+	 * The bag's legacy grinder click setting (e.g. `"2.5"`, `"40"`), on old
+	 * rows only: a new snapshot never carries it (REVIEW-FINAL S2). The
+	 * fallback for a row with no grind of its own ({@link effectiveGrindSetting}).
 	 */
 	readonly grinderSetting?: string;
 	/**
-	 * The bean's grinder NAME at shot-completion time (e.g. "Niche
-	 * Zero") — `snapshotFromBean` has always written it (untyped until
-	 * issue #16 round 4 surfaced it on the detail's bean block); absent
-	 * for older snapshots and beans without a grinder.
+	 * The bag's legacy grinder NAME (e.g. "Niche Zero"), on old rows only: a
+	 * new snapshot never carries it (REVIEW-FINAL S2).
 	 */
 	readonly grinder?: string;
 }
@@ -128,9 +126,11 @@ export interface ShotBean {
  * Returns `null` when `bean` is null/undefined — the call sites then
  * persist `shot.bean = null` (a bean-less shot).
  *
- * Optional fields (`notes`, `grinderSetting`) are omitted from the
- * literal when their source is empty so the persisted record stays
- * minimal (matches the original capture-site assembly).
+ * `notes` is omitted from the literal when empty so the persisted record
+ * stays minimal. The bag's legacy `grinderSetting` / `grinder` are never
+ * copied (REVIEW-FINAL S2, the core's `ShotBean::snapshot_of`): a new row's
+ * grind and grinder are its own `metadata.grinderSetting` and
+ * `grinderId` / `grinderModel`, so the old-row fallbacks read nothing for it.
  */
 export function snapshotFromBean(
 	bean: Bean | null | undefined,
@@ -144,9 +144,7 @@ export function snapshotFromBean(
 		roastedOn: bean.roastedOn,
 		roastLevel: bean.roastLevel,
 		tags: [...bean.tags],
-		...(bean.notes ? { notes: bean.notes } : {}),
-		...(bean.grinderSetting ? { grinderSetting: bean.grinderSetting } : {}),
-		...(bean.grinder ? { grinder: bean.grinder } : {})
+		...(bean.notes ? { notes: bean.notes } : {})
 	};
 }
 
@@ -313,8 +311,8 @@ export interface StoredShot {
 	bean?: ShotBean | null;
 	/**
 	 * Equipment-level grinder model at completion time (e.g. "Niche
-	 * Zero"). `null` means no value; the upload-time cascade falls
-	 * back to the settings default. Editable post-completion.
+	 * Zero"). `null` means no grinder: the upload sends none (no settings
+	 * fallback, REVIEW-FINAL S3). Editable post-completion.
 	 */
 	grinderModel?: string | null;
 	/**

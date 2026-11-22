@@ -11,13 +11,15 @@
  *
  * Replay paths populate `ActiveShot` from the capture file's META before
  * any event fires (see docs/49 §3); the live path populates it at
- * `ShotStarted`. Both converge here on the same `ActiveShotData`, so the
- * commit logic doesn't branch on origin — only on `activeShot.source`
- * for the live-only side effects (bean burn-down, webhook).
+ * `ShotStarted`. Both converge here on the same `ActiveShotData`; the
+ * side effects (bag debit, webhook, auto-save, uploads) follow the core's
+ * one rule (`shot_effects`, REVIEW-CORE M4), which reads only whether the
+ * shot is a replay. The bag, grinder and grind come from the core's record
+ * (frozen at its shot start, REVIEW-CORE H3).
  */
 
 import { Effect } from 'effect';
-import { brew_ratio } from '#lib/wasm/de1_wasm.js';
+import { brew_ratio, shotEffectsJson } from '#lib/wasm/de1_wasm.js';
 import type { CaptureEntry } from '#lib/capture/index.js';
 import { getCaptureStore } from '#lib/capture/index.js';
 import { getBeanStore } from '#lib/bean/index.js';
@@ -27,7 +29,8 @@ import { toast } from '#lib/components/shared/toast.svelte.js';
 import { promptBagEmpty } from '#lib/bean/bag-empty-prompt.js';
 import { getProfileStore } from '#lib/profiles/index.js';
 import { getActiveShotStore, type ActiveShotData } from '#lib/state/active-shot.svelte.js';
-import type { ShotCaptureContext } from '#lib/core/crema-core.js';
+import type { ShotCaptureContext, ShotEffects, ShotEffectsInput } from '#lib/core/crema-core.js';
+import { ShotDisposition } from '#lib/core/crema-core.js';
 import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
 import { uploadsHeld } from '#lib/visualizer/sync-config.js';
 import { ACCOUNT_HELD_NOTICE } from '#lib/services/account-held.js';
@@ -149,38 +152,47 @@ export function commitShotCompletion(
 	// maintenance runs in the DE1's Espresso state; recording it would
 	// pollute history — Decenza #1325), `DiscardAborted` for a short AND
 	// light pull (Decenza abortedshotclassifier.h:19-25, validated over
-	// 882 shots). The mechanics stay here: a skipped cleaning run has no
-	// side effects at all (nothing was ground); an aborted discard is held
-	// behind an undo toast, and its live side effects still run (the dose
-	// was physically ground, so the bean debit belongs).
+	// 882 shots).
 	const disposition = event.content.disposition ?? 'Record';
+	// What the completion does — debit, webhook, auto-save, upload — is the
+	// core's one rule (REVIEW-CORE M4, `shot_effects`). The web records every
+	// shot it sees (it is never a remote); a replay touches no bag.
+	const effects = shotEffects({
+		disposition: ShotDisposition[disposition],
+		recordedHere: true,
+		replay: activeShot?.source === 'replay'
+	});
 	// The core assembled the shot (F10): its own record — frames, scale
-	// overlays, the as-run profile and values, the stop reason — plus what
+	// overlays, the as-run profile and values, the stop reason, and the
+	// bag, profile, grinder and grind it froze at shot start — plus what
 	// only the shell knows. Taken now, whatever the disposition, so the
 	// core's pending shot never outlives its completion; an aborted
 	// discard keeps it for the undo.
 	const captured = ctx.takeStoredShot(captureContext(activeShot));
 	const dose = recordedDose(captured, activeShot);
-	if (disposition === 'SkipCleaning') {
+	if (!effects.record && !effects.offerUndo) {
 		getActiveShotStore().clear();
 		return;
 	}
 	if (restoreFrozen()) {
 		// A restore runs in another tab, and every write here is being dropped:
 		// keep the shot for after the reload, which records it the normal way.
-		if (captured && disposition === 'Record') keepFrozenShot(captured, activeShot, dose);
+		if (captured && effects.record) keepFrozenShot(captured, effects, dose);
 		getActiveShotStore().clear();
 		return;
 	}
-	if (disposition === 'DiscardAborted') {
-		const bagDebit =
-			activeShot?.source !== 'replay'
-				? runLiveOnlySideEffects(event, activeShot, dose, ctx.snapshot, ctx.fireWebhook)
-				: untouchedBag(activeShot);
+	// The bag the shot debits is the one it recorded (frozen by the core at
+	// shot start), never a later selection.
+	const beanId = recordedBeanId(captured);
+	if (effects.offerUndo) {
+		// An aborted pull: the dose was physically ground, so the debit and
+		// the webhook run now; the row, its auto-save and uploads wait for
+		// the Undo.
+		const bagDebit = effects.debit ? debitShotBag(beanId, dose) : untouchedBag(beanId);
+		if (effects.webhook) fireShotWebhook(event, activeShot, dose, ctx.snapshot, ctx.fireWebhook);
 		// Freeze everything the undo needs — by the time the user taps it
 		// the active-shot store is cleared and a new shot may be underway.
-		const frozenShot = activeShot;
-		const frozenSnapshot = ctx.snapshot;
+		const frozenMeta = atShotStartMeta(activeShot);
 		const frozenCtx = {
 			runtime: ctx.runtime,
 			shotStartedAtMs: ctx.shotStartedAtMs,
@@ -195,8 +207,8 @@ export function commitShotCompletion(
 				if (!record) return;
 				getHistoryStore().setBagDebit(record.id, bagDebit);
 				// An undone discard is a kept shot: auto-save counts it.
-				if (frozenShot?.source !== 'replay') autoSaveGrind(record);
-				if (frozenCtx.runtime) {
+				if (effects.autoSave) autoSaveGrind(record);
+				if (effects.upload && frozenCtx.runtime) {
 					registerUploadBatch(record.id, autoUploadDestinations());
 					frozenCtx.runtime.runFork(pushShotToVisualizer(record.id));
 					frozenCtx.runtime.runFork(pushShotToDecent(record.id));
@@ -204,7 +216,7 @@ export function commitShotCompletion(
 				if (frozenCtx.shotStartedAtMs !== null) {
 					const fromMs = frozenCtx.shotStartedAtMs - CAPTURE_LEAD_MS;
 					const toMs = frozenCtx.lastNotificationAtMs ?? performance.now();
-					void persistCaptureSlice(record.id, fromMs, toMs, frozenCtx.sliceJsonl);
+					void persistCaptureSlice(record, frozenMeta, fromMs, toMs, frozenCtx.sliceJsonl);
 				}
 			}
 		);
@@ -214,17 +226,15 @@ export function commitShotCompletion(
 	const record = captured ? getHistoryStore().recordCaptured(captured) : null;
 
 	if (record) {
-		const isLive = activeShot?.source !== 'replay';
-		const bagDebit = isLive
-			? runLiveOnlySideEffects(event, activeShot, dose, ctx.snapshot, ctx.fireWebhook)
-			: untouchedBag(activeShot);
+		const bagDebit = effects.debit ? debitShotBag(beanId, dose) : untouchedBag(beanId);
 		getHistoryStore().setBagDebit(record.id, bagDebit);
-		if (isLive) autoSaveGrind(record);
+		if (effects.webhook) fireShotWebhook(event, activeShot, dose, ctx.snapshot, ctx.fireWebhook);
+		if (effects.autoSave) autoSaveGrind(record);
 		// Visualizer push — fire-and-forget; recoverable failures land in the
 		// retry queue. Runs on the app runtime (T-22) so it sees ShotSync /
 		// UploadQueue and the REAL typed errors (no boundary squash); `runFork`
 		// is detached, same posture as before. No runtime → skip (non-fatal).
-		if (ctx.runtime) {
+		if (effects.upload && ctx.runtime) {
 			// One toast for the whole batch, however many destinations answer.
 			registerUploadBatch(record.id, autoUploadDestinations());
 			ctx.runtime.runFork(pushShotToVisualizer(record.id));
@@ -237,7 +247,7 @@ export function commitShotCompletion(
 		if (ctx.shotStartedAtMs !== null) {
 			const fromMs = ctx.shotStartedAtMs - CAPTURE_LEAD_MS;
 			const toMs = ctx.lastNotificationAtMs ?? performance.now();
-			void persistCaptureSlice(record.id, fromMs, toMs, ctx.sliceJsonl);
+			void persistCaptureSlice(record, atShotStartMeta(activeShot), fromMs, toMs, ctx.sliceJsonl);
 		}
 	}
 
@@ -245,10 +255,21 @@ export function commitShotCompletion(
 	getActiveShotStore().clear();
 }
 
+/** What a completed shot does (`de1_domain::shot_effects`, REVIEW-CORE M4). */
+export function shotEffects(input: ShotEffectsInput): ShotEffects {
+	return JSON.parse(shotEffectsJson(JSON.stringify(input))) as ShotEffects;
+}
+
+/** The bag the core recorded on the shot (`bean.beanId`, frozen at shot start), or `null`. */
+function recordedBeanId(captured: Record<string, unknown> | null): string | null {
+	const bean = captured?.bean as { beanId?: string | null } | null | undefined;
+	return bean?.beanId || null;
+}
+
 /** Keep a shot finished in a frozen tab; if that fails, the overlay offers it. */
-function keepFrozenShot(captured: Record<string, unknown>, activeShot: ActiveShotData | null, dose: number | null): void {
-	const live = activeShot?.source !== 'replay';
-	const kept = stashFrozenShot({ captured, beanId: activeShot?.bean?.beanId ?? null, dose, live });
+function keepFrozenShot(captured: Record<string, unknown>, effects: ShotEffects, dose: number | null): void {
+	// `live`: the reload debits and auto-saves it (a replay does neither).
+	const kept = stashFrozenShot({ captured, beanId: recordedBeanId(captured), dose, live: effects.debit });
 	if (!kept) freezeOverlay.keep(captured);
 }
 
@@ -345,7 +366,6 @@ function recordedDose(
  * one-shot copy: a later edit to the bean's tags does NOT rewrite history)
  * and the machine. The bag, profile, grinder and grind are the core's own,
  * frozen at shot start from `setShotSelections` (REVIEW-CORE H3).
- * TODO(#488 batch 2 web): hand the selections to the core as they change.
  */
 function captureContext(activeShot: ActiveShotData | null): ShotCaptureContext {
 	const bean = activeShot?.bean ?? null;
@@ -393,29 +413,29 @@ export function autoSaveGrind(shot: StoredShot): void {
 }
 
 /** The `bagDebit` of a row whose bag wasn't debited: 0 with a bag, else `null`. */
-function untouchedBag(activeShot: ActiveShotData | null): number | null {
-	return activeShot?.bean?.beanId ? 0 : null;
+function untouchedBag(beanId: string | null): number | null {
+	return beanId ? 0 : null;
 }
 
 /**
- * Bean burn-down + webhook. Both reach into user state (the user's bag
- * inventory, a user-configured endpoint), so replay paths must skip
- * them — a replay should leave no side effects on user data. Returns the grams
- * the shot took from its bag, `null` for a shot with no bag.
+ * Take the shot's dose from the bag it recorded (`beanId`). Returns the grams
+ * taken, 0 with a bag and no dose, `null` for a shot with no bag.
  */
-function runLiveOnlySideEffects(
+function debitShotBag(beanId: string | null, dose: number | null): number | null {
+	if (!beanId || !dose) return untouchedBag(beanId);
+	const debit = getBeanStore().debitBean(beanId, dose);
+	if (debit.emptied) void promptBagEmpty(beanId);
+	return debit.taken;
+}
+
+/** The `shotCompleted` webhook (gated by the user's settings inside `fireWebhook`). */
+function fireShotWebhook(
 	event: ShotCompletedEvent,
 	activeShot: ActiveShotData | null,
 	dose: number | null,
 	snapshot: UiSnapshot,
 	fireWebhook: (eventType: string, payload: object) => void
-): number | null {
-	let bagDebit = untouchedBag(activeShot);
-	if (activeShot?.bean?.beanId && dose) {
-		const debit = getBeanStore().debitBean(activeShot.bean.beanId, dose);
-		bagDebit = debit.taken;
-		if (debit.emptied) void promptBagEmpty(activeShot.bean.beanId);
-	}
+): void {
 	const finalWeight = event.content.final_weight ?? null;
 	// Core-owned ratio math (review #42) — same guard rule as the history
 	// stats (`de1_domain::brew_ratio`: positive dose, finite quotient).
@@ -432,7 +452,6 @@ function runLiveOnlySideEffects(
 		peakTemp: event.content.peak_temp ?? null,
 		brewRatio
 	});
-	return bagDebit;
 }
 
 /**
@@ -442,12 +461,14 @@ function runLiveOnlySideEffects(
  * the bytes the core re-recorded match the bytes we fed in.
  */
 async function persistCaptureSlice(
-	shotId: string,
+	shot: StoredShot,
+	activeMeta: Record<string, unknown>,
 	fromMs: number,
 	toMs: number,
 	sliceJsonl: (fromMs: number, toMs: number) => Promise<string>
 ): Promise<void> {
-	const shotMeta = buildAtShotStartMeta(toMs);
+	const shotId = shot.id;
+	const shotMeta = buildAtShotStartMeta(toMs, shot, activeMeta);
 	const jsonl = await sliceJsonl(fromMs, toMs);
 	if (!jsonl) {
 		return;
@@ -477,22 +498,12 @@ async function persistCaptureSlice(
 }
 
 /**
- * The at-shot-start META `CaptureEntry` appended after the core's
- * connect-phase META prelude. Two META lines is intentional: the
- * core's is wire-side identity the replay driver needs BEFORE the
- * bytes that follow; this one is advisory state an analyst reads.
- * `foldMeta` in `lib/replay/capture.ts` merges both onto one
- * `ReplayMeta` view.
- *
- * `profileBytesHex` is deliberately absent — the core doesn't surface
- * the byte-exact upload payload and caching it shell-side is multi-file
- * plumbing deferred per the task spec.
+ * The at-shot-start META fields the active shot holds: the profile name and
+ * the Quick Sheet values. Read at the completion, before the store clears.
  */
-function buildAtShotStartMeta(tMs: number): CaptureEntry | null {
-	const active = getActiveShotStore().current;
-	if (!active) return null;
-
+function atShotStartMeta(active: ActiveShotData | null): Record<string, unknown> {
 	const meta: Record<string, unknown> = {};
+	if (!active) return meta;
 	if (active.profileName) meta.profileName = active.profileName;
 	const brewParams = active.brewParams;
 	if (brewParams) {
@@ -502,19 +513,48 @@ function buildAtShotStartMeta(tMs: number): CaptureEntry | null {
 		meta.stopOnWeight = brewParams.stopOnWeight;
 		meta.autoTare = brewParams.autoTare;
 	}
-	if (active.bean) {
+	return meta;
+}
+
+/**
+ * The at-shot-start META `CaptureEntry` appended after the core's
+ * connect-phase META prelude. Two META lines is intentional: the
+ * core's is wire-side identity the replay driver needs BEFORE the
+ * bytes that follow; this one is the shot's context, which a replay
+ * hands back to the core as its selections (REVIEW-CORE H3).
+ * `foldMeta` in `lib/replay/capture.ts` merges both onto one
+ * `ReplayMeta` view.
+ *
+ * The bag, grinder and grind are the ones the shot recorded (the core
+ * froze them at shot start). The grind rides the bag block's
+ * `grinderSetting`, the one grind slot the META has, so a shot with no bag
+ * carries none.
+ *
+ * `profileBytesHex` is deliberately absent — the core doesn't surface
+ * the byte-exact upload payload and caching it shell-side is multi-file
+ * plumbing deferred per the task spec.
+ */
+export function buildAtShotStartMeta(
+	tMs: number,
+	shot: StoredShot,
+	activeMeta: Record<string, unknown>
+): CaptureEntry | null {
+	const meta: Record<string, unknown> = { ...activeMeta };
+	if (shot.bean) {
 		const bean: Record<string, unknown> = {};
-		const name = active.bean.name?.trim() ?? '';
-		const roaster = active.bean.roasterName?.trim() ?? '';
+		const name = shot.bean.name?.trim() ?? '';
+		const roaster = shot.bean.roasterName?.trim() ?? '';
 		if (name) bean.name = name;
 		if (roaster) bean.roaster = roaster;
-		if (active.bean.roastedOn) bean.roastedOn = active.bean.roastedOn;
-		if (active.bean.roastLevel != null) bean.roastLevel = active.bean.roastLevel;
-		if (active.bean.notes) bean.notes = active.bean.notes;
-		if (active.bean.grinderSetting) bean.grinderSetting = active.bean.grinderSetting;
+		if (shot.bean.roastedOn) bean.roastedOn = shot.bean.roastedOn;
+		if (shot.bean.roastLevel != null) bean.roastLevel = shot.bean.roastLevel;
+		if (shot.bean.notes) bean.notes = shot.bean.notes;
+		const grind = shot.metadata?.grinderSetting?.trim();
+		if (grind) bean.grinderSetting = grind;
 		if (Object.keys(bean).length > 0) meta.bean = bean;
 	}
-	if (active.grinderModel) meta.grinderModel = active.grinderModel;
+	const grinder = shot.grinderModel?.trim();
+	if (grinder) meta.grinderModel = grinder;
 	if (Object.keys(meta).length === 0) return null;
 	return { t: Math.round(tMs), dir: 'in', src: 'META', hex: '', meta };
 }

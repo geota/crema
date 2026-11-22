@@ -34,6 +34,7 @@ import { describeError } from '#lib/utils/error.js';
 import type { ActiveShotBrewParams, ActiveShotData } from '#lib/state/active-shot.svelte.js';
 import type { UiSnapshot } from '#lib/state/ui-state.svelte.js';
 import type { ShotBean } from '#lib/history/index.js';
+import type { ShotSelections } from '#lib/core/crema-core.js';
 
 /**
  * The largest inter-event wait the replay will honour, in ms. A capture can
@@ -65,6 +66,12 @@ export interface ReplayCaptureDeps {
 	 *  `app → services → app` import cycle). */
 	readonly clearedReadout: Partial<UiSnapshot>;
 	readonly applyOutput: (output: CoreOutput) => void;
+	/**
+	 * Hand the core (the shadow core, during the replay) the capture's
+	 * selections, which it freezes on the replay's `ShotStarted`
+	 * (REVIEW-CORE H3).
+	 */
+	readonly setShotSelections: (selections: ShotSelections) => void;
 	readonly patch: (snapshot: Partial<UiSnapshot>) => void;
 	readonly setActiveShot: (data: ActiveShotData) => void;
 	readonly clearActiveShot: () => void;
@@ -109,8 +116,7 @@ export function replayMetaToActiveShot(meta: ReplayMeta): ActiveShotData {
 				roasterName: bean.roaster ?? null,
 				roastedOn: bean.roastedOn ?? null,
 				roastLevel: bean.roastLevel ?? null,
-				notes: bean.notes,
-				grinderSetting: bean.grinderSetting
+				notes: bean.notes
 			}
 		: null;
 	const hasBrewParams =
@@ -135,6 +141,38 @@ export function replayMetaToActiveShot(meta: ReplayMeta): ActiveShotData {
 		brewParams,
 		grinderModel: meta.grinderModel ?? null,
 		source: 'replay'
+	};
+}
+
+/**
+ * The capture's selections for the shadow core to freeze at the replay's
+ * shot start (REVIEW-CORE H3): what the shot recorded, from its META. The
+ * bag has no `beanId` (it isn't necessarily in this device's library), and
+ * the profile and grinder have no ids. The grind rides the META bag block's
+ * `grinderSetting` (an older capture's is the bag's own grind then).
+ */
+export function replayMetaToSelections(meta: ReplayMeta): ShotSelections {
+	const bean = meta.bean;
+	const name = bean?.name?.trim() ?? '';
+	const roaster = bean?.roaster?.trim() ?? '';
+	const hasBag = !!bean && (name !== '' || roaster !== '' || bean.roastedOn != null || bean.roastLevel != null || !!bean.notes);
+	return {
+		bean: hasBag
+			? {
+					name,
+					roasterName: roaster || undefined,
+					roastedOn: bean.roastedOn ?? undefined,
+					// The snapshot's level is a whole number (the META's may not be).
+					roastLevel:
+						bean.roastLevel != null && Number.isFinite(bean.roastLevel)
+							? Math.min(10, Math.max(0, Math.round(bean.roastLevel)))
+							: undefined,
+					notes: bean.notes || undefined
+				}
+			: undefined,
+		profileName: meta.profileName?.trim() || undefined,
+		grinderName: meta.grinderModel?.trim() || undefined,
+		grind: bean?.grinderSetting?.trim() || undefined
 	};
 }
 
@@ -188,8 +226,11 @@ export function replayCaptureProgram(d: ReplayCaptureDeps): Effect.Effect<void> 
 	const use = Effect.gen(function* () {
 		// Populate ActiveShot from the META BEFORE any events fire (the brew UI
 		// follows ActiveShot; the replay's ShotStarted fold then leaves it alone).
+		// The capture's selections go to the shadow core the same way, before
+		// its ShotStarted: the core freezes them there and the shot records them.
 		yield* Effect.sync(() => {
 			d.setActiveShot(replayMetaToActiveShot(d.parsed.meta));
+			d.setShotSelections(replayMetaToSelections(d.parsed.meta));
 		});
 
 		// Identify the scale so SCALE_WEIGHT bytes decode into ScaleReading events.

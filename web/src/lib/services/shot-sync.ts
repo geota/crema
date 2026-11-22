@@ -101,7 +101,6 @@ import {
 } from '#lib/history/model.js';
 import type { HistoryStore } from '#lib/history/store.svelte.js';
 import { liveSyncRows, rowBoundTo, syncRows } from '#lib/history/sync-view.js';
-import { getSettingsStore } from '#lib/settings/index.js';
 import type { components } from '#lib/visualizer/openapi.js';
 import {
 	reconcileShots,
@@ -277,20 +276,14 @@ function baristaOf(shot: AnyShot): string {
 // reading discipline the core can't know about.
 
 /**
- * Resolve the shot's equipment-level grinder model for the post-upload PATCH.
- * Cascade (per #81): snapshot {@link StoredShot.grinderModel} wins, then the
- * equipment-level `settings.prefs.grinderModel` default (legacy fallback), then
- * `null` (omit the field so a blank doesn't clobber a Visualizer-side edit).
+ * The shot's grinder name for the post-upload PATCH: its own
+ * {@link StoredShot.grinderModel} snapshot, else `null` (omit the field so a
+ * blank doesn't clobber a Visualizer-side edit). No fallback to the settings
+ * `grinderModel` (REVIEW-FINAL S3, N8): since #488 it can't be edited and "No
+ * grinder" is a choice, so a shot with no grinder uploads none.
  */
-export function resolveGrinderModel(
-	shot: Pick<StoredShot, 'grinderModel'>,
-	settingsDefault: string | undefined | null
-): string | null {
-	const fromShot = shot.grinderModel?.trim();
-	if (fromShot) return fromShot;
-	const fromSettings = settingsDefault?.trim();
-	if (fromSettings) return fromSettings;
-	return null;
+export function resolveGrinderModel(shot: Pick<StoredShot, 'grinderModel'>): string | null {
+	return shot.grinderModel?.trim() || null;
 }
 
 /**
@@ -743,7 +736,7 @@ export const ShotSyncLive = Layer.effect(
 			// went up, or wait in marks: a re-upload sends none and marks none,
 			// or it would bring back tags removed on the website.
 			const tagList = shot.visualizerId != null ? null : resolveTagList(shot);
-			const grinderModel = resolveGrinderModel(shot, getSettingsStore().current.grinderModel);
+			const grinderModel = resolveGrinderModel(shot);
 			if (
 				coffeeBagId != null ||
 				(tagList != null && tagList.length > 0) ||
@@ -1480,10 +1473,9 @@ export const ShotSyncLive = Layer.effect(
 		 * with their own marks.
 		 */
 		const annotationsPatch = (shot: AnyShot): ShotPatch => {
-			const settings = getSettingsStore().current;
 			const cfg = readSyncConfig();
 			const coffeeBagId = resolveCoffeeBagId(shot);
-			const grinderModel = resolveGrinderModel(shot, settings.grinderModel);
+			const grinderModel = resolveGrinderModel(shot);
 			const grinderSetting = effectiveGrindSetting(shot);
 			return {
 				rating: (shot.metadata.rating ?? 0) > 0 ? (shot.metadata.rating ?? null) : null,

@@ -239,6 +239,25 @@ describe('ShotSync.uploadShot — post-upload PATCH', () => {
 		expect(pendingEdit('s1')?.tags).toBeUndefined();
 	});
 
+	it('a shot with no grinder uploads none, not the settings grinder (REVIEW-FINAL S3)', async () => {
+		h.settings = { grinderModel: 'Old EK43' };
+		const { layer, calls } = mkHttp((req) =>
+			req.method === 'POST' ? { ok: true, json: { id: 'viz-1' } } : { ok: true, json: {} }
+		);
+		await run(ShotSync.pipe(Effect.flatMap((s) => s.uploadShot(shot()))), layer);
+		expect(patchCall(calls), 'nothing to patch: no grinder of its own').toBeUndefined();
+	});
+
+	it('a shot with a grinder uploads its own name', async () => {
+		h.settings = { grinderModel: 'Old EK43' };
+		const { layer, calls } = mkHttp((req) =>
+			req.method === 'POST' ? { ok: true, json: { id: 'viz-1' } } : { ok: true, json: {} }
+		);
+		await run(ShotSync.pipe(Effect.flatMap((s) => s.uploadShot(shot({ grinderModel: ' Niche Zero ' })))), layer);
+		const body = (JSON.parse(patchCall(calls)!.body as string) as { shot: Record<string, unknown> }).shot;
+		expect(body.grinder_model).toBe('Niche Zero');
+	});
+
 	it('fails ResponseDecodeError when upload returns no id', async () => {
 		const { layer } = mkHttp(() => ({ ok: true, json: {} }));
 		const exit = await run(ShotSync.pipe(Effect.flatMap((s) => s.uploadShot(shot()))), layer);
@@ -326,6 +345,16 @@ describe('ShotSync.patchEditedShot — pending-only PATCHes', () => {
 			expect(pendingEdit('s1')).toBeUndefined();
 		});
 	}
+
+	it('a journal edit of a shot with no grinder sends none, not the settings grinder (REVIEW-FINAL S3)', async () => {
+		setPremium(true);
+		h.settings = { grinderModel: 'Old EK43' };
+		const { layer, calls } = mkHttp(() => ({ ok: true, json: {} }));
+		await editAndPush(edited(), layer);
+		const bodies = patchBodies(calls);
+		expect(bodies.length).toBeGreaterThan(0);
+		for (const body of bodies) expect(body).not.toHaveProperty('grinder_model');
+	});
 
 	it('a barista edit sends it: cleared as an empty string, set trimmed', async () => {
 		setPremium(false);

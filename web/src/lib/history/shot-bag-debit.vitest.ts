@@ -1,6 +1,8 @@
 /**
  * What a completed shot records as taken from its bag (#303): the row's
- * `bagDebit` on the live path, the aborted-shot undo and a replay.
+ * `bagDebit` on the live path, the aborted-shot undo and a replay. The bag
+ * is the one the core recorded on the shot (frozen at its shot start,
+ * REVIEW-CORE H3), and `shot_effects` decides whether it is debited (M4).
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
@@ -18,21 +20,27 @@ vi.mock('#lib/bean/bag-empty-prompt.js', () => ({
 const { commitShotCompletion } = await import('./shot-persistence');
 type Event = Parameters<typeof commitShotCompletion>[0];
 
-function captured(id: string, dose: number): Record<string, unknown> {
+function captured(id: string, dose: number, beanId = 'a'): Record<string, unknown> {
 	return {
 		formatVersion: 3,
 		id,
 		completedAt: 1_700_000_000_000,
 		metadata: { dose },
+		bean: { beanId, name: beanId },
 		record: { duration: 28_000, samples: [{ elapsed: 0, sample: { groupPressure: 9 } }] }
 	};
 }
 
 const fireWebhook = vi.fn();
 
-function complete(id: string, disposition: 'Record' | 'DiscardAborted', source: 'live' | 'replay'): void {
+function complete(
+	id: string,
+	disposition: 'Record' | 'DiscardAborted',
+	source: 'live' | 'replay',
+	{ inFlightBeanId = 'a', recordedBeanId = 'a' } = {}
+): void {
 	getActiveShotStore().set({
-		bean: { beanId: 'a', name: 'a', tags: [] },
+		bean: { beanId: inFlightBeanId, name: inFlightBeanId, tags: [] },
 		profileName: null,
 		dose: 18,
 		brewParams: null,
@@ -46,16 +54,16 @@ function complete(id: string, disposition: 'Record' | 'DiscardAborted', source: 
 		lastNotificationAtMs: null,
 		sliceJsonl: async () => '',
 		fireWebhook,
-		takeStoredShot: () => captured(id, 18),
+		takeStoredShot: () => captured(id, 18, recordedBeanId),
 		runtime: null
 	} as unknown as Parameters<typeof commitShotCompletion>[1]);
 }
 
-function bag(remaining: number): void {
-	getBeanStore().upsertBean({ ...coerceBean({ id: 'a', name: 'a' })!, bagSize: 250, remaining });
+function bag(remaining: number, id = 'a'): void {
+	getBeanStore().upsertBean({ ...coerceBean({ id, name: id })!, bagSize: 250, remaining });
 }
 
-const remaining = (): number | undefined => getBeanStore().getBean('a')?.remaining;
+const remaining = (id = 'a'): number | undefined => getBeanStore().getBean(id)?.remaining;
 
 beforeAll(async () => {
 	await initTestWasm();
@@ -110,6 +118,31 @@ describe('commitShotCompletion', () => {
 		complete('shot:1', 'Record', 'replay');
 		expect(getHistoryStore().get('shot:1')?.bagDebit).toBe(0);
 		expect(remaining()).toBe(100);
+	});
+
+	it('debits the bag the shot recorded, not the shell\'s in-flight copy (REVIEW-CORE H3)', () => {
+		// The shell's in-flight copy says bag b (a stale or later selection);
+		// the core froze bag a at shot start, and the row records a.
+		bag(100, 'a');
+		bag(100, 'b');
+		complete('shot:1', 'Record', 'live', { inFlightBeanId: 'b', recordedBeanId: 'a' });
+		expect(getHistoryStore().get('shot:1')?.bean?.beanId).toBe('a');
+		expect(remaining('a')).toBe(82);
+		expect(remaining('b')).toBe(100);
+	});
+
+	it('an aborted pull debits the bag it recorded, at once', () => {
+		bag(100, 'a');
+		bag(100, 'b');
+		complete('shot:1', 'DiscardAborted', 'live', { inFlightBeanId: 'b', recordedBeanId: 'a' });
+		expect(remaining('a')).toBe(82);
+		expect(remaining('b')).toBe(100);
+	});
+
+	it('a replay fires no webhook (shot_effects)', () => {
+		fireWebhook.mockClear();
+		complete('shot:1', 'Record', 'replay');
+		expect(fireWebhook).not.toHaveBeenCalled();
 	});
 
 	it('keeps the debit through an aborted shot’s undo', () => {
