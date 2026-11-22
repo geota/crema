@@ -313,11 +313,11 @@ pub use grinder::{
     GrindScale, Grinder, GrinderAdd, GrinderAddKind, GrinderArchive, GrinderLibraryMigration,
     GrinderMatch, GrinderMatchKind, MigrationGate, MigrationSkip, active_grind_scale,
     active_grinder, active_grinder_json, add_another_grinder, add_another_grinder_json,
-    add_grinder, add_grinder_json, archive_grinder, archive_grinder_json, grinder_key,
-    grinder_named, grinders_for_names, grinders_for_names_json, match_grinders,
+    add_grinder, add_grinder_json, archive_grinder, archive_grinder_json, clean_grinder_name,
+    grinder_key, grinder_named, grinders_for_names, grinders_for_names_json, match_grinders,
     match_grinders_json, merge_grinder_edit, merge_grinder_edit_json, migrate_grinder_library,
     migrate_grinder_library_json, names_grinder, restore_grinder, restore_grinder_json,
-    same_grinder,
+    same_grinder, shot_names_grinder,
 };
 pub use grinder_catalogue::{
     CatalogueGrinder, CatalogueGrinderInfo, CatalogueScale, GRINDER_CATALOGUE, GrinderKind,
@@ -453,10 +453,10 @@ pub use visualizer_error::{
 pub use visualizer_sync::{
     BeanReconcileAction, GuardedVisualizerPrefs, LocalShotRef, PulledBag, ReconcileAction,
     RoasterReconcileAction, WireShot, guard_restored_visualizer_prefs,
-    guard_restored_visualizer_prefs_json, pull_covers_attempt, reconcile_beans,
-    reconcile_beans_json, reconcile_pulled_bags, reconcile_roasters, reconcile_roasters_json,
-    reconcile_shots, reconcile_shots_json, shot_upload_key, signature_for_bean,
-    signature_for_roaster, signature_for_shot,
+    guard_restored_visualizer_prefs_json, pull_covers_attempt, reconcile_beans_json,
+    reconcile_pulled_bags, reconcile_roasters, reconcile_roasters_json, reconcile_shots,
+    reconcile_shots_json, shot_upload_key, signature_for_bean, signature_for_roaster,
+    signature_for_shot,
 };
 pub use visualizer_wire::{
     BagWire, RoasterWire, ShotPatchInputs, VISUALIZER_PREMIUM_SHOT_FIELDS, VISUALIZER_SHOT_FIELDS,

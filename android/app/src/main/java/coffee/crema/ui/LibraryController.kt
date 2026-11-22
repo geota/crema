@@ -987,6 +987,7 @@ class LibraryController(
                         wrote = u.wrote.copy(
                             grind = coffee.crema.core.QuickSaveGrindUndo(
                                 beanId = beanId, grinderId = slot, before = was.savedGrind(slot), written = out.bean.savedGrind(slot),
+                                grindsWereNone = was.grinds == null,
                             ),
                         ),
                         bagHadNoGrinds = was.grinds == null,

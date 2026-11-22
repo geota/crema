@@ -1311,7 +1311,8 @@ mod tests {
     /// run's plan writes nothing; a local edit after the pull writes once.
     #[test]
     fn pull_then_sync_writes_nothing_and_a_later_edit_writes_once() {
-        use crate::visualizer_sync::{BeanReconcileAction, reconcile_beans};
+        use crate::visualizer_sync::BeanReconcileAction;
+        use crate::visualizer_sync::tests::pull;
         let run1_end = 5_000;
         // Run 1 pulls a remote bag + roaster (Add): decoded with "now" stamps.
         let mut pulled = bean("bean:p", None);
@@ -1330,7 +1331,7 @@ mod tests {
         let mut decoded = pulled.clone();
         decoded.id = "bean:fallback".into();
         decoded.updated_at = 9_000; // decode fallback = run 2's "now"
-        let actions = reconcile_beans(
+        let actions = pull(
             std::slice::from_ref(&pulled),
             &[decoded.clone()],
             &HashMap::new(),
@@ -1351,7 +1352,7 @@ mod tests {
         let mut edited = pulled.clone();
         edited.name = "Renamed".into();
         edited.updated_at = 6_000;
-        let actions = reconcile_beans(
+        let actions = pull(
             std::slice::from_ref(&edited),
             &[decoded],
             &HashMap::new(),

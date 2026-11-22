@@ -34,7 +34,7 @@ use crate::bean::Bean;
 use crate::grind_value::same_grind;
 use crate::grinder::{
     Grinder, GrinderAddKind, GrinderMatchKind, active_grinder, add_grinder, grinder_named,
-    grinders_for_names, names_grinder, restore_grinder,
+    grinders_for_names, restore_grinder, shot_names_grinder,
 };
 #[cfg(doc)]
 use crate::history::StoredShot;
@@ -79,8 +79,9 @@ pub struct LastGrind {
 }
 
 /// The newest shot grind among `last_grinds` for `grinder`: a row stamped
-/// with its id, or a row with no id whose name names it
-/// ([`crate::grinder::names_grinder`]). Blank grinds don't count.
+/// with its id, or a row with no id whose name is the grinder's own or a
+/// catalogue alias of that model ([`crate::grinder::shot_names_grinder`]),
+/// never a numbered second unit's ("Niche Zero 2"). Blank grinds don't count.
 #[must_use]
 pub fn newest_shot_grind<'a>(
     last_grinds: &'a [LastGrind],
@@ -92,7 +93,7 @@ pub fn newest_shot_grind<'a>(
         .filter(
             |l| match l.grinder_id.as_deref().filter(|id| !id.is_empty()) {
                 Some(id) => id == grinder.id,
-                None => names_grinder(grinder, &l.grinder),
+                None => shot_names_grinder(grinder, &l.grinder),
             },
         )
         .max_by_key(|l| l.completed_at)
@@ -979,7 +980,8 @@ pub struct GrinderPickRow {
     pub saved: Option<String>,
     /// With nothing saved: the newest shot grind on the bag with it
     /// ([`newest_shot_grind`]: by id, or an older row by name through the
-    /// catalogue's exact aliases, so "Niche" finds the Niche Zero).
+    /// catalogue's exact aliases, so "Niche" finds the Niche Zero, but never
+    /// the "Niche Zero 2").
     pub last_shot: Option<String>,
 }
 
@@ -2292,6 +2294,51 @@ mod tests {
         // A typo isn't an alias.
         let typo = vec![last(None, "Nich", "14", 10)];
         assert_eq!(new_bag_grind_row(&nz, &typo).grind, "");
+    }
+
+    /// #488 follow-up 43 (REVIEW-514 2, REVIEW-515 2): with two Niche Zeros,
+    /// an old id-less "Niche Zero" shot is the first unit's only.
+    #[test]
+    fn an_old_shot_is_never_a_numbered_second_units() {
+        let first = niche_zero();
+        let second = crate::grinder::add_another_grinder(
+            std::slice::from_ref(&first),
+            "",
+            Some("niche-zero"),
+            NOW,
+        )
+        .unwrap()
+        .grinder;
+        assert_eq!(second.name, "Niche Zero 2");
+        assert_eq!(second.preset_id.as_deref(), Some("niche-zero"));
+        let bag = bag_with(Vec::new());
+        for name in ["Niche Zero", "niche"] {
+            let lasts = vec![last(None, name, "14", 10)];
+            assert_eq!(newest_shot_grind(&lasts, &first).unwrap().grind, "14");
+            assert_eq!(newest_shot_grind(&lasts, &second), None, "{name}");
+            let rows = grinder_pick_rows(&[first.clone(), second.clone()], Some(&bag), &lasts);
+            assert_eq!(rows[0].last_shot.as_deref(), Some("14"));
+            assert_eq!(rows[1].last_shot, None, "{name}: not on the second unit");
+            assert_eq!(new_bag_grind_row(&second, &lasts).grind, "");
+            assert_eq!(pick_grind(&bag, Some(&second), &lasts), None);
+        }
+        // Its own old rows, by its exact name, and every row with its id.
+        let lasts = vec![
+            last(None, "niche zero 2", "16", 10),
+            last(Some(&first.id), "Niche Zero", "12", 20),
+        ];
+        assert_eq!(newest_shot_grind(&lasts, &second).unwrap().grind, "16");
+        assert_eq!(newest_shot_grind(&lasts, &first).unwrap().grind, "12");
+        // The catalogue link alone no longer counts: a renamed unit keeps
+        // only the rows stamped with its id or its new name.
+        let mut renamed = first.clone();
+        renamed.name = "Office grinder".into();
+        let lasts = vec![last(None, "Niche Zero", "14", 10)];
+        assert_eq!(newest_shot_grind(&lasts, &renamed), None);
+        assert!(
+            crate::grinder::names_grinder(&renamed, "Niche Zero"),
+            "imports still match"
+        );
     }
 
     #[test]

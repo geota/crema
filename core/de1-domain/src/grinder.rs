@@ -148,11 +148,39 @@ impl Grinder {
     }
 }
 
-/// What two grinder names are compared by: trimmed and lowercased. Empty for
-/// a blank name, which names no grinder.
+/// A grinder name as stored: each run of control characters (a newline, a
+/// tab, ...) with the spaces around it becomes one space, and the ends are
+/// trimmed (REVIEW-513 follow-up 1: a name with a newline, say from a
+/// Beanconqueror import, can't be picked from a remote). Imports, adds and
+/// renames store it.
+#[must_use]
+pub fn clean_grinder_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    // A control character was seen: the next visible character gets one space.
+    let mut gap = false;
+    for c in name.chars() {
+        if c.is_control() {
+            gap = true;
+            out.truncate(out.trim_end().len());
+            continue;
+        }
+        if gap {
+            if c.is_whitespace() {
+                continue;
+            }
+            out.push(' ');
+            gap = false;
+        }
+        out.push(c);
+    }
+    out.trim().to_owned()
+}
+
+/// What two grinder names are compared by: cleaned ([`clean_grinder_name`])
+/// and lowercased. Empty for a blank name, which names no grinder.
 #[must_use]
 pub fn grinder_key(name: &str) -> String {
-    name.trim().to_lowercase()
+    clean_grinder_name(name).to_lowercase()
 }
 
 /// Whether `a` and `b` name the same grinder (ignoring case and surrounding
@@ -177,6 +205,29 @@ pub fn names_grinder(grinder: &Grinder, name: &str) -> bool {
     };
     grinder.preset_id.as_deref() == Some(entry.id)
         || catalogue_entry_for_name(&grinder.name).is_some_and(|e| e.id == entry.id)
+}
+
+/// Whether an old shot's grinder name `name` (a row from before grinder ids)
+/// is `grinder`'s: the same name ([`same_grinder`]), or both names name the
+/// same catalogue model ([`catalogue_entry_for_name`]: "niche" and "Niche
+/// Zero"). Unlike [`names_grinder`], the grinder's `preset_id` doesn't count,
+/// so a numbered second unit ("Niche Zero 2", from [`add_another_grinder`])
+/// never takes the shots the first unit recorded under "Niche Zero" (#488
+/// follow-up 43): those rows predate owning two. The trade-off: a grinder
+/// renamed since away from its model's name ("My Niche") no longer finds its
+/// old id-less shots; its shots since carry its id.
+#[must_use]
+pub fn shot_names_grinder(grinder: &Grinder, name: &str) -> bool {
+    if same_grinder(&grinder.name, name) {
+        return true;
+    }
+    match (
+        catalogue_entry_for_name(name),
+        catalogue_entry_for_name(&grinder.name),
+    ) {
+        (Some(shot), Some(own)) => shot.id == own.id,
+        _ => false,
+    }
 }
 
 /// The grinder `name` names among `grinders` that aren't deleted, if any
@@ -241,19 +292,20 @@ fn mint_id(name: &str, taken: &[Grinder]) -> String {
         .unwrap_or(base)
 }
 
-/// A new grinder called `name` (trimmed), from `entry` when given, else from
-/// the entry the name names strictly: that entry's verified scale, else the
-/// default.
+/// A new grinder called `name` (cleaned, [`clean_grinder_name`]), from
+/// `entry` when given, else from the entry the name names strictly: that
+/// entry's verified scale, else the default.
 fn new_grinder(
     name: &str,
     entry: Option<&'static CatalogueGrinder>,
     taken: &[Grinder],
     now_ms: i64,
 ) -> Grinder {
-    let entry = entry.or_else(|| catalogue_entry_for_name(name));
+    let name = clean_grinder_name(name);
+    let entry = entry.or_else(|| catalogue_entry_for_name(&name));
     Grinder {
-        id: mint_id(name, taken),
-        name: name.trim().to_owned(),
+        id: mint_id(&name, taken),
+        name,
         scale: entry.map_or_else(GrindScale::default, CatalogueGrinder::starting_scale),
         preset_id: entry.map(|e| e.id.to_owned()),
         updated_at: now_ms,
@@ -308,7 +360,7 @@ pub fn add_grinder(
     let name = if grinder_key(name).is_empty() {
         entry?.name()
     } else {
-        name.trim().to_owned()
+        clean_grinder_name(name)
     };
     let not_deleted = || grinders.iter().filter(|g| g.deleted_at.is_none());
     let by_entry = entry.and_then(|e| {
@@ -369,7 +421,7 @@ pub fn add_another_grinder(
     let base = if grinder_key(name).is_empty() {
         entry?.name()
     } else {
-        name.trim().to_owned()
+        clean_grinder_name(name)
     };
     let entry = entry.or_else(|| catalogue_entry_for_name(&base));
     let not_deleted = || grinders.iter().filter(|g| g.deleted_at.is_none());
@@ -445,6 +497,7 @@ pub fn restore_grinder(grinder: &Grinder, now_ms: i64) -> Grinder {
 /// The Save of a grinder edit on Devices (rename, scale, preset): the fields
 /// the user changed (`edited` against `base`) applied onto `current`, the
 /// row as stored now, as [`crate::library_edit::merge_roaster_edit`] does.
+/// The name is stored cleaned ([`clean_grinder_name`]).
 #[must_use]
 pub fn merge_grinder_edit(
     base: &Grinder,
@@ -453,6 +506,7 @@ pub fn merge_grinder_edit(
     now_ms: i64,
 ) -> Grinder {
     let mut out = crate::library_edit::merge_row(base, edited, current);
+    out.name = clean_grinder_name(&out.name);
     out.id.clone_from(&current.id);
     out.updated_at = current.updated_at;
     if out != *current {
@@ -909,6 +963,38 @@ mod tests {
     use crate::bounds::{quick_control_bounds, quick_control_bounds_for_grinder_json};
 
     const NOW: i64 = 1_000;
+
+    /// REVIEW-513 follow-up 1: no control characters in a stored name.
+    #[test]
+    fn grinder_names_are_stored_without_control_characters() {
+        assert_eq!(clean_grinder_name(" Niche\nZero "), "Niche Zero");
+        assert_eq!(clean_grinder_name("Niche \r\n\t Zero"), "Niche Zero");
+        assert_eq!(clean_grinder_name("EK43\n"), "EK43");
+        assert_eq!(clean_grinder_name("\u{7}"), "");
+        assert_eq!(clean_grinder_name("Comandante  C40"), "Comandante  C40");
+        // Compared cleaned: the same grinder, so an import adds no second.
+        assert!(same_grinder("Niche\nZero", "niche zero"));
+        let owned = vec![grinder("grinder:nz", "Niche Zero")];
+        assert!(grinders_for_names(&owned, &["Niche\nZero"], NOW).is_empty());
+        let added = grinders_for_names(&[], &["My\ngrinder"], NOW);
+        assert_eq!(added[0].name, "My grinder");
+        // Adds and renames store it clean.
+        let typed = add_grinder(&[], "Office\tgrinder\n", None, NOW).unwrap();
+        assert_eq!(typed.grinder.name, "Office grinder");
+        let base = grinder("grinder:a", "A");
+        let mut edited = base.clone();
+        edited.name = "Shop\ngrinder".into();
+        assert_eq!(
+            merge_grinder_edit(&base, &edited, &base, NOW).name,
+            "Shop grinder"
+        );
+        // A stored row read back (backup, library import) is cleaned too.
+        let row = serde_json::json!({ "id": "grinder:x", "name": "Line\none" });
+        assert_eq!(
+            crate::bean_coerce::coerce_grinder(&row).unwrap().name,
+            "Line one"
+        );
+    }
 
     pub(crate) fn grinder(id: &str, name: &str) -> Grinder {
         Grinder {

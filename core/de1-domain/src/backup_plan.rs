@@ -2065,6 +2065,28 @@ pub fn common_is_pristine_json(common_json: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// #488 follow-up 51: a backup keeps a shot's mirror-copy mark, so a
+    /// restored copy of the hub's shot still moves nothing.
+    #[test]
+    fn a_backup_shot_line_keeps_the_mirror_copy_mark() {
+        let mut shot = StoredShot::new(
+            1_000,
+            crate::ShotRecord {
+                duration: std::time::Duration::from_secs(1),
+                samples: Vec::new(),
+            },
+        );
+        shot.mirror_copy = true;
+        let mut row = serde_json::to_value(&shot).unwrap();
+        row["kind"] = serde_json::json!("shot");
+        let line = serde_json::to_vec(&row).unwrap();
+        let Ok(BackupLine::Shot(back, _)) = parse_backup_line(&line) else {
+            panic!("a shot line");
+        };
+        assert!(back.mirror_copy);
+        assert_eq!(serde_json::to_value(&*back).unwrap()["mirrorCopy"], true);
+    }
+
     /// A shell compares the plan the user confirmed with a fresh one by its
     /// JSON, so the same inputs must serialise the same way every time. With
     /// a hash map, the method order changed from one map to the next, and the

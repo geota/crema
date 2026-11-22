@@ -116,6 +116,12 @@ pub struct ShotCaptureContext {
     /// ([`StoredShot::replay`]). `false` (or absent) for a live pull.
     #[serde(default)]
     pub replay: bool,
+    /// The shot is another device's (the hub's), and this row is a remote's
+    /// copy of it: the row gets the mirror-copy mark
+    /// ([`StoredShot::mirror_copy`]). `false` (or absent) for a shot this
+    /// device recorded.
+    #[serde(default)]
+    pub mirror_copy: bool,
 }
 
 /// The profile and Quick Controls the DE1 held when the shot started.
@@ -214,6 +220,7 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
     });
     s.machine = ctx.machine;
     s.replay = ctx.replay;
+    s.mirror_copy = ctx.mirror_copy;
     Some(s)
 }
 
@@ -519,6 +526,26 @@ mod tests {
         assert!(json.get("replay").is_none(), "omitted when false");
         let back: StoredShot = serde_json::from_value(json).unwrap();
         assert!(!back.replay, "an old row reads as live");
+    }
+
+    /// #488 follow-up 51: a remote's copy of the hub's shot is marked.
+    #[test]
+    fn a_mirror_copy_carries_the_mark() {
+        let ctx = ShotCaptureContext {
+            mirror_copy: true,
+            ..ShotCaptureContext::default()
+        };
+        let shot = assemble_stored_shot(completed(None), ctx).unwrap();
+        assert!(shot.mirror_copy);
+        let json = serde_json::to_value(&shot).unwrap();
+        assert_eq!(json["mirrorCopy"], true);
+        let back: StoredShot = serde_json::from_value(json).unwrap();
+        assert!(back.mirror_copy, "the mark round-trips");
+        let here = assemble_stored_shot(completed(None), ShotCaptureContext::default()).unwrap();
+        let json = serde_json::to_value(&here).unwrap();
+        assert!(json.get("mirrorCopy").is_none(), "omitted when false");
+        let ctx: ShotCaptureContext = serde_json::from_str(r#"{"completedAt":1}"#).unwrap();
+        assert!(!ctx.mirror_copy, "absent = recorded here");
     }
 
     #[test]

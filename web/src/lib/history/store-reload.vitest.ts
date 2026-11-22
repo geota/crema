@@ -142,6 +142,7 @@ describe('HistoryStore reload', () => {
 			visualizerUpdatedAt: 1_700_000_000,
 			pinned: true,
 			replay: true,
+			mirrorCopy: true,
 			machine,
 			deletedAt: 1_700_000_100_000,
 			brewMethod: 'custom:abc',
