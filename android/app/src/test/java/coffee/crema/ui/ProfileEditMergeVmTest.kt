@@ -109,4 +109,23 @@ class ProfileEditMergeVmTest {
         assertEquals(opened.name, saved.name)
         assertTrue(saved.pinned)
     }
+
+    /** REVIEW-519: a profile deleted while open in the editor isn't added back
+     *  by its Save, which says the changes weren't saved. */
+    @Test
+    fun `a Save of a profile deleted while open adds nothing and says so`() {
+        val vm = vm()
+        val id = vm.custom("Mine")
+        vm.startEditProfile(id)
+        VmHarness.idle()
+        val opened = vm.profile(id)
+        vm.deleteProfile(id)
+        VmHarness.idle()
+        val messages = vm.ui.value.userMessages.size
+
+        vm.saveAsEditor(opened, name = "Renamed")
+        VmHarness.idle()
+        assertTrue(VmHarness.ownState(vm).profiles.none { it.id == id }, "not re-added")
+        assertEquals(listOf("“Renamed” was deleted elsewhere; your changes weren’t saved"), vm.ui.value.userMessages.drop(messages))
+    }
 }

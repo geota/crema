@@ -1189,6 +1189,13 @@ class LibraryController(
             else -> null
         }
         if (base == null) {
+            // The stored profile the editor opened on is gone (deleted elsewhere
+            // while open, REVIEW-519): the Save never adds it back, and says so,
+            // as the bag editor does.
+            if (editorBaseJson?.let { profileIdOf(it, json) } == id) {
+                val shown = name.trim().ifEmpty { "This profile" }
+                notify("“$shown” was deleted elsewhere; your changes weren’t saved")
+            }
             appendLog("Save profile: base for $id not found")
             return
         }
@@ -2528,7 +2535,12 @@ class LibraryController(
         val wireGrinders = decodeList("grinders", coffee.crema.core.Grinder.serializer())
 
         val s = uiState()
-        val merge = mergeBeanImport(wireBeans, wireRoasters, s.beans, s.roasters, wireGrinders = wireGrinders, libGrinders = s.grinders)
+        // Every row, tombstones included, as the merge below reads them: a file
+        // row that only meets a tombstone is "nothing new" here too (#488 S5, SF1).
+        val merge = mergeBeanImport(
+            wireBeans, wireRoasters, s.beans.withTombstones(), s.roasters.withTombstones(),
+            wireGrinders = wireGrinders, libGrinders = s.grinders,
+        )
         val newBeans = merge.newBeans
         val newRoasters = merge.newRoasters
         val beanIdRemap: Map<String, String> = merge.beanIdRemap
