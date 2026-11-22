@@ -936,8 +936,9 @@ pub fn active_grinder_json(grinders_json: String, active_id: String) -> String {
 }
 
 /// The library migration (#488), on every load and after every import:
-/// `{grinders, beans, grinderModel}` in, a `GrinderLibraryMigration` JSON
-/// out. Idempotent; the old grinder fields are never changed. See
+/// `{grinders, beans, grinderModel, gate}` in, a `GrinderLibraryMigration`
+/// JSON out. Runs nothing unless `gate` (a `MigrationGate`) says the library
+/// and settings read (REVIEW-CORE H5). Idempotent; the old grinder fields are never changed. See
 /// [`de1_domain::migrate_grinder_library`].
 ///
 /// # Errors
@@ -997,6 +998,68 @@ pub fn resolve_bag_selection_json(input_json: String) -> Result<String, CremaErr
 #[uniffi::export]
 pub fn resolve_grinder_switch_json(input_json: String) -> Result<String, CremaError> {
     de1_domain::resolve_grinder_switch_json(&input_json).map_err(crema_err)
+}
+
+/// The Undo of a bag selection (REVIEW-CORE H4): `{"selection":
+/// BagSelection, "now": SelectionState}` in, the `SelectionChange` to apply
+/// out (only the parts that still hold what the selection set). See
+/// [`de1_domain::bag_selection_undo`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn bag_selection_undo_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::bag_selection_undo_json(&input_json).map_err(crema_err)
+}
+
+/// The bag's remaining after a bag-editor edit (REVIEW-CORE H6): a
+/// `RemainingEdit` JSON in, the grams (a JSON number) out. See
+/// [`de1_domain::edited_remaining`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn edited_remaining_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::edited_remaining_json(&input_json).map_err(crema_err)
+}
+
+/// The grinders as the bag editor sees them, stored with its staged ones
+/// over them (FINAL S7): two `Grinder[]` JSON in, a `Grinder[]` JSON out.
+/// See [`de1_domain::bag_editor_grinders`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn bag_editor_grinders_json(
+    stored_json: String,
+    staged_json: String,
+) -> Result<String, CremaError> {
+    de1_domain::bag_editor_grinders_json(&stored_json, &staged_json).map_err(crema_err)
+}
+
+/// A grinder picked in the bag editor, staged in its draft (FINAL S7): a
+/// `GrinderPickInput` JSON in, a `StagedGrinderPick` JSON or `null` out.
+/// Nothing is stored. See [`de1_domain::stage_grinder_pick`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn stage_grinder_pick_json(input_json: String, now_unix_ms: i64) -> Result<String, CremaError> {
+    de1_domain::stage_grinder_pick_json(&input_json, now_unix_ms).map_err(crema_err)
+}
+
+/// What the bag editor's Save writes for its staged grinders (FINAL S7): a
+/// `StagedGrindersInput` JSON in, a `StagedGrindersSave` JSON out. See
+/// [`de1_domain::staged_grinders_on_save`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn staged_grinders_on_save_json(
+    input_json: String,
+    now_unix_ms: i64,
+) -> Result<String, CremaError> {
+    de1_domain::staged_grinders_on_save_json(&input_json, now_unix_ms).map_err(crema_err)
 }
 
 /// What a completed shot does (REVIEW-CORE M4): a `ShotEffectsInput` JSON
@@ -2196,7 +2259,8 @@ pub fn detect_roaster_duplicates(roasters_json: String) -> Result<String, CremaE
 }
 
 /// Plan a roaster delete (`RoasterDeletePlan` JSON, or `null`): detach or
-/// cascade, plus the Visualizer ids to delete. Mirrors the wasm
+/// cascade, plus the Visualizer ids to delete and the active-bag pointer
+/// afterwards (`activeBeanId` in). Mirrors the wasm
 /// `planRoasterDelete`; see [`de1_domain::plan_roaster_delete_json`].
 ///
 /// # Errors

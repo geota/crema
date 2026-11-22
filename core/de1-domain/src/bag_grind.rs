@@ -19,14 +19,23 @@
 //! newest shot on that bag with that grinder (by `grinder_id`; rows without
 //! one matched by name, read-only), else the grind stays as it is. A bag
 //! selection is one change with one inverse for Undo
-//! ([`resolve_bag_selection`], review F6).
+//! ([`resolve_bag_selection`], review F6), and its Undo reverts only what
+//! still holds what the selection set ([`bag_selection_undo`]).
+//!
+//! **Adding a grinder from the bag editor** is staged in the editor's draft
+//! (FINAL S7): [`stage_grinder_pick`] answers the row without storing
+//! anything, and [`staged_grinders_on_save`] says what the editor's Save
+//! writes. Cancel drops the staged list, so nothing was written.
 
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
 use crate::bean::Bean;
 use crate::grind_value::same_grind;
-use crate::grinder::{Grinder, active_grinder, grinder_named, grinders_for_names, names_grinder};
+use crate::grinder::{
+    Grinder, GrinderAddKind, GrinderMatchKind, active_grinder, add_grinder, grinder_named,
+    grinders_for_names, names_grinder, restore_grinder,
+};
 #[cfg(doc)]
 use crate::history::StoredShot;
 
@@ -363,6 +372,10 @@ pub struct BagSelectInput {
     pub grinders: Vec<Grinder>,
     /// The bag's newest grind per grinder, from the history.
     pub last_grinds: Vec<LastGrind>,
+    /// The bag that was selected before this pick. Picking the bag that is
+    /// already selected changes nothing (FINAL N7): an unsaved grind on Brew
+    /// stays, with no message.
+    pub active_bean_id: Option<String>,
 }
 
 /// One bag selection, resolved (review F6): the change, its inverse for the
@@ -401,6 +414,9 @@ pub fn resolve_bag_selection(input: &BagSelectInput) -> BagSelection {
     let Some(bag) = input.bag.as_ref() else {
         return BagSelection::default();
     };
+    if input.active_bean_id.as_deref() == Some(bag.id.as_str()) {
+        return BagSelection::default();
+    }
     let mut change = SelectionChange::default();
     let mut undo = SelectionChange::default();
     if !input.linked_profile_missing
@@ -452,6 +468,65 @@ pub fn resolve_bag_selection(input: &BagSelectInput) -> BagSelection {
         change,
         undo,
         grinder_name,
+    }
+}
+
+/// What Brew holds now, for [`bag_selection_undo`].
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SelectionState {
+    /// The active profile id now.
+    pub profile_id: Option<String>,
+    /// The active grinder pointer now.
+    pub grinder_id: Option<String>,
+    /// Brew's grind now.
+    pub grind: Option<String>,
+    /// A shot is in progress: loading a profile would upload it to the
+    /// machine mid-extraction, so Undo leaves the profile as it is.
+    pub shot_in_progress: bool,
+}
+
+fn still_set(now: Option<&str>, set: Option<&SetTo>) -> bool {
+    set.is_some_and(|set| now == set.value.as_deref())
+}
+
+fn still_grind(now: Option<&str>, set: Option<&SetTo>) -> bool {
+    let Some(set) = set else { return false };
+    match (non_blank(now), non_blank(set.value.as_deref())) {
+        (Some(now), Some(set)) => same_grind(now, set),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+/// The Undo of a bag selection (REVIEW-CORE H4, FINAL S9): each part of
+/// `selection.undo` only while Brew still holds what the selection set, so a
+/// change made since (a dial, a grinder pick, a profile pick) stands. The
+/// grind compares as [`same_grind`] (`"15"` is `"15.0"`), and blank matches
+/// blank. With a shot in progress the profile part is left out. The bag
+/// itself is the shell's to put back.
+#[must_use]
+pub fn bag_selection_undo(selection: &BagSelection, now: &SelectionState) -> SelectionChange {
+    let SelectionChange {
+        profile_id,
+        grinder_id,
+        grind,
+    } = &selection.change;
+    SelectionChange {
+        profile_id: selection.undo.profile_id.clone().filter(|_| {
+            !now.shot_in_progress && still_set(now.profile_id.as_deref(), profile_id.as_ref())
+        }),
+        grinder_id: selection
+            .undo
+            .grinder_id
+            .clone()
+            .filter(|_| still_set(now.grinder_id.as_deref(), grinder_id.as_ref())),
+        grind: selection
+            .undo
+            .grind
+            .clone()
+            .filter(|_| still_grind(now.grind.as_deref(), grind.as_ref())),
     }
 }
 
@@ -531,6 +606,176 @@ pub fn auto_save_shot_grind(input: &AutoSaveInput, now_ms: i64) -> Option<GrindS
     Some(save_bag_grind(bag, grinder.as_ref(), grind, now_ms))
 }
 
+// ── Adding a grinder from the bag editor (FINAL S7) ──
+
+/// The grinders as the bag editor sees them: `stored` with the draft's
+/// `staged` records over them by id (a staged revival reads as live), then
+/// the staged new ones. The editor's type-or-pick box and its rows read
+/// this.
+#[must_use]
+pub fn bag_editor_grinders(stored: &[Grinder], staged: &[Grinder]) -> Vec<Grinder> {
+    let mut out: Vec<Grinder> = stored
+        .iter()
+        .map(|g| staged.iter().find(|s| s.id == g.id).unwrap_or(g).clone())
+        .collect();
+    out.extend(
+        staged
+            .iter()
+            .filter(|s| !stored.iter().any(|g| g.id == s.id))
+            .cloned(),
+    );
+    out
+}
+
+/// A pick in the bag editor's type-or-pick box, for [`stage_grinder_pick`].
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct GrinderPickInput {
+    /// The grinder records as stored.
+    pub grinders: Vec<Grinder>,
+    /// The records this editor staged so far (from earlier picks).
+    pub staged: Vec<Grinder>,
+    /// Which list the pick came from; `None` = "+ Create" with `name`.
+    pub kind: Option<GrinderMatchKind>,
+    /// The grinder id (owned, archived) or the catalogue entry id.
+    pub id: String,
+    /// The typed name ("+ Create").
+    pub name: String,
+}
+
+/// What [`stage_grinder_pick`] answers.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedGrinderPick {
+    /// The grinder for the new bag row, as it will be stored on Save.
+    pub grinder: Grinder,
+    /// Already owned (or staged earlier), a new record, or an archived one
+    /// brought back.
+    pub kind: GrinderAddKind,
+    /// The draft's staged records afterwards; the editor keeps it until Save
+    /// or Cancel.
+    pub staged: Vec<Grinder>,
+}
+
+/// A grinder picked in the bag editor's Add box (FINAL S7), staged in the
+/// draft: as [`add_grinder`] (or [`restore_grinder`] for an archived pick)
+/// over [`bag_editor_grinders`], but nothing is stored and the active
+/// grinder doesn't change. A typo ("Nich") then never reaches Devices unless
+/// it is saved. `None` when the pick names nothing (an unknown id or entry,
+/// a blank name).
+#[must_use]
+pub fn stage_grinder_pick(input: &GrinderPickInput, now_ms: i64) -> Option<StagedGrinderPick> {
+    let view = bag_editor_grinders(&input.grinders, &input.staged);
+    let (grinder, kind) = match input.kind {
+        Some(GrinderMatchKind::Owned | GrinderMatchKind::Archived) => {
+            let found = view
+                .iter()
+                .find(|g| g.id == input.id && g.deleted_at.is_none())?;
+            if found.is_live() {
+                (found.clone(), GrinderAddKind::Existing)
+            } else {
+                (restore_grinder(found, now_ms), GrinderAddKind::Revived)
+            }
+        }
+        Some(GrinderMatchKind::Catalogue) => {
+            let add = add_grinder(&view, "", Some(&input.id), now_ms)?;
+            (add.grinder, add.kind)
+        }
+        None => {
+            let add = add_grinder(&view, &input.name, None, now_ms)?;
+            (add.grinder, add.kind)
+        }
+    };
+    let mut staged = input.staged.clone();
+    if kind != GrinderAddKind::Existing {
+        match staged.iter_mut().find(|s| s.id == grinder.id) {
+            Some(s) => s.clone_from(&grinder),
+            None => staged.push(grinder.clone()),
+        }
+    }
+    Some(StagedGrinderPick {
+        grinder,
+        kind,
+        staged,
+    })
+}
+
+/// What [`staged_grinders_on_save`] reads.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StagedGrindersInput {
+    /// The grinder records as stored now (at Save).
+    pub grinders: Vec<Grinder>,
+    /// The editor's staged records.
+    pub staged: Vec<Grinder>,
+    /// The bag as the Save stores it (after [`crate::merge_bean_edit`]).
+    pub bag: Option<Bean>,
+    /// The active grinder pointer now.
+    pub active_grinder_id: Option<String>,
+}
+
+/// What the bag editor's Save writes besides the bag.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedGrindersSave {
+    /// Grinder records to upsert, in pick order.
+    pub grinders: Vec<Grinder>,
+    /// The active grinder pointer to set; `None` = it stays.
+    pub active_grinder_id: Option<SetTo>,
+}
+
+/// The bag editor's Save of its staged grinders (FINAL S7):
+///
+/// - only the staged records the saved bag still has a row for (a row added
+///   and removed again writes nothing);
+/// - a new record as staged; an archived one restored from the row as stored
+///   now (so a Devices edit made meanwhile stays); one already live, or
+///   deleted meanwhile, writes nothing;
+/// - with no live grinder active, the one written becomes active (the bag's
+///   starred one first, else the first picked; review 499 "a new grinder
+///   becomes active when none is"), here at Save, not at the pick.
+///
+/// Cancel discards the staged list: nothing to call.
+#[must_use]
+pub fn staged_grinders_on_save(input: &StagedGrindersInput, now_ms: i64) -> StagedGrindersSave {
+    let rows = input
+        .bag
+        .as_ref()
+        .and_then(|b| b.grinds.as_deref())
+        .unwrap_or_default();
+    let mut out = StagedGrindersSave::default();
+    for staged in &input.staged {
+        if !rows.iter().any(|r| r.grinder_id == staged.id) {
+            continue;
+        }
+        match input.grinders.iter().find(|g| g.id == staged.id) {
+            None => out.grinders.push(staged.clone()),
+            Some(stored) if stored.deleted_at.is_none() && !stored.is_live() => {
+                out.grinders.push(restore_grinder(stored, now_ms));
+            }
+            Some(_) => {}
+        }
+    }
+    if active_grinder(&input.grinders, input.active_grinder_id.as_deref()).is_none() {
+        let starred = |g: &&Grinder| rows.iter().any(|r| r.starred && r.grinder_id == g.id);
+        let pick = out
+            .grinders
+            .iter()
+            .find(starred)
+            .or_else(|| out.grinders.first());
+        if let Some(g) = pick {
+            out.active_grinder_id = Some(SetTo {
+                value: Some(g.id.clone()),
+            });
+        }
+    }
+    out
+}
+
 // ── JSON bridges ──
 
 fn parse<T: serde::de::DeserializeOwned>(json: &str) -> Result<T, String> {
@@ -576,6 +821,50 @@ pub fn resolve_bag_selection_json(input_json: &str) -> Result<String, String> {
     to_json(&resolve_bag_selection(&parse(input_json)?))
 }
 
+/// JSON-bridged [`bag_selection_undo`]: `{"selection": BagSelection, "now":
+/// SelectionState}` in, a [`SelectionChange`] out.
+///
+/// # Errors
+/// The JSON parse error string on malformed input.
+pub fn bag_selection_undo_json(input_json: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct In {
+        selection: BagSelection,
+        now: SelectionState,
+    }
+    let inp: In = parse(input_json)?;
+    to_json(&bag_selection_undo(&inp.selection, &inp.now))
+}
+
+/// JSON-bridged [`bag_editor_grinders`]: the stored and staged `Grinder[]`
+/// JSON in, a `Grinder[]` JSON out.
+///
+/// # Errors
+/// The JSON parse error string on malformed input.
+pub fn bag_editor_grinders_json(stored_json: &str, staged_json: &str) -> Result<String, String> {
+    let stored: Vec<Grinder> = parse(stored_json)?;
+    let staged: Vec<Grinder> = parse(staged_json)?;
+    to_json(&bag_editor_grinders(&stored, &staged))
+}
+
+/// JSON-bridged [`stage_grinder_pick`]: a [`GrinderPickInput`] JSON and now
+/// in, a [`StagedGrinderPick`] JSON or `null` out.
+///
+/// # Errors
+/// The JSON parse error string on malformed input.
+pub fn stage_grinder_pick_json(input_json: &str, now_ms: i64) -> Result<String, String> {
+    to_json(&stage_grinder_pick(&parse(input_json)?, now_ms))
+}
+
+/// JSON-bridged [`staged_grinders_on_save`]: a [`StagedGrindersInput`] JSON
+/// and now in, a [`StagedGrindersSave`] JSON out.
+///
+/// # Errors
+/// The JSON parse error string on malformed input.
+pub fn staged_grinders_on_save_json(input_json: &str, now_ms: i64) -> Result<String, String> {
+    to_json(&staged_grinders_on_save(&parse(input_json)?, now_ms))
+}
+
 /// JSON-bridged [`resolve_grinder_switch`]: a [`GrinderSwitchInput`] JSON in,
 /// the grind as a JSON string or `null` out.
 ///
@@ -598,7 +887,8 @@ pub fn auto_save_shot_grind_json(input_json: &str, now_ms: i64) -> Result<String
 mod tests {
     use super::*;
     use crate::grinder::{
-        GrinderLibraryMigration, add_grinder, archive_grinder, migrate_grinder_library,
+        GrinderLibraryMigration, MigrationGate, add_grinder, archive_grinder,
+        migrate_grinder_library,
     };
 
     const NOW: i64 = 5_000;
@@ -646,7 +936,7 @@ mod tests {
     }
 
     fn migrated(bags: &[Bean], model: &str) -> GrinderLibraryMigration {
-        migrate_grinder_library(&[], bags, model, NOW)
+        migrate_grinder_library(&[], bags, model, MigrationGate::READ, NOW)
     }
 
     #[test]
@@ -706,6 +996,7 @@ mod tests {
                 old_bag("b2", "Comandante", "22"),
             ],
             "",
+            MigrationGate::READ,
             NOW,
         );
         assert_eq!(
@@ -1092,6 +1383,323 @@ mod tests {
         )
         .unwrap();
         assert_eq!(json, out);
+    }
+
+    fn starred_pick() -> BagSelection {
+        let mut bag = bag_with(vec![row("grinder:nz", "14", true)]);
+        bag.linked_profile_id = Some("p:bloom".into());
+        select(
+            bag,
+            Some("p:default"),
+            Some("grinder:ek"),
+            Some("9"),
+            vec![g("grinder:nz", "Niche Zero"), g("grinder:ek", "EK43")],
+        )
+    }
+
+    fn state(profile: &str, grinder: &str, grind: Option<&str>) -> SelectionState {
+        SelectionState {
+            profile_id: Some(profile.into()),
+            grinder_id: Some(grinder.into()),
+            grind: grind.map(str::to_owned),
+            shot_in_progress: false,
+        }
+    }
+
+    #[test]
+    fn undo_with_nothing_changed_since_reverts_every_part() {
+        let sel = starred_pick();
+        let undo = bag_selection_undo(&sel, &state("p:bloom", "grinder:nz", Some("14.0")));
+        assert_eq!(undo, sel.undo);
+    }
+
+    #[test]
+    fn undo_keeps_a_dial_change_made_since() {
+        // REVIEW-CORE divergence 5: select bag X (Niche Zero at 14), dial 15,
+        // Undo. The 15 stays; the grinder and profile go back.
+        let sel = starred_pick();
+        let undo = bag_selection_undo(&sel, &state("p:bloom", "grinder:nz", Some("15")));
+        assert_eq!(
+            undo,
+            SelectionChange {
+                profile_id: set(Some("p:default")),
+                grinder_id: set(Some("grinder:ek")),
+                grind: None,
+            }
+        );
+    }
+
+    #[test]
+    fn undo_keeps_a_profile_picked_since() {
+        // FINAL S9 repro: the pick loads "Blooming", the user picks X by hand,
+        // then taps Undo: X stays.
+        let sel = starred_pick();
+        let undo = bag_selection_undo(&sel, &state("p:x", "grinder:nz", Some("14")));
+        assert_eq!(undo.profile_id, None);
+        assert_eq!(undo.grinder_id, set(Some("grinder:ek")));
+        assert_eq!(undo.grind, set(Some("9")));
+    }
+
+    #[test]
+    fn undo_keeps_a_grinder_picked_since() {
+        let sel = starred_pick();
+        let undo = bag_selection_undo(&sel, &state("p:bloom", "grinder:df", Some("14")));
+        assert_eq!(undo.grinder_id, None);
+        assert_eq!(undo.profile_id, set(Some("p:default")));
+    }
+
+    #[test]
+    fn undo_leaves_the_profile_while_a_shot_is_in_progress() {
+        let sel = starred_pick();
+        let mut now = state("p:bloom", "grinder:nz", Some("14"));
+        now.shot_in_progress = true;
+        let undo = bag_selection_undo(&sel, &now);
+        assert_eq!(undo.profile_id, None);
+        assert_eq!(undo.grinder_id, set(Some("grinder:ek")));
+    }
+
+    #[test]
+    fn undo_matches_a_cleared_grind_only_against_a_cleared_one() {
+        let sel = BagSelection {
+            change: SelectionChange {
+                grind: set(None),
+                ..SelectionChange::default()
+            },
+            undo: SelectionChange {
+                grind: set(Some("9")),
+                ..SelectionChange::default()
+            },
+            changed: true,
+            grinder_name: None,
+        };
+        let blank = SelectionState {
+            grind: Some("  ".into()),
+            ..SelectionState::default()
+        };
+        assert_eq!(bag_selection_undo(&sel, &blank).grind, set(Some("9")));
+        let dialed = SelectionState {
+            grind: Some("10".into()),
+            ..SelectionState::default()
+        };
+        assert_eq!(bag_selection_undo(&sel, &dialed).grind, None);
+        // Nothing to undo: nothing comes back.
+        assert!(bag_selection_undo(&BagSelection::default(), &blank).is_empty());
+    }
+
+    #[test]
+    fn undo_json_round_trips() {
+        let sel = starred_pick();
+        let now = state("p:bloom", "grinder:nz", Some("15"));
+        let out: SelectionChange = serde_json::from_str(
+            &bag_selection_undo_json(
+                &serde_json::json!({ "selection": sel, "now": now }).to_string(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out, bag_selection_undo(&sel, &now));
+        assert!(bag_selection_undo_json("{}").is_err());
+    }
+
+    #[test]
+    fn re_picking_the_selected_bag_changes_nothing() {
+        // FINAL N7: Brew holds an unsaved 15 on the selected bag; picking the
+        // same bag again keeps it, with no message.
+        let bag = bag_with(vec![row("grinder:nz", "14", true)]);
+        let input = BagSelectInput {
+            bag: Some(bag.clone()),
+            active_grinder_id: Some("grinder:nz".into()),
+            grind: Some("15".into()),
+            grinders: vec![g("grinder:nz", "Niche Zero")],
+            active_bean_id: Some(bag.id.clone()),
+            ..BagSelectInput::default()
+        };
+        assert_eq!(resolve_bag_selection(&input), BagSelection::default());
+        // From another bag, the same pick resets the dial to the saved 14.
+        let other = BagSelectInput {
+            active_bean_id: Some("bean:other".into()),
+            ..input
+        };
+        assert_eq!(resolve_bag_selection(&other).change.grind, set(Some("14")));
+    }
+
+    // ── Adding a grinder from the bag editor (FINAL S7) ──
+
+    fn pick(
+        stored: &[Grinder],
+        staged: &[Grinder],
+        kind: Option<GrinderMatchKind>,
+        id: &str,
+        name: &str,
+    ) -> Option<StagedGrinderPick> {
+        stage_grinder_pick(
+            &GrinderPickInput {
+                grinders: stored.to_vec(),
+                staged: staged.to_vec(),
+                kind,
+                id: id.into(),
+                name: name.into(),
+            },
+            NOW,
+        )
+    }
+
+    fn save_staged(
+        stored: &[Grinder],
+        staged: &[Grinder],
+        rows: Vec<BagGrind>,
+        active: Option<&str>,
+    ) -> StagedGrindersSave {
+        staged_grinders_on_save(
+            &StagedGrindersInput {
+                grinders: stored.to_vec(),
+                staged: staged.to_vec(),
+                bag: Some(bag_with(rows)),
+                active_grinder_id: active.map(str::to_owned),
+            },
+            NOW,
+        )
+    }
+
+    #[test]
+    fn a_typed_grinder_is_staged_not_stored_and_cancel_leaves_nothing() {
+        // FINAL S7 repro: Enter on a typo ("Nich") used to create the grinder
+        // at once, and Cancel kept it. Now the pick only stages it.
+        let stored = vec![g("grinder:ek", "EK43")];
+        let out = pick(&stored, &[], None, "", "Nich").unwrap();
+        assert_eq!(out.kind, GrinderAddKind::Created);
+        assert_eq!(out.grinder.name, "Nich");
+        assert_eq!(out.staged, std::slice::from_ref(&out.grinder));
+        // Cancel: the draft (and its staged list) is dropped; `stored` was
+        // never written. A Save without its row writes nothing either.
+        let none = save_staged(
+            &stored,
+            &out.staged,
+            vec![row("grinder:ek", "9", false)],
+            None,
+        );
+        assert_eq!(none, StagedGrindersSave::default());
+    }
+
+    #[test]
+    fn a_staged_grinder_reads_as_owned_and_isnt_staged_twice() {
+        let first = pick(
+            &[],
+            &[],
+            Some(GrinderMatchKind::Catalogue),
+            "niche-zero",
+            "",
+        )
+        .unwrap();
+        assert_eq!(first.kind, GrinderAddKind::Created);
+        let view = bag_editor_grinders(&[], &first.staged);
+        assert_eq!(view, first.staged);
+        // The same entry again, or the staged row picked as owned: Existing.
+        let again = pick(
+            &[],
+            &first.staged,
+            Some(GrinderMatchKind::Catalogue),
+            "niche-zero",
+            "",
+        )
+        .unwrap();
+        assert_eq!(again.kind, GrinderAddKind::Existing);
+        assert_eq!(again.staged, first.staged);
+        let owned = pick(
+            &[],
+            &first.staged,
+            Some(GrinderMatchKind::Owned),
+            &first.grinder.id,
+            "",
+        )
+        .unwrap();
+        assert_eq!(owned.kind, GrinderAddKind::Existing);
+        // A second new grinder gets its own id.
+        let second = pick(&[], &first.staged, None, "", "My Hand Grinder").unwrap();
+        assert_ne!(second.grinder.id, first.grinder.id);
+        assert_eq!(second.staged.len(), 2);
+        assert!(pick(&[], &[], Some(GrinderMatchKind::Owned), "grinder:nope", "").is_none());
+        assert!(pick(&[], &[], None, "", "  ").is_none());
+    }
+
+    #[test]
+    fn an_archived_pick_is_revived_only_on_save_from_the_row_as_stored() {
+        let archived = archive_grinder(&g("grinder:nz", "Niche Zero"), None, 2).grinder;
+        let out = pick(
+            std::slice::from_ref(&archived),
+            &[],
+            Some(GrinderMatchKind::Archived),
+            "grinder:nz",
+            "",
+        )
+        .unwrap();
+        assert_eq!(out.kind, GrinderAddKind::Revived);
+        assert!(out.grinder.is_live());
+        // The stored row was renamed on Devices meanwhile: Save restores that.
+        let mut renamed = archived.clone();
+        renamed.name = "Niche (old)".into();
+        let saved = save_staged(
+            std::slice::from_ref(&renamed),
+            &out.staged,
+            vec![row("grinder:nz", "14", false)],
+            Some("grinder:ek"),
+        );
+        assert_eq!(saved.grinders.len(), 1);
+        assert_eq!(saved.grinders[0].name, "Niche (old)");
+        assert!(saved.grinders[0].is_live());
+        // Restored meanwhile: nothing to write.
+        let live = restore_grinder(&renamed, 3);
+        let saved = save_staged(
+            &[live],
+            &out.staged,
+            vec![row("grinder:nz", "14", false)],
+            None,
+        );
+        assert!(saved.grinders.is_empty());
+    }
+
+    #[test]
+    fn save_makes_a_written_grinder_active_only_when_none_is() {
+        let a = pick(&[], &[], None, "", "Alpha").unwrap();
+        let b = pick(&[], &a.staged, None, "", "Beta").unwrap();
+        let rows = vec![
+            row(&a.grinder.id, "1", false),
+            row(&b.grinder.id, "2", true),
+        ];
+        let saved = save_staged(&[], &b.staged, rows.clone(), None);
+        assert_eq!(saved.grinders, b.staged);
+        // The starred one first.
+        assert_eq!(saved.active_grinder_id, set(Some(b.grinder.id.as_str())));
+        // A live grinder already active: it stays.
+        let ek = g("grinder:ek", "EK43");
+        let saved = save_staged(
+            std::slice::from_ref(&ek),
+            &b.staged,
+            rows,
+            Some("grinder:ek"),
+        );
+        assert_eq!(saved.active_grinder_id, None);
+        // The pick itself never touched the pointer (there is none to touch).
+        let json: StagedGrindersSave = serde_json::from_str(
+            &staged_grinders_on_save_json(
+                &serde_json::json!({ "staged": b.staged, "bag": bag_with(vec![row(&a.grinder.id, "1", false)]) })
+                    .to_string(),
+                NOW,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json.grinders, std::slice::from_ref(&a.grinder));
+        assert_eq!(json.active_grinder_id, set(Some(a.grinder.id.as_str())));
+        let staged_json = stage_grinder_pick_json(r#"{"name":"Gamma"}"#, NOW).unwrap();
+        let staged: StagedGrinderPick = serde_json::from_str(&staged_json).unwrap();
+        assert_eq!(staged.grinder.name, "Gamma");
+        assert_eq!(
+            bag_editor_grinders_json("[]", &serde_json::to_string(&staged.staged).unwrap())
+                .unwrap(),
+            serde_json::to_string(&staged.staged).unwrap()
+        );
+        assert!(stage_grinder_pick_json("nope", NOW).is_err());
     }
 
     #[test]

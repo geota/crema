@@ -831,7 +831,10 @@ export class BeanLibraryStore {
 		if (!this.canMigrate || !settingsReadable) return false;
 		let m;
 		try {
-			m = migrateGrinderLibrary(this.allGrinders, this.beans, grinderModel);
+			m = migrateGrinderLibrary(this.allGrinders, this.beans, grinderModel, {
+				library: this.canMigrate,
+				settings: settingsReadable
+			});
 		} catch (e) {
 			// Malformed rows: keep what there is; a later load tries again.
 			console.warn('[beans] grinder migration skipped', e);
