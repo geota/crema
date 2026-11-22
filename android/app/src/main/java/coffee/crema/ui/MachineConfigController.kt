@@ -46,8 +46,9 @@ internal class MachineConfigController(
     private val pushConfig: () -> Unit,
     private val profileJson: (String) -> String?,
     private val persistLibrary: () -> Unit,
-    /** A bag was selected: resolve the profile, grinder and grind it brings (#488, review F6). */
-    private val onBagSelected: (String) -> Unit,
+    /** A bag was selected (its id, then the bag selected before it): resolve
+     *  the profile, grinder and grind it brings (#488, review F6). */
+    private val onBagSelected: (String, String?) -> Unit,
     /** A grinder was selected: Brew's grind takes the pick order (#488). */
     private val onGrinderSelected: (String?) -> Unit = {},
     /** Push the stop targets from a state, the desired profile after a delay in ms. */
@@ -70,10 +71,15 @@ internal class MachineConfigController(
 
     // ── Config commands ───────────────────────────────────────────────────────
 
+    /** A bag pick [showConfig] applied, with the bag selected before it. */
+    private var bagBefore: Pair<MachineCommand.SetActiveBean, String?>? = null
+
     /** The visible half of a config command on the device that owns the
      *  config: update the UI state now; [commitConfig] does the rest. A remote
      *  shows its relayed edits in its mirror slice instead ([RemoteConfigController.showPending]). */
     fun showConfig(cmd: MachineCommand.Config) {
+        // The bag selected before a pick, for its commit (re-picking it is a no-op, FINAL N7).
+        if (cmd is MachineCommand.SetActiveBean) bagBefore = cmd to uiState().activeBeanId
         updateUi { cmd.applyTo(it) }
         // The brew override is stored normalized by the core (this device holds
         // the machine: its own dial and a remote's relayed one alike) — brew
@@ -117,7 +123,10 @@ internal class MachineConfigController(
                 // grind; review F6). Only user acts reach this — boot/library
                 // restore writes activeBeanId directly — so firing here matches
                 // the "explicit activation only" rule.
-                if (cmd.id != null) onBagSelected(cmd.id)
+                // Unknown (no showConfig for it): resolved as a new pick.
+                val before = bagBefore?.takeIf { it.first === cmd }?.second
+                bagBefore = null
+                if (cmd.id != null) onBagSelected(cmd.id, before)
             }
             is MachineCommand.SetActiveGrinder -> {
                 onGrinderSelected(cmd.id) // persists the pointer; Brew's grind takes the pick order

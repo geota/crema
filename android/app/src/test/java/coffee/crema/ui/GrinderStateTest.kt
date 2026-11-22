@@ -114,9 +114,6 @@ class GrinderStateTest {
         assertTrue(coffee.crema.beans.sameGrind("14", "14.0"))
         assertFalse(coffee.crema.beans.sameGrind("14", "15"))
         assertFalse(coffee.crema.beans.sameGrind("2.5.3", "2.5.4"))
-        assertTrue(stillGrind(null, null))
-        assertFalse(stillGrind("4", null))
-        assertTrue(stillGrind("15", "15.0"))
     }
 
     @Test

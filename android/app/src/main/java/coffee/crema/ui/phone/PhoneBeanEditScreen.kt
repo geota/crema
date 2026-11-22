@@ -91,8 +91,16 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var archived by remember(bean.id) { mutableStateOf(bean.archivedAt != null) }
     var bagSize by remember(bean.id) { mutableStateOf((bean.bagSize ?: 0f).toDouble()) }
     var remaining by remember(bean.id) { mutableStateOf((bean.remaining ?: 0f).toDouble()) }
+    // Remaining follows the core rule (REVIEW-CORE H6) until the user sets it.
+    var remainingTouched by remember(bean.id) { mutableStateOf(false) }
+    val shownRemaining = remember(bean.id, bagSize, remaining, remainingTouched) {
+        if (remainingTouched) remaining
+        else coffee.crema.beans.editedRemaining(asOpened, bagSize, remaining, remainingTouched = false).toDouble()
+    }
     // "Grind per grinder" (#488): the bag's rows as the editor's draft.
     val grinds = remember(bean.id) { mutableStateListOf<coffee.crema.core.BagGrind>().apply { addAll(bean.grinds.orEmpty()) } }
+    // Grinders the "Add a grinder" box picked: stored on Save, dropped on Cancel (FINAL S7).
+    val stagedGrinders = remember(bean.id) { mutableStateListOf<coffee.crema.core.Grinder>() }
     var grindsToFix by remember(bean.id) { mutableStateOf(emptySet<String>()) }
     val lastGrinds = remember(bean.id, ui.history.version) { vm.lastGrindsForBag(bean.id) }
     var linkedProfileId by remember(bean.id) { mutableStateOf(bean.linkedProfileId) }
@@ -186,7 +194,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             applyBeanEdits(b, BeanDraft(
                 name = name, roast = roast, mixSel = mixSel, roastTypeSel = roastTypeSel,
                 roasted = roasted, opened = opened, frozen = frozen, archived = archived,
-                decaf = decaf, pinned = pinned, bagSize = bagSize, remaining = remaining,
+                decaf = decaf, pinned = pinned, bagSize = bagSize, remaining = remaining, remainingTouched = remainingTouched,
                 country = country, region = region, farm = farm, farmer = farmer, variety = variety,
                 elevation = elevation, processing = processing, harvestTime = harvestTime,
                 grinds = draftGrinds,
@@ -196,6 +204,8 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 canonicalCoffeeBagId = canonicalCoffeeBagId, canonicalRoasterId = canonicalRoasterId,
             ))
         }
+        // Before the bag pick below: its starred grinder may be one staged here.
+        vm.saveStagedGrinders(bean.id, stagedGrinders.toList())
         if (active) {
             vm.setActiveBean(bean.id)
         } else if (ui.activeBeanId == bean.id) {
@@ -359,7 +369,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     // Fixed cap, NOT bagSize: quick-added/imported bags have bagSize = 0,
                     // and the stepper clamps every edit through it — which froze Remaining
                     // at 0 (tablet + web use a fixed cap for the same reason, issue #14).
-                    CremaStepper(value = remaining, unit = "g", step = 5.0, min = 0.0, max = 2000.0, fmt = { fmt("%.0f", it) }, onChange = { remaining = it }, style = CremaStepperStyle.BareCompact)
+                    CremaStepper(value = shownRemaining, unit = "g", step = 5.0, min = 0.0, max = 2000.0, fmt = { fmt("%.0f", it) }, onChange = { remaining = it; remainingTouched = true }, style = CremaStepperStyle.BareCompact)
                 }
                 Text(
                     "Bag size auto-debits per shot. Grind is saved per grinder; ★ is the grinder Brew switches to for this bag.",
@@ -371,8 +381,9 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     rows = grinds,
                     opened = asOpened.grinds.orEmpty(),
                     grinders = ui.grinders,
+                    staged = stagedGrinders,
                     lastGrinds = lastGrinds,
-                    onPick = vm::resolveGrinderPick,
+                    onStage = vm::stageGrinderPick,
                     toFix = grindsToFix,
                     compact = true,
                 )

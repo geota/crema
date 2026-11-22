@@ -45,8 +45,9 @@ class OwnStateReadsTest {
             "applySteamHotWater" to setOf("qcSteamTempC", "qcSteamTimeS", "qcHotWaterTempC", "qcHotWaterVolumeMl"),
             // The device that owns the config (a remote shows its edits in its
             // mirror slice): the brew override is stored normalized against
-            // its own active profile.
-            "showConfig" to setOf("activeProfileId", "brewParams"),
+            // its own active profile, and a bag pick's commit learns the bag
+            // selected before it (re-picking it is a no-op, FINAL N7).
+            "showConfig" to setOf("activeProfileId", "brewParams", "activeBeanId"),
             // The hot-water dose edit: LocalOnly, so never on a remote (own is shown).
             "applyHotWaterDose" to setOf("withHotWaterDose()"),
         ),
@@ -74,6 +75,8 @@ class OwnStateReadsTest {
             "archiveGrinder" to setOf("activeGrinderId"),
             // The first grinder added becomes the own active one (review 499).
             "addGrinder" to setOf("activeGrinderId"),
+            // The bag editor's Save of its staged grinders, the same rule at Save (FINAL S7).
+            "saveStagedGrinders" to setOf("activeGrinderId"),
             "saveGrinderEdit" to setOf("activeGrinderId"),
             // The commits of a bag or grinder pick run on the device that owns
             // the session (a remote's picks are relayed there): its own

@@ -185,7 +185,7 @@ class CatalogueAutofillTest {
         val draft = BeanDraft(
             name = "Hambela", roast = 2, mixSel = "single", roastTypeSel = "",
             roasted = "", opened = "", frozen = false, archived = false,
-            decaf = false, pinned = false, bagSize = 0.0, remaining = 0.0,
+            decaf = false, pinned = false, bagSize = 0.0, remaining = 0.0, remainingTouched = false,
             country = "", region = "", farm = "", farmer = "", variety = "",
             elevation = "", processing = "", harvestTime = "", grinds = null,
             linkedProfileId = null, rating = 0, qualityScore = "", tastingNotes = "",

@@ -21,6 +21,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coffee.crema.beans.DEFAULT_GRIND_SCALE
+import coffee.crema.beans.bagEditorGrinders
 import coffee.crema.beans.formatGrind
 import coffee.crema.beans.sameGrind
 import coffee.crema.beans.isLive
@@ -28,6 +29,7 @@ import coffee.crema.core.BagGrind
 import coffee.crema.core.Bean
 import coffee.crema.core.Grinder
 import coffee.crema.core.LastGrind
+import coffee.crema.core.StagedGrinderPick
 import coffee.crema.ui.GrinderPick
 import coffee.crema.ui.components.CremaStepper
 import coffee.crema.ui.components.CremaStepperStyle
@@ -42,29 +44,39 @@ import coffee.crema.ui.newestShotGrind
  * grinder's name, a stepper on that grinder's scale (tap to type), 🗑. An
  * edited value says "Changed from 470 μm · saved when you tap Save"; a
  * grinder no longer on Devices stays, dimmed and read-only, until removed.
- * The type-or-pick box adds a row. The editor's Save writes all of it;
- * Cancel discards it. [rows] is the editor's draft.
+ * The type-or-pick box adds a row. A grinder it adds (a catalogue entry,
+ * "+ Create", an archived one) is only staged in [staged] (FINAL S7): it is
+ * stored, and may become Brew's grinder, only on Save; Cancel discards it.
+ * [rows] and [staged] are the editor's draft.
  */
 @Composable
 fun BagGrindsEditor(
     rows: SnapshotStateList<BagGrind>,
     /** The rows the editor opened on, for "Changed from …". */
     opened: List<BagGrind>,
+    /** The grinder records as stored. */
     grinders: List<Grinder>,
+    /** The grinders this editor's picks staged (stored on Save, dropped on Cancel). */
+    staged: SnapshotStateList<Grinder>,
     lastGrinds: List<LastGrind>,
-    /** Resolve a pick (adds a catalogue or created grinder to Devices). */
-    onPick: (GrinderPick) -> Grinder?,
+    /** Stage a pick over the staged list so far (core `stage_grinder_pick`); stores nothing. */
+    onStage: (GrinderPick, List<Grinder>) -> StagedGrinderPick?,
     /** The grinder ids whose grind Save refuses ("Enter a grind or remove this row"). */
     toFix: Set<String> = emptySet(),
     compact: Boolean = false,
 ) {
+    // The rows and the box read the stored grinders with the staged ones over them.
+    val stagedNow = staged.toList()
+    val shown = remember(grinders, stagedNow) {
+        runCatching { bagEditorGrinders(grinders, stagedNow) }.getOrElse { grinders + stagedNow.filter { g -> grinders.none { it.id == g.id } } }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Eyebrow("Grind per grinder", Modifier.weight(1f))
             Text("Saved when you tap Save", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         rows.toList().forEach { row ->
-            val grinder = grinders.firstOrNull { it.id == row.grinderId }
+            val grinder = shown.firstOrNull { it.id == row.grinderId }
             val onDevices = row.grinderId.isEmpty() || grinder?.isLive == true
             val scale = grinder?.scale ?: DEFAULT_GRIND_SCALE
             val before = opened.firstOrNull { it.grinderId == row.grinderId }
@@ -128,10 +140,15 @@ fun BagGrindsEditor(
             }
         }
         GrinderAddBox(
-            grinders = grinders,
+            grinders = shown,
             excludeIds = rows.map { it.grinderId },
             onPick = { pick ->
-                val g = onPick(pick) ?: return@GrinderAddBox
+                val picked = onStage(pick, stagedNow) ?: return@GrinderAddBox
+                if (picked.staged != stagedNow) {
+                    staged.clear()
+                    staged.addAll(picked.staged)
+                }
+                val g = picked.grinder
                 if (rows.none { it.grinderId == g.id }) {
                     // The newest shot on this bag with it, else empty (Save asks for one).
                     val seed = newestShotGrind(lastGrinds, g)?.grind.orEmpty()

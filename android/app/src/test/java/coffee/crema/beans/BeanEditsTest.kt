@@ -27,16 +27,24 @@ class BeanEditsTest {
     private fun blankDraft() = BeanDraft(
         name = "", roast = 5, mixSel = "single", roastTypeSel = "",
         roasted = "", opened = "", frozen = false, archived = false,
-        decaf = false, pinned = false, bagSize = 0.0, remaining = 0.0,
+        decaf = false, pinned = false, bagSize = 0.0, remaining = 0.0, remainingTouched = false,
         country = "", region = "", farm = "", farmer = "", variety = "",
         elevation = "", processing = "", harvestTime = "", grinds = null,
         linkedProfileId = null, rating = 0, qualityScore = "", tastingNotes = "",
         placeOfPurchase = "", cost = "", url = "", notes = "", tags = emptyList(),
     )
 
+    // Size and remaining: the core rule `edited_remaining` (REVIEW-CORE H6).
+
     @Test
     fun `a first size fills a bag`() {
         assertEquals(250f, applyBeanEdits(bean(), blankDraft().copy(bagSize = 250.0)).remaining)
+    }
+
+    @Test
+    fun `a first size fills a bag even when its remaining wasn't 0, while Remaining is untouched`() {
+        val sizeless = bean().copy(bagSize = 0f, remaining = 50f)
+        assertEquals(250f, applyBeanEdits(sizeless, blankDraft().copy(bagSize = 250.0, remaining = 50.0)).remaining)
     }
 
     @Test
@@ -46,21 +54,35 @@ class BeanEditsTest {
     }
 
     @Test
+    fun `a refill set on Remaining stands`() {
+        val empty = bean().copy(bagSize = 250f, remaining = 0f)
+        assertEquals(340f, applyBeanEdits(empty, blankDraft().copy(bagSize = 340.0, remaining = 340.0, remainingTouched = true)).remaining)
+    }
+
+    @Test
     fun `setting Remaining to 0 alongside a first size stands`() {
         val sizeless = bean().copy(bagSize = 0f, remaining = 50f)
-        assertEquals(0f, applyBeanEdits(sizeless, blankDraft().copy(bagSize = 250.0, remaining = 0.0)).remaining)
+        assertEquals(0f, applyBeanEdits(sizeless, blankDraft().copy(bagSize = 250.0, remaining = 0.0, remainingTouched = true)).remaining)
     }
 
     @Test
     fun `a size edit leaves a bag in progress alone`() {
-        val out = applyBeanEdits(bean().copy(bagSize = 250f), blankDraft().copy(bagSize = 340.0, remaining = 120.0))
-        assertEquals(120f, out.remaining)
+        val half = bean().copy(bagSize = 250f, remaining = 90f)
+        assertEquals(90f, applyBeanEdits(half, blankDraft().copy(bagSize = 340.0, remaining = 90.0)).remaining)
+        assertEquals(120f, applyBeanEdits(half, blankDraft().copy(bagSize = 340.0, remaining = 120.0, remainingTouched = true)).remaining)
     }
 
     @Test
     fun `a bag run down to 0 stays at 0 when nothing else changes`() {
         val out = applyBeanEdits(bean().copy(bagSize = 250f), blankDraft().copy(bagSize = 250.0))
         assertEquals(0f, out.remaining)
+    }
+
+    @Test
+    fun `the editor shows what Save will store`() {
+        // A new bag (its draft has no size) shows the size it's given.
+        assertEquals(340f, editedRemaining(bean(), bagSize = 340.0, remaining = 0.0, remainingTouched = false))
+        assertEquals(0f, editedRemaining(bean().copy(bagSize = 250f, remaining = 0f), bagSize = 340.0, remaining = 0.0, remainingTouched = false))
     }
 
     @Test
