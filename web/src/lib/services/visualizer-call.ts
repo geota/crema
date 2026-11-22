@@ -33,6 +33,8 @@ import {
 	NetworkError,
 	NotAuthenticatedError,
 	ResponseDecodeError,
+	REPLAY_NOT_UPLOADED,
+	ShotReplayError,
 	ShotWithoutSeriesError,
 	TokenRefreshFailedError,
 	VisualizerNotFoundError,
@@ -68,7 +70,8 @@ export type VisualizerCallError =
 	| TokenRefreshFailedError
 	| VisualizerPremiumGatedError
 	| VisualizerNotFoundError
-	| ShotWithoutSeriesError;
+	| ShotWithoutSeriesError
+	| ShotReplayError;
 
 /** A single Visualizer request. */
 export interface VisualizerCallOptions {
@@ -368,5 +371,7 @@ export function describeVisualizerError(e: VisualizerCallError | ResponseDecodeE
 			return 'Unexpected Visualizer response.';
 		case 'ShotWithoutSeriesError':
 			return 'This shot has no telemetry to upload.';
+		case 'ShotReplayError':
+			return REPLAY_NOT_UPLOADED;
 	}
 }

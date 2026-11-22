@@ -1487,7 +1487,13 @@ export class HistoryStore {
 		const none = new Set(this.withoutTelemetry.map((s) => s.id));
 		const config = readSyncConfig();
 		return this.rows().all.filter(
-			(s) => !s.visualizerId && !isBrewLog(s) && !none.has(s.id) && !excludedFromUpload(s, config)
+			(s) =>
+				!s.visualizerId &&
+				!isBrewLog(s) &&
+				// A replay is never uploaded (core `upload_refused_shot`, #488 batch 6).
+				s.replay !== true &&
+				!none.has(s.id) &&
+				!excludedFromUpload(s, config)
 		);
 	}
 

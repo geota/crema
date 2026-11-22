@@ -487,6 +487,26 @@ describe('the rows not loaded yet (#310 P3w)', () => {
 	});
 });
 
+describe('a replay is never uploaded (#488 batch 6)', () => {
+	beforeEach(() => {
+		shots.clear();
+		liveSerial = 6262;
+		writeDecentAccount(linked);
+	});
+
+	it('no POST, automatic or manual, and it stays out of the backlog', async () => {
+		shots.set('r', shot('r', 30_000, { replay: true }));
+
+		const auto = await uploadShotToDecent('r', { fetchFn: ok });
+		const manual = await uploadShotToDecent('r', { fetchFn: ok, manual: true });
+
+		expect(auto).toEqual({ kind: 'skipped', reason: 'A replay is never uploaded.' });
+		expect(manual).toEqual({ kind: 'skipped', reason: 'A replay is never uploaded.' });
+		expect(posts).toBe(0);
+		expect(unsentDecentShots([...shots.values()], { hasLiveMachine: true, rejectedShotIds: [] })).toEqual([]);
+	});
+});
+
 describe('a shot with no telemetry (#330)', () => {
 	beforeEach(() => {
 		shots.clear();

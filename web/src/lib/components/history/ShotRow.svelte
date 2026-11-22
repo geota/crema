@@ -181,6 +181,7 @@
 		<div class="hi-row-name">
 			{shotTitle(shot)}
 			{#if manual}<span class="hi-row-logged">· logged</span>{/if}
+			{#if shot.replay}<span class="hi-row-logged" title="A replay of a capture: never uploaded">· replay</span>{/if}
 			{#if shot.pinned}<span class="hi-row-pin" title="Pinned"
 					><Icon cls="ph-fill ph-push-pin" aria-label="Pinned" /></span
 				>{/if}

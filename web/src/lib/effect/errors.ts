@@ -42,6 +42,18 @@ export class ShotWithoutSeriesError extends Data.TaggedError('ShotWithoutSeriesE
 	readonly shotId: string;
 }> {}
 
+/**
+ * A replay of a capture, refused before any request (#488 batch 6, core
+ * `upload_refused_shot`): it is a copy of a shot the user already has, so it is
+ * recorded in History but never uploaded. Terminal for the queue.
+ */
+export class ShotReplayError extends Data.TaggedError('ShotReplayError')<{
+	readonly shotId: string;
+}> {}
+
+/** Why a replay has no upload: the words every upload path shows. */
+export const REPLAY_NOT_UPLOADED = 'A replay is never uploaded.';
+
 // ── OAuth / auth ────────────────────────────────────────────────────────
 
 export class NotAuthenticatedError extends Data.TaggedError('NotAuthenticatedError')<{}> {}

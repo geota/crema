@@ -12,6 +12,7 @@
  */
 
 import { DECENT_HISTORY_URL, decentShotViewUrl } from '#lib/decent/api.js';
+import { REPLAY_NOT_UPLOADED } from '#lib/effect/errors.js';
 import { isBrewLog, type AnyShot } from './model';
 
 export interface UploadTarget {
@@ -48,7 +49,15 @@ function names(ts: UploadTarget[]): string {
 	return ts.map((t) => t.name).join(' + ');
 }
 
-export function uploadMenuEntry(all: readonly UploadTarget[]): UploadMenuEntry {
+export function uploadMenuEntry(
+	all: readonly UploadTarget[],
+	shot: { replay?: boolean } = {}
+): UploadMenuEntry {
+	// A replay is recorded, never uploaded (core `upload_refused_shot`, #488
+	// batch 6): the row stays, dimmed, and says why.
+	if (shot.replay) {
+		return { title: 'Upload shot', sub: REPLAY_NOT_UPLOADED, enabled: false, targets: [], reupload: false };
+	}
 	const enabled = all.filter((t) => t.enabled);
 	if (enabled.length === 0) {
 		return {

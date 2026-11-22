@@ -44,11 +44,13 @@ import type {
 	NetworkError,
 	NotAuthenticatedError,
 	ResponseDecodeError,
+	ShotReplayError,
 	ShotWithoutSeriesError,
 	TokenRefreshFailedError,
 	VisualizerNotFoundError,
 	VisualizerPremiumGatedError
 } from '#lib/effect/errors.js';
+import { REPLAY_NOT_UPLOADED } from '#lib/effect/errors.js';
 import { ShotSync } from '#lib/services/shot-sync.js';
 import {
 	describeRefusal,
@@ -562,6 +564,7 @@ type ShotPushError =
 	| VisualizerPremiumGatedError
 	| VisualizerNotFoundError
 	| ShotWithoutSeriesError
+	| ShotReplayError
 	| ResponseDecodeError;
 
 /**
@@ -593,6 +596,8 @@ function describePushError(e: ShotPushError): string {
 			return 'Unexpected Visualizer response.';
 		case 'ShotWithoutSeriesError':
 			return 'This shot has no telemetry to upload.';
+		case 'ShotReplayError':
+			return REPLAY_NOT_UPLOADED;
 	}
 }
 

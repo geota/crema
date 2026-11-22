@@ -283,7 +283,7 @@
 			: []
 	);
 
-	const uploadEntry = $derived(uploadMenuEntry(uploadTargets));
+	const uploadEntry = $derived(uploadMenuEntry(uploadTargets, { replay: shot.replay === true }));
 	const viewRows = $derived(viewableTargets(uploadTargets));
 	const shareableCount = $derived(viewRows.filter((t) => t.shareable).length);
 
@@ -800,7 +800,7 @@
 	const detailTitle = $derived(
 		isBrew
 			? (shot.recipeName ?? methodLabel(method, shot.brewMethodLabel)) + (manual ? ' · logged' : '')
-			: (shot.profileName ?? 'Untitled shot')
+			: (shot.profileName ?? 'Untitled shot') + (shot.replay ? ' · replay' : '')
 	);
 	/** The strip's bottom row: the grind this shot was pulled at + the grinder. */
 	const specLine = $derived(
@@ -1363,7 +1363,7 @@
 				title={isBrew
 					? (shot.recipeName ?? methodLabel(method, shot.brewMethodLabel)) +
 						(manual ? ' · logged' : '')
-					: (shot.profileName ?? 'Untitled shot')}
+					: (shot.profileName ?? 'Untitled shot') + (shot.replay ? ' · replay' : '')}
 				meta={profileMetaLine}
 				interactive={false}
 			/>

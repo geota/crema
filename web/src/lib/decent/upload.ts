@@ -41,7 +41,8 @@ import { getHistoryStore } from '#lib/history/store.svelte.js';
 import { liveSyncRows } from '#lib/history/sync-view.js';
 import { reportUploadOutcome } from '#lib/history/upload-toast.js';
 import { appendSyncLog } from '#lib/visualizer/sync-config.js';
-import { isBrewLog, refusedNoSamples, toCoreShotMachine, type AnyShot, type StoredShot } from '#lib/history/model.js';
+import { isBrewLog, toCoreShotMachine, uploadRefused, type AnyShot, type StoredShot } from '#lib/history/model.js';
+import { REPLAY_NOT_UPLOADED } from '#lib/effect/errors.js';
 import type { ShotMachine, TimedSample } from '#lib/core/crema-core.js';
 import { getMachineReadout } from '#lib/state/machine-readout.svelte.js';
 import {
@@ -266,7 +267,10 @@ async function runUpload(shotId: string, opts: DecentUploadOptions): Promise<Dec
 	// Brew Log rows (issue #10) are not DE1 shots: never uploaded, and never
 	// stamped with the live machine (which the bind below would do).
 	if (isBrewLog(shot)) return skipped('Brew Log entries stay on this device');
-	if (refusedNoSamples(shot, opts.samples?.length)) return skipped('This shot has no telemetry to upload');
+	// The core's refusal (`upload_refused_shot`): a replay (#488 batch 6), or no telemetry.
+	if (uploadRefused(shot, opts.samples?.length)) {
+		return skipped(shot.replay === true ? REPLAY_NOT_UPLOADED : 'This shot has no telemetry to upload');
+	}
 	if (shot.decentId && !opts.replace) return skipped('Already on Decent');
 	if (!opts.manual && shotDurationSeconds(shot) < MIN_SHOT_SECONDS) {
 		return skipped(`Shorter than ${MIN_SHOT_SECONDS} s`);
@@ -459,6 +463,8 @@ export function unsentDecentShots<T extends AnyShot>(
 	return shots.filter(
 		(s) =>
 			!isBrewLog(s) &&
+			// A replay is never uploaded (core `upload_refused_shot`).
+			s.replay !== true &&
 			!s.decentId &&
 			!s.deletedAt &&
 			shotDurationSeconds(s) >= MIN_SHOT_SECONDS &&
