@@ -5,8 +5,8 @@
 //! (electric or hand).
 //!
 //! **Only grinders we are sure of** (#488): an entry is here only when its
-//! maker's name for it, its popularity among home espresso users, and its
-//! range are all certain. Every entry carries a [`VerifiedScale`] checked
+//! maker's name for it, its popularity among home espresso or high-end
+//! filter brewers, and its range are all certain. Every entry carries a [`VerifiedScale`] checked
 //! against the maker's manual or page, cited in [`VerifiedScale::source`].
 //! A grinder whose range can't be checked from its maker, or whose dial isn't
 //! one numeric range (Baratza macro plus micro, 1Zpresso
@@ -448,6 +448,27 @@ pub const GRINDER_CATALOGUE: &[CatalogueGrinder] = &[
             "https://www.timemore.com/blogs/read-our-blog/sculptor-064s-gen-ii",
         ),
     ),
+    // "There are 41 grind size setting"; the chart runs espresso "3-7" to
+    // steep "39-41". The WSFB-100S, and the WSFBS-200B with a scale.
+    entry(
+        "wilfa-uniform",
+        "Wilfa",
+        "Uniform",
+        &[
+            "Wilfa Uniform",
+            "Wilfa Svart Uniform",
+            "WSFB-100S",
+            "WSFBS-200B",
+        ],
+        E,
+        scale(
+            1.0,
+            41.0,
+            1.0,
+            "",
+            "https://wilfa.com/pages/uniform-wsfb-use",
+        ),
+    ),
 ];
 
 #[cfg(test)]
@@ -558,6 +579,8 @@ mod tests {
             ("Sculptor 064S", "timemore-sculptor-064s"),
             ("064s", "timemore-sculptor-064s"),
             ("Sculptor 064S Gen II", "timemore-sculptor-064s"),
+            ("Wilfa Uniform", "wilfa-uniform"),
+            ("WSFBS-200B", "wilfa-uniform"),
         ] {
             assert_eq!(
                 catalogue_entry_for_name(name).map(|g| g.id),
@@ -573,6 +596,8 @@ mod tests {
             "Sculptor 064",
             "Sculptor 078S",
             "Encore ESP Pro",
+            "Uniform Evo",
+            "Wilfa Svart",
             "   ",
             "",
         ] {
@@ -591,6 +616,7 @@ mod tests {
             "Fellow Opus",
             "Baratza Sette 270",
             "Lagom P64",
+            "Fellow Ode Gen 2",
         ] {
             assert_eq!(catalogue_entry_for_name(name), None, "{name}");
         }
