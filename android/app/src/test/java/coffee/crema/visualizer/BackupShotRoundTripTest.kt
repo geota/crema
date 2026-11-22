@@ -218,4 +218,16 @@ class BackupShotRoundTripTest {
         }
         assertEquals("15", storedShotFromBackupJson(numeric, json)!!.grindSetting)
     }
+
+    /** A crafted number grind (a backup or a pulled row) is kept as its literal, never expanded. */
+    @Test
+    fun `a huge-exponent grind number isn't expanded`() {
+        fun row(grind: String) = """{"id":"s","completedAtMs":1,"durationMs":1,"grindSetting":$grind}"""
+        assertEquals("1e999999999", json.decodeFromString(StoredShot.serializer(), row("1e999999999")).grindSetting)
+        assertEquals("1E-999999999", json.decodeFromString(StoredShot.serializer(), row("1E-999999999")).grindSetting)
+        val long = "1" + "0".repeat(40)
+        assertEquals(long, json.decodeFromString(StoredShot.serializer(), row(long)).grindSetting, "too many digits: as written")
+        assertEquals("1500", json.decodeFromString(StoredShot.serializer(), row("1.5e3")).grindSetting, "a sane exponent is spelled out")
+        assertEquals("1e999999999", coffee.crema.beans.grindTextOf(kotlinx.serialization.json.JsonUnquotedLiteral("1e999999999")))
+    }
 }

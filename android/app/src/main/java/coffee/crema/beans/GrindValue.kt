@@ -105,8 +105,18 @@ fun grindDouble(text: String?): Double? = text?.trim()?.replace(',', '.')?.toDou
 fun grindTextOf(p: JsonPrimitive?): String? = when {
     p == null || p is JsonNull -> null
     p.isString -> p.content.takeIf { it.isNotBlank() }
-    else -> p.content.toBigDecimalOrNull()?.stripTrailingZeros()?.toPlainString()
+    // Only a number a Float could have held is spelled out: a crafted
+    // "1e999999999" would expand into a gigantic string, so anything outside
+    // a grind's range stays as its own (input-sized) literal.
+    else -> p.content.toBigDecimalOrNull()?.stripTrailingZeros()
+        ?.takeIf { it.scale() in -MAX_GRIND_EXPONENT..MAX_GRIND_EXPONENT && it.precision() <= MAX_GRIND_DIGITS }
+        ?.toPlainString()
+        ?: p.content.takeIf { it.isNotBlank() }
 }
+
+/** The widest number [grindTextOf] spells out: digits after or zeros before the point, and digits in all. */
+private const val MAX_GRIND_EXPONENT = 20
+private const val MAX_GRIND_DIGITS = 30
 
 /**
  * A grind as text in JSON (REVIEW-FINAL M1): written as a string, and read

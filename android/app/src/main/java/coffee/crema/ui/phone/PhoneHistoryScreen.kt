@@ -1042,7 +1042,7 @@ private fun PhoneShotDetail(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Eyebrow("Grind")
-                        val grinders by remember { vm.ui.map { it.grinders }.distinctUntilChanged() }.collectAsStateWithLifecycle(vm.ui.value.grinders)
+                        val grinders by remember { vm.ui.map { it.grinders }.distinctUntilChanged() }.collectAsStateWithLifecycle(emptyList())
                         coffee.crema.ui.components.ShotGrindStepper(shot, grinders, { g, scale -> vm.setShotGrind(shot.id, g, scale) })
                     }
                     // Only the name lists, recomputed when the history list changes
