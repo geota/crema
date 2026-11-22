@@ -176,6 +176,18 @@ export function autoSaveShotGrind(input: WithBag<AutoSaveInput>, nowMs = Date.no
 	return out === 'null' ? null : (JSON.parse(out) as GrindSave & { bean: Bean });
 }
 
+/**
+ * The grinder record a typed shot grinder name names (#488, review M2): an
+ * owned grinder of that name (trimmed, any case), else an archived one;
+ * tombstones never. `null` when none does: the shot then has no grinder id.
+ */
+export function grinderIdForName(grinders: readonly Grinder[], name: string | null | undefined): string | null {
+	const key = (name ?? '').trim().toLowerCase();
+	if (!key) return null;
+	const named = grinders.filter((g) => g.deletedAt == null && g.name.trim().toLowerCase() === key);
+	return (named.find(isLiveGrinder) ?? named[0])?.id ?? null;
+}
+
 /** The bag's saved row for `grinderId` (`NO_GRINDER_ID` for none), if any. */
 export function savedGrindRow(bean: Bean | null, grinderId: string | null): BagGrind | null {
 	const id = grinderId ?? NO_GRINDER_ID;

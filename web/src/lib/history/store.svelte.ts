@@ -110,6 +110,8 @@ import {
 	type StoredShot
 } from './model';
 import type { Bean, Roaster } from '#lib/bean/index.js';
+import { getBeanStore } from '#lib/bean/store.svelte.js';
+import { grinderIdForName } from '#lib/bean/grinder.js';
 import { getCaptureStore } from '#lib/capture/store.js';
 import { readCaptureKeep } from '#lib/capture/limit.js';
 import {
@@ -3446,7 +3448,13 @@ export class HistoryStore {
 	 * settings default. Mirrors {@link setNotes}.
 	 */
 	setGrinderModel(id: string, grinderModel: string | null): void {
-		this.edit(id, (target) => ({ ...target, grinderModel }));
+		// The id follows the name (#488, review M2): the owned grinder it names,
+		// else none, so lookups by id never keep pointing at the old grinder.
+		const grinderId = grinderIdForName(getBeanStore().allGrinders, grinderModel);
+		this.edit(id, (target) => {
+			const { grinderId: _old, ...rest } = target;
+			return grinderId ? { ...rest, grinderModel, grinderId } : { ...rest, grinderModel };
+		});
 	}
 
 	/**

@@ -196,3 +196,26 @@ describe('the library migration runs only over a loaded library', () => {
 		expect(lib.getBean('bean:old')!.grinds ?? null).toBeNull();
 	});
 });
+
+describe('adding a grinder with none active (#499 review)', () => {
+	it('a created, catalogue or restored grinder becomes the active one', () => {
+		expect(library.activeGrinder).toBeNull();
+		const g = library.takeGrinderChoice({ kind: 'create', name: "Dad's Zassenhaus" })!;
+		expect(library.activeGrinder?.id).toBe(g.id);
+		// With one active, another addition leaves it as it is.
+		const df = library.takeGrinderChoice({ kind: 'catalogue', id: 'df64', name: 'DF64' });
+		expect(df).not.toBeNull();
+		expect(library.activeGrinder?.id).toBe(g.id);
+		// Archiving the active clears it; restoring one makes it active again.
+		library.archiveGrinder(g.id);
+		expect(library.activeGrinder).toBeNull();
+		library.takeGrinderChoice({ kind: 'archived', id: g.id, name: g.name });
+		expect(library.activeGrinder?.id).toBe(g.id);
+	});
+
+	it('picking an owned grinder in the bag editor does not switch Brew', () => {
+		const g = library.addGrinder('Niche Zero')!;
+		library.takeGrinderChoice({ kind: 'owned', id: g.id, name: g.name });
+		expect(library.activeGrinder).toBeNull();
+	});
+});

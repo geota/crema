@@ -109,3 +109,30 @@ describe('auto-save after a kept shot', () => {
 		]);
 	});
 });
+
+describe('editing a shot\'s grinder in History (#499 review M2)', () => {
+	it('re-points grinderId to the owned grinder of that name, or clears it', async () => {
+		const { getHistoryStore } = await import('./store.svelte');
+		const history = getHistoryStore();
+		const library = getBeanStore();
+		const niche = library.addGrinder('Niche Zero')!;
+		const df = library.addGrinder('DF64')!;
+		history.insertPulled({
+			formatVersion: 3,
+			id: 'shot:m2',
+			completedAt: 1_700_000_000_000,
+			profileName: 'x',
+			profile: null,
+			stopReason: null,
+			metadata: { dose: 18, yieldOut: 36, grinderSetting: '14' },
+			record: { duration: 30_000, samples: [] },
+			grinderModel: niche.name,
+			grinderId: niche.id
+		} as unknown as StoredShot);
+		history.setGrinderModel('shot:m2', ' df64 ');
+		expect(history.get('shot:m2')?.grinderId).toBe(df.id);
+		history.setGrinderModel('shot:m2', 'Some other grinder');
+		expect(history.get('shot:m2')?.grinderId ?? null, 'no match: no id').toBeNull();
+		expect(history.get('shot:m2')?.grinderModel).toBe('Some other grinder');
+	});
+});

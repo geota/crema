@@ -767,16 +767,17 @@ export class BeanLibraryStore {
 	 * the default scale.
 	 */
 	takeGrinderChoice(choice: GrinderChoice): Grinder | null {
-		switch (choice.kind) {
-			case 'owned':
-				return this.getGrinder(choice.id);
-			case 'archived':
-				return this.restoreGrinder(choice.id);
-			case 'catalogue':
-				return this.addGrinder('', choice.id);
-			case 'create':
-				return this.addGrinder(choice.name, '');
-		}
+		if (choice.kind === 'owned') return this.getGrinder(choice.id);
+		const g =
+			choice.kind === 'archived'
+				? this.restoreGrinder(choice.id)
+				: choice.kind === 'catalogue'
+					? this.addGrinder('', choice.id)
+					: this.addGrinder(choice.name, '');
+		// With no grinder active, the one just added becomes it: Brew then
+		// uses its scale without a second pick.
+		if (g && this.activeGrinder === null) this.setActiveGrinder(g.id);
+		return g;
 	}
 
 	/** Point Brew at a grinder (`null` = no grinder). */
