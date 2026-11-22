@@ -33,6 +33,7 @@ interface ShotMeta {
     val peakTemp: Float?
     val peakWeightG: Float?
     val profileName: String?
+    val profileId: String?
     val bean: ShotBean?
     val rating: Int?
     val notes: String?
@@ -75,6 +76,7 @@ data class ShotRow(
     override val peakTemp: Float? = null,
     override val peakWeightG: Float? = null,
     override val profileName: String? = null,
+    override val profileId: String? = null,
     override val bean: ShotBean? = null,
     override val rating: Int? = null,
     override val notes: String? = null,
@@ -109,7 +111,7 @@ data class ShotRow(
 fun StoredShot.toRow(summary: ShotSummary): ShotRow = ShotRow(
     id = id, completedAtMs = completedAtMs, durationMs = durationMs, yieldG = yieldG, doseG = doseG,
     bagDebitG = bagDebitG, grindSetting = grindSetting, yieldTargetG = yieldTargetG, peakPressure = peakPressure,
-    peakTemp = peakTemp, peakWeightG = peakWeightG, profileName = profileName, bean = bean, rating = rating,
+    peakTemp = peakTemp, peakWeightG = peakWeightG, profileName = profileName, profileId = profileId, bean = bean, rating = rating,
     notes = notes, nextPlan = nextPlan, barista = barista, drinker = drinker, grinderModel = grinderModel,
     tags = tags, preinfuseTargetS = preinfuseTargetS, stopOnWeight = stopOnWeight, autoTare = autoTare,
     stopReason = stopReason, stopEstimated = stopEstimated, privacy = privacy, visualizerId = visualizerId,
@@ -131,7 +133,7 @@ fun ShotRow.withHeavy(
 ): StoredShot = StoredShot(
     id = id, completedAtMs = completedAtMs, durationMs = durationMs, yieldG = yieldG, doseG = doseG,
     bagDebitG = bagDebitG, grindSetting = grindSetting, yieldTargetG = yieldTargetG, peakPressure = peakPressure,
-    peakTemp = peakTemp, peakWeightG = peakWeightG, profileName = profileName, profile = profile, bean = bean,
+    peakTemp = peakTemp, peakWeightG = peakWeightG, profileName = profileName, profileId = profileId, profile = profile, bean = bean,
     rating = rating, notes = notes, nextPlan = nextPlan, barista = barista, drinker = drinker,
     grinderModel = grinderModel, samples = samples, tags = tags, preinfuseTargetS = preinfuseTargetS,
     stopOnWeight = stopOnWeight, autoTare = autoTare, stopReason = stopReason, stopEstimated = stopEstimated,

@@ -3001,6 +3001,9 @@ class LibraryController(
             // mirror core never uploads, so it knows no profile title (on a
             // remote the screen shows the hub's selection).
             profileName = profile?.name,
+            // Its library id (save boundaries F4), from the shot's start: the
+            // core stamps it when the DE1 held no profile it knows of.
+            profileId = profile?.id,
         )
         assembling()
         val assembled = runCatching {

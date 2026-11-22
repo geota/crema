@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModelStore
 import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.newBean
 import coffee.crema.core.NotificationSource
+import coffee.crema.history.toRow
+import coffee.crema.history.withHeavy
 import coffee.crema.profiles.CremaProfile
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -302,7 +304,7 @@ class SaveBoundariesVmTest {
     @Test
     fun `a shot records and debits the bag it started with`() {
         val vm = vmWith(listOf(bag("a", remaining = 200f), bag("b", remaining = 200f)), active = "a")
-        activeBuiltin(vm)
+        val profile = activeBuiltin(vm)
         val bridge = VmHarness.bridge(vm)
         apply(vm, bridge.onNotification(NotificationSource.DE1_STATE, byteArrayOf(4, 5), 1_000uL))
         for (i in 1..24) {
@@ -324,5 +326,31 @@ class SaveBoundariesVmTest {
         assertEquals("Bag a", shot.bean?.name)
         assertTrue(vm.bean("a").remaining!! < 200f, "the debit is the start's bag's")
         assertEquals(200f, vm.bean("b").remaining)
+        // F4: the profile's library id next to its name, in the store too.
+        assertEquals(profile.id, shot.profileId)
+        assertEquals(profile.id, VmHarness.truthField(vm, shot.id, "profileId"))
+    }
+
+    /** F4: Android's own shot shape keeps the core's `profileId` through the
+     *  store's row JSON, a row, and a backup; an older row reads as none. */
+    @Test
+    fun `the profile id round-trips and an old row reads as none`() {
+        val shot = coffee.crema.history.StoredShot(
+            id = "shot:1", completedAtMs = 1_700_000_000_000, durationMs = 28_000,
+            profileName = "Blooming", profileId = "profile:blooming",
+        )
+        val row = coreJson.encodeToString(coffee.crema.history.StoredShot.serializer(), shot)
+        assertEquals(shot, coreJson.decodeFromString(coffee.crema.history.StoredShot.serializer(), row))
+        val old = coreJson.decodeFromString(coffee.crema.history.StoredShot.serializer(), row.replace(",\"profileId\":\"profile:blooming\"", ""))
+        assertNull(old.profileId)
+        assertEquals("Blooming", old.profileName)
+
+        val summary = coffee.crema.history.unknownSeriesSummary(shot)
+        assertEquals(shot, shot.toRow(summary).withHeavy(shot.samples, shot.profile, shot.brewSeries), "a row and back")
+
+        val backup = coffee.crema.visualizer.wireShotJson(shot, forBackup = true)
+        assertEquals("profile:blooming", coffee.crema.visualizer.storedShotFromBackupJson(backup, coreJson)?.profileId)
+        val bare = coffee.crema.visualizer.wireShotJson(shot.copy(profileId = null), forBackup = true)
+        assertFalse("profileId" in bare, "omitted when absent, as the core writes it")
     }
 }
