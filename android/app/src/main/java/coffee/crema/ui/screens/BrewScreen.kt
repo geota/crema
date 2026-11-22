@@ -203,7 +203,6 @@ fun BrewScreen(
                 activeBean = activeBean,
                 beans = ui.beans,
                 roasters = ui.roasters,
-                equipmentGrinder = ui.grinderModel,
                 onSelectBean = vm::setActiveBean,
                 onOpenQuick = { quickOpen = true },
                 // Footer/empty-state routes — mirror ProfilesScreen/BeansScreen wiring
@@ -544,7 +543,6 @@ private fun BrewHeader(
     activeBean: Bean?,
     beans: List<Bean>,
     roasters: List<Roaster>,
-    equipmentGrinder: String,
     onSelectBean: (String) -> Unit,
     onOpenQuick: () -> Unit,
     onOpenProfiles: () -> Unit,
@@ -584,7 +582,6 @@ private fun BrewHeader(
             activeBean = activeBean,
             beans = beans,
             roasters = roasters,
-            equipmentGrinder = equipmentGrinder,
             onSelect = onSelectBean,
             onOpenLibrary = onOpenBeans,
             onNew = onNewBean,
@@ -728,9 +725,6 @@ private fun BeanBlock(
     activeBean: Bean?,
     beans: List<Bean>,
     roasters: List<Roaster>,
-    /** Settings-level grinder model — the fallback when the bean has no
-     *  grinder of its own (web BeanContextCard precedence, issue #16). */
-    equipmentGrinder: String,
     onSelect: (String) -> Unit,
     onOpenLibrary: () -> Unit,
     onNew: () -> Unit,

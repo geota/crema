@@ -146,6 +146,17 @@ class GrinderStateTest {
         assertEquals(listOf("18 clicks" to df64.id, "15" to niche.id, "30" to null), out.map { it.grind to it.grinderId }, "a text grind counts as typed")
     }
 
+    /** #488 follow-up 38: the screens show Brew's grinder, never the retired settings `grinderModel`. */
+    @Test
+    fun `no screen shows the settings grinder model`() {
+        val shown = coffee.crema.MainSources.kotlinFiles()
+            .filter { (path, _) -> path.startsWith("coffee/crema/ui/screens/") || path.startsWith("coffee/crema/ui/phone/") }
+            .flatMap { (path, text) -> text.lines().mapIndexedNotNull { i, line -> if (Regex("""\bui\.grinderModel\b""").containsMatchIn(line)) "$path:${i + 1}" else null } }
+        assertEquals(emptyList(), shown)
+        assertEquals("Brew uses Niche Zero. Your grinders and their grind scales are on Devices.", grindersSettingsLine(niche.name))
+        assertEquals("No grinder on Brew. Your grinders and their grind scales are on Devices.", grindersSettingsLine(null))
+    }
+
     /** Review 499: a catalogue entry with no verified range says where to set it. */
     @Test
     fun `catalogue offers say whether the range comes with it`() {

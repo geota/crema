@@ -2,6 +2,7 @@ package coffee.crema.ui.phone
 
 import kotlinx.coroutines.launch
 import coffee.crema.visualizer.pullWaitingLine
+import coffee.crema.ui.activeGrinder
 import coffee.crema.ui.LiveReadouts
 import coffee.crema.ui.CoreBounds
 import coffee.crema.ui.RelayPairingRows
@@ -163,7 +164,7 @@ fun PhoneSettingsScreen(
                     // through availability() (spec §7.6): no role checks here.
                     when (current) {
                         "machine" -> MachineSection(vm, ui.let { it }, connected, onConnect)
-                        "peripherals" -> PeripheralsSection(vm, scaleConnected, ui.scaleName, ui.grinderModel, onConnect, onOpenScale = { onNav("scale") }, scaleReconnecting = ui.scaleReconnecting, ui = ui)
+                        "peripherals" -> PeripheralsSection(vm, scaleConnected, ui.scaleName, ui.activeGrinder()?.name, onConnect, onOpenScale = { onNav("scale") }, scaleReconnecting = ui.scaleReconnecting, ui = ui)
                         "brew" -> BrewDefaultsSection(vm, ui.let { it })
                         "water" -> WaterSection(
                             vm, ui.let { it }, connected,
@@ -461,7 +462,8 @@ private fun PeripheralsSection(
     vm: MainViewModel,
     scaleConnected: Boolean,
     scaleName: String?,
-    grinderModel: String,
+    /** Brew's grinder (on a remote, the hub's); the settings `grinderModel` is retired (#488). */
+    activeGrinder: String?,
     onConnect: (String) -> Unit,
     onOpenScale: () -> Unit,
     scaleReconnecting: Boolean = false,
@@ -492,7 +494,7 @@ private fun PeripheralsSection(
     }
     SettingsGroup("Grinder") {
         // Grinders are Devices → Grinder's now (#488).
-        CremaSettingsRow("Grinders", "Your grinders and their grind scales are on Devices.", last = true) {
+        CremaSettingsRow("Grinders", coffee.crema.ui.grindersSettingsLine(activeGrinder), last = true) {
             CremaButton(onClick = { vm.openDevicesTab("grinder"); onOpenScale() }, variant = CremaButtonVariant.Outlined, label = "Devices")
         }
     }

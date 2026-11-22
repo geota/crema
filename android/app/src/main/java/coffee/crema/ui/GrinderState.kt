@@ -127,6 +127,16 @@ fun scaleFieldNumber(text: String): Float? =
 fun presetLabel(entry: coffee.crema.core.CatalogueGrinderInfo): String =
     if (entry.tier == coffee.crema.core.ScaleTier.Typical) "Typical range — check your dial" else "From the ${entry.name} preset"
 
+/**
+ * Settings → Connected devices' Grinders line (#488 follow-up 38): Brew's
+ * active grinder by name (on a remote, the hub's), never the retired
+ * settings `grinderModel`; with none, where grinders live.
+ */
+fun grindersSettingsLine(activeGrinder: String?): String =
+    activeGrinder?.trim()?.takeIf { it.isNotEmpty() }
+        ?.let { "Brew uses $it. Your grinders and their grind scales are on Devices." }
+        ?: "No grinder on Brew. Your grinders and their grind scales are on Devices."
+
 /** "0–999 μm", or "0–20" with no unit. */
 fun scaleRangeText(scale: GrindScale): String =
     "${scaleNumber(scale.min)}–${scaleNumber(scale.max)}" + scale.unit.trim().takeIf { it.isNotEmpty() }?.let { " $it" }.orEmpty()
