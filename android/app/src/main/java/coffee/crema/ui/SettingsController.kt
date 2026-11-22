@@ -107,7 +107,10 @@ internal class SettingsController(
             qcGrind = p.qcGrind,
             // Restore the last session's profile selection; refreshProfiles
             // self-heals if the id no longer resolves (e.g. deleted custom).
-            activeProfileId = p.activeProfileId ?: it.activeProfileId,
+            // A selection the user cleared stays clear (follow-up 5); only a
+            // fresh install keeps the first profile the load seeded.
+            activeProfileId = if (p.profileCleared) null else p.activeProfileId ?: it.activeProfileId,
+            profileCleared = p.profileCleared && p.activeProfileId == null,
             proxyRole = p.proxyRole,
             proxyPrimaryHost = p.proxyPrimaryHost,
             proxyPrimaryPort = p.proxyPrimaryPort,
@@ -236,6 +239,7 @@ internal class SettingsController(
         qcFlushTempC = uiState().qcFlushTempC,
         qcGrind = uiState().qcGrind,
         activeProfileId = uiState().activeProfileId,
+        profileCleared = uiState().profileCleared && uiState().activeProfileId == null,
         // The remembered addresses live on the connection controller — its
         // setters call persistPrefs AFTER their state update, so this read is
         // always fresh (the MainUiState copies are display mirrors).

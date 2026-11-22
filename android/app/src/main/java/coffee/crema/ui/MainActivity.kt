@@ -42,6 +42,7 @@ import coffee.crema.ui.components.CremaMessageHost
 import coffee.crema.ui.components.LocalMessageAnchors
 import coffee.crema.ui.components.MessageAnchors
 import coffee.crema.ui.components.showDiscardMessage
+import coffee.crema.ui.components.showActionMessage
 import coffee.crema.ui.components.showUndoMessage
 import coffee.crema.ui.components.showKeptAsideMessage
 import androidx.compose.material3.Surface
@@ -304,13 +305,24 @@ class MainActivity : ComponentActivity() {
                 }
                 // A Quick Controls Save that updated a profile in place: Undo
                 // puts the profile (and the grind it saved) back.
+                // A newer Save (with or without an Undo of its own) takes the
+                // older message down: its Undo would do nothing (follow-up 3).
+                val quickSaveSlot = remember(snackbarScope, snackbarHostState) {
+                    coffee.crema.ui.components.UndoMessageSlot(snackbarScope, snackbarHostState)
+                }
                 LaunchedEffect(ui.quickSaveUndo) {
-                    val notice = ui.quickSaveUndo ?: return@LaunchedEffect
+                    quickSaveSlot.follow(ui.quickSaveUndo, onUndo = viewModel::undoQuickSave, onDrop = viewModel::consumeQuickSaveUndo)
+                }
+                // An Add grinder that found the model already yours offers a
+                // second one of it (#488 follow-up 18).
+                LaunchedEffect(ui.addAnotherOffer) {
+                    val offer = ui.addAnotherOffer ?: return@LaunchedEffect
                     snackbarScope.launch {
-                        snackbarHostState.showUndoMessage(
-                            notice.message,
-                            onUndo = { viewModel.undoQuickSave(notice.seq) },
-                            onDrop = { viewModel.consumeQuickSaveUndo(notice.seq) },
+                        snackbarHostState.showActionMessage(
+                            offer.message,
+                            "Add another",
+                            onAction = { viewModel.addAnotherGrinder(offer.seq) },
+                            onDrop = { viewModel.consumeAddAnotherOffer(offer.seq) },
                         )
                     }
                 }

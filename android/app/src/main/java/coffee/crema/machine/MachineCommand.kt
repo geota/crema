@@ -182,7 +182,7 @@ sealed interface MachineCommand {
     /**
      * Quick Controls' Save (#488, review F8): the device holding the machine
      * saves its own dials to its own bag and profile, each changed part to
-     * its owner ([coffee.crema.ui.QuickSavePlan]). A remote sends it rather
+     * its owner ([coffee.crema.ui.quickSavePlan]). A remote sends it rather
      * than writing its own library, which the hub never reads, and shows
      * nothing until the hub's snapshot and message arrive. [copyName] names a
      * copy (a built-in's, or "Save as new…" when [asNew]).

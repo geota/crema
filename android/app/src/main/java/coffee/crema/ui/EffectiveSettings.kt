@@ -130,7 +130,7 @@ private fun MainUiState.mirroredBagOf(cfg: ConfigSnapshot): coffee.crema.core.Be
  *  override: it was dialled against the old profile (Decenza clears its
  *  temperature override on a profile load). Every path that changes the active
  *  profile goes through here. */
-fun MainUiState.withActiveProfileId(id: String?): MainUiState = copy(activeProfileId = id, brewParams = null)
+fun MainUiState.withActiveProfileId(id: String?): MainUiState = copy(activeProfileId = id, brewParams = null, profileCleared = id == null)
 
 /** What a config command shows, without its side effects: the #203
  *  `showConfig` body as a pure function. */

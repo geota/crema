@@ -71,4 +71,35 @@ class MessageHostTest {
         // A plain showSnackbar(message) message is Short, as before.
         assertEquals(SnackbarDuration.Short, CremaMessageVisuals("Saved").duration)
     }
+
+    /** PLAN follow-up 3: a newer Save's notice, or its notice going, takes the
+     *  older Undo message down instead of queueing behind it. */
+    @Test
+    fun `a newer Save's notice dismisses the older Undo message`() = runTest {
+        val host = SnackbarHostState()
+        val calls = mutableListOf<String>()
+        val slot = UndoMessageSlot(this, host)
+        val undo = { seq: Long -> calls += "undo $seq"; Unit }
+        val drop = { seq: Long -> calls += "drop $seq"; Unit }
+        slot.follow(coffee.crema.ui.UndoNotice("“Mine” updated", 1), undo, drop)
+        runCurrent()
+        assertEquals("“Mine” updated", host.currentSnackbarData?.visuals?.message)
+        slot.follow(coffee.crema.ui.UndoNotice("“Mine” updated · grind 3 saved", 2), undo, drop)
+        runCurrent()
+        assertEquals("“Mine” updated · grind 3 saved", host.currentSnackbarData?.visuals?.message, "the newer one shows now")
+        // The same notice again (a recomposition) doesn't show it twice.
+        slot.follow(coffee.crema.ui.UndoNotice("“Mine” updated · grind 3 saved", 2), undo, drop)
+        runCurrent()
+        // A Save without an Undo clears the notice: the message goes.
+        slot.follow(null, undo, drop)
+        runCurrent()
+        assertNull(host.currentSnackbarData, "no stale Undo on screen")
+        assertEquals(emptyList(), calls, "neither older Undo ran")
+        // A notice shown to its end still reports its own seq.
+        slot.follow(coffee.crema.ui.UndoNotice("“Mine” updated", 3), undo, drop)
+        runCurrent()
+        assertNotNull(host.currentSnackbarData).performAction()
+        runCurrent()
+        assertEquals(listOf("undo 3"), calls)
+    }
 }

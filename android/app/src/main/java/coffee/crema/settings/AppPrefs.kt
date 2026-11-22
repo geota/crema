@@ -273,6 +273,10 @@ data class AppPrefs(
     // ── Session restore ──────────────────────────────────────────────────────
     /** The last active profile id, restored on launch (web `crema.profiles.activeId`). */
     val activeProfileId: String? = null,
+    /** The user cleared the profile (deleted or hid the active one): no
+     *  profile is picked on launch. Absent/false is a fresh install's or a
+     *  kept selection, which seeds the first profile (PLAN follow-up 5). */
+    val profileCleared: Boolean = false,
     // ── Connection (auto-connect is per-device = a remembered address) ───────
     /** Remembered DE1 Bluetooth address — the auto-connect target (reconnect on
      *  an unexpected drop + connect on launch). Non-null ⟺ the DE1's
@@ -518,6 +522,7 @@ private data class PersistedPrefs(
     @Serializable(with = coffee.crema.beans.GrindTextSerializer::class)
     val qcGrind: String? = null,
     val activeProfileId: String? = null,
+    val profileCleared: Boolean = false,
     val de1Address: String? = null,
     val scaleAddress: String? = null,
     val scaleName: String? = null,
@@ -547,6 +552,7 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     lastBrewLogMethod = lastBrewLogMethod,
     qcGrind = qcGrind,
     activeProfileId = activeProfileId,
+    profileCleared = profileCleared,
     de1Address = de1Address,
     scaleAddress = scaleAddress,
     scaleName = scaleName,
@@ -575,6 +581,7 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     lastBrewLogMethod = lastBrewLogMethod,
     qcGrind = qcGrind,
     activeProfileId = activeProfileId,
+    profileCleared = profileCleared,
     de1Address = de1Address,
     scaleAddress = scaleAddress,
     scaleName = scaleName,

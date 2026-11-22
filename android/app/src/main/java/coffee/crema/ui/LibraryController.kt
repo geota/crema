@@ -114,6 +114,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -192,6 +193,8 @@ class LibraryController(
      *  the selection and push the stop targets and the desired profile, as a
      *  pick would. */
     private val onProfileCleared: () -> Unit = {},
+    /** Persist this device's own selection (the prefs), with nothing else. */
+    private val persistSelection: () -> Unit = {},
     /**
      * A stored shot's record-carried annotations (rating, notes, grind, bean)
      * were edited — the Decent destination queues its debounced
@@ -824,7 +827,8 @@ class LibraryController(
         val own = uiState().activeProfileId
         val current = own?.takeIf { id -> all.any { it.id == id } }
         updateUi { st ->
-            val reseed = if (own != null || seedEmpty) all.firstOrNull { it.id !in hiddenIds }?.id else null
+            // A selection the user cleared stays clear at the startup loads too (follow-up 5).
+            val reseed = if (own != null || (seedEmpty && !st.profileCleared)) all.firstOrNull { it.id !in hiddenIds }?.id else null
             val active = current ?: reseed
             // A reseeded selection is a profile change: the override goes too.
             val reseeded = if (active == st.activeProfileId) st else st.withActiveProfileId(active)
@@ -873,34 +877,30 @@ class LibraryController(
     /** What an in-place Quick Controls Save replaced, until its Undo goes. */
     private data class QuickSaveUndo(
         val seq: Long,
-        val profileId: String,
+        /** What the Save wrote, for the core's guarded Undo (`quick_save_undo`, REVIEW-CORE M2). */
+        val wrote: coffee.crema.core.QuickSaveUndo,
         /** The profile's body before the Save. */
         val previousJson: String,
-        /** The body the Save wrote: Undo restores only over this one. */
-        val writtenJson: String,
         /** The Quick-Controls override the Save folded into the profile. */
         val previousBrew: BrewParams?,
-        /** The bag grind the same Save wrote. */
-        val grind: GrindUndo?,
+        /** The bag had no grind rows at all before the Save (null, not []): Undo leaves it so (#13). */
+        val bagHadNoGrinds: Boolean = false,
     )
-
-    /** A bag grind a Save wrote (#488): bag [beanId]'s row for [grinderId]
-     *  ("" = no grinder) was [before] (null = none) and is now [written]. */
-    private data class GrindUndo(val beanId: String, val grinderId: String, val before: coffee.crema.core.BagGrind?, val written: coffee.crema.core.BagGrind?)
 
     private var quickSaveUndo: QuickSaveUndo? = null
     private var quickSaveSeq = 0L
 
     /**
      * Quick Controls' **Save** (review 2026-11-21 F1): write each changed part
-     * of [QuickSavePlan] to its owner, in one message. The grind goes to the
-     * active bag's row for the active grinder (#488, the core's
-     * `save_bag_grind`: adds the row, never moves the star). The recipe dials
-     * go to the profile: a custom one is updated in place (Undo in the
-     * message) unless [asNew]; a built-in, or [asNew], becomes a copy named
-     * [copyName], made active. A copy without a name writes nothing (the
-     * prompt asks first). Runs on the device that owns the session: a remote
-     * sends it here (review F8).
+     * of the core's plan ([quickSavePlan], `quick_save_plan`) to its owner, in
+     * one message. The grind goes to the active bag's row for the active
+     * grinder (#488, the core's `save_bag_grind`: adds the row, never moves
+     * the star). The recipe dials go to the profile: a custom one is updated
+     * in place (Undo in the message) unless [asNew]; a built-in, or [asNew],
+     * becomes a copy named [copyName], made active. A copy without a name
+     * writes nothing (the prompt asks first). A Save that writes retires the
+     * older Save's Undo message (follow-up 3). Runs on the device that owns
+     * the session: a remote sends it here (review F8).
      */
     fun quickSave(copyName: String? = null, asNew: Boolean = false, now: Long = System.currentTimeMillis()): CommandOutcome {
         // The selections and dials on screen: on the hub (where a remote's Save
@@ -908,7 +908,7 @@ class LibraryController(
         val s = effectiveState()
         val plan = s.quickSavePlan()
         if (!plan.enabled) return CommandOutcome.Refused("Nothing to save")
-        val copying = plan.writesRecipe && (asNew || plan.profileKind == QuickSaveProfileKind.BuiltIn)
+        val copying = plan.writesRecipe && (asNew || plan.profileWrite == coffee.crema.core.QuickSaveProfileWrite.Copy)
         val name = copyName?.trim()?.takeIf { it.isNotEmpty() }
         if (copying && name == null) return CommandOutcome.Refused("A copy needs a name")
         // Everything that can fail first: nothing is written unless all of it can be.
@@ -950,7 +950,12 @@ class LibraryController(
                 // The values live in the profile now.
                 resetBrewParams()
                 parts += "“${plan.profileName}” updated"
-                undo = QuickSaveUndo(++quickSaveSeq, id, base, written, s.brewParams, null)
+                val wrote = coffee.crema.core.QuickSaveUndo(
+                    profileId = id,
+                    profileName = plan.profileName.orEmpty(),
+                    writtenProfile = json.parseToJsonElement(written),
+                )
+                undo = QuickSaveUndo(++quickSaveSeq, wrote, base, s.brewParams)
             }
         }
         val grind = plan.grind
@@ -959,11 +964,11 @@ class LibraryController(
             val grinder = s.activeGrinder()
             val slot = grinder?.id ?: coffee.crema.beans.NO_GRINDER_ID
             var saved: coffee.crema.core.GrindSave? = null
-            var before: coffee.crema.core.BagGrind? = null
+            var before: coffee.crema.core.Bean? = null
             editBeans { rows ->
                 rows.mapped { b ->
                     if (b.id != beanId) return@mapped b
-                    before = b.savedGrind(slot)
+                    before = b
                     val out = runCatching { coffee.crema.beans.saveBagGrind(b, grinder, grind, now) }
                         .onFailure { appendLog("Save grind failed: ${it.message}") }.getOrNull()
                     saved = out
@@ -971,15 +976,27 @@ class LibraryController(
                 }
             }
             val out = saved
-            if (out != null && out.changed) {
+            val was = before
+            if (out != null && out.changed && was != null) {
                 persistLibrary()
                 val label = coffee.crema.beans.formatGrind(grind, grinder?.scale)
                 val where = listOfNotNull(plan.beanName, grinder?.name).joinToString(" · ")
                 parts += if (parts.isEmpty()) "Grind $label saved to $where" else "grind $label saved to $where"
-                undo = undo?.copy(grind = GrindUndo(beanId, slot, before, out.bean.savedGrind(slot)))
+                undo = undo?.let { u ->
+                    u.copy(
+                        wrote = u.wrote.copy(
+                            grind = coffee.crema.core.QuickSaveGrindUndo(
+                                beanId = beanId, grinderId = slot, before = was.savedGrind(slot), written = out.bean.savedGrind(slot),
+                            ),
+                        ),
+                        bagHadNoGrinds = was.grinds == null,
+                    )
+                }
             }
         }
         if (parts.isEmpty()) return CommandOutcome.Accepted
+        // This Save is the newest: the older Save's Undo message goes (follow-up 3).
+        retireQuickSaveUndo()
         val message = parts.joinToString(" · ")
         if (undo != null) {
             quickSaveUndo = undo
@@ -991,42 +1008,60 @@ class LibraryController(
         return CommandOutcome.Accepted
     }
 
-    /** Undo the in-place Save [seq]: each half comes back only while it is
-     *  still what the Save wrote, so an edit made since (a star, a rename, a
-     *  new grind) stands. The profile's body brings its dial back, unless the
-     *  user dialled again since. */
-    fun undoQuickSave(seq: Long) {
+    /** The older Save's Undo goes: its message is dismissed (the screen drops a notice that's gone). */
+    private fun retireQuickSaveUndo() {
+        if (quickSaveUndo == null && uiState().quickSaveUndo == null) return
+        quickSaveUndo = null
+        updateUi { it.copy(quickSaveUndo = null) }
+    }
+
+    /** Undo the in-place Save [seq] by the core's guard (`quick_save_undo`):
+     *  each half comes back only while it is still what the Save wrote, so an
+     *  edit made since (a star, a rename, a new grind) stands. The profile's
+     *  body brings its dial back, unless the user dialled again since. */
+    fun undoQuickSave(seq: Long, now: Long = System.currentTimeMillis()) {
         val u = quickSaveUndo?.takeIf { it.seq == seq } ?: return
         quickSaveUndo = null
         updateUi { st -> if (st.quickSaveUndo?.seq == seq) st.copy(quickSaveUndo = null) else st }
-        val current = customProfilesJson.firstOrNull { profileIdOf(it, json) == u.profileId }
-        val profileBack = current == u.writtenJson
-        if (profileBack) {
-            customProfilesJson = customProfilesJson.map { if (profileIdOf(it, json) == u.profileId) u.previousJson else it }
+        val profileId = u.wrote.profileId
+        val nowProfile = customProfilesJson.firstOrNull { profileIdOf(it, json) == profileId }
+            ?.let { runCatching { json.parseToJsonElement(it) }.getOrNull() } ?: JsonNull
+        val nowBag = u.wrote.grind?.let { g -> uiState().beans.firstOrNull { it.id == g.beanId } }
+        val plan = runCatching {
+            coffee.crema.ui.quickSaveUndo(coffee.crema.core.QuickSaveUndoInput(undo = u.wrote, nowProfile = nowProfile, nowBag = nowBag), now)
+        }.getOrElse {
+            appendLog("Save undo failed: ${it.message}")
+            return
+        }
+        if (plan.restoreProfile) {
+            customProfilesJson = customProfilesJson.map { if (profileIdOf(it, json) == profileId) u.previousJson else it }
             refreshProfiles()
             persistCustomProfiles()
             val st = uiState()
-            if (st.activeProfileId == u.profileId && st.brewParams == null) u.previousBrew?.let(restoreBrewParams)
+            if (st.activeProfileId == profileId && st.brewParams == null) u.previousBrew?.let(restoreBrewParams)
         }
-        var grindBack = false
-        u.grind?.let { g ->
-            val now = System.currentTimeMillis()
+        plan.restoreBean?.let { restored ->
+            // A bag that had no rows before the Save goes back to none, not [] (#13).
+            val back = if (u.bagHadNoGrinds && restored.grinds.isNullOrEmpty()) restored.copy(grinds = null) else restored
+            var put = false
             editBeans { rows ->
                 rows.mapped { b ->
-                    if (b.id != g.beanId || b.savedGrind(g.grinderId) != g.written) return@mapped b
-                    grindBack = true
-                    val others = b.grinds.orEmpty().filterNot { it.grinderId == g.grinderId }
-                    b.copy(grinds = listOfNotNull(g.before) + others, updatedAt = now)
+                    // Only over the row the core checked: anything since stands.
+                    if (b.id != back.id || b != nowBag) return@mapped b
+                    put = true
+                    back
                 }
             }
-            if (grindBack) persistLibrary()
+            if (put) persistLibrary()
         }
-        val name = uiState().profiles.firstOrNull { it.id == u.profileId }?.name
+        val name = uiState().profiles.firstOrNull { it.id == profileId }?.name ?: u.wrote.profileName.takeIf { it.isNotBlank() }
+        val quoted = name?.let { "“$it”" }
         notify(
-            when {
-                profileBack -> "Save undone"
-                grindBack -> "Grind put back; ${name?.let { "“$it”" } ?: "the profile"} changed since, not undone"
-                else -> "${name?.let { "“$it”" } ?: "The profile"} changed since; not undone"
+            when (plan.outcome) {
+                coffee.crema.core.QuickSaveUndoOutcome.Undone -> "Save undone"
+                coffee.crema.core.QuickSaveUndoOutcome.ProfileOnly -> "${quoted ?: "The profile"} put back; the grind changed since, not undone"
+                coffee.crema.core.QuickSaveUndoOutcome.GrindOnly -> "Grind put back; ${quoted ?: "the profile"} changed since, not undone"
+                coffee.crema.core.QuickSaveUndoOutcome.NotUndone -> "${quoted ?: "The profile"} changed since; not undone"
             },
         )
     }
@@ -1219,7 +1254,9 @@ class LibraryController(
      *  targets, the desired profile and the mirrors follow, as on a pick (on
      *  this device's own selection; a remote's screen shows its hub's). */
     private fun clearedActive() {
-        if (uiState().mirror != null) return
+        // A remote keeps its own cleared selection across a restart too
+        // (follow-up 5); its stop targets are the hub's.
+        if (uiState().mirror != null) return persistSelection()
         onProfileCleared()
     }
 
@@ -2179,7 +2216,7 @@ class LibraryController(
         historyStore.forget(historyRows().map { it.id })
         editRows(
             { it.copy(beans = it.beans.with(emptyList()), roasters = it.roasters.with(emptyList()), grinders = it.grinders.with(emptyList())) },
-            { it.copy(activeBeanId = null, activeProfileId = null, activeGrinderId = null) },
+            { it.copy(activeBeanId = null, activeProfileId = null, activeGrinderId = null, profileCleared = false) },
         )
         // Back to a fresh install's selection.
         refreshProfiles(seedEmpty = true)
@@ -2597,14 +2634,47 @@ class LibraryController(
 
     /** Open a bean in the editor (the `bean-edit` route reads this). */
     fun startEditBean(id: String) {
-        updateUi { it.copy(editingBeanId = id, draftBean = null) }
+        editedBag = null
+        updateUi { it.copy(editingBeanId = id, draftBean = null, editingBeanGone = null) }
+    }
+
+    /** The stored bag the editor is on, as last seen (PLAN follow-up 10). */
+    private var editedBag: Bean? = null
+
+    /** A bag this device deleted itself: its editor going isn't news. */
+    private var deletedHere: String? = null
+
+    /**
+     * Watch the bag the editor is on (PLAN follow-up 10): when it goes from the
+     * library while open, deleted elsewhere (a sync, another device), the
+     * editor says its changes weren't saved instead of losing the draft
+     * silently. A new bag's draft and this device's own delete are not news.
+     */
+    fun watchEditedBag(st: MainUiState) {
+        val id = st.editingBeanId
+        if (id == null || st.draftBean?.id == id) {
+            editedBag = null
+            return
+        }
+        val stored = st.beans.firstOrNull { it.id == id }
+        if (stored != null) {
+            editedBag = stored
+            return
+        }
+        val held = editedBag?.takeIf { it.id == id } ?: return
+        editedBag = null
+        if (deletedHere == id || st.editingBeanGone != null) return
+        val name = held.name.trim().ifEmpty { "This bag" }
+        updateUi { if (it.editingBeanId == id) it.copy(editingBeanGone = name) else it }
+        notify("“$name” was deleted elsewhere; your changes weren’t saved")
     }
 
     /** Start a brand-new bean in the full editor — stash a blank draft and point
      *  the editor at it. Added to the library only on Save (via [updateBean]). */
     fun startNewBean() {
         val draft = newBean(name = "", roasterId = null, roastLevel = null, roastedOn = null, nowMs = System.currentTimeMillis())
-        updateUi { it.copy(draftBean = draft, editingBeanId = draft.id) }
+        editedBag = null
+        updateUi { it.copy(draftBean = draft, editingBeanId = draft.id, editingBeanGone = null) }
     }
 
     /**
@@ -2811,23 +2881,54 @@ class LibraryController(
             appendLog("Add grinder failed: ${it.message}")
             return null
         } ?: return null
-        when (add.kind) {
-            coffee.crema.core.GrinderAddKind.Existing -> Unit
-            coffee.crema.core.GrinderAddKind.Created -> upsertGrinder(add.grinder)
-            coffee.crema.core.GrinderAddKind.Revived -> {
-                upsertGrinder(add.grinder)
-                notify("${add.grinder.name} is back, with its saved grinds")
-            }
+        if (add.kind == coffee.crema.core.GrinderAddKind.Existing) {
+            // Already one of yours: the message offers a second one of the model (follow-up 18).
+            val offer = AddAnotherOffer(name, catalogueId, add.grinder.name, ++addAnotherSeq)
+            updateUi { it.copy(addAnotherOffer = offer) }
+            return add.grinder
         }
+        return landGrinderAdd(add)
+    }
+
+    private var addAnotherSeq = 0L
+
+    /** A new or revived grinder lands: stored, and Brew's when none is active. */
+    private fun landGrinderAdd(add: coffee.crema.core.GrinderAdd): coffee.crema.core.Grinder {
+        upsertGrinder(add.grinder)
+        if (add.kind == coffee.crema.core.GrinderAddKind.Revived) notify("${add.grinder.name} is back, with its saved grinds")
         // With no grinder active, the one just added becomes Brew's (review 499):
         // on the device that owns the session; a remote's pick goes to its hub.
         val s = uiState()
-        if (add.kind != coffee.crema.core.GrinderAddKind.Existing && s.mirror == null && s.grinders.activeGrinder(s.activeGrinderId) == null) {
+        if (s.mirror == null && s.grinders.activeGrinder(s.activeGrinderId) == null) {
             updateUi { it.copy(activeGrinderId = add.grinder.id) }
             onGrinderSelected(add.grinder.id)
             pushConfig()
         }
         return add.grinder
+    }
+
+    /**
+     * "Add another" on the offer [seq] (#488 follow-up 18, core
+     * `add_another_grinder`): an archived grinder of that model comes back,
+     * else a new record "‹name› 2" with its own id and the same preset.
+     * Returns the record, or null when the offer has gone.
+     */
+    fun addAnotherGrinder(seq: Long, now: Long = System.currentTimeMillis()): coffee.crema.core.Grinder? {
+        val offer = uiState().addAnotherOffer?.takeIf { it.seq == seq } ?: return null
+        updateUi { st -> if (st.addAnotherOffer?.seq == seq) st.copy(addAnotherOffer = null) else st }
+        val add = runCatching { coffee.crema.beans.addAnotherGrinder(uiState().grinders, offer.name, offer.catalogueId, now) }.getOrElse {
+            appendLog("Add grinder failed: ${it.message}")
+            return null
+        } ?: return null
+        if (add.kind == coffee.crema.core.GrinderAddKind.Existing) return add.grinder
+        val out = landGrinderAdd(add)
+        if (add.kind == coffee.crema.core.GrinderAddKind.Created) notify("Added ${out.name}")
+        return out
+    }
+
+    /** The "Add another" offer [seq] went without the action. */
+    fun consumeAddAnotherOffer(seq: Long) {
+        updateUi { st -> if (st.addAnotherOffer?.seq == seq) st.copy(addAnotherOffer = null) else st }
     }
 
     /**
@@ -3115,6 +3216,8 @@ class LibraryController(
      */
     fun deleteBean(id: String, alsoOnVisualizer: Boolean = false) {
         val doomed = uiState().beans.firstOrNull { it.id == id }
+        // The editor's own Delete (or the list's): not "deleted elsewhere".
+        deletedHere = id
         val wasActive = uiState().activeBeanId == id
         editRows(
             { rows -> rows.copy(beans = rows.beans.filtered { it.id != id }) },
