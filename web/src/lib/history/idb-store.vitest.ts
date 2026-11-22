@@ -149,6 +149,28 @@ function memoryRoot() {
 	return { files, control, snapshotRoot: async () => root as unknown as FileSystemDirectoryHandle };
 }
 
+/**
+ * Web Locks, exclusive per name, that count the snapshot runs that ended: the
+ * day's write, its read-back, and its removals all run under the lock, so a
+ * test waits for them instead of sleeping.
+ */
+function countedLocks() {
+	const tails = new Map<string, Promise<unknown>>();
+	const ended = { snapshots: 0 };
+	const locks: LockManagerLike = {
+		request(name, _opts, run) {
+			const next = (tails.get(name) ?? Promise.resolve()).then(() => run(null));
+			tails.set(
+				name,
+				next.catch(() => {})
+			);
+			if (name === SNAPSHOT_LOCK) next.finally(() => ended.snapshots++).catch(() => {});
+			return next;
+		}
+	};
+	return { locks, ended };
+}
+
 /** The first `crema-history` write fails for quota; the row-only retry, and later ones, land. */
 function firstWriteFull() {
 	let failed = false;
@@ -908,9 +930,13 @@ describe('a store that is lost or can’t open', () => {
 		expect((await stored()).details.get(shots[1].id)!.samples).toHaveLength(4);
 	});
 
-	/** A store on `day`: whose saves write that day's copy. */
+	/**
+	 * A store on `day`: whose saves write that day's copy. Day 0 is a fixed
+	 * local noon, so a run that crosses midnight names the same copies.
+	 */
 	const dayClock = () => {
-		const c = { day: 0, now: () => Date.now() + c.day * 86_400_000 };
+		const noon = new Date(2026, 10, 22, 12).getTime();
+		const c = { day: 0, now: () => noon + c.day * 86_400_000 };
 		return c;
 	};
 
@@ -993,7 +1019,8 @@ describe('a store that is lost or can’t open', () => {
 		const shots = small(3);
 		await seedStore(shots);
 		const clock = dayClock();
-		const store = await boot({ snapshotRoot, now: clock.now });
+		const { locks, ended } = countedLocks();
+		const store = await boot({ snapshotRoot, now: clock.now, locks });
 		for (const day of [0, 1, 2]) {
 			clock.day = day;
 			store.setRating(shots[0].id, day + 1);
@@ -1006,14 +1033,16 @@ describe('a store that is lost or can’t open', () => {
 		control.failClose = true;
 		store.setRating(shots[0].id, 4);
 		await store.flushed();
-		await new Promise((r) => setTimeout(r, 30));
+		await until(() => ended.snapshots === 4);
+		expect(control.failClose).toBe(false);
 		for (const name of three) expect(files.has(name)).toBe(true);
 		expect((await store.snapshotInfo()).map((c) => c.name)).toEqual([...three].reverse());
 		// Day 4's lands: the oldest goes, and so does day 3's empty file.
 		clock.day = 4;
 		store.setRating(shots[0].id, 5);
 		await store.flushed();
-		await until(() => !files.has(three[0]));
+		// The whole run: the oldest goes first, day 3's empty file after it.
+		await until(() => ended.snapshots === 5);
 		expect([...files.keys()].sort()).toEqual([...three.slice(1), snapshotNameOf(clock.now())]);
 	});
 
@@ -1022,7 +1051,8 @@ describe('a store that is lost or can’t open', () => {
 		const shots = small(3);
 		await seedStore(shots);
 		const clock = dayClock();
-		const store = await boot({ snapshotRoot, now: clock.now });
+		const { locks, ended } = countedLocks();
+		const store = await boot({ snapshotRoot, now: clock.now, locks });
 		for (const day of [0, 1, 2]) {
 			clock.day = day;
 			store.setRating(shots[0].id, day + 1);
@@ -1034,7 +1064,10 @@ describe('a store that is lost or can’t open', () => {
 		control.cutShort = true;
 		store.setRating(shots[0].id, 4);
 		await store.flushed();
-		await new Promise((r) => setTimeout(r, 30));
+		// The day's write, its read-back and its removal have all run (a fixed
+		// sleep let a loaded run look before the cut-short copy was removed).
+		await until(() => ended.snapshots === 4);
+		expect(control.cutShort).toBe(false);
 		expect([...files.keys()].sort()).toEqual(three);
 		expect((await store.snapshotInfo()).map((c) => c.rows)).toEqual([3, 3, 3]);
 	});
