@@ -1,6 +1,7 @@
 package coffee.crema.ui
 
 import coffee.crema.core.Bean
+import coffee.crema.core.Grinder
 import coffee.crema.core.Roaster
 import coffee.crema.history.ShotRow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +41,8 @@ typealias BeanView = RowView<Bean>
 typealias BeanRows = Rows<Bean>
 typealias RoasterView = RowView<Roaster>
 typealias RoasterRows = Rows<Roaster>
+typealias GrinderView = RowView<Grinder>
+typealias GrinderRows = Rows<Grinder>
 
 private class ViewOf<T>(val rows: List<T>) : AbstractList<T>(), RowView<T> {
     override val size: Int get() = rows.size
@@ -76,7 +79,7 @@ fun <T> Rows<T>.with(next: List<T>): Rows<T> = EditOf(next)
 fun <T> Rows<T>.with(stale: RowView<T>): Rows<T> = error("unreachable")
 
 /** Everything [UiStore.edit] can change, at once. The shot history isn't here: its rows are the store's (#310 A3b). */
-data class LibraryRows(val beans: BeanRows, val roasters: RoasterRows)
+data class LibraryRows(val beans: BeanRows, val roasters: RoasterRows, val grinders: GrinderRows)
 
 /** Change rows in one atomic write: see [UiStore.edit]. */
 typealias EditRows = (rows: (LibraryRows) -> LibraryRows, rest: (MainUiState) -> MainUiState) -> Unit
@@ -100,17 +103,18 @@ class UiStore(initial: MainUiState) {
      */
     fun edit(rows: (LibraryRows) -> LibraryRows, rest: (MainUiState) -> MainUiState = { it }) {
         flow.update { current ->
-            val edited = rows(LibraryRows(current.beans.forEdit(), current.roasters.forEdit()))
+            val edited = rows(LibraryRows(current.beans.forEdit(), current.roasters.forEdit(), current.grinders.forEdit()))
             rest(current).copy(
                 beans = edited.beans.forState(),
                 roasters = edited.roasters.forState(),
+                grinders = edited.grinders.forState(),
             )
         }
     }
 
     private fun MainUiState.keepingRowsOf(current: MainUiState): MainUiState =
-        if (beans === current.beans && roasters === current.roasters) this
-        else copy(beans = current.beans, roasters = current.roasters)
+        if (beans === current.beans && roasters === current.roasters && grinders === current.grinders) this
+        else copy(beans = current.beans, roasters = current.roasters, grinders = current.grinders)
 
     private fun <T> RowView<T>.forEdit(): Rows<T> = EditOf((this as ViewOf<T>).rows)
 

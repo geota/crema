@@ -2,6 +2,7 @@ package coffee.crema.beans
 
 import coffee.crema.core.Bean
 import coffee.crema.core.BeanImportMerge
+import coffee.crema.core.Grinder
 import coffee.crema.core.Roaster
 import coffee.crema.core.exportCremaJsonl
 import coffee.crema.core.mergeBeanImportJson
@@ -33,10 +34,13 @@ fun beanLibraryJsonl(
     nowMs: Long,
     cremaVersion: String,
     export: (envelope: String, nowMs: Long, cremaVersion: String) -> String = ::exportCremaJsonl,
+    /** The grinder records (#488): a `grinder` line each, so the bags' saved grinds keep their grinders. */
+    grinders: List<Grinder> = emptyList(),
 ): String {
     val envelope = buildJsonObject {
         put("beans", interchangeJson.encodeToJsonElement(ListSerializer(Bean.serializer()), beans))
         put("roasters", interchangeJson.encodeToJsonElement(ListSerializer(Roaster.serializer()), roasters))
+        put("grinders", interchangeJson.encodeToJsonElement(ListSerializer(Grinder.serializer()), grinders))
         put("shots", JsonArray(emptyList()))
     }
     return export(envelope.toString(), nowMs, cremaVersion)
@@ -65,6 +69,9 @@ fun mergeBeanImport(
     libBeans: List<Bean>,
     libRoasters: List<Roaster>,
     core: (payload: String) -> String = ::mergeBeanImportJson,
+    /** The file's grinder records (#488), merged by id then by name like roasters. */
+    wireGrinders: List<Grinder> = emptyList(),
+    libGrinders: List<Grinder> = emptyList(),
 ): BeanImportMerge {
     val beans = ListSerializer(Bean.serializer())
     val roasters = ListSerializer(Roaster.serializer())
@@ -73,6 +80,8 @@ fun mergeBeanImport(
         put("incomingRoasters", interchangeJson.encodeToJsonElement(roasters, wireRoasters))
         put("libraryBeans", interchangeJson.encodeToJsonElement(beans, libBeans))
         put("libraryRoasters", interchangeJson.encodeToJsonElement(roasters, libRoasters))
+        put("incomingGrinders", interchangeJson.encodeToJsonElement(ListSerializer(Grinder.serializer()), wireGrinders))
+        put("libraryGrinders", interchangeJson.encodeToJsonElement(ListSerializer(Grinder.serializer()), libGrinders))
     }
     return interchangeJson.decodeFromString(BeanImportMerge.serializer(), core(payload.toString()))
 }

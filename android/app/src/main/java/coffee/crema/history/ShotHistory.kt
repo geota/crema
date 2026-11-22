@@ -130,6 +130,13 @@ data class StoredShot(
      */
     override val grinderModel: String? = null,
     /**
+     * The grinder record's id at shot start (#488, review F4), next to the
+     * [grinderModel] name snapshot: lookups use the id, display the name.
+     * Mirrors core `StoredShot.grinder_id`; null on older rows (matched by
+     * name) and for a shot with no grinder.
+     */
+    override val grinderId: String? = null,
+    /**
      * The shot's telemetry — the core's full record since F10 (no 200-point
      * cut, so a re-upload reproduces Visualizer's telemetry hash). Older
      * records carry a downsampled slice. Persisted in a per-shot series file,

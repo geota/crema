@@ -17,6 +17,7 @@ class RemotePolicyTest {
         MachineCommand.StartDescale, MachineCommand.StartClean, MachineCommand.CancelMaintenance, MachineCommand.TareScale,
         MachineCommand.SetActiveProfile("p"), MachineCommand.SetActiveBean("b"), MachineCommand.SetStopOnWeight(true),
         MachineCommand.SetAutoTare(true), MachineCommand.AdjustBrew(18.0, 36.0, 93.0, null), MachineCommand.ResetBrew,
+        MachineCommand.SetActiveGrinder("g"), MachineCommand.QuickSave(null, asNew = false),
     ) + QcField.entries.map { MachineCommand.SetQc(it, 1f) }
 
     @Test

@@ -10,7 +10,9 @@ package coffee.crema.machine
  */
 fun MachineCommand.Relayable.sentByRemotes(): Boolean = when (this) {
     MachineCommand.StartShot, is MachineCommand.StateRequest, MachineCommand.CancelMaintenance, MachineCommand.TareScale -> true
-    is MachineCommand.SetActiveProfile, is MachineCommand.SetActiveBean, is MachineCommand.SetStopOnWeight,
+    // Save writes the hub's own bag and profile (review F8).
+    is MachineCommand.QuickSave -> true
+    is MachineCommand.SetActiveProfile, is MachineCommand.SetActiveBean, is MachineCommand.SetActiveGrinder, is MachineCommand.SetStopOnWeight,
     is MachineCommand.SetAutoTare, is MachineCommand.AdjustBrew, MachineCommand.ResetBrew -> true
     is MachineCommand.SetQc -> field.sentByRemotes()
 }

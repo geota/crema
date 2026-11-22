@@ -57,7 +57,7 @@ data class PhoneDest(val route: String, val icon: String, val label: String)
 
 val CremaPhoneDestinations = listOf(
     PhoneDest("brew", "coffee", "Brew"),
-    PhoneDest("scale", "scales", "Scale"),
+    PhoneDest("scale", "scales", "Devices"),
     PhoneDest("profiles", "list-bullets", "Profiles"),
     PhoneDest("beans", "coffee-bean", "Beans"),
     PhoneDest("history", "chart-line", "History"),

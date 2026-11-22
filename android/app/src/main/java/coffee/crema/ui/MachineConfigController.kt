@@ -46,8 +46,10 @@ internal class MachineConfigController(
     private val pushConfig: () -> Unit,
     private val profileJson: (String) -> String?,
     private val persistLibrary: () -> Unit,
-    /** Load the profile linked to the bean just activated, if any. */
-    private val maybeLoadLinkedProfile: (String) -> Unit,
+    /** A bag was selected: resolve the profile, grinder and grind it brings (#488, review F6). */
+    private val onBagSelected: (String) -> Unit,
+    /** A grinder was selected: Brew's grind takes the pick order (#488). */
+    private val onGrinderSelected: (String?) -> Unit = {},
     /** Push the stop targets from a state, the desired profile after a delay in ms. */
     private val pushStopTargets: (state: MainUiState) -> Unit,
     private val refreshStopTargetProjection: () -> Unit,
@@ -111,10 +113,15 @@ internal class MachineConfigController(
             is MachineCommand.SetActiveBean -> {
                 persistLibrary()
                 pushConfig() // bean activation persists via the library, not prefs
-                // Linked-profile auto-load (web activateBean parity). Only user acts
-                // reach this — boot/library restore writes activeBeanId directly —
-                // so firing here matches the "explicit activation only" rule.
-                if (cmd.id != null) maybeLoadLinkedProfile(cmd.id)
+                // The one selection change (linked profile, starred grinder, its
+                // grind; review F6). Only user acts reach this — boot/library
+                // restore writes activeBeanId directly — so firing here matches
+                // the "explicit activation only" rule.
+                if (cmd.id != null) onBagSelected(cmd.id)
+            }
+            is MachineCommand.SetActiveGrinder -> {
+                onGrinderSelected(cmd.id) // persists the pointer; Brew's grind takes the pick order
+                pushConfig()
             }
             is MachineCommand.SetStopOnWeight -> {
                 runCatching { bridge.setStopOnWeight(cmd.on) }.onFailure {

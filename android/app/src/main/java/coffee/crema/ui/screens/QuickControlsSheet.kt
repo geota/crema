@@ -154,6 +154,13 @@ fun QuickControlsSheet(
      *  else a generic mid-range default. */
     qcGrindSeed: Double = 4.2,
     onGrind: (Double) -> Unit,
+    /** The active grinder's scale (#488): the grind stepper's range, step and unit. */
+    grindScale: coffee.crema.core.GrindScale = coffee.crema.beans.DEFAULT_GRIND_SCALE,
+    /** The bag's saved grind for the active grinder: its chip gets a copper ring. */
+    savedGrind: Double? = null,
+    /** "● Bag 4.2" in the Grind card's label row while the dial differs (#488). */
+    unsavedGrind: coffee.crema.ui.UnsavedGrind? = null,
+    unsavedGrindExplanation: String? = null,
     onToggleChannel: (String, Boolean) -> Unit,
     onDismiss: () -> Unit,
     /** Each machine or session control's gate (spec §7.6): on a remote the
@@ -233,13 +240,17 @@ fun QuickControlsSheet(
                             label = "Save as new…",
                         )
                     }
-                    CremaButton(
-                        onClick = { if (quickSave.needsName) savePrompt = QuickSavePrompt.Copy else onQuickSave(null, false) },
-                        variant = CremaButtonVariant.Text,
-                        icon = "bookmark-simple",
-                        label = quickSave.label,
-                        enabled = quickSave.enabled,
-                    )
+                    Box {
+                        CremaButton(
+                            onClick = { if (quickSave.needsName) savePrompt = QuickSavePrompt.Copy else onQuickSave(null, false) },
+                            variant = CremaButtonVariant.Text,
+                            icon = "bookmark-simple",
+                            label = quickSave.label,
+                            enabled = quickSave.enabled,
+                        )
+                        // The dot: Save includes the grind (#488).
+                        if (quickSave.includesGrind) coffee.crema.ui.components.SaveGrindDot(Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 4.dp))
+                    }
                     // Always visible like the web QuickSheet; enabled only once a
                     // tweak exists so it never reads as a dead control.
                     CremaButton(onClick = onResetBrew, variant = CremaButtonVariant.Text, icon = "arrow-counter-clockwise", label = "Reset", enabled = brewParams != null && brewGate.editable)
@@ -294,17 +305,26 @@ fun QuickControlsSheet(
                     CremaStepper(
                         modifier = m,
                         value = if (doseGrindMode == DoseGrindMode.Dose) dose else grind,
-                        unit = if (doseGrindMode == DoseGrindMode.Dose) "g" else null,
-                        min = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MIN_G else QcBounds.GRIND_MIN,
-                        max = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MAX_G else QcBounds.GRIND_MAX,
-                        step = 0.1,
+                        unit = if (doseGrindMode == DoseGrindMode.Dose) "g" else grindScale.unit.takeIf { it.isNotBlank() },
+                        // Grind: the active grinder's scale (#488); a typed value outside it is kept.
+                        min = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MIN_G else minOf(grindScale.min, grindScale.max).toDouble(),
+                        max = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MAX_G else maxOf(grindScale.min, grindScale.max).toDouble(),
+                        step = if (doseGrindMode == DoseGrindMode.Dose) 0.1 else grindScale.step.toDouble().takeIf { it.isFinite() && it > 0 } ?: 0.1,
                         fmt = niceFmt,
-                        chips = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 17.0, 18.0, 19.0, 20.0) else listOf(3.8, 4.0, 4.2, 4.4, 4.6),
+                        chips = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 17.0, 18.0, 19.0, 20.0) else coffee.crema.ui.grindChips(savedGrind ?: grind, grindScale),
+                        chipRing = if (doseGrindMode == DoseGrindMode.Grind && savedGrind != null) { c -> kotlin.math.abs(c - savedGrind) < 1e-6 } else null,
+                        clampTyped = doseGrindMode == DoseGrindMode.Dose,
                         onChange = { if (doseGrindMode == DoseGrindMode.Dose) onAdjustBrew(it, yieldOut, brewTemp, preinfOverride) else onGrind(it) },
                         style = CremaStepperStyle.Boxed,
                         gate = doseGrindGate,
                         header = {
-                            CremaSplitLabel(prefix = "", options = listOf(SplitOption("dose", "Dose"), SplitOption("grind", "Grind")), value = doseGrindMode.value, onChange = { doseGrindMode = DoseGrindMode.of(it) })
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.weight(1f)) {
+                                    CremaSplitLabel(prefix = "", options = listOf(SplitOption("dose", "Dose"), SplitOption("grind", "Grind")), value = doseGrindMode.value, onChange = { doseGrindMode = DoseGrindMode.of(it) })
+                                }
+                                // "● Bag 4.2" where Yield shows 1:2, while the grind differs from the bag's.
+                                if (unsavedGrind != null) coffee.crema.ui.components.UnsavedGrindMarker(unsavedGrind, unsavedGrindExplanation)
+                            }
                         },
                     )
                 },

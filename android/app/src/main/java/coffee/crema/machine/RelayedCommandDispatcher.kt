@@ -94,6 +94,8 @@ class RelayedCommandDispatcher(
         MachineCommand.StartFlush -> "started a flush"
         MachineCommand.TareScale -> "tared the scale"
         MachineCommand.StartDescale, MachineCommand.StartClean, MachineCommand.CancelMaintenance -> null
+        // Its own message reaches the hub's user; the snapshot shows the rest.
+        is MachineCommand.QuickSave -> null
         is MachineCommand.Config -> null
     }
 }

@@ -50,11 +50,12 @@ class SettingsRegistryTest {
     @Test
     fun `the groups and counts match the spec`() {
         // 87: relay v4 R5 removed `pairedDevices` (C), the v3 pairing list; 91:
-        // the hot-water modes added the dose rows A22–A25.
-        assertEquals(95, Setting.entries.size)
+        // the hot-water modes added the dose rows A22–A25; 97: #488 added the
+        // active grinder (B) and the grind auto-save switch (C).
+        assertEquals(97, Setting.entries.size)
         assertEquals(25, Setting.entries.count { it.group == SettingGroup.A_MACHINE })
-        assertEquals(13, Setting.entries.count { it.group == SettingGroup.B_SESSION })
-        assertEquals(57, Setting.entries.count { it.group == SettingGroup.C_PERSONAL })
+        assertEquals(14, Setting.entries.count { it.group == SettingGroup.B_SESSION })
+        assertEquals(58, Setting.entries.count { it.group == SettingGroup.C_PERSONAL })
         for (s in Setting.entries) {
             if (s.group == SettingGroup.C_PERSONAL) {
                 assertEquals(OnRemote.LOCAL, s.onRemote, "$s")

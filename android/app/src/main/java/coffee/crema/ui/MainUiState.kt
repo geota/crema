@@ -172,6 +172,9 @@ data class MainUiState(
     /** Non-null while a Quick Controls Save that updated a profile in place
      *  can be undone — MainActivity shows it in an action snackbar ("Undo"). */
     val quickSaveUndo: UndoNotice? = null,
+    /** Non-null while a bag selection's one change (profile, grinder, grind;
+     *  review F6) can be undone — MainActivity shows it with "Undo". */
+    val bagSelectUndo: UndoNotice? = null,
     /** Non-null when a store file was unreadable at load and was kept aside
      *  ("Couldn't read your shot history; …") — MainActivity shows it once in an
      *  action snackbar whose "Share" sends the kept-aside copies. */
@@ -272,6 +275,9 @@ data class MainUiState(
      *  bell). Null = never chosen — read through [coffee.crema.ui.brewlog.BrewCueDefaults]. */
     val brewCueSound: Boolean? = null,
     val brewCueHaptics: Boolean? = null,
+    /** Devices → Grinder "Save each shot's grind to its bag" (#488): personal,
+     *  per device. Null = never set → off. */
+    val grindAutoSave: Boolean? = null,
     // ── Machine sleep & screensaver (Settings → Display) ─────────────────────
     /** "Sleep after": idle minutes before Crema puts the DE1 to sleep, 0 =
      *  Never. The core's idle-sleep timer owns the decision (see [IdleSleepRunner]);
@@ -402,6 +408,13 @@ data class MainUiState(
     val roasters: RoasterView = rowViewOf(),
     /** The active bean id — the Brew bean block + burn-down, or null. */
     val activeBeanId: String? = null,
+    /** The grinder records (#488, review F3): bean-library rows next to the
+     *  roasters, archived and tombstoned ones included (pickers show the live
+     *  ones, [liveGrinders]). */
+    val grinders: GrinderView = rowViewOf(),
+    /** This device's active grinder (a per-device pointer like [activeBeanId],
+     *  never in backups); null, or an id no live grinder has, = no grinder. */
+    val activeGrinderId: String? = null,
     /** The bean currently open in the editor (`bean-edit` route), or null. */
     val editingBeanId: String? = null,
     /** The roaster open in the pushed `roaster-edit` route (phone), or null =
@@ -566,6 +579,12 @@ data class MainUiState(
     /** The hub's active bag is empty (#302): a remote's own copy of a bag can't
      *  say. Projected from [mirror]. */
     val mirroredBagEmpty: Boolean = false,
+    /** A remote's copy of the hub's active grinder, from its snapshot (name and
+     *  scale, display only; review F3): the hub's records aren't in this
+     *  device's library. Null on a hub or a device on its own. */
+    val mirroredGrinder: coffee.crema.core.Grinder? = null,
+    /** Devices' open tab: "scale" or "grinder" (#488, the web's `?tab=grinder`). In memory only. */
+    val devicesTab: String = "scale",
     /** A debit just emptied a bag: the prompt after the shot (#302). */
     val bagEmptyPrompt: coffee.crema.beans.BagEmptyPrompt? = null,
     /** A user Disconnect while the machine pours waits on this question (#320). */

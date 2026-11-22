@@ -9,6 +9,19 @@ import coffee.crema.ui.quickSavePlan
 import coffee.crema.ui.UNKNOWN_VALUE
 import coffee.crema.ui.awaitingHubValues
 import coffee.crema.ui.gate
+import coffee.crema.ui.components.CremaButton
+import coffee.crema.ui.components.CremaButtonVariant
+import coffee.crema.ui.activeBag
+import coffee.crema.ui.activeGrinder
+import coffee.crema.ui.activeGrindScale
+import coffee.crema.ui.brewGrind
+import coffee.crema.ui.grindSeed
+import coffee.crema.ui.liveGrinders
+import coffee.crema.ui.savedGrindForBrew
+import coffee.crema.ui.unsavedGrind
+import coffee.crema.ui.unsavedGrindExplanation
+import coffee.crema.beans.grindLabel
+import coffee.crema.beans.savedGrind
 import coffee.crema.ui.fmt
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -217,6 +230,7 @@ fun BrewScreen(
                     if (activeBean != null) { vm.startEditBean(activeBean.id); onNav("bean-edit") }
                     else onNav("beans")
                 },
+                grinderBlock = { GrinderBlock(vm, ui, onNav) },
             )
             EmptyBagBanner(ui, onSelectBag = vm::setActiveBean, Modifier.padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 4.dp))
             Row(
@@ -499,10 +513,12 @@ fun BrewScreen(
                     onFlushTime = { vm.setQcFlushTime(it.toFloat()) },
                     onFlushTemp = { vm.setQcFlushTemp(it.toFloat()) },
                     qcGrind = ui.qcGrind?.toDouble(),
-                    qcGrindSeed = remember(ui.activeBeanId, ui.beans) {
-                        ui.beans.firstOrNull { it.id == ui.activeBeanId }
-                            ?.grinderSetting?.trim()?.replace(',', '.')?.toDoubleOrNull()
-                    } ?: 4.2,
+                    // The bag's saved grind for the active grinder (#488), on its scale.
+                    qcGrindSeed = ui.grindSeed(),
+                    grindScale = ui.activeGrindScale(),
+                    savedGrind = coffee.crema.beans.grindDouble(ui.savedGrindForBrew()?.grind),
+                    unsavedGrind = ui.unsavedGrind(),
+                    unsavedGrindExplanation = ui.unsavedGrindExplanation(),
                     onGrind = { vm.setQcGrind(it.toFloat()) },
                     onToggleChannel = vm::toggleChartChannel,
                     onDismiss = { quickOpen = false },
@@ -543,6 +559,8 @@ private fun BrewHeader(
     onOpenBeans: () -> Unit,
     onNewBean: () -> Unit,
     onEditBean: () -> Unit,
+    /** The Grinder block between Profile and Bean (#488, board WideBrew2). */
+    grinderBlock: @Composable () -> Unit = {},
 ) {
     Row(
         modifier = Modifier
@@ -551,7 +569,8 @@ private fun BrewHeader(
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        ProfileBlock(
+        // Profile | Grinder | Bean, evenly spaced, today's divider between each.
+        Box(Modifier.weight(1f)) { ProfileBlock(
             active = active,
             brewParams = brewParams,
             profiles = profiles,
@@ -563,8 +582,9 @@ private fun BrewHeader(
             onOpenLibrary = onOpenProfiles,
             onNew = onNewProfile,
             onEdit = onEditProfile,
-        )
-        Spacer(Modifier.weight(1f))
+        ) }
+        Box(Modifier.width(1.dp).height(44.dp).background(MaterialTheme.colorScheme.outlineVariant))
+        Box(Modifier.weight(1f)) { grinderBlock() }
         Box(Modifier.width(1.dp).height(44.dp).background(MaterialTheme.colorScheme.outlineVariant))
         BeanBlock(
             activeBean = activeBean,
@@ -768,11 +788,7 @@ private fun BeanBlock(
                         roastBand(activeBean.roastLevel?.toInt()),
                         activeBean.roastType?.string?.replaceFirstChar { it.uppercase() },
                         activeBean.mix?.string?.replaceFirstChar { it.uppercase() },
-                        activeBean.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" },
-                        // Grinder NAME at a glance (issue #16): the bean's own, else
-                        // the equipment default — web BeanContextCard precedence.
-                        activeBean.grinder?.takeIf { it.isNotBlank() }
-                            ?: equipmentGrinder.takeIf { it.isNotBlank() },
+                        // The grind and the grinder are the Grinder block's now (#488).
                     ).joinToString(" · ")
                     if (spec.isNotBlank()) add(HeaderBlockLine(spec, HeaderLineStyle.Spec))
                     // .bh-tags — custom tags joined " · ".
@@ -844,6 +860,96 @@ private fun BeanBlock(
                     onNew = { open = false; onNew() },
                     onEdit = { open = false; onEdit() },
                 )
+            }
+        }
+    }
+}
+
+/**
+ * The Brew header's Grinder block (#488, boards WideBrew2, WideBrewStar,
+ * WideGrindUnsavedRest): eyebrow "Grinder", the active grinder (★ when it's
+ * the bag's), "Grind 480 μm" with the unsaved-grind marker, opening a picker
+ * of the live grinders with what each has saved for this bag. Shown with one
+ * grinder too; "No grinder" with none.
+ */
+@Composable
+private fun GrinderBlock(vm: MainViewModel, ui: coffee.crema.ui.MainUiState, onNav: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    var adding by remember { mutableStateOf(false) }
+    val grinder = ui.activeGrinder()
+    val bag = ui.activeBag()
+    val scale = ui.activeGrindScale()
+    val starred = grinder != null && bag?.savedGrind(grinder.id)?.starred == true
+    val marker = ui.unsavedGrind()
+    val gate = ui.gate(coffee.crema.settings.Setting.ACTIVE_GRINDER)
+    Box {
+        CremaHeaderBlock(
+            eyebrow = "Grinder",
+            title = grinder?.name ?: "No grinder",
+            openTint = open,
+            onClick = { open = !open },
+            titleTrailing = if (starred) {
+                { PhIcon("star-fill", sizeDp = 13, tint = MaterialTheme.colorScheme.primary, contentDescription = "this bag's grinder") }
+            } else {
+                null
+            },
+            lines = emptyList(),
+            extra = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        ui.brewGrind()?.let { "Grind ${grindLabel(it, scale)}" } ?: "Grind —",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                    if (marker != null) coffee.crema.ui.components.UnsavedGrindMarker(marker, ui.unsavedGrindExplanation())
+                }
+            },
+        )
+        CremaAnchoredPopup(expanded = open, onDismiss = { open = false; adding = false }) {
+            PopCard {
+                PickerLead(listOfNotNull("Your grinders", bag?.name).joinToString(" · "))
+                val lastGrinds = remember(bag?.id, ui.history.version) { bag?.let { vm.lastGrindsForBag(it.id) }.orEmpty() }
+                val rows = coffee.crema.ui.grinderPickRows(ui.liveGrinders, bag, lastGrinds)
+                PopList {
+                    if (rows.isEmpty()) {
+                        Text("No grinders yet: add yours to give Brew its grind range.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
+                    }
+                    rows.forEach { row ->
+                        coffee.crema.ui.components.GrinderPickerRow(
+                            row = row,
+                            active = row.grinder.id == grinder?.id,
+                            onClick = { open = false; if (gate.editable) vm.setActiveGrinder(row.grinder.id) },
+                        )
+                    }
+                    if (grinder != null) {
+                        coffee.crema.ui.components.GrinderPickerRow(
+                            row = coffee.crema.ui.GrinderPickRow(grinder.copy(name = "No grinder"), starred = false, meta = "The default scale, 0–20"),
+                            active = false,
+                            onClick = { open = false; if (gate.editable) vm.setActiveGrinder(null) },
+                        )
+                    }
+                }
+                if (adding) {
+                    coffee.crema.ui.components.GrinderAddBox(
+                        grinders = ui.grinders,
+                        excludeIds = ui.liveGrinders.map { it.id },
+                        modifier = Modifier.padding(top = 10.dp),
+                        onPick = { pick ->
+                            vm.resolveGrinderPick(pick)?.let { vm.setActiveGrinder(it.id) }
+                            adding = false
+                            open = false
+                        },
+                    )
+                }
+                Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (bag != null) {
+                        CremaButton(onClick = { open = false; vm.startEditBean(bag.id); onNav("bean-edit") }, variant = CremaButtonVariant.Text, label = "Edit this bag's grinds")
+                    }
+                    Spacer(Modifier.weight(1f))
+                    CremaButton(onClick = { open = false; vm.openDevicesTab("grinder"); onNav("scale") }, variant = CremaButtonVariant.Text, label = "Devices")
+                    PopFootIcon(icon = "plus", onClick = { adding = !adding })
+                }
             }
         }
     }

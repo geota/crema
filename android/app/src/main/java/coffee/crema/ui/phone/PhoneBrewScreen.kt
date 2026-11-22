@@ -71,6 +71,14 @@ import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.rankProfilesForPicker
 import coffee.crema.beans.rankBeansForPicker
 import coffee.crema.ui.MainUiState
+import coffee.crema.ui.activeBag
+import coffee.crema.ui.activeGrinder
+import coffee.crema.ui.activeGrindScale
+import coffee.crema.ui.brewGrind
+import coffee.crema.ui.gate
+import coffee.crema.ui.liveGrinders
+import coffee.crema.ui.unsavedGrind
+import coffee.crema.ui.unsavedGrindExplanation
 import coffee.crema.ui.remoteBrewCue
 import coffee.crema.ui.activeProfile
 import coffee.crema.ui.MainViewModel
@@ -153,9 +161,11 @@ fun PhoneBrewScreen(
                     beanLine = remember(
                         ui.activeBeanId, ui.beans, ui.roasters, ui.mirroredBeanSummary,
                     ) { beanLine(ui) },
-                    specLine = remember(
-                        ui.activeBeanId, ui.beans, ui.grinderModel,
-                    ) { beanSpecLine(ui) },
+                    // "Grind 480 μm · Motto 80" (#488): the grind with its unsaved-grind
+                    // marker, then the active grinder (board PhoneGrindUnsavedRest).
+                    specLine = beanSpecLine(ui),
+                    specMarker = ui.unsavedGrind()?.let { m -> { coffee.crema.ui.components.UnsavedGrindMarker(m, ui.unsavedGrindExplanation()) } },
+                    specSuffix = ui.activeGrinder()?.name?.let { " · $it" },
                     freshLabel = when {
                         activeBean == null -> null
                         frozen -> "Frozen"
@@ -171,6 +181,9 @@ fun PhoneBrewScreen(
                         onSelectBean = { vm.setActiveBean(it); swapOpen = false },
                         onAllProfiles = { swapOpen = false; onNav("profiles") },
                         onAllBeans = { swapOpen = false; onNav("beans") },
+                        onSelectGrinder = { vm.setActiveGrinder(it); swapOpen = false },
+                        onManageGrinders = { swapOpen = false; vm.openDevicesTab("grinder"); onNav("scale") },
+                        lastGrinds = { id -> vm.lastGrindsForBag(id) },
                         onDismiss = { swapOpen = false },
                     )
                 }
@@ -346,15 +359,12 @@ internal fun beanLine(ui: MainUiState): String {
     return listOfNotNull(roaster, bean.name).joinToString(" · ")
 }
 
-/** "Grind N · Grinder" strip bottom row (issue #16 at-a-glance), fainter —
- *  the bean's own grinder, else the equipment default (web BeanContextCard
- *  precedence). Null when there is nothing to show. */
+/** The strip's bottom row's grind (#488): "Grind 480 μm", Brew's grind on
+ *  the active grinder's scale; the grinder's name follows it ([ProfileStrip]'s
+ *  suffix), after the unsaved-grind marker. Null with neither a grind nor a grinder. */
 internal fun beanSpecLine(ui: MainUiState): String? {
-    val bean = ui.beans.firstOrNull { it.id == ui.activeBeanId } ?: return null
-    val grind = bean.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" }
-    val grinder = bean.grinder?.takeIf { it.isNotBlank() }
-        ?: ui.grinderModel.takeIf { it.isNotBlank() }
-    return listOfNotNull(grind, grinder).joinToString(" · ").ifBlank { null }
+    val grind = ui.brewGrind()?.let { "Grind ${coffee.crema.beans.grindLabel(it, ui.activeGrindScale())}" }
+    return grind ?: if (ui.activeGrinder() != null) "Grind —" else null
 }
 
 // ── Profile strip (proto .pf-profilestrip) ───────────────────────────────────
@@ -369,6 +379,9 @@ internal fun ProfileStrip(
      *  .bh-spec tier); its own row so neither line ellipsizes the other
      *  (user direction: the single line cut off on phone widths). */
     specLine: String? = null,
+    /** After [specLine]: Brew's unsaved-grind marker (#488), then [specSuffix] (" · Motto 80"). */
+    specMarker: (@Composable () -> Unit)? = null,
+    specSuffix: String? = null,
     /** "Nd off roast" / "Frozen", or null when the roast date is unknown —
      *  rendered as the tablet/web colour pip + label on the TOP row. */
     freshLabel: String?,
@@ -408,12 +421,24 @@ internal fun ProfileStrip(
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 if (specLine != null) {
-                    Text(
-                        specLine,
-                        style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.5.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            specLine,
+                            style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.5.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                        specMarker?.invoke()
+                        if (specSuffix != null) {
+                            Text(
+                                specSuffix.removePrefix(" · ").let { if (specMarker != null) "· $it" else "· $it" },
+                                style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.5.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                        }
+                    }
                 }
             }
             PhIcon("caret-down", sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -430,6 +455,9 @@ private fun SwapDropdown(
     onAllProfiles: () -> Unit,
     onAllBeans: () -> Unit,
     onDismiss: () -> Unit,
+    onSelectGrinder: (String?) -> Unit = {},
+    onManageGrinders: () -> Unit = {},
+    lastGrinds: (String) -> List<coffee.crema.core.LastGrind> = { emptyList() },
 ) {
     val ddWidth = coffee.crema.ui.windowContentDpSize().width - CremaEdge * 2
     CremaAnchoredPopup(expanded = true, onDismiss = onDismiss) {
@@ -511,6 +539,26 @@ private fun SwapDropdown(
                 if (beans.isEmpty()) {
                     Text(
                         "No beans yet — add a bag in Beans.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    )
+                }
+                // Grinder (#488, board PhoneBrew2): the live grinders with what
+                // each has saved for the bag, under Profile and Bean.
+                HorizontalDivider(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                DdSectionHead("Grinder", "Manage grinders →", onManageGrinders)
+                val bag = ui.activeBag()
+                val bagGrinds = remember(bag?.id, ui.history.version) { bag?.let { lastGrinds(it.id) }.orEmpty() }
+                val rows = coffee.crema.ui.grinderPickRows(ui.liveGrinders, bag, bagGrinds)
+                val activeGrinder = ui.activeGrinder()
+                val gate = ui.gate(coffee.crema.settings.Setting.ACTIVE_GRINDER)
+                rows.forEach { row ->
+                    coffee.crema.ui.components.GrinderPickerRow(row, active = row.grinder.id == activeGrinder?.id, onClick = { if (gate.editable) onSelectGrinder(row.grinder.id) })
+                }
+                if (rows.isEmpty()) {
+                    Text(
+                        "No grinders yet — add yours in Devices.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),

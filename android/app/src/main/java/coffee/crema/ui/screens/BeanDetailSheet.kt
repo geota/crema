@@ -79,6 +79,8 @@ fun BeanDetailSheet(
     onLogBrew: (() -> Unit)? = null,
     /** This bag's brews' doses, g, newest first — the "≈N brews" estimate. */
     recentDosesG: List<Float> = emptyList(),
+    /** The grinder records, for the bag's saved grinds (#488). */
+    grinders: List<coffee.crema.core.Grinder> = emptyList(),
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
     var photoOpen by remember { mutableStateOf(false) }
@@ -158,6 +160,7 @@ fun BeanDetailSheet(
                             .padding(horizontal = 18.dp, vertical = 14.dp),
                     ) {
                         BeanDetailContent(
+                            grinders = grinders,
                             bean = bean,
                             roasterName = roasterName,
                             linkedProfileName = linkedProfileName,

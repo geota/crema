@@ -41,6 +41,7 @@ interface ShotMeta {
     val barista: String?
     val drinker: String?
     val grinderModel: String?
+    val grinderId: String?
     val tags: List<String>
     val preinfuseTargetS: Float?
     val stopOnWeight: Boolean?
@@ -84,6 +85,7 @@ data class ShotRow(
     override val barista: String? = null,
     override val drinker: String? = null,
     override val grinderModel: String? = null,
+    override val grinderId: String? = null,
     override val tags: List<String> = emptyList(),
     override val preinfuseTargetS: Float? = null,
     override val stopOnWeight: Boolean? = null,
@@ -112,7 +114,7 @@ fun StoredShot.toRow(summary: ShotSummary): ShotRow = ShotRow(
     id = id, completedAtMs = completedAtMs, durationMs = durationMs, yieldG = yieldG, doseG = doseG,
     bagDebitG = bagDebitG, grindSetting = grindSetting, yieldTargetG = yieldTargetG, peakPressure = peakPressure,
     peakTemp = peakTemp, peakWeightG = peakWeightG, profileName = profileName, profileId = profileId, bean = bean, rating = rating,
-    notes = notes, nextPlan = nextPlan, barista = barista, drinker = drinker, grinderModel = grinderModel,
+    notes = notes, nextPlan = nextPlan, barista = barista, drinker = drinker, grinderModel = grinderModel, grinderId = grinderId,
     tags = tags, preinfuseTargetS = preinfuseTargetS, stopOnWeight = stopOnWeight, autoTare = autoTare,
     stopReason = stopReason, stopEstimated = stopEstimated, privacy = privacy, visualizerId = visualizerId,
     decentId = decentId, visualizerUpdatedAt = visualizerUpdatedAt, pinned = pinned, machineSerial = machineSerial,
@@ -135,7 +137,7 @@ fun ShotRow.withHeavy(
     bagDebitG = bagDebitG, grindSetting = grindSetting, yieldTargetG = yieldTargetG, peakPressure = peakPressure,
     peakTemp = peakTemp, peakWeightG = peakWeightG, profileName = profileName, profileId = profileId, profile = profile, bean = bean,
     rating = rating, notes = notes, nextPlan = nextPlan, barista = barista, drinker = drinker,
-    grinderModel = grinderModel, samples = samples, tags = tags, preinfuseTargetS = preinfuseTargetS,
+    grinderModel = grinderModel, grinderId = grinderId, samples = samples, tags = tags, preinfuseTargetS = preinfuseTargetS,
     stopOnWeight = stopOnWeight, autoTare = autoTare, stopReason = stopReason, stopEstimated = stopEstimated,
     privacy = privacy, visualizerId = visualizerId, decentId = decentId, visualizerUpdatedAt = visualizerUpdatedAt,
     pinned = pinned, machineSerial = machineSerial, machineFirmware = machineFirmware, machineModel = machineModel,

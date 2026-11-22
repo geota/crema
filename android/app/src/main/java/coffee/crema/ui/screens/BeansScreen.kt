@@ -511,6 +511,7 @@ fun BeansScreen(
                 shotCount = shots.size,
                 recentShots = shots.take(5).map { shotRowSummary(it) },
                 recentDosesG = shots.map { it.doseG ?: 0f },
+                grinders = ui.grinders,
                 onLogBrew = { vm.openLogBrew(coffee.crema.ui.brewlog.BrewLogOwner.BEANS, beanId = bean.id) },
                 isActive = bean.id == ui.activeBeanId,
                 onDismiss = { detailBeanId = null },

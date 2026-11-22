@@ -3,6 +3,7 @@ package coffee.crema.beans
 import android.content.Context
 import coffee.crema.core.Bean
 import coffee.crema.core.BeanOrigin
+import coffee.crema.core.Grinder
 import coffee.crema.core.Roaster
 import coffee.crema.core.duplicateBeanJson
 import coffee.crema.core.setBeanFrozenJson
@@ -31,12 +32,18 @@ import java.util.UUID
  * suspend API without touching callers.
  */
 
-/** The persisted library — beans + the roaster directory + the active selection. */
+/** The persisted library — beans + the roaster directory + the grinder
+ *  records (#488, review F3), and this device's active bag and grinder. */
 @Serializable
 data class BeanLibrary(
     val beans: List<Bean> = emptyList(),
     val roasters: List<Roaster> = emptyList(),
     val activeBeanId: String? = null,
+    /** The grinder records (#488): library rows next to the roasters, archived
+     *  and tombstoned ones included. Absent in files from before #488. */
+    val grinders: List<Grinder> = emptyList(),
+    /** This device's active grinder, a pointer like [activeBeanId]; null = none. */
+    val activeGrinderId: String? = null,
 )
 
 /** File-backed JSON persistence for [BeanLibrary] (`filesDir/beanLibrary.json`). */

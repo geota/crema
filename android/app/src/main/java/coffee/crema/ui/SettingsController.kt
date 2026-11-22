@@ -69,6 +69,7 @@ internal class SettingsController(
             keepScreenOnBrew = p.keepScreenOnBrew,
             brewCueSound = p.brewCueSound,
             brewCueHaptics = p.brewCueHaptics,
+            grindAutoSave = p.grindAutoSave,
             idleSleepMin = p.idleSleepMin ?: DEFAULT_IDLE_SLEEP_MIN,
             screensaverAfterMin = p.screensaverAfterMin,
             wakeMachineWithSaver = p.wakeMachineWithSaver,
@@ -147,6 +148,7 @@ internal class SettingsController(
             keepScreenOnBrew = p.keepScreenOnBrew,
             brewCueSound = p.brewCueSound,
             brewCueHaptics = p.brewCueHaptics,
+            grindAutoSave = p.grindAutoSave,
             grinderModel = p.grinderModel,
             baristaName = p.baristaName,
             showDebugPanel = p.showDebugPanel,
@@ -193,6 +195,7 @@ internal class SettingsController(
         keepScreenOnBrew = uiState().keepScreenOnBrew,
         brewCueSound = uiState().brewCueSound,
         brewCueHaptics = uiState().brewCueHaptics,
+        grindAutoSave = uiState().grindAutoSave,
         idleSleepMin = uiState().idleSleepMin,
         screensaverAfterMin = uiState().screensaverAfterMin,
         wakeMachineWithSaver = uiState().wakeMachineWithSaver,
@@ -329,6 +332,12 @@ internal class SettingsController(
     /** Guided-brew cue vibration (Settings → Display). Persisted as an explicit choice. */
     fun setBrewCueHaptics(enabled: Boolean) {
         updateUi { it.copy(brewCueHaptics = enabled) }
+        persistPrefs()
+    }
+
+    /** Devices → Grinder "Save each shot's grind to its bag" (#488). Personal, per device. */
+    fun setGrindAutoSave(enabled: Boolean) {
+        updateUi { it.copy(grindAutoSave = enabled) }
         persistPrefs()
     }
 

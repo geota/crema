@@ -35,8 +35,10 @@ data class BeanDraft(
     val elevation: String,
     val processing: String,
     val harvestTime: String,
-    val grinder: String,
-    val grind: String,
+    /** The "Grind per grinder" rows (#488); null = the bag has none and the
+     *  editor added none (an older bag stays unmigrated). The old grinder and
+     *  grind fields are no longer edited: they stay as stored. */
+    val grinds: List<coffee.crema.core.BagGrind>?,
     val linkedProfileId: String?,
     val rating: Int,
     val qualityScore: String,
@@ -112,8 +114,7 @@ private fun applyDraft(b: Bean, draft: BeanDraft, frozenOn: String?, defrostedOn
         processing = draft.processing.ifBlank { null },
         harvestTime = draft.harvestTime.ifBlank { null },
     ),
-    grinder = draft.grinder.trim(),
-    grinderSetting = draft.grind.trim(),
+    grinds = draft.grinds ?: b.grinds,
     linkedProfileId = draft.linkedProfileId,
     rating = draft.rating.coerceIn(0, 5).toUByte(),
     qualityScore = draft.qualityScore.trim(),

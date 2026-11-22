@@ -65,6 +65,14 @@ interface MachineActions {
 
     fun hasBean(id: String): Boolean
 
+    /** Whether [id] is one of this device's live grinders (#488). */
+    fun hasGrinder(id: String): Boolean = false
+
+    /** Quick Controls' Save on this device's own bag and profile (#488,
+     *  review F8): refused when there is nothing to save. */
+    fun applyQuickSave(copyName: String?, asNew: Boolean): CommandOutcome =
+        CommandOutcome.Refused("Nothing to save")
+
     /** A peer used Crema to drive this machine: presence at the machine. */
     fun notePeerActivity()
 
@@ -101,6 +109,11 @@ class LocalMachine(
         is MachineCommand.StateRequest -> accepted { actions.applyMachineState(cmd.request) }
         MachineCommand.CancelMaintenance -> accepted { actions.applyCancelMaintenance() }
         MachineCommand.TareScale -> accepted { actions.applyTareScale() }
+        is MachineCommand.QuickSave -> if (origin != null && !actions.configReady()) {
+            CommandOutcome.Refused("${hostName()} is starting up")
+        } else {
+            actions.applyQuickSave(cmd.copyName, cmd.asNew)
+        }
         // A peer's config edit before this device loaded its config would be
         // overwritten by the load after its reply (review 17).
         is MachineCommand.Config -> if (origin != null && !actions.configReady()) {
@@ -122,7 +135,11 @@ class LocalMachine(
             if (actions.hasProfile(cmd.id)) null else "That profile isn’t on $hostName"
         is MachineCommand.SetActiveBean ->
             cmd.id?.takeUnless { actions.hasBean(it) }?.let { "That bean isn’t on $hostName" }
-        else -> null
+        is MachineCommand.SetActiveGrinder ->
+            cmd.id?.takeUnless { actions.hasGrinder(it) }?.let { "That grinder isn’t on $hostName" }
+        MachineCommand.StartShot, is MachineCommand.StateRequest, MachineCommand.CancelMaintenance,
+        MachineCommand.TareScale, is MachineCommand.QuickSave, is MachineCommand.SetStopOnWeight,
+        is MachineCommand.SetAutoTare, is MachineCommand.SetQc, is MachineCommand.AdjustBrew, MachineCommand.ResetBrew -> null
     }
 
     /** A peer's command is about to run here. */

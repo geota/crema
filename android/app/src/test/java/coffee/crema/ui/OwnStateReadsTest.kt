@@ -63,10 +63,25 @@ class OwnStateReadsTest {
             "readMachineInfo" to setOf("de1MachineInfo"),
         ),
         "LibraryController.kt" to mapOf(
-            "persistLibrary" to setOf("activeBeanId"),
-            "persistLibraryNow" to setOf("activeBeanId"),
+            // The library file holds this device's own bag and grinder pointers (#488).
+            "persistLibrary" to setOf("activeBeanId", "libraryFile()"),
+            "persistLibraryNow" to setOf("activeBeanId", "libraryFile()"),
             "deleteRoaster" to setOf("activeBeanId"),
-            "maybeLoadLinkedProfile" to setOf("activeProfileId"),
+            // #488: the library's grinder records and this device's own pointer.
+            // The migration reads the own settings grinder; archiving the own
+            // active grinder clears it (F5); an edit of it is pushed to remotes.
+            "migrateGrinderLibrary" to setOf("grinderModel", "activeGrinderId"),
+            "archiveGrinder" to setOf("activeGrinderId"),
+            // The first grinder added becomes the own active one (review 499).
+            "addGrinder" to setOf("activeGrinderId"),
+            "saveGrinderEdit" to setOf("activeGrinderId"),
+            // The commits of a bag or grinder pick run on the device that owns
+            // the session (a remote's picks are relayed there): its own
+            // selection, grinder and grind, and one Undo of them (F6, F9).
+            "onGrinderSelected" to setOf("activeBag()"),
+            "onBagSelected" to setOf("activeProfileId", "activeGrinderId", "qcGrind", "activeGrinder()"),
+            "applySelectionChange" to setOf("withActiveProfileId()"),
+            "undoBagSelection" to setOf("activeProfileId", "activeGrinderId", "qcGrind"),
             // The library's own selection: a reseed after a delete or hide is
             // a profile change that clears this device's own override.
             "refreshProfiles" to setOf("activeProfileId", "withActiveProfileId()"),
@@ -74,11 +89,11 @@ class OwnStateReadsTest {
             "archiveBuiltinProfile" to setOf("activeProfileId", "withActiveProfileId()"),
             "deleteBean" to setOf("activeBeanId"),
             // A Save's Undo puts the override back on this device's own
-            // selection (Save is off on a remote, F8).
+            // selection (a remote sends Save to the hub, F8).
             "undoQuickSave" to setOf("activeProfileId", "brewParams"),
             // Own-state writers (§7.4): a restore and a bean import.
             // A restore writes the library's own active bean, and plans against it.
-            "restoreSink" to setOf("activeBeanId"),
+            "restoreSink" to setOf("activeBeanId", "activeGrinderId", "libraryFile()"),
             "applyBeanImportPlan" to setOf("activeBeanId"),
         ),
         "PresenceController.kt" to mapOf(

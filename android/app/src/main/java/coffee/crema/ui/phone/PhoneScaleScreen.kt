@@ -73,7 +73,7 @@ fun PhoneScaleScreen(
     Scaffold(
         topBar = {
             CremaPhoneTopBar(
-                title = "Scale",
+                title = "Devices",
                 actions = buildList {
                     if (!connected) add(BarAction("arrows-clockwise") { onConnect("scale") })
                     add(BarAction("gear-six") { onNav("settings") })
@@ -81,7 +81,24 @@ fun PhoneScaleScreen(
             )
         },
         containerColor = MaterialTheme.colorScheme.background,
-    ) { inner ->
+    ) { outer ->
+      // Devices (#488): Scale | Grinder, underline tabs like Beans' Bags | Roasters.
+      Column(Modifier.padding(outer).fillMaxSize()) {
+        PhoneTabs(
+            options = listOf("scale" to "Scale", "grinder" to "Grinder"),
+            value = ui.devicesTab,
+            onChange = vm::openDevicesTab,
+        )
+        if (ui.devicesTab == "grinder") {
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = CremaEdge, vertical = 12.dp),
+            ) {
+                coffee.crema.ui.screens.DevicesGrinderContent(vm, ui, wide = false)
+                Spacer(Modifier.height(24.dp))
+            }
+            return@Scaffold
+        }
+        val inner = PaddingValues(0.dp)
         // Weigh | Brew segment (issue #10). The mode is VM-held so it survives
         // the phone↔tablet host swap; arming a session pins it to Brew.
         val setup by vm.guidedSetup.collectAsStateWithLifecycle()
@@ -179,6 +196,7 @@ fun PhoneScaleScreen(
 
             Spacer(Modifier.height(24.dp))
         }
+      }
     }
 }
 

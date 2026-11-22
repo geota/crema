@@ -117,6 +117,7 @@ fun PhoneBeanDetailScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             BeanDetailContent(
+                grinders = ui.grinders,
                 bean = bean,
                 roasterName = roasterName,
                 linkedProfileName = linkedProfileNameFor(bean, ui.profiles.map { it.id to it.name }),

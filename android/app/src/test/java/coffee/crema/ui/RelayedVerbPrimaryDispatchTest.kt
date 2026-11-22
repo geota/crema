@@ -69,6 +69,15 @@ class RelayedVerbPrimaryDispatchTest {
         "quickAdjustBrew" to Effect { it.brewParams == BrewParams(18.0, 36.0, 93.0, 8.0) },
         "quickAdjustBrew.noPreinf" to Effect { it.brewParams == BrewParams(18.0, 36.0, 93.0, null) },
         "resetBrew" to Effect(prime = { it.quickAdjustBrew(18.0, 36.0, 93.0) }) { it.brewParams == null },
+        // #488: a grinder this primary owns.
+        "setActiveGrinder" to Effect(prime = { vm -> vm.addGrinder("Niche Zero"); vm.setActiveGrinder(null) }) {
+            it.activeGrinderId == SAMPLE_GRINDER_ID
+        },
+        "setActiveGrinder.none" to Effect(prime = { it.setActiveGrinder(SAMPLE_GRINDER_ID) }) { it.activeGrinderId == null },
+        // #488 (F8): the primary's Save on its own profile: a dial on the
+        // built-in makes the named copy; a dial on that copy, Save as new.
+        "quickSave.copy" to Effect(prime = { it.quickAdjustBrew(19.5, 41.0, 91.0) }) { s -> s.profiles.count { it.name == "Blooming 2" } == 1 },
+        "quickSave.asNew" to Effect(prime = { it.quickAdjustBrew(20.5, 43.0, 90.0) }) { s -> s.profiles.count { it.name == "Blooming 2" } == 2 },
     )
 
     /** Fixtures the primary refuses in this setup, with the reason's text.
@@ -76,6 +85,8 @@ class RelayedVerbPrimaryDispatchTest {
      *  primary doesn't have. */
     private val refusals = mapOf(
         "setActiveBean" to "That bean isn\u2019t on",
+        // Nothing dialled yet: the primary has nothing to save.
+        "quickSave" to "Nothing to save",
     )
 
     /** What a refused fixture must leave as it was. */

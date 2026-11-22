@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.newBean
+import coffee.crema.beans.savedGrind
 import coffee.crema.core.NotificationSource
 import coffee.crema.history.toRow
 import coffee.crema.history.withHeavy
@@ -102,7 +103,7 @@ class SaveBoundariesVmTest {
         vm.quickSave()
         VmHarness.idle()
         assertEquals(before, vm.customs())
-        assertEquals("4", vm.bean("a").grinderSetting)
+        assertEquals("4", vm.bean("a").savedGrind(null)?.grind)
     }
 
     @Test
@@ -118,7 +119,7 @@ class SaveBoundariesVmTest {
         val active = vm.ui.value.activeProfileId
         vm.quickSave()
         VmHarness.idle()
-        assertEquals("5.5", vm.bean("a").grinderSetting)
+        assertEquals("5.5", vm.bean("a").savedGrind(null)?.grind)
         assertEquals(profiles, vm.ui.value.profiles, "no profile written")
         assertEquals(active, vm.ui.value.activeProfileId)
         assertTrue("Grind 5.5 saved to Bag a" in vm.messages(), "${vm.messages()}")
@@ -136,7 +137,7 @@ class SaveBoundariesVmTest {
         assertTrue(vm.ui.value.quickSavePlan().enabled)
         vm.quickSave()
         VmHarness.idle()
-        assertEquals("6", vm.bean("a").grinderSetting)
+        assertEquals("6", vm.bean("a").savedGrind(null)?.grind)
     }
 
     @Test
@@ -194,7 +195,7 @@ class SaveBoundariesVmTest {
         vm.quickSave()
         VmHarness.idle()
         assertTrue(vm.customs().isEmpty())
-        assertEquals("4", vm.bean("a").grinderSetting, "the grind waits for the confirm too")
+        assertEquals("4", vm.bean("a").savedGrind(null)?.grind, "the grind waits for the confirm too")
 
         vm.quickSave("My blend")
         VmHarness.idle()
@@ -202,7 +203,7 @@ class SaveBoundariesVmTest {
         assertEquals("My blend", copy.name)
         assertEquals(dose.toFloat(), copy.dose)
         assertEquals(copy.id, vm.ui.value.activeProfileId)
-        assertEquals("7", vm.bean("a").grinderSetting, "both changed: both written")
+        assertEquals("7", vm.bean("a").savedGrind(null)?.grind, "both changed: both written")
         assertTrue("Saved “My blend” · grind 7 saved to Bag a" in vm.messages(), "one message: ${vm.messages()}")
     }
 
@@ -215,12 +216,12 @@ class SaveBoundariesVmTest {
         VmHarness.idle()
         vm.quickSave()
         VmHarness.idle()
-        assertEquals("3", vm.bean("a").grinderSetting)
+        assertEquals("3", vm.bean("a").savedGrind(null)?.grind)
         val undo = assertNotNull(vm.ui.value.quickSaveUndo)
         assertEquals("“Mine” updated · grind 3 saved to Bag a", undo.message)
         vm.undoQuickSave(undo.seq)
         VmHarness.idle()
-        assertEquals("4", vm.bean("a").grinderSetting)
+        assertEquals("4", vm.bean("a").savedGrind(null)?.grind)
         assertEquals(custom.dose, vm.customs().single().dose)
     }
 
@@ -331,6 +332,46 @@ class SaveBoundariesVmTest {
         // The row reaches history.db on the store's own save, after the row shows.
         VmHarness.idleUntil("the shot's row in history.db") { VmHarness.truthField(vm, shot.id, "profileId") != null }
         assertEquals(profile.id, VmHarness.truthField(vm, shot.id, "profileId"))
+    }
+
+    /** #488 (review F4, F9): a shot is stamped with the grinder active at its
+     *  start, id and name, not the settings grinder; a switch mid-shot is the next shot's. */
+    @Test
+    fun `a shot records the grinder it started with`() {
+        val niche = coffee.crema.core.Grinder(id = "grinder:niche", name = "Niche Zero", scale = coffee.crema.core.GrindScale(0f, 50f, 1f, ""), updatedAt = 1L)
+        val c40 = coffee.crema.core.Grinder(id = "grinder:c40", name = "Comandante C40", scale = coffee.crema.core.GrindScale(0f, 40f, 1f, "clicks"), updatedAt = 1L)
+        val library = BeanLibrary(listOf(bag("a")), emptyList(), "a", grinders = listOf(niche, c40), activeGrinderId = niche.id)
+        File(VmHarness.app().filesDir, "beanLibrary.json").writeText(coreJson.encodeToString(BeanLibrary.serializer(), library))
+        val vm = VmHarness.build(store)
+        VmHarness.idle()
+        VmHarness.awaitPrefsLoaded(vm)
+        VmHarness.awaitStartupLoaded(vm)
+        vm.setGrinderModel("Settings grinder")
+        activeBuiltin(vm)
+        // Auto-save on (#488): the kept shot's grind goes to its bag, for its grinder.
+        vm.setGrindAutoSave(true)
+        vm.setQcGrind(16f)
+        VmHarness.idle()
+        val bridge = VmHarness.bridge(vm)
+        apply(vm, bridge.onNotification(NotificationSource.DE1_STATE, byteArrayOf(4, 5), 1_000uL))
+        for (i in 1..48) {
+            apply(vm, bridge.onNotification(NotificationSource.DE1_SHOT_SAMPLE, sampleIn(listOf(0, 2, 2, 3)[minOf(i - 1, 3)]), (1_000 + 250 * i).toULong()))
+            if (i == 12) {
+                VmHarness.drainCoreLane(vm)
+                vm.setActiveGrinder(c40.id)
+                VmHarness.idle()
+            }
+        }
+        apply(vm, bridge.onNotification(NotificationSource.DE1_STATE, byteArrayOf(2, 0), (1_000 + 250 * 49).toULong()))
+        VmHarness.idleUntil("the shot to be recorded", 5_000) { VmHarness.rows(vm).isNotEmpty() }
+        val shot = VmHarness.whole(vm, VmHarness.rows(vm).first().id)
+        assertEquals(niche.id, shot.grinderId, "the grinder at the start")
+        assertEquals("Niche Zero", shot.grinderModel, "its name, not the settings grinder")
+        VmHarness.idleUntil("the shot's row in history.db") { VmHarness.truthField(vm, shot.id, "grinderId") != null }
+        assertEquals(niche.id, VmHarness.truthField(vm, shot.id, "grinderId"))
+        // Auto-save: this device recorded the shot, so its grind is the bag's for that grinder.
+        assertEquals("16", vm.bean("a").savedGrind(niche.id)?.grind)
+        assertNull(vm.bean("a").savedGrind(c40.id), "not the grinder picked mid-shot")
     }
 
     /** F4: Android's own shot shape keeps the core's `profileId` through the
