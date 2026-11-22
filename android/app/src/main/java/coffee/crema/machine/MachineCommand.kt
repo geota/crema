@@ -113,10 +113,17 @@ sealed interface MachineCommand {
         override fun refusal(): String? = id?.let(::idRefusal)
     }
 
-    /** Select the active grinder (#488), or none. A primary refuses an id
-     *  that isn't one of its own live grinders (review F3, F8). */
-    data class SetActiveGrinder(val id: String?) : Config {
-        override fun refusal(): String? = id?.let(::idRefusal)
+    /** Select the active grinder (#488), or none. [name] is the picked
+     *  record's name: a primary refuses an id that isn't one of its own live
+     *  grinders, or is one under another name (a record renamed since, or
+     *  another device's grinder with the same slug id; follow-up 19, review
+     *  F3, F8). A pick always carries its name. */
+    data class SetActiveGrinder(val id: String?, val name: String?) : Config {
+        override fun refusal(): String? = when {
+            id == null -> null
+            name == null -> idRefusal(id) ?: "a grinder pick needs its name"
+            else -> idRefusal(id) ?: nameRefusal(name)
+        }
     }
 
     data class SetStopOnWeight(val on: Boolean) : Config
@@ -126,6 +133,26 @@ sealed interface MachineCommand {
     /** One Quick-Controls value, inside its stepper's range. */
     data class SetQc(val field: QcField, val value: Float) : Config {
         override fun refusal(): String? = field.refusal(value)
+    }
+
+    /**
+     * Brew's grind (#488 round 2), as text end to end: the stepper's number
+     * formatted on the active grinder's scale, or a recorded grind as it is
+     * ("2.1.3", "4⅓", a "Start from this shot" grind). Grind never reaches
+     * the machine: it is recorded onto the next shot. A typed grind outside
+     * the active scale is kept; [refusal] is a sanity bound only.
+     */
+    data class SetGrind(val grind: String) : Config {
+        override fun refusal(): String? {
+            val text = grind.trim()
+            val number = text.replace(',', '.').toDoubleOrNull()
+            return when {
+                text.isEmpty() -> "a grind is required"
+                text.length > MAX_GRIND_LENGTH || text.any { it.isISOControl() } -> "malformed grind"
+                number != null && !number.within(0.0..MAX_GRIND) -> "grind out of range: $text"
+                else -> null
+            }
+        }
     }
 
     /** The live Quick-Controls brew override, applied by the core to the next
@@ -190,9 +217,7 @@ enum class QcField(val label: String, private val range: () -> ClosedFloatingPoi
     /** The bare volume edit; its range is the core's hot-water volume range. */
     HOT_WATER_VOLUME("hot-water volume", { HotWaterUi.bounds.volumeMl.let { it.min.toDouble()..it.max.toDouble() } }),
     FLUSH_TIME("flush time", { CoreBounds.qc.flushTimeS.toRange() }),
-    FLUSH_TEMP("flush temperature", { CoreBounds.qc.flushTempC.toRange() }),
-    /** Grind also comes from a shot's or bag's recorded setting, not just the stepper. */
-    GRIND("grind", { 0.0..MAX_GRIND });
+    FLUSH_TEMP("flush temperature", { CoreBounds.qc.flushTempC.toRange() });
 
     /** Why [value] is out of bounds for this field, or null. The ranges are the
      *  Quick Controls steppers' (the core's table, F8), hot water aside. */
@@ -210,6 +235,7 @@ private const val MAX_NAME_LENGTH = 128
 private const val MAX_PREINF_S = 300.0
 /** A sanity bound, not the scale: a typed grind outside the active scale is kept (#488). */
 private const val MAX_GRIND = 10_000.0
+private const val MAX_GRIND_LENGTH = 64
 
 /** The core's temperature ceiling (`MAX_TEMPERATURE_C`, 100 °C), the one bound
  *  for a brew temperature on every path. */
@@ -218,6 +244,12 @@ internal fun maxBrewTempC(): Double = ProfileBounds.INSTANCE.maxTemperatureC.toD
 private fun idRefusal(id: String): String? = when {
     id.isEmpty() -> "an id is required"
     id.length > MAX_ID_LENGTH || id.any { it.isISOControl() } -> "malformed id"
+    else -> null
+}
+
+private fun nameRefusal(name: String): String? = when {
+    name.isBlank() -> "a name is required"
+    name.length > MAX_NAME_LENGTH || name.any { it.isISOControl() } -> "malformed name"
     else -> null
 }
 

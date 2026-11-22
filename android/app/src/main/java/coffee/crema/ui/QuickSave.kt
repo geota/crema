@@ -51,7 +51,8 @@ data class QuickSavePlan(
 
 /** [QuickSavePlan] for the state on screen (on a remote, the hub's). */
 fun MainUiState.quickSavePlan(): QuickSavePlan {
-    val bean = activeBag()
+    // On a remote, the hub's bag and its saved grind (S8); the hub saves.
+    val bean = grindBag()
     // Save's grind part, from the core: Brew's grind when the marker shows
     // (a bag, a grind set, and it differs from the saved one or none is saved).
     val grind = brewGrindView().saveGrind

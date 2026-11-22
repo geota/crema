@@ -219,7 +219,8 @@ class RemoteSettingsTest {
      *  the hub's snapshot carries its active grinder's name and scale. */
     @Test
     fun `a remote's grinder pick is relayed and the hub's grinder shows from its snapshot`() {
-        val vm = fixture.start()
+        val niche = coffee.crema.core.Grinder(id = "grinder:niche", name = "Niche", scale = coffee.crema.beans.DEFAULT_GRIND_SCALE, updatedAt = 1L)
+        val vm = fixture.start(library = RemoteFixture.LIBRARY.copy(grinders = listOf(niche)))
         fixture.push(
             S.copy(
                 activeGrinderId = "grinder:motto", activeGrinderName = "Motto 80",
@@ -234,7 +235,7 @@ class RemoteSettingsTest {
         val own = VmHarness.ownState(vm).activeGrinderId
         vm.setActiveGrinder("grinder:niche")
         idleRelays(1)
-        assertEquals("setActiveGrinder" to "grinder:niche", fixture.handled.last())
+        assertEquals("setActiveGrinder" to "grinder:niche\nNiche", fixture.handled.last(), "with its record's name (follow-up 19)")
         VmHarness.idle()
         assertEquals(own, VmHarness.ownState(vm).activeGrinderId, "this device's own pointer is untouched")
     }

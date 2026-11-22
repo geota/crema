@@ -158,10 +158,10 @@ internal class MachineConfigController(
                     QcField.STEAM_FLOW -> lane.route("Set steam flow") { bridge.setSteamFlow(cmd.value) }
                     QcField.FLUSH_TIME -> lane.route("Set flush time") { bridge.setFlushTimeout((cmd.value * 1000f).toUInt()) }
                     QcField.FLUSH_TEMP -> lane.route("Set flush temp") { bridge.setFlushTemp(cmd.value) }
-                    // Grind never reaches the machine: it's recorded onto the next shot.
-                    QcField.GRIND -> Unit
                 }
             }
+            // Grind never reaches the machine: it's recorded onto the next shot.
+            is MachineCommand.SetGrind -> persistPrefs()
             is MachineCommand.AdjustBrew -> {
                 // The new yield override becomes the live stop-at-weight target
                 // now; the core uploads the dialled profile once the dial rests.

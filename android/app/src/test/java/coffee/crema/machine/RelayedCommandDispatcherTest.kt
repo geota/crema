@@ -55,7 +55,7 @@ class RelayedCommandDispatcherTest {
             }
             jobs.forEach { it.join() }
         }
-        assertEquals((1..20).map { "commit(${MachineCommand.SetQc(QcField.GRIND, it.toFloat())})" }, actions.applied.toList())
+        assertEquals((1..20).map { "commit(${MachineCommand.SetGrind("$it.0")})" }, actions.applied.toList())
         assertEquals(setOf(LANE), actions.threads.toSet(), "every command ran on the lane")
     }
 
@@ -78,6 +78,27 @@ class RelayedCommandDispatcherTest {
         assertEquals(CommandOutcome.Accepted, dispatch("setActiveBean", "bean-1"))
         assertEquals(CommandOutcome.Accepted, dispatch("setActiveBean", ""), "clearing the bean names nothing")
         assertEquals(3, actions.applied.size)
+    }
+
+    /** Follow-up 19: a grinder pick names the same record here, by id and
+     *  name; a renamed one, another device's of the same id, or a bare id is
+     *  refused with a reason, and nothing changes. */
+    @Test
+    fun `a grinder pick must be this primary's same record`() {
+        assertEquals(CommandOutcome.Refused("That grinder isn’t on Tablet"), dispatch("setActiveGrinder", "grinder:c40\nC40"))
+        actions.grinders[0] = actions.grinders[0].copy(name = "Niche (old)", updatedAt = 2L)
+        assertEquals(
+            CommandOutcome.Refused("That grinder is “Niche (old)” on Tablet now"),
+            dispatch("setActiveGrinder", "grinder:niche-zero\nNiche Zero"),
+            "renamed here since the remote's copy",
+        )
+        val bare = assertIs<CommandOutcome.Refused>(dispatch("setActiveGrinder", "grinder:niche-zero"))
+        assertTrue("needs its name" in bare.reason, bare.reason)
+        assertTrue(actions.applied.isEmpty() && actions.shown.isEmpty(), "nothing shown or committed: ${actions.applied}")
+
+        assertEquals(CommandOutcome.Accepted, dispatch("setActiveGrinder", "grinder:niche-zero\n niche (OLD) "), "trimmed, any case")
+        assertEquals(CommandOutcome.Accepted, dispatch("setActiveGrinder", ""), "no grinder names nothing")
+        assertEquals(2, actions.applied.size)
     }
 
     @Test

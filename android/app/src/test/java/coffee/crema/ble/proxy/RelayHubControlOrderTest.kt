@@ -138,7 +138,7 @@ class RelayHubControlOrderTest {
                 if (i % 2 == 1) Frame.Control(i.toLong(), "setQcGrind", "$i.0") else Frame.Control(i.toLong(), "startShot", "")
             }
             val expected = (1..40).map { i ->
-                if (i % 2 == 1) "commit(${MachineCommand.SetQc(QcField.GRIND, i.toFloat())})" else "startShot"
+                if (i % 2 == 1) "commit(${MachineCommand.SetGrind("$i.0")})" else "startShot"
             }
             assertEquals(expected, actions.applied.toList())
             assertEquals(setOf("main-lane"), actions.threads.toSet())

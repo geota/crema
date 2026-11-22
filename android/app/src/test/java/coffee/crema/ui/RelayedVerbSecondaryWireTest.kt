@@ -68,7 +68,7 @@ class RelayedVerbSecondaryWireTest {
                 Result.failure(IllegalStateException("refused by the test primary"))
             } else {
                 if (method == "setQcGrind") {
-                    hubConfig = coffee.crema.settings.v4SnapshotJson(rev = ++hubRev) { it.copy(qcGrind = coffee.crema.beans.grindText(args.toDouble())) }
+                    hubConfig = coffee.crema.settings.v4SnapshotJson(rev = ++hubRev) { it.copy(qcGrind = args) }
                     pushHubConfig()
                 }
                 Result.success(Unit)
@@ -88,6 +88,9 @@ class RelayedVerbSecondaryWireTest {
         endpoint = TestHubServer.serving(hub, remote, name = "Test primary")
         VmHarness.pinHub(relayStore, endpoint.hubKeys, endpoint.port, name = "Test primary")
         vm = VmHarness.build(store)
+        VmHarness.idle()
+        // The remote's pickers list its own grinders: it owns one of the hub's name.
+        vm.addGrinder(SAMPLE_GRINDER_NAME)
         VmHarness.idle()
         vm.switchToSecondary("127.0.0.1", endpoint.port)
         VmHarness.advance(MODE_SWITCH_SETTLE_MS)

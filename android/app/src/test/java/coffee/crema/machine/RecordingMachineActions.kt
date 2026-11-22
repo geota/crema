@@ -12,6 +12,10 @@ internal class RecordingMachineActions(
     var startShot: CommandOutcome = CommandOutcome.Accepted,
     val profiles: MutableSet<String> = mutableSetOf("p-1"),
     val beans: MutableSet<String> = mutableSetOf("bean-1"),
+    /** This device's live grinders. */
+    val grinders: MutableList<coffee.crema.core.Grinder> = mutableListOf(
+        coffee.crema.core.Grinder(id = "grinder:niche-zero", name = "Niche Zero", scale = coffee.crema.beans.DEFAULT_GRIND_SCALE, updatedAt = 1L),
+    ),
 ) : MachineActions {
     /** Verb bodies that ran, in order. */
     val applied = CopyOnWriteArrayList<String>()
@@ -56,6 +60,7 @@ internal class RecordingMachineActions(
         return id in profiles
     }
     override fun hasBean(id: String) = id in beans
+    override fun liveGrinder(id: String) = grinders.firstOrNull { it.id == id }
     override fun configReady() = configLoaded
 
     override fun notePeerActivity() {

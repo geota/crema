@@ -68,7 +68,7 @@ class RelayMachineTest {
 
     @Test
     fun `a config edit is shown at once and settles when accepted`() {
-        val edit = MachineCommand.SetQc(QcField.GRIND, 14.5f)
+        val edit = MachineCommand.SetGrind("14.5")
         relay.execute(edit)
         assertEquals(listOf<MachineCommand.Config>(edit), shown.toList(), "shown before the round trip")
         assertTrue(settled.isEmpty(), "not settled before the answer")
@@ -137,7 +137,7 @@ class RelayMachineTest {
     @Test
     fun `a view-only remote sends nothing`() {
         viewOnly = true
-        for (cmd in listOf(MachineCommand.Stop, MachineCommand.StartShot, MachineCommand.SetQc(QcField.GRIND, 14f), MachineCommand.SetStopOnWeight(true))) {
+        for (cmd in listOf(MachineCommand.Stop, MachineCommand.StartShot, MachineCommand.SetGrind("14"), MachineCommand.SetStopOnWeight(true))) {
             assertEquals(CommandOutcome.Refused(RelayMachine.viewOnly("Kitchen tablet")), run(cmd))
         }
         assertTrue(sent.isEmpty() && shown.isEmpty(), "sent $sent, shown $shown")
@@ -147,12 +147,12 @@ class RelayMachineTest {
     /** AC-15 / AC-35: a machine setting is read-only on a remote. */
     @Test
     fun `a quick controls machine setting is refused here and nothing is sent`() {
-        for (field in QcField.entries.filter { it != QcField.GRIND }) {
+        for (field in QcField.entries) {
             assertEquals(CommandOutcome.Refused("Change on Kitchen tablet"), run(MachineCommand.SetQc(field, 1f)), "$field")
         }
         assertTrue(sent.isEmpty() && shown.isEmpty(), "sent $sent, shown $shown")
-        assertEquals(CommandOutcome.Accepted, run(MachineCommand.SetQc(QcField.GRIND, 14f)), "grind is a shot dial")
-        assertEquals(listOf(MachineCommandCodec.Wire("setQcGrind", "14.0")), sent.toList())
+        assertEquals(CommandOutcome.Accepted, run(MachineCommand.SetGrind("14")), "grind is a shot dial")
+        assertEquals(listOf(MachineCommandCodec.Wire("setQcGrind", "14")), sent.toList())
     }
 
     @Test

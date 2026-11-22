@@ -277,14 +277,15 @@ class RemoteEditFlowTest {
             runBlocking { withTimeout(5_000) { while (rx.none { it is Frame.Welcome }) delay(5) } }
             fixture.holdReplies = true
             vm.setQcGrind(14.5f)
-            runBlocking { client.send(Frame.Control(1, "setQcGrind", "16.0")) }
+            runBlocking { client.send(Frame.Control(1, "setQcGrind", "16")) }
             VmHarness.idleUntil("both edits at the hub") { fixture.handled.size == 2 }
             fixture.holdReplies = false
             runBlocking { withTimeout(5_000) { while (rx.none { it is Frame.ControlOk }) delay(5) } }
             VmHarness.idleUntil("the remote's edit settled") { VmHarness.ownState(vm).mirror?.pending?.isEmpty() == true }
             VmHarness.idleUntil("the last push") { VmHarness.ownState(vm).mirror?.snapshot == fixture.current }
             assertEquals(2, fixture.echoed.size)
-            val last = coffee.crema.beans.grindText(fixture.echoed.last().second.toDouble())
+            // The grind travels as text (#488 round 2): the hub keeps it as sent.
+            val last = fixture.echoed.last().second
             assertEquals(last, fixture.current.qcGrind, "the hub's value is the last edit it processed")
             assertEquals(last, vm.ui.value.qcGrind, "this remote shows it")
             assertEquals(SettingAvailability.VIA_HUB, availability(vm, Setting.QC_GRIND), "no stale pending value")

@@ -1,6 +1,7 @@
 package coffee.crema.machine
 
 import coffee.crema.core.MachineRequest
+import coffee.crema.ui.sameRecord
 
 /** How a [MachineCommand] ended. */
 sealed interface CommandOutcome {
@@ -65,8 +66,8 @@ interface MachineActions {
 
     fun hasBean(id: String): Boolean
 
-    /** Whether [id] is one of this device's live grinders (#488). */
-    fun hasGrinder(id: String): Boolean = false
+    /** This device's live grinder [id] (#488), or null when it has none. */
+    fun liveGrinder(id: String): coffee.crema.core.Grinder? = null
 
     /** Quick Controls' Save on this device's own bag and profile (#488,
      *  review F8): refused when there is nothing to save. */
@@ -135,11 +136,21 @@ class LocalMachine(
             if (actions.hasProfile(cmd.id)) null else "That profile isn’t on $hostName"
         is MachineCommand.SetActiveBean ->
             cmd.id?.takeUnless { actions.hasBean(it) }?.let { "That bean isn’t on $hostName" }
-        is MachineCommand.SetActiveGrinder ->
-            cmd.id?.takeUnless { actions.hasGrinder(it) }?.let { "That grinder isn’t on $hostName" }
+        // The same record, not just the id (follow-up 19): ids are slugs of
+        // the first name, so a grinder renamed here since, or another
+        // device's grinder of that name, shares the id with another record.
+        is MachineCommand.SetActiveGrinder -> cmd.id?.let { id ->
+            val own = actions.liveGrinder(id)
+            when {
+                own == null -> "That grinder isn’t on $hostName"
+                !own.sameRecord(id, cmd.name) -> "That grinder is “${own.name.trim()}” on $hostName now"
+                else -> null
+            }
+        }
         MachineCommand.StartShot, is MachineCommand.StateRequest, MachineCommand.CancelMaintenance,
         MachineCommand.TareScale, is MachineCommand.QuickSave, is MachineCommand.SetStopOnWeight,
-        is MachineCommand.SetAutoTare, is MachineCommand.SetQc, is MachineCommand.AdjustBrew, MachineCommand.ResetBrew -> null
+        is MachineCommand.SetAutoTare, is MachineCommand.SetQc, is MachineCommand.SetGrind, is MachineCommand.AdjustBrew,
+        MachineCommand.ResetBrew -> null
     }
 
     /** A peer's command is about to run here. */
