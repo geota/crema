@@ -1,7 +1,5 @@
 package coffee.crema.ui
 
-import coffee.crema.beans.grindText
-
 /** The kind of profile Quick Controls' Save would write to. */
 enum class QuickSaveProfileKind { None, Custom, BuiltIn }
 
@@ -21,7 +19,7 @@ enum class QuickSaveProfileKind { None, Custom, BuiltIn }
 data class QuickSavePlan(
     val beanId: String? = null,
     val beanName: String? = null,
-    /** The dial as the bag stores it, when it differs from the bag's; else null. */
+    /** Brew's grind as the bag stores it, when it differs from the bag's; else null. */
     val grind: String? = null,
     val profileId: String? = null,
     val profileName: String? = null,
@@ -54,9 +52,9 @@ data class QuickSavePlan(
 /** [QuickSavePlan] for the state on screen (on a remote, the hub's). */
 fun MainUiState.quickSavePlan(): QuickSavePlan {
     val bean = activeBag()
-    // The dial against the bag's saved grind for the active grinder; none saved counts as different.
-    val grind = qcGrind?.let(::grindText)
-        ?.takeIf { bean != null && (savedGrindForBrew() == null || coffee.crema.beans.grindDiffers(it, savedGrindForBrew()?.grind)) }
+    // Save's grind part, from the core: Brew's grind when the marker shows
+    // (a bag, a grind set, and it differs from the saved one or none is saved).
+    val grind = brewGrindView().saveGrind
     val profile = activeProfile()
     val kind = when {
         profile == null -> QuickSaveProfileKind.None

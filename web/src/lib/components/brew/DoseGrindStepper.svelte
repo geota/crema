@@ -12,8 +12,9 @@
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import { getSettingsStore, formatWeight } from '#lib/settings/index.js';
 	import GrindMarker from '#lib/components/grinders/GrindMarker.svelte';
-	import { grindText } from '#lib/bean/grinder.js';
-	import { grindChips, type GrindView } from '#lib/brew/grind-view.js';
+	import { grindChips, grindNumber, grindText } from '#lib/bean/grinder.js';
+	import type { GrindView } from '#lib/brew/grind-view.js';
+	import { getBrewGrind } from '#lib/brew/grind-session.svelte.js';
 
 	let {
 		params,
@@ -43,13 +44,22 @@
 
 	/** The grind stepper's range: the active grinder's scale (#488). */
 	const gs = $derived(grind?.scale ?? { min: b.grind.min, max: b.grind.max, step: b.grind.step, unit: '' });
-	/** Preset chips on that scale, around the bag's saved value. */
-	const chips = $derived(grindChips(gs, grind?.savedNumber ?? null, phoneLayout.current ? 4 : 5));
+	/**
+	 * Brew's grind on the stepper (DESIGN "No grind set is its own state"):
+	 * its number, or blank when not set; a grind that isn't a plain number
+	 * shows as typed. The first ± from either goes to the core's start.
+	 */
+	const dial = $derived(grind?.dial ?? null);
+	/** Single steps around Brew's grind (the core's chips); none when it isn't set. */
+	const chips = $derived(grindChips(gs, grind?.recorded ?? null, phoneLayout.current ? 4 : 5).map((c) => c.value));
 	/** A typed value outside the scale is kept as typed, with a warning. */
-	const outOfRange = $derived(p.grind < gs.min || p.grind > gs.max);
-	const grindFmt = (v: number): string => grindText(v);
+	const outOfRange = $derived(dial !== null && (dial < gs.min || dial > gs.max));
+	/** The dial as a shot records it (`grind_text`): the stepper shows what is recorded. */
+	const grindFmt = (v: number): string => grindText(v, gs);
 	/** The chip with the bag's saved value gets a copper ring while the grind differs. */
-	const ringed = $derived(grind?.marker ? (grind.savedNumber ?? null) : null);
+	const ringed = $derived(grind?.marker ? grindNumber(grind.saved) : null);
+	const brewGrind = getBrewGrind();
+	const setGrind = (v: number): void => brewGrind.setDial(v, gs);
 </script>
 
 {#snippet rangeWarning()}
@@ -92,26 +102,29 @@
 		/>
 	{:else}
 		<QuickStepper
-			value={p.grind}
+			value={dial}
+			blankStart={grind?.startFromBlank ?? gs.min}
+			blankText={dial === null ? (grind?.recorded ?? '') : ''}
 			name="Grind"
 			unit={gs.unit}
 			min={gs.min}
 			max={gs.max}
 			step={gs.step}
+			precision={6}
 			clampTyped={false}
-			onChange={(v) => params.set('grind', v)}
-			fmt={gs.step < 1 ? (v) => v.toFixed(gs.step < 0.1 ? 2 : 1) : grindFmt}
+			onChange={setGrind}
+			fmt={grindFmt}
 			sub={outOfRange ? rangeWarning : undefined}
 		/>
 		<div style="height:8px"></div>
 		<QuickChipRow
 			options={chips}
-			value={p.grind}
+			value={dial ?? Number.NaN}
 			name="Grind"
 			unit={gs.unit}
 			ringed={ringed}
-			onChange={(v) => params.set('grind', v)}
-			fmt={gs.step < 1 ? (v) => v.toFixed(gs.step < 0.1 ? 2 : 1) : grindFmt}
+			onChange={setGrind}
+			fmt={grindFmt}
 		/>
 	{/if}
 </div>

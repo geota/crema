@@ -72,6 +72,7 @@ import coffee.crema.ui.components.title
 import coffee.crema.ui.QuickSavePlan
 import coffee.crema.ui.components.CremaSearchPill
 import coffee.crema.ui.components.CremaStepper
+import coffee.crema.ui.stepperBlank
 import coffee.crema.ui.components.CremaStepperStyle
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaDotToggle
@@ -147,19 +148,12 @@ fun QuickControlsSheet(
     onHotWaterDose: (HotWaterDose) -> Unit,
     onFlushTime: (Double) -> Unit,
     onFlushTemp: (Double) -> Unit,
-    // Persisted QC grind click + pre-infuse transient override (issue 15).
-    qcGrind: Double?,
-    /** Dial seed when no QC value is set — the active bean's saved grind
-     *  (issue #16: "tweak slightly from last time" must START at last time),
-     *  else a generic mid-range default. */
-    qcGrindSeed: Double = 4.2,
+    /** Brew's grind from the core (#488 round 2): the stepper's value (blank
+     *  when not set, the first + or − then goes to the middle of the scale on
+     *  its step), the active grinder's scale, the bag's saved grind (its chip
+     *  gets a copper ring) and "● Bag 4.2" while the grind differs. */
+    grindView: coffee.crema.core.BrewGrindView,
     onGrind: (Double) -> Unit,
-    /** The active grinder's scale (#488): the grind stepper's range, step and unit. */
-    grindScale: coffee.crema.core.GrindScale = coffee.crema.beans.DEFAULT_GRIND_SCALE,
-    /** The bag's saved grind for the active grinder: its chip gets a copper ring. */
-    savedGrind: Double? = null,
-    /** "● Bag 4.2" in the Grind card's label row while the dial differs (#488). */
-    unsavedGrind: coffee.crema.ui.UnsavedGrind? = null,
     unsavedGrindExplanation: String? = null,
     onToggleChannel: (String, Boolean) -> Unit,
     onDismiss: () -> Unit,
@@ -180,9 +174,12 @@ fun QuickControlsSheet(
     // The current pre-infuse override state (null = not overridden) — preserved
     // when other brew steppers fire so a dose tweak doesn't drop a preinf override.
     val preinfOverride = brewParams?.preinf
-    // Grind: persisted QC click (issue 15); show the saved value, else the
-    // active bean's own setting (issue #16), else the generic seed.
-    val grind = qcGrind ?: qcGrindSeed
+    // Grind: Brew's grind (issue 15), blank when not set (#488 round 2).
+    val grind = grindView.dial ?: grindView.startFromBlank
+    val grindScale = grindView.scale
+    val savedGrind = coffee.crema.beans.grindDouble(grindView.saved)
+    val unsavedGrind = grindView.marker
+    val grindChips = remember(grindScale, grindView.value) { coffee.crema.beans.grindChips(grindScale, grindView.value).map { it.value } }
 
     var savePrompt by remember { mutableStateOf<QuickSavePrompt?>(null) }
     // Per-stepper mode — which sub-value each combined stepper edits (local view state).
@@ -310,10 +307,11 @@ fun QuickControlsSheet(
                         min = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MIN_G else minOf(grindScale.min, grindScale.max).toDouble(),
                         max = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MAX_G else maxOf(grindScale.min, grindScale.max).toDouble(),
                         step = if (doseGrindMode == DoseGrindMode.Dose) 0.1 else grindScale.step.toDouble().takeIf { it.isFinite() && it > 0 } ?: 0.1,
-                        fmt = niceFmt,
-                        chips = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 17.0, 18.0, 19.0, 20.0) else coffee.crema.ui.grindChips(savedGrind ?: grind, grindScale),
+                        fmt = if (doseGrindMode == DoseGrindMode.Dose) niceFmt else ({ v -> coffee.crema.beans.grindText(v, grindScale) }),
+                        chips = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 17.0, 18.0, 19.0, 20.0) else grindChips.takeIf { it.isNotEmpty() },
                         chipRing = if (doseGrindMode == DoseGrindMode.Grind && savedGrind != null) { c -> kotlin.math.abs(c - savedGrind) < 1e-6 } else null,
                         clampTyped = doseGrindMode == DoseGrindMode.Dose,
+                        blank = if (doseGrindMode == DoseGrindMode.Grind) grindView.stepperBlank() else null,
                         onChange = { if (doseGrindMode == DoseGrindMode.Dose) onAdjustBrew(it, yieldOut, brewTemp, preinfOverride) else onGrind(it) },
                         style = CremaStepperStyle.Boxed,
                         gate = doseGrindGate,

@@ -137,7 +137,7 @@ class RemoteEditFlowTest {
     }
 
     /** S with the relayed values the golden samples set changed away from them. */
-    private val base = S.copy(stopOnWeight = false, autoTare = true, qcGrind = 15f, brewDoseG = 20.0, brewYieldG = 40.0, brewTempC = 94.0, brewPreinfuseS = 6.0, rev = 1)
+    private val base = S.copy(stopOnWeight = false, autoTare = true, qcGrind = "15", brewDoseG = 20.0, brewYieldG = 40.0, brewTempC = 94.0, brewPreinfuseS = 6.0, rev = 1)
 
     /** A relayed edit: its golden sample, its setting, and how the screen shows it. */
     private class Edit(val fixture: String, val setting: Setting, val edited: Any?, val shown: (MainUiState) -> Any?)
@@ -146,7 +146,7 @@ class RemoteEditFlowTest {
         Edit("setStopOnWeight", Setting.STOP_ON_WEIGHT, true) { it.stopOnWeight },
         Edit("setAutoTare", Setting.AUTO_TARE, false) { it.autoTare },
         Edit("quickAdjustBrew", Setting.BREW_PARAMS, BrewParams(18.0, 36.0, 93.0, 8.0)) { it.brewParams },
-        Edit("setQcGrind", Setting.QC_GRIND, 14.5f) { it.qcGrind },
+        Edit("setQcGrind", Setting.QC_GRIND, "14.5") { it.qcGrind },
     )
 
     private fun controls(): List<String> = fixture.endpoint.received.filter { "\"type\":\"control\"" in it }
@@ -220,11 +220,11 @@ class RemoteEditFlowTest {
         vm.setQcGrind(14.5f)
         VmHarness.idleUntil("the edit at the hub") { fixture.handled.isNotEmpty() }
         untilClock("the request to time out") { availability(vm, Setting.QC_GRIND) == SettingAvailability.UNCONFIRMED }
-        assertEquals(14.5f, vm.ui.value.qcGrind, "kept on screen")
+        assertEquals("14.5", vm.ui.value.qcGrind, "kept on screen")
         assertEquals("Kitchen tablet didn’t answer — this may not have been applied", vm.ui.value.availabilityNote(Setting.QC_GRIND))
         fixture.holdReplies = false
-        fixture.push(base.copy(qcGrind = 12f, rev = 2))
-        assertEquals(12f, vm.ui.value.qcGrind, "the next snapshot shows the hub's value")
+        fixture.push(base.copy(qcGrind = "12", rev = 2))
+        assertEquals("12", vm.ui.value.qcGrind, "the next snapshot shows the hub's value")
         assertEquals(SettingAvailability.VIA_HUB, availability(vm, Setting.QC_GRIND))
         assertEquals(1, fixture.handled.count { it.first == "setQcGrind" }, "never resent")
         assertEquals(abOf(P), abOf(savedPrefs()))
@@ -284,7 +284,7 @@ class RemoteEditFlowTest {
             VmHarness.idleUntil("the remote's edit settled") { VmHarness.ownState(vm).mirror?.pending?.isEmpty() == true }
             VmHarness.idleUntil("the last push") { VmHarness.ownState(vm).mirror?.snapshot == fixture.current }
             assertEquals(2, fixture.echoed.size)
-            val last = fixture.echoed.last().second.toFloat()
+            val last = coffee.crema.beans.grindText(fixture.echoed.last().second.toDouble())
             assertEquals(last, fixture.current.qcGrind, "the hub's value is the last edit it processed")
             assertEquals(last, vm.ui.value.qcGrind, "this remote shows it")
             assertEquals(SettingAvailability.VIA_HUB, availability(vm, Setting.QC_GRIND), "no stale pending value")

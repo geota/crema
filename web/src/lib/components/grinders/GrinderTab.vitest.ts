@@ -105,7 +105,7 @@ describe('the Grinder tab', () => {
 
 		type(field(root, 'Lowest'), '0');
 		type(field(root, 'Step'), '0');
-		expect(root.querySelector('[role="alert"]')?.textContent).toBe('Step must be above 0.');
+		expect(root.querySelector('[role="alert"]')?.textContent).toBe('Step must be more than 0.');
 
 		type(field(root, 'Step'), 'abc');
 		expect(root.querySelector('[role="alert"]')?.textContent).toContain('Enter a number');

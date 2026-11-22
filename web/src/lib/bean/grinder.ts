@@ -17,6 +17,7 @@ import type {
 	BagGrind,
 	BagSelectInput,
 	BagSelection,
+	BrewGrindView,
 	CatalogueGrinderInfo,
 	Grinder,
 	GrinderAdd,
@@ -26,18 +27,25 @@ import type {
 	GrindSave,
 	GrindScale,
 	GrinderSwitchInput,
+	GrindChip,
 	LastGrind,
 	QuickControlBounds
 } from '#lib/core/crema-core.js';
+import { ScaleRefusal } from '#lib/core/crema-core.js';
 import {
 	activeGrinderJson,
 	addGrinderJson,
 	archiveGrinderJson,
 	autoSaveShotGrindJson,
 	bagGrindsToFixJson,
+	brewGrindViewJson,
 	coerceGrinder as wasmCoerceGrinder,
+	formatGrindJson,
 	grinderCatalogueJson,
+	grindChipsJson,
 	grindersForNamesJson,
+	grindScaleRefusalJson,
+	grindTextJson,
 	matchGrindersJson,
 	mergeGrinderEditJson,
 	migrateGrinderLibraryJson,
@@ -45,6 +53,7 @@ import {
 	resolveBagSelectionJson,
 	resolveGrinderSwitchJson,
 	restoreGrinderJson,
+	sameGrind as wasmSameGrind,
 	saveBagGrindJson
 } from '#lib/wasm/de1_wasm.js';
 import type { Bean } from './model';
@@ -52,14 +61,17 @@ import type { Bean } from './model';
 export type {
 	BagGrind,
 	BagSelection,
+	BrewGrindView,
 	CatalogueGrinderInfo,
 	Grinder,
 	GrinderAdd,
 	GrinderMatch,
+	GrindChip,
 	GrindSave,
 	GrindScale,
 	LastGrind
 };
+export { ScaleRefusal };
 
 /** What the type-or-pick box answers: one of its matches, or "+ Create “<typed>”". */
 export type GrinderChoice =
@@ -194,57 +206,83 @@ export function savedGrindRow(bean: Bean | null, grinderId: string | null): BagG
 	return bean?.grinds?.find((g) => g.grinderId === id) ?? null;
 }
 
-/** A grind as a number, or `null` when it isn't one ("6 + a tooth"). */
+/** The largest grind read as a number; past it a grind stays text. */
+export const MAX_GRIND_NUMBER = 1e6;
+
+/**
+ * A typed grind as a number, or `null` when it isn't a plain number ("6 + a
+ * tooth", "2.1.3"): the shell's parse of what the user types (REVIEW-CORE
+ * H1). Plain decimals only ("0,5" reads as 0.5): no hex, no `Infinity`,
+ * no exponent, and no more than {@link MAX_GRIND_NUMBER}.
+ */
 export function grindNumber(grind: string | null | undefined): number | null {
 	const raw = (grind ?? '').trim().replace(',', '.');
-	if (!raw) return null;
+	// No exponent: an imported "1e999999999" stays text, never a number to
+	// expand. And a bound well past any grinder's scale.
+	if (raw.length > 32 || !/^[+-]?(\d+\.?\d*|\.\d+)$/.test(raw)) return null;
 	const n = Number(raw);
-	return Number.isFinite(n) ? n : null;
-}
-
-/** The dial's value as a bag stores it: whole numbers without a decimal. */
-export function grindText(dial: number): string {
-	if (Number.isInteger(dial)) return String(dial);
-	// The dial moves in its scale's steps: at most two decimals, trailing zeros dropped.
-	return String(Number(dial.toFixed(2)));
+	return Number.isFinite(n) && Math.abs(n) <= MAX_GRIND_NUMBER ? n : null;
 }
 
 /**
- * What the grind dial shows with no grind on Brew: today's 4.2 on the default
- * scale, else the scale's middle on its step. A placeholder, never a grind.
+ * A dial number as a bag stores it and a shot records it, on `scale`
+ * (`de1_domain::grind_text`): whole numbers without a decimal, otherwise the
+ * step's decimals; never rounded to one decimal (REVIEW-FINAL M2).
  */
-export function grindPlaceholder(scale: GrindScale): number {
-	if (scale.min <= 4.2 && 4.2 <= scale.max && scale.max <= 20) return 4.2;
-	const mid = (scale.min + scale.max) / 2;
-	const step = scale.step > 0 ? scale.step : 1;
-	return Number((scale.min + Math.round((mid - scale.min) / step) * step).toFixed(3));
+export function grindText(dial: number, scale: GrindScale | null = null): string {
+	return grindTextJson(dial, JSON.stringify(scale ?? DEFAULT_GRIND_SCALE));
 }
 
-/** `grind` with the scale's unit: "480 μm", "14", "—" for none. */
-export function formatGrind(grind: string | number | null | undefined, scale: GrindScale | null): string {
-	if (grind == null || (typeof grind === 'string' && grind.trim() === '')) return '—';
-	const text = typeof grind === 'number' ? grindText(grind) : grind.trim();
-	const unit = scale?.unit?.trim() ?? '';
-	// A value that isn't a plain number is shown as typed, without a unit.
-	return unit && grindNumber(text) !== null ? `${text} ${unit}` : text;
+/** Whether two grinds are the same (`de1_domain::same_grind`): as numbers when both parse, else trimmed text. */
+export function sameGrind(a: string, b: string): boolean {
+	return wasmSameGrind(a, b);
+}
+
+/** `grind` with the scale's unit (`de1_domain::format_grind`): "480 μm", "2.1.3" as typed, "—" for none. */
+export function formatGrind(grind: string | null | undefined, scale: GrindScale | null): string {
+	return formatGrindJson(grind ?? '', JSON.stringify(scale ?? DEFAULT_GRIND_SCALE));
+}
+
+/** Why a typed scale can't be stored (`de1_domain::grind_scale_refusal`), or `null` when it is usable. */
+export function grindScaleRefusal(scale: GrindScale): ScaleRefusal | null {
+	return JSON.parse(grindScaleRefusalJson(JSON.stringify(scale))) as ScaleRefusal | null;
+}
+
+/** What each {@link ScaleRefusal} tells the user (Android's wording). */
+export const SCALE_REFUSAL_TEXT: Record<ScaleRefusal, string> = {
+	[ScaleRefusal.NotANumber]: 'Enter a number in each field',
+	[ScaleRefusal.LowestNotBelowHighest]: 'Lowest must be below Highest',
+	[ScaleRefusal.StepNotPositive]: 'Step must be more than 0',
+	[ScaleRefusal.StepTooLarge]: 'Step must fit between Lowest and Highest'
+};
+
+/**
+ * What Brew's grind is (`de1_domain::brew_grind_view`, DESIGN "No grind set
+ * is its own state"): the header's value, what a shot records, the stepper's
+ * number or blank, where the first + or − goes from blank, the marker and
+ * Save's grind part. `brewGrind` `null` = not set.
+ */
+export function brewGrindView(input: { bag: Bean | null; grinder: Grinder | null; brewGrind: string | null }): BrewGrindView {
+	const core = {
+		bag: input.bag ?? undefined,
+		grinder: input.grinder ?? undefined,
+		brewGrind: input.brewGrind ?? undefined
+	};
+	return JSON.parse(brewGrindViewJson(JSON.stringify(core))) as BrewGrindView;
+}
+
+/** Where a stepper's first + or − goes from a blank grind on `scale`: its middle, on its step. */
+export function grindStartFromBlank(scale: GrindScale | null): number {
+	return brewGrindView({ bag: null, grinder: scale ? ({ scale } as Grinder) : null, brewGrind: null }).startFromBlank;
 }
 
 /**
- * Whether Brew's grind differs from what the bag saved for the active
- * grinder: the unsaved-grind marker. No bag, or no grind on Brew: no marker.
+ * Up to `count` Quick Controls chips on `scale`, single steps around
+ * `around` (Brew's grind) (`de1_domain::grind_chips`, REVIEW-CORE L1). None
+ * when the grind is unset or isn't a plain number.
  */
-export function grindUnsaved(bean: Bean | null, grinderId: string | null, brewGrind: number | null): boolean {
-	if (!bean || brewGrind === null) return false;
-	const row = savedGrindRow(bean, grinderId);
-	if (!row || row.grind.trim() === '') return true;
-	const saved = grindNumber(row.grind);
-	return saved === null ? row.grind.trim() !== grindText(brewGrind) : saved !== brewGrind;
-}
-
-/** Whether a typed scale is usable: finite numbers, min below max, a positive step. */
-export function validScale(scale: GrindScale): boolean {
-	const { min, max, step } = scale;
-	return [min, max, step].every((n) => typeof n === 'number' && Number.isFinite(n)) && min < max && step > 0;
+export function grindChips(scale: GrindScale, around: string | null, count: number): GrindChip[] {
+	return JSON.parse(grindChipsJson(JSON.stringify(scale), around ?? undefined, count)) as GrindChip[];
 }
 
 /**

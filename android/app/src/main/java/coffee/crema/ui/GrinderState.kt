@@ -3,13 +3,13 @@ package coffee.crema.ui
 import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.DEFAULT_GRIND_SCALE
 import coffee.crema.beans.activeGrinder
-import coffee.crema.beans.grindDiffers
-import coffee.crema.beans.grindNumber
-import coffee.crema.beans.grindText
+import coffee.crema.beans.formatGrind
 import coffee.crema.beans.isLive
+import coffee.crema.beans.sameGrind
 import coffee.crema.beans.savedGrind
 import coffee.crema.core.BagGrind
 import coffee.crema.core.Bean
+import coffee.crema.core.BrewGrindView
 import coffee.crema.core.GrindScale
 import coffee.crema.core.Grinder
 
@@ -46,37 +46,42 @@ fun MainUiState.activeBag(): Bean? = beans.firstOrNull { it.id == activeBeanId }
 /** The bag's saved grind for the active grinder (the "no grinder" slot with none). */
 fun MainUiState.savedGrindForBrew(): BagGrind? = activeBag()?.savedGrind(activeGrinder()?.id)
 
-/** Brew's grind as text: the dial when set, else the bag's saved grind; null when neither. */
-fun MainUiState.brewGrind(): String? = qcGrind?.let(::grindText) ?: savedGrindForBrew()?.grind
+/** The last [brewGrindView] answer and what it was asked: the screens read it on every recomposition. */
+private class GrindViewMemo(val bag: Bean?, val grinder: Grinder?, val grind: String?, val view: BrewGrindView)
 
-/** Where the stepper starts with no dial yet: the bag's saved grind, else 4.2 inside the scale. */
-fun MainUiState.grindSeed(): Double {
-    val scale = activeGrindScale()
-    // Through the text, so 4.2f reads 4.2 and not 4.199999809.
-    savedGrindForBrew()?.grind?.trim()?.replace(',', '.')?.toDoubleOrNull()?.takeIf { it.isFinite() }?.let { return it }
-    val lo = minOf(scale.min, scale.max).toDouble()
-    val hi = maxOf(scale.min, scale.max).toDouble()
-    return DEFAULT_GRIND_SEED.coerceIn(lo, hi)
+@Volatile private var grindViewMemo: GrindViewMemo? = null
+
+/**
+ * What Brew's grind is, from the core (`brew_grind_view`, DESIGN "No grind
+ * set is its own state"): [BrewGrindView.value] is what the header and strip
+ * show and what the shot records (null = not set: "Grind —", no marker, and
+ * the first + or − goes to [BrewGrindView.startFromBlank]); the marker and
+ * Save's grind part come with it. On a remote, the hub's grinder and grind.
+ */
+fun MainUiState.brewGrindView(): BrewGrindView {
+    val bag = activeBag()
+    val grinder = activeGrinder()
+    grindViewMemo?.takeIf { it.bag == bag && it.grinder == grinder && it.grind == qcGrind }?.let { return it.view }
+    val view = runCatching { coffee.crema.beans.brewGrindView(bag, grinder, qcGrind) }.getOrElse {
+        // Never expected (the input is this app's own types); keep Brew drawable.
+        val scale = grinder?.scale ?: DEFAULT_GRIND_SCALE
+        val value = qcGrind?.trim()?.takeIf { g -> g.isNotEmpty() }
+        BrewGrindView(scale = scale, value = value, display = value ?: "—", startFromBlank = minOf(scale.min, scale.max).toDouble())
+    }
+    grindViewMemo = GrindViewMemo(bag, grinder, qcGrind, view)
+    return view
 }
 
-private const val DEFAULT_GRIND_SEED = 4.2
+/** Whether Brew's grind [now] is still the one a change set ([set]): an Undo only reverts what's still its own. */
+internal fun stillGrind(now: String?, set: String?): Boolean =
+    if (now.isNullOrBlank() || set.isNullOrBlank()) now.isNullOrBlank() && set.isNullOrBlank() else sameGrind(now, set)
 
-/** The unsaved-grind marker: Brew's dial differs from the bag's saved grind
- *  for the active grinder. [saved] null = nothing saved yet ("Bag —"). */
-data class UnsavedGrind(val saved: String?) {
-    /** "Bag 4.2" or "Bag —". */
-    val label: String get() = "Bag ${saved ?: "—"}"
-}
+/** "Grind 480 μm" or "Grind —": Brew's grind in the header and the phone strip. */
+fun BrewGrindView.headerText(): String = "Grind $display"
 
-/** The marker when it shows: a bag is selected, the dial is set, and it
- *  differs from the bag's saved grind (or none is saved). No bag: none. */
-fun MainUiState.unsavedGrind(): UnsavedGrind? {
-    if (activeBag() == null) return null
-    val dial = qcGrind ?: return null
-    val saved = savedGrindForBrew()?.grind
-    if (saved != null && !grindDiffers(grindText(dial), saved)) return null
-    return UnsavedGrind(saved)
-}
+/** The stepper's blank state ([coffee.crema.ui.components.StepperBlank]): the grind isn't set ("—") or isn't a plain number ("2.1.3"). */
+fun BrewGrindView.stepperBlank(): coffee.crema.ui.components.StepperBlank? =
+    if (dial != null) null else coffee.crema.ui.components.StepperBlank(value ?: "—", startFromBlank)
 
 /** A scale bound or step as Devices and the pickers show it: "999", "0.1". */
 fun scaleNumber(v: Float): String = if (v % 1f == 0f) String.format(java.util.Locale.ROOT, "%.0f", v) else v.toString()
@@ -89,6 +94,13 @@ fun scaleRangeText(scale: GrindScale): String =
 fun newestShotGrind(lastGrinds: List<coffee.crema.core.LastGrind>, grinder: Grinder): coffee.crema.core.LastGrind? =
     lastGrinds.filter { it.grind.isNotBlank() && (it.grinderId == grinder.id || (it.grinderId == null && it.grinder.trim().equals(grinder.name.trim(), ignoreCase = true))) }
         .maxByOrNull { it.completedAt }
+
+/** The scale a stored shot's grind is on: its grinder's by id, an older row's by name, else the default. */
+fun shotGrindScale(shot: coffee.crema.history.ShotMeta, grinders: List<Grinder>): GrindScale =
+    grinders.firstOrNull { g -> !shot.grinderId.isNullOrEmpty() && g.id == shot.grinderId }?.scale
+        ?: shot.grinderModel?.trim()?.takeIf { shot.grinderId.isNullOrEmpty() && it.isNotEmpty() }
+            ?.let { name -> grinders.firstOrNull { it.name.trim().equals(name, ignoreCase = true) }?.scale }
+        ?: DEFAULT_GRIND_SCALE
 
 /** One grinder row in the Brew pickers (wide header, phone swap section). */
 data class GrinderPickRow(val grinder: Grinder, val starred: Boolean, val meta: String)
@@ -104,32 +116,22 @@ fun grinderPickRows(grinders: List<Grinder>, bag: Bean?, lastGrinds: List<coffee
         val starred = saved?.starred == true
         val meta = when {
             bag == null -> scaleRangeText(g.scale)
-            saved != null && starred -> "This bag's grinder · saved ${coffee.crema.beans.grindLabel(saved.grind, g.scale)}"
-            saved != null -> "Saved ${coffee.crema.beans.grindLabel(saved.grind, g.scale)}"
-            else -> newestShotGrind(lastGrinds, g)?.let { "Nothing saved · last shot ${coffee.crema.beans.grindLabel(it.grind, g.scale)}" } ?: "Nothing saved"
+            saved != null && starred -> "This bag's grinder · saved ${formatGrind(saved.grind, g.scale)}"
+            saved != null -> "Saved ${formatGrind(saved.grind, g.scale)}"
+            else -> newestShotGrind(lastGrinds, g)?.let { "Nothing saved · last shot ${formatGrind(it.grind, g.scale)}" } ?: "Nothing saved"
         }
         GrinderPickRow(g, starred, meta)
     }
 
-/** Five quick-pick values around [center] on [scale] (Quick Controls' grind chips), inside the scale. */
-fun grindChips(center: Double, scale: GrindScale): List<Double> {
-    val step = if (scale.step.isFinite() && scale.step > 0f) scale.step.toDouble() else 0.1
-    val lo = minOf(scale.min, scale.max).toDouble()
-    val hi = maxOf(scale.min, scale.max).toDouble()
-    val snapped = (kotlin.math.round((center - lo) / step) * step + lo).coerceIn(lo, hi)
-    val start = (snapped - 2 * step).coerceIn(lo, (hi - 4 * step).coerceAtLeast(lo))
-    return (0 until 5).map { i -> kotlin.math.round((start + i * step) * 100) / 100 }.filter { it in lo..hi }.distinct()
-}
-
 /** The explanation behind the unsaved-grind marker (hover / long-press). */
 fun MainUiState.unsavedGrindExplanation(): String? {
-    val marker = unsavedGrind() ?: return null
+    val view = brewGrindView()
+    val marker = view.marker ?: return null
     val bag = activeBag() ?: return null
     val grinder = activeGrinder()
-    val scale = activeGrindScale()
-    val now = brewGrind()?.let { coffee.crema.beans.grindLabel(it, scale) } ?: "—"
     val forGrinder = grinder?.name?.let { " for $it" }.orEmpty()
-    val has = marker.saved?.let { "${bag.name} has ${coffee.crema.beans.grindLabel(it, scale)} saved$forGrinder." } ?: "${bag.name} has no grind saved$forGrinder yet."
+    val has = marker.saved?.let { "${bag.name} has ${formatGrind(it, view.scale)} saved$forGrinder." } ?: "${bag.name} has no grind saved$forGrinder yet."
+    val now = view.display
     return "$has Brew is at $now for the next shot. Save in Quick Controls saves it."
 }
 

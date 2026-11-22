@@ -264,10 +264,12 @@ data class AppPrefs(
     val qcHotWaterRatio: Float? = null,
     val qcFlushTimeS: Float = CommonDefaults.common.qcFlushTimeS,
     val qcFlushTempC: Float = CommonDefaults.common.qcFlushTempC,
-    /** Persisted Quick-Controls grinder click (issue 15). Null = never dialed —
-     *  the stepper shows a seed value and shots record no grind until the user
-     *  sets it; once set it sticks and is recorded onto each shot. */
-    val qcGrind: Float? = null,
+    /** Brew's grind (issue 15, #488 round 2), as text. Null = not set: Brew
+     *  shows it blank and shots record no grind until the user sets it; once
+     *  set it sticks and is recorded onto each shot. An older file's number
+     *  reads as its digits. */
+    @Serializable(with = coffee.crema.beans.GrindTextSerializer::class)
+    val qcGrind: String? = null,
     // ── Session restore ──────────────────────────────────────────────────────
     /** The last active profile id, restored on launch (web `crema.profiles.activeId`). */
     val activeProfileId: String? = null,
@@ -513,7 +515,8 @@ private data class PersistedPrefs(
     val lastUpdateCheckAtMs: Long? = null,
     val lastSeenLatestVersion: String? = null,
     val lastBrewLogMethod: String? = null,
-    val qcGrind: Float? = null,
+    @Serializable(with = coffee.crema.beans.GrindTextSerializer::class)
+    val qcGrind: String? = null,
     val activeProfileId: String? = null,
     val de1Address: String? = null,
     val scaleAddress: String? = null,
@@ -628,7 +631,9 @@ data class ConfigSnapshot(
     val qcHotWaterVolumeMl: Float = 150f,
     val qcFlushTimeS: Float = 4f,
     val qcFlushTempC: Float = 95f,
-    val qcGrind: Float? = null,
+    /** The hub's Brew grind as text (#488 round 2); an older hub's number reads as its digits. */
+    @Serializable(with = coffee.crema.beans.GrindTextSerializer::class)
+    val qcGrind: String? = null,
     /** The hub's hot-water dose (A22–A25), beside [qcHotWaterVolumeMl]. Null
      *  = not carried: the rows read "Waiting for <hub>". */
     val qcHotWaterMode: coffee.crema.core.HotWaterMode? = null,

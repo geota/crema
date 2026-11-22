@@ -312,7 +312,7 @@
 			dose: dose > 0 ? dose : null,
 			waterG: !espresso && water > 0 ? water : null,
 			yieldOut: espresso && water > 0 ? water : (seed?.yieldOut ?? null),
-			grinderSetting: grind != null && grind > 0 ? grindText(grind) : null,
+			grinderSetting: grind != null && grind > 0 ? grindText(grind, library.activeGrinder?.scale ?? null) : null,
 			brewTempC: temp != null && temp > 0 ? temp : null,
 			durationMs: parseDuration(timeStr),
 			rating: rating > 0 ? rating : null,

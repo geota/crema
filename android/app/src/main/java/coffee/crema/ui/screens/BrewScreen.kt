@@ -14,13 +14,11 @@ import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.activeBag
 import coffee.crema.ui.activeGrinder
 import coffee.crema.ui.activeGrindScale
-import coffee.crema.ui.brewGrind
-import coffee.crema.ui.grindSeed
+import coffee.crema.ui.brewGrindView
 import coffee.crema.ui.liveGrinders
 import coffee.crema.ui.savedGrindForBrew
-import coffee.crema.ui.unsavedGrind
+import coffee.crema.ui.headerText
 import coffee.crema.ui.unsavedGrindExplanation
-import coffee.crema.beans.grindLabel
 import coffee.crema.beans.savedGrind
 import coffee.crema.ui.fmt
 import androidx.compose.foundation.BorderStroke
@@ -512,12 +510,8 @@ fun BrewScreen(
                     onHotWaterDose = vm::setHotWaterDose,
                     onFlushTime = { vm.setQcFlushTime(it.toFloat()) },
                     onFlushTemp = { vm.setQcFlushTemp(it.toFloat()) },
-                    qcGrind = ui.qcGrind?.toDouble(),
-                    // The bag's saved grind for the active grinder (#488), on its scale.
-                    qcGrindSeed = ui.grindSeed(),
-                    grindScale = ui.activeGrindScale(),
-                    savedGrind = coffee.crema.beans.grindDouble(ui.savedGrindForBrew()?.grind),
-                    unsavedGrind = ui.unsavedGrind(),
+                    // Brew's grind from the core (#488 round 2): the header reads the same view.
+                    grindView = ui.brewGrindView(),
                     unsavedGrindExplanation = ui.unsavedGrindExplanation(),
                     onGrind = { vm.setQcGrind(it.toFloat()) },
                     onToggleChannel = vm::toggleChartChannel,
@@ -878,9 +872,9 @@ private fun GrinderBlock(vm: MainViewModel, ui: coffee.crema.ui.MainUiState, onN
     var adding by remember { mutableStateOf(false) }
     val grinder = ui.activeGrinder()
     val bag = ui.activeBag()
-    val scale = ui.activeGrindScale()
+    val grindView = ui.brewGrindView()
     val starred = grinder != null && bag?.savedGrind(grinder.id)?.starred == true
-    val marker = ui.unsavedGrind()
+    val marker = grindView.marker
     val gate = ui.gate(coffee.crema.settings.Setting.ACTIVE_GRINDER)
     Box {
         CremaHeaderBlock(
@@ -897,7 +891,7 @@ private fun GrinderBlock(vm: MainViewModel, ui: coffee.crema.ui.MainUiState, onN
             extra = {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        ui.brewGrind()?.let { "Grind ${grindLabel(it, scale)}" } ?: "Grind —",
+                        grindView.headerText(),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

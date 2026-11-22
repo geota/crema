@@ -8,7 +8,8 @@
 import {
 	DEFAULT_GRIND_SCALE,
 	grinderCatalogue,
-	validScale,
+	grindScaleRefusal,
+	SCALE_REFUSAL_TEXT,
 	type CatalogueGrinderInfo,
 	type Grinder,
 	type GrindScale
@@ -35,8 +36,9 @@ function numberOf(text: string): number {
 }
 
 /**
- * The typed scale, and why it is refused (`null` when it is usable). Gated
- * on {@link validScale}: finite numbers, Lowest below Highest, Step above 0.
+ * The typed scale, and why it is refused (`null` when it is usable): the
+ * core's `grind_scale_refusal` (finite numbers, Lowest below Highest, Step
+ * above 0 and no more than the range), so Devices refuses what Android does.
  */
 export function parseScaleDraft(draft: ScaleDraft): { scale: GrindScale; error: string | null } {
 	const scale: GrindScale = {
@@ -45,16 +47,8 @@ export function parseScaleDraft(draft: ScaleDraft): { scale: GrindScale; error: 
 		step: numberOf(draft.step),
 		unit: draft.unit.trim()
 	};
-	if (validScale(scale)) return { scale, error: null };
-	let error: string;
-	if (![scale.min, scale.max, scale.step].every(Number.isFinite)) {
-		error = 'Enter a number in Lowest, Highest and Step.';
-	} else if (scale.min >= scale.max) {
-		error = 'Lowest must be below Highest.';
-	} else {
-		error = 'Step must be above 0.';
-	}
-	return { scale, error };
+	const refusal = grindScaleRefusal(scale);
+	return { scale, error: refusal === null ? null : `${SCALE_REFUSAL_TEXT[refusal]}.` };
 }
 
 /** Whether two scales are the same. */

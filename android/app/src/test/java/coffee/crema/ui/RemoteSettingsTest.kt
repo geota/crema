@@ -184,10 +184,10 @@ class RemoteSettingsTest {
     fun `older snapshots are dropped`() {
         val vm = fixture.start()
         fixture.push(S.copy(rev = 5))
-        fixture.hubConfig = coreJson.encodeToString(coffee.crema.settings.ConfigSnapshot.serializer(), S.copy(rev = 3, qcGrind = 3f))
+        fixture.hubConfig = coreJson.encodeToString(coffee.crema.settings.ConfigSnapshot.serializer(), S.copy(rev = 3, qcGrind = "3"))
         fixture.hub.pushConfig(fixture.hubConfig)
-        fixture.push(S.copy(rev = 6, qcGrind = 6f)) // a later one lands, so the rev-3 one was handled first
-        assertEquals(6f, vm.ui.value.qcGrind)
+        fixture.push(S.copy(rev = 6, qcGrind = "6")) // a later one lands, so the rev-3 one was handled first
+        assertEquals("6", vm.ui.value.qcGrind)
         assertTrue(VmHarness.log(vm).any { "Config snapshot 3 dropped" in it }, "the rev-3 snapshot was dropped")
     }
 
@@ -357,7 +357,7 @@ class RemoteSettingsTest {
         val vm = fixture.start()
         fixture.push(S.copy(rev = 5))
         val shown = abOfUi(vm.ui.value)
-        val after = S.copy(stopOnWeight = false, qcGrind = 9f, grinderModel = "After the restart", rev = 0)
+        val after = S.copy(stopOnWeight = false, qcGrind = "9", grinderModel = "After the restart", rev = 0)
         fixture.hubConfig = coreJson.encodeToString(coffee.crema.settings.ConfigSnapshot.serializer(), after)
         fixture.restart()
         VmHarness.idleUntil("the remote to notice") { vm.ui.value.mirrorReconnecting }
@@ -370,7 +370,7 @@ class RemoteSettingsTest {
         assertEquals(abOf(P), abOf(savedPrefs()))
         untilClock("the reattach") { fixture.hub.remotes().isNotEmpty() && !vm.ui.value.mirrorReconnecting }
         VmHarness.idleUntil("the restarted hub's snapshot") { vm.ui.value.grinderModel == "After the restart" }
-        assertEquals(9f, vm.ui.value.qcGrind)
+        assertEquals("9", vm.ui.value.qcGrind)
         assertEquals(false, vm.ui.value.stopOnWeight)
         assertEquals(SettingAvailability.VIA_HUB, vm.ui.value.availability(Setting.STOP_ON_WEIGHT))
         assertEquals(abOf(P), abOf(savedPrefs()))

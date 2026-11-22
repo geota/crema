@@ -861,7 +861,8 @@ internal class GuidedBrewController(
                 doseG = d.dose.toFloat().takeIf { it > 0f },
                 waterG = if (!d.espresso) d.water.toFloat().takeIf { it > 0f } else null,
                 yieldG = if (d.espresso) d.water.toFloat().takeIf { it > 0f } else null,
-                grindSetting = d.grind.toFloat().takeIf { it > 0f },
+                // As text on the log stepper's 0.1 steps (#488 round 2: never rounded to one decimal).
+                grindSetting = d.grind.takeIf { it > 0.0 }?.let { coffee.crema.beans.grindText(it) },
                 brewTempC = d.temp.toFloat().takeIf { it > 0f },
                 durationMs = coffee.crema.ui.brewlog.parseBrewDurationMs(d.timeStr),
                 rating = d.rating.takeIf { it > 0 },

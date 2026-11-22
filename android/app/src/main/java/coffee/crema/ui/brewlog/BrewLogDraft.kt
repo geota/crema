@@ -118,9 +118,7 @@ object BrewLogSeeds {
         doseG = s.doseG,
         waterG = s.waterG,
         yieldG = s.yieldG,
-        grinderSetting = s.grindSetting?.let { g ->
-            if (g % 1f == 0f) String.format(java.util.Locale.US, "%.0f", g) else String.format(java.util.Locale.US, "%.1f", g)
-        },
+        grinderSetting = s.grindSetting?.trim()?.takeIf { it.isNotEmpty() },
         tempC = s.brewTempC,
         durationMs = s.durationMs,
     )

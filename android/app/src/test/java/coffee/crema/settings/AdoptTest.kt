@@ -10,9 +10,9 @@ import kotlin.test.assertEquals
 /** Remote → standalone adoption, pure (spec §7.5, AC-24). */
 class AdoptTest {
 
-    private val own = MainUiState(qcSteamTempC = 140f, stopOnWeight = false, steamEco = false, activeBeanId = "bean:p", qcGrind = 10f, themeMode = "light")
+    private val own = MainUiState(qcSteamTempC = 140f, stopOnWeight = false, steamEco = false, activeBeanId = "bean:p", qcGrind = "10", themeMode = "light")
     private val cfg = v4Snapshot(own).copy(
-        qcSteamTempC = 150f, stopOnWeight = true, steamEco = true, activeBeanId = "bean:s", qcGrind = 15f,
+        qcSteamTempC = 150f, stopOnWeight = true, steamEco = true, activeBeanId = "bean:s", qcGrind = "15",
         brewDoseG = 20.0, brewYieldG = 40.0, brewTempC = 94.0,
     )
 
@@ -30,7 +30,7 @@ class AdoptTest {
         assertEquals(150f, adopted.qcSteamTempC)
         assertEquals(true, adopted.stopOnWeight)
         assertEquals(true, adopted.steamEco)
-        assertEquals(15f, adopted.qcGrind)
+        assertEquals("15", adopted.qcGrind)
         assertEquals("bean:s", adopted.activeBeanId)
         assertEquals(BrewParams(20.0, 40.0, 94.0, null), adopted.brewParams)
         assertEquals("light", adopted.themeMode)

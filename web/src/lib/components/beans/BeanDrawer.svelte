@@ -35,7 +35,7 @@
 		NO_GRINDER_ID,
 		formatGrind,
 		isLiveGrinder,
-		validScale
+		grindScaleRefusal
 	} from '#lib/bean/grinder.js';
 	import { getHistoryStore, effectiveGrindSetting, yieldOf } from '#lib/history/index.js';
 	import { bagRows, getHistoryReads } from '#lib/history/reads.svelte.js';
@@ -102,7 +102,7 @@
 			const none = g.grinderId === NO_GRINDER_ID;
 			const grinder = none ? null : library.getGrinder(g.grinderId);
 			const live = none || (grinder !== null && isLiveGrinder(grinder));
-			const scale = grinder && validScale(grinder.scale) ? grinder.scale : DEFAULT_GRIND_SCALE;
+			const scale = grinder && grindScaleRefusal(grinder.scale) === null ? grinder.scale : DEFAULT_GRIND_SCALE;
 			return {
 				key: `g:${g.grinderId}`,
 				name: none ? 'No grinder' : (live ? grinder?.name : null) || g.grinderName || 'Unknown grinder',

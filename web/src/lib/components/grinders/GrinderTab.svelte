@@ -19,7 +19,7 @@
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import StarIcon from 'phosphor-svelte/lib/StarIcon';
 	import { getBeanStore } from '#lib/bean/store.svelte.js';
-	import { formatGrind, grindPlaceholder, type GrinderChoice } from '#lib/bean/grinder.js';
+	import { formatGrind, grindStartFromBlank, grindText, type GrinderChoice } from '#lib/bean/grinder.js';
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import GrinderTypeOrPick from './GrinderTypeOrPick.svelte';
@@ -66,7 +66,7 @@
 	const atPreset = $derived(!!selected && !!presetScale && sameScale(selected.scale, presetScale));
 	const notSet = $derived(!!selected && rangeNotSet(selected));
 	const preview = $derived(
-		selected ? formatGrind(grindPlaceholder(selected.scale), selected.scale) : ''
+		selected ? formatGrind(grindText(grindStartFromBlank(selected.scale), selected.scale), selected.scale) : ''
 	);
 	const bags = $derived(selected ? savedOnBags(lib.beans, selected.id) : []);
 	const autoSave = $derived(settings.current.grindAutoSave === true);

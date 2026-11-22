@@ -135,7 +135,9 @@ fun MachineCommand.Config.applyTo(s: MainUiState): MainUiState = when (this) {
         QcField.HOT_WATER_VOLUME -> s.copy(qcHotWaterVolumeMl = value, qcHotWaterMode = coffee.crema.core.HotWaterMode.Volume)
         QcField.FLUSH_TIME -> s.copy(qcFlushTimeS = value)
         QcField.FLUSH_TEMP -> s.copy(qcFlushTempC = value)
-        QcField.GRIND -> s.copy(qcGrind = value)
+        // A stepped or typed number, as text on the active grinder's scale
+        // (the core's grind_text: no one-decimal rounding, #488 round 2).
+        QcField.GRIND -> s.copy(qcGrind = coffee.crema.beans.grindText(value.toDouble(), s.activeGrindScale()))
     }
     is MachineCommand.AdjustBrew -> s.copy(brewParams = BrewParams(dose, yieldOut, brewTemp, preinf))
     MachineCommand.ResetBrew -> s.copy(brewParams = null)

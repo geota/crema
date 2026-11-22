@@ -119,20 +119,3 @@ describe('the dial lives at app level (F7)', () => {
 		expect(again.qcOverrides()).toEqual({});
 	});
 });
-
-describe('the grind dial is the bag’s, not the profile’s (save-boundaries F1)', () => {
-	it('a profile change and Reset keep the grind dial', () => {
-		const active = new ReactiveBox(profileAt(92, 'A'));
-		const params = sheet(active);
-		params.set('grind', 12);
-		params.set('dose', 19);
-		active.value = profileAt(90, 'B');
-		flushSync();
-		expect(params.current.grind, 'a re-seed does not put back the 4.2 placeholder').toBe(12);
-		expect(params.current.dose).toBe(active.value.dose);
-		params.set('dose', 20);
-		params.reset();
-		expect(params.current.grind).toBe(12);
-		expect(params.qcOverrides()).toEqual({});
-	});
-});

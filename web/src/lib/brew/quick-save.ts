@@ -21,9 +21,8 @@
 
 import type { Bean } from '#lib/bean/index.js';
 import {
+	brewGrindView,
 	formatGrind,
-	grindText,
-	grindUnsaved,
 	DEFAULT_GRIND_SCALE,
 	type BagGrind,
 	type Grinder,
@@ -50,14 +49,9 @@ export interface QuickSavePlan {
 	readonly recipeChanged: boolean;
 }
 
-/** The bag's form of the grind dial: whole numbers without a decimal. */
-export function grindSettingOf(dial: number): string {
-	return grindText(dial);
-}
-
 /**
  * The plan for the active `bean`, the active `grinder`, Brew's grind
- * (`brewGrind`, `null` = none set), the active `profile` and its
+ * (`brewGrind` as text, `null` = not set), the active `profile` and its
  * `overrides` — normalized by the core's lifecycle rule
  * (`normalizeBrewOverrides`), so a dial back at the profile's own value is
  * no change. No grind on Brew is no grind change either.
@@ -65,13 +59,13 @@ export function grindSettingOf(dial: number): string {
 export function quickSavePlan(input: {
 	bean: Bean | null;
 	grinder: Grinder | null;
-	brewGrind: number | null;
+	brewGrind: string | null;
 	profile: CremaProfile | null;
 	overrides: ProfileFingerprintOverrides;
 }): QuickSavePlan {
 	const { bean, brewGrind, profile, grinder } = input;
-	const grind =
-		bean && brewGrind !== null && grindUnsaved(bean, grinder?.id ?? null, brewGrind) ? grindText(brewGrind) : null;
+	// Save's grind part is the core's (`brew_grind_view`): the marker's rule.
+	const grind = brewGrindView({ bag: bean, grinder, brewGrind }).saveGrind ?? null;
 	return {
 		beanId: bean?.id ?? null,
 		beanName: bean?.name ?? null,

@@ -340,8 +340,10 @@ data class MainUiState(
     val qcHotWaterRatio: Float = HotWaterUi.defaults.ratio,
     val qcFlushTimeS: Float = DefaultPrefs.qcFlushTimeS,
     val qcFlushTempC: Float = DefaultPrefs.qcFlushTempC,
-    /** Persisted Quick-Controls grinder click (issue 15); null = never dialed. */
-    val qcGrind: Float? = null,
+    /** Brew's grind (issue 15, #488 round 2), as text: "15", "2.25", or a
+     *  grind that isn't a plain number ("2.1.3"). Null = not set: Brew shows
+     *  it blank and a shot records none. Read it through [brewGrindView]. */
+    val qcGrind: String? = null,
     // ── Brew Log (issue #10) ─────────────────────────────────────────────
     /** The live guided-brew session, when one is armed/running. */
     val guidedBrew: GuidedBrewUi = GuidedBrewUi(),
