@@ -764,6 +764,24 @@ fn score_docs(docs: &[Doc], toks: &[Vec<char>]) -> Option<SearchHit> {
     })
 }
 
+/// The score of `query` against one record known by the names in `texts`
+/// (each scored as a name), with the same tiers and floor as
+/// [`search_beans`]: `None` when it doesn't match or the query is blank. For
+/// the grinder type-or-pick box (#488), so "df46" finds DF64.
+pub(crate) fn name_match_score(texts: &[&str], query: &str) -> Option<f32> {
+    let toks = tokens(query);
+    let docs: Vec<Doc> = texts
+        .iter()
+        .filter_map(|t| doc(SearchField::Name, *t))
+        .collect();
+    score_docs(&docs, &toks).map(|h| h.score)
+}
+
+/// [`fold`] for other modules: lowercased and ASCII-folded.
+pub(crate) fn fold_text(s: &str) -> String {
+    fold(s)
+}
+
 /// Rank `beans` against `query`, best match first.
 ///
 /// Returns an empty vec for a blank query — "no query" is not "no results",

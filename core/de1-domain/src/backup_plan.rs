@@ -32,8 +32,8 @@ use typeshare::typeshare;
 
 use crate::{
     Bean, BrewRecipe, CustomBrewMethod, Roaster, STORED_SHOT_FORMAT_VERSION, StoredShot,
-    app_settings::CommonSettings, crema_jsonl::BackupImportPlan, is_builtin_recipe,
-    is_custom_method_id, visualizer_sync::VisualizerSyncPrefs,
+    app_settings::CommonSettings, crema_jsonl::BackupImportPlan, grinder::Grinder,
+    is_builtin_recipe, is_custom_method_id, visualizer_sync::VisualizerSyncPrefs,
 };
 
 /// The header kind this build writes and reads.
@@ -99,6 +99,8 @@ pub enum BackupLine {
     Shot(Box<StoredShot>, bool),
     Bean(Box<Bean>),
     Roaster(Box<Roaster>),
+    /// A grinder record (#488).
+    Grinder(Box<Grinder>),
     Recipe(Box<BrewRecipe>),
     Method(Box<CustomBrewMethod>),
     /// A custom profile, verbatim with `kind` removed, and its id.
@@ -122,6 +124,8 @@ pub struct ManifestHeader {
     pub profile_count: Option<u32>,
     pub bean_count: Option<u32>,
     pub roaster_count: Option<u32>,
+    /// Absent in backups from before grinder records (#488).
+    pub grinder_count: Option<u32>,
     pub shot_count: Option<u32>,
     pub recipe_count: Option<u32>,
     pub custom_method_count: Option<u32>,
@@ -146,6 +150,10 @@ pub enum ParsedBackupLine {
     },
     Roaster {
         roaster: Box<Roaster>,
+    },
+    /// A grinder record (#488).
+    Grinder {
+        grinder: Box<Grinder>,
     },
     Recipe {
         recipe: Box<BrewRecipe>,
@@ -199,6 +207,7 @@ pub fn parse_backup_line_parsed(line: &[u8]) -> ParsedBackupLine {
         Ok(BackupLine::Shot(shot, pinned)) => ParsedBackupLine::Shot { shot, pinned },
         Ok(BackupLine::Bean(bean)) => ParsedBackupLine::Bean { bean },
         Ok(BackupLine::Roaster(roaster)) => ParsedBackupLine::Roaster { roaster },
+        Ok(BackupLine::Grinder(grinder)) => ParsedBackupLine::Grinder { grinder },
         Ok(BackupLine::Recipe(recipe)) => ParsedBackupLine::Recipe { recipe },
         Ok(BackupLine::Method(method)) => ParsedBackupLine::BrewMethod { method },
         Ok(BackupLine::Profile(profile, id)) => ParsedBackupLine::Profile { id, profile },
@@ -284,6 +293,9 @@ pub fn parse_backup_line(line: &[u8]) -> Result<BackupLine, LineError> {
         }
         "bean" => Ok(BackupLine::Bean(Box::new(typed(row)?))),
         "roaster" => Ok(BackupLine::Roaster(Box::new(typed(row)?))),
+        "grinder" => crate::bean_coerce::coerce_grinder(&row)
+            .map(|g| BackupLine::Grinder(Box::new(g)))
+            .ok_or(LineError::BadRow),
         "recipe" => Ok(BackupLine::Recipe(Box::new(typed(row)?))),
         "brewMethod" => Ok(BackupLine::Method(Box::new(typed(row)?))),
         "profile" => {
@@ -336,6 +348,7 @@ fn read_header(
         profile_count: count("profileCount")?,
         bean_count: count("beanCount")?,
         roaster_count: count("roasterCount")?,
+        grinder_count: count("grinderCount")?,
         shot_count: count("shotCount")?,
         recipe_count: count("recipeCount")?,
         custom_method_count: count("customMethodCount")?,
@@ -351,6 +364,8 @@ fn read_header(
 pub enum RowStore {
     Beans,
     Roasters,
+    /// Grinder records (#488).
+    Grinders,
     Shots,
     Profiles,
     Recipes,
@@ -358,9 +373,10 @@ pub enum RowStore {
 }
 
 impl RowStore {
-    const ALL: [RowStore; 6] = [
+    const ALL: [RowStore; 7] = [
         RowStore::Beans,
         RowStore::Roasters,
+        RowStore::Grinders,
         RowStore::Shots,
         RowStore::Profiles,
         RowStore::Recipes,
@@ -373,6 +389,7 @@ impl RowStore {
         match self {
             RowStore::Beans => "beans",
             RowStore::Roasters => "roasters",
+            RowStore::Grinders => "grinders",
             RowStore::Shots => "shots",
             RowStore::Profiles => "profiles",
             RowStore::Recipes => "recipes",
@@ -384,6 +401,7 @@ impl RowStore {
         match self {
             RowStore::Beans => h.bean_count,
             RowStore::Roasters => h.roaster_count,
+            RowStore::Grinders => h.grinder_count,
             RowStore::Shots => h.shot_count,
             RowStore::Profiles => h.profile_count,
             RowStore::Recipes => h.recipe_count,
@@ -477,10 +495,15 @@ pub struct BackupManifest {
     /// Ids per store, in file order, first of each id only.
     pub beans: Vec<String>,
     pub roasters: Vec<String>,
+    pub grinders: Vec<String>,
     pub profiles: Vec<String>,
     pub recipes: Vec<String>,
     pub custom_methods: Vec<String>,
     pub shots: Vec<ManifestShot>,
+    /// Bean ids whose row has no `grinds` (written by an app from before
+    /// #488): a Replace keeps the device's saved grinds on them (review F7).
+    #[serde(default)]
+    pub beans_without_grinds: Vec<String>,
     /// Bean ids with a photo in the backup. The shell's, from the zip.
     pub photos: Vec<String>,
     /// The settings line's `_shell`, if there's a settings line.
@@ -512,6 +535,7 @@ impl BackupManifest {
         let list = match store {
             RowStore::Beans => &self.beans,
             RowStore::Roasters => &self.roasters,
+            RowStore::Grinders => &self.grinders,
             RowStore::Profiles => &self.profiles,
             RowStore::Recipes => &self.recipes,
             RowStore::CustomMethods => &self.custom_methods,
@@ -684,12 +708,20 @@ impl BackupScan {
             }
             BackupLine::Bean(b) => {
                 if self.row(RowStore::Beans, &b.id) {
+                    if b.grinds.is_none() {
+                        self.manifest.beans_without_grinds.push(b.id.clone());
+                    }
                     self.manifest.beans.push(b.id);
                 }
             }
             BackupLine::Roaster(r) => {
                 if self.row(RowStore::Roasters, &r.id) {
                     self.manifest.roasters.push(r.id);
+                }
+            }
+            BackupLine::Grinder(g) => {
+                if self.row(RowStore::Grinders, &g.id) {
+                    self.manifest.grinders.push(g.id);
                 }
             }
             BackupLine::Recipe(r) => {
@@ -799,6 +831,10 @@ pub enum BackupRecord {
     Roaster {
         roaster: Box<Roaster>,
     },
+    /// A grinder record (#488).
+    Grinder {
+        grinder: Box<Grinder>,
+    },
     Recipe {
         recipe: Box<BrewRecipe>,
     },
@@ -863,6 +899,9 @@ impl BackupImport {
             BackupLine::Roaster(roaster) => self
                 .fresh(RowStore::Roasters, &roaster.id)
                 .then_some(BackupRecord::Roaster { roaster }),
+            BackupLine::Grinder(grinder) => self
+                .fresh(RowStore::Grinders, &grinder.id)
+                .then_some(BackupRecord::Grinder { grinder }),
             BackupLine::Recipe(recipe) => (!is_builtin_recipe(&recipe.id)
                 && self.fresh(RowStore::Recipes, &recipe.id))
             .then_some(BackupRecord::Recipe { recipe }),
@@ -912,6 +951,7 @@ pub fn import_backup_bytes(bytes: &[u8]) -> BackupImportPlan {
             BackupRecord::Shot { shot } => plan.shots.push(*shot),
             BackupRecord::Bean { bean } => plan.beans.push(*bean),
             BackupRecord::Roaster { roaster } => plan.roasters.push(*roaster),
+            BackupRecord::Grinder { grinder } => plan.grinders.push(*grinder),
             BackupRecord::Recipe { recipe } => plan.recipes.push(*recipe),
             BackupRecord::BrewMethod { method } => plan.custom_methods.push(*method),
             BackupRecord::Profile { profile } => plan.profiles.push(profile),
@@ -1005,6 +1045,8 @@ pub struct LocalState {
     pub health: Vec<LocalStoreHealth>,
     pub beans: Vec<String>,
     pub roasters: Vec<String>,
+    /// Grinder records (#488), archived and tombstones included.
+    pub grinders: Vec<String>,
     /// Custom profiles only: built-ins aren't the backup's to change.
     pub profiles: Vec<String>,
     /// The user's own recipes only.
@@ -1022,6 +1064,8 @@ pub struct LocalState {
     pub visualizer_prefs: VisualizerSyncPrefs,
     pub total_litres: f64,
     pub active_bean_id: Option<String>,
+    /// The device's active-grinder pointer (#488).
+    pub active_grinder_id: Option<String>,
     /// Beans an earlier, interrupted run of this restore added, from its
     /// marker. They don't count as here for `zero_debit`: a re-run after any
     /// prefix of the steps must end where a clean run does.
@@ -1033,6 +1077,7 @@ impl LocalState {
         let list = match store {
             RowStore::Beans => &self.beans,
             RowStore::Roasters => &self.roasters,
+            RowStore::Grinders => &self.grinders,
             RowStore::Profiles => &self.profiles,
             RowStore::Recipes => &self.recipes,
             RowStore::CustomMethods => &self.custom_methods,
@@ -1278,6 +1323,12 @@ pub struct RestorePlan {
     pub source: PlanSource,
     pub beans: StorePlan,
     pub roasters: StorePlan,
+    /// Grinder records (#488), merged by id like roasters.
+    pub grinders: StorePlan,
+    /// Beans Replace overwrites with a backup row that has no `grinds` (an
+    /// app from before #488): the shell keeps the device's `grinds` on them
+    /// (review F7).
+    pub beans_keep_grinds: Vec<String>,
     pub profiles: StorePlan,
     pub recipes: StorePlan,
     pub custom_methods: StorePlan,
@@ -1291,6 +1342,8 @@ pub struct RestorePlan {
     pub recipe_meta: RecipeMetaPlan,
     /// Replace clears an active bean the backup doesn't have.
     pub clear_active_bean: bool,
+    /// Replace clears an active grinder the backup doesn't have (#488).
+    pub clear_active_grinder: bool,
 }
 
 /// Whether `common` is still as a fresh install leaves it. Not "equals the
@@ -1302,10 +1355,9 @@ pub fn common_is_pristine(common: &CommonSettings) -> bool {
 }
 
 /// What a first load does to `c`: the settings sanitize, the idle-sleep
-/// default, the hot-water never-changed rule and the grinder migration (with
-/// no bags: a fresh install has none).
+/// default and the hot-water never-changed rule.
 fn first_run(c: CommonSettings) -> CommonSettings {
-    let mut c = crate::grinder::migrate_grinders::<&str>(c.sanitized(), &[]);
+    let mut c = c.sanitized();
     if c.idle_sleep_min.is_none() {
         c.idle_sleep_min = Some(crate::idle_sleep::DEFAULT_IDLE_SLEEP_MIN);
     }
@@ -1481,6 +1533,13 @@ pub fn plan_restore(
     // ── Rows ──
     let beans = row_plan(m, local, mode, RowStore::Beans);
     let roasters = row_plan(m, local, mode, RowStore::Roasters);
+    let grinders = row_plan(m, local, mode, RowStore::Grinders);
+    let beans_keep_grinds: Vec<String> = beans
+        .overwrite
+        .iter()
+        .filter(|id| m.beans_without_grinds.contains(id))
+        .cloned()
+        .collect();
     let profiles = row_plan(m, local, mode, RowStore::Profiles);
     let recipes = row_plan(m, local, mode, RowStore::Recipes);
     let custom_methods = row_plan(m, local, mode, RowStore::CustomMethods);
@@ -1557,6 +1616,12 @@ pub fn plan_restore(
             .active_bean_id
             .as_ref()
             .is_some_and(|id| beans.remove.contains(id));
+    let clear_active_grinder = replace
+        && m.carries(RowStore::Grinders)
+        && local
+            .active_grinder_id
+            .as_ref()
+            .is_some_and(|id| grinders.remove.contains(id));
 
     let verdict = if !refusals.is_empty() {
         Verdict::Refused
@@ -1583,6 +1648,8 @@ pub fn plan_restore(
         source,
         beans,
         roasters,
+        grinders,
+        beans_keep_grinds,
         profiles,
         recipes,
         custom_methods,
@@ -1595,6 +1662,7 @@ pub fn plan_restore(
         profile_meta,
         recipe_meta,
         clear_active_bean,
+        clear_active_grinder,
     }
 }
 

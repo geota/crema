@@ -432,6 +432,47 @@ fn last_grinds_for_bag_are_the_newest_per_grinder() {
     assert!(store.last_grinds_for_bag("none").expect("reads").is_empty());
 }
 
+/// #488 F4: rows stamped with a grinder id count per id (a rename doesn't
+/// split them, and a same-named grinder with another id doesn't merge);
+/// rows from before ids count per name, for the core to match by name.
+#[test]
+fn last_grinds_for_bag_are_per_grinder_id_then_per_name() {
+    let d = dir();
+    let mut store = create(&file(&d, "history.db"));
+    let bag = json!({ "beanId": "bag" });
+    store
+        .upsert(&rows_in(&[
+            row("i1", 10, json!({ "bean": bag, "grinderId": "grinder:nz", "grinderModel": "Niche Zero", "metadata": { "grinderSetting": "14" } })),
+            row("i2", 20, json!({ "bean": bag, "grinderId": "grinder:nz", "grinderModel": "Bar Niche", "metadata": { "grinderSetting": "15" } })),
+            row("i3", 30, json!({ "bean": bag, "grinderId": "grinder:nz-2", "grinderModel": "Niche Zero", "metadata": { "grinderSetting": "9" } })),
+            row("o1", 40, json!({ "bean": bag, "grinderModel": "Niche Zero", "metadata": { "grinderSetting": "13" } })),
+            row("o2", 5, json!({ "bean": bag, "grinderModel": "niche zero", "metadata": { "grinderSetting": "12" } })),
+        ]))
+        .expect("writes");
+    let got: Vec<(Option<String>, String, String)> = store
+        .last_grinds_for_bag("bag")
+        .expect("reads")
+        .into_iter()
+        .map(|l| (l.grinder_id, l.grinder, l.grind))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (None, "Niche Zero".to_owned(), "13".to_owned()),
+            (
+                Some("grinder:nz-2".to_owned()),
+                "Niche Zero".to_owned(),
+                "9".to_owned()
+            ),
+            (
+                Some("grinder:nz".to_owned()),
+                "Bar Niche".to_owned(),
+                "15".to_owned()
+            ),
+        ]
+    );
+}
+
 #[test]
 fn lookups_by_id_remote_id_bag_and_backlog() {
     let d = dir();

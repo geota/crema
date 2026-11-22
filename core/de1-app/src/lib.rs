@@ -14334,8 +14334,9 @@ mod tests {
 
                 #[test]
                 fn grinder_model_is_the_active_grinder_never_the_bags() {
-                    // #488: the shot carries the active grinder's name (the
-                    // shell passes it as `settings_grinder`); the bag's old
+                    // #488: the shot carries the active grinder's id and name
+                    // (the shell passes them as `grinder_id` and
+                    // `settings_grinder`, taken at shot start); the bag's old
                     // stored grinder is not read.
                     let bean = |grinder: Option<&str>| ShotBean {
                         name: "Gesha".into(),
@@ -14355,10 +14356,16 @@ mod tests {
                             .take_stored_shot(ShotCaptureContext {
                                 bean: b,
                                 settings_grinder: active.map(str::to_owned),
+                                grinder_id: active.map(|_| " grinder:ek43 ".to_owned()),
                                 ..ctx()
                             })
                             .expect("a shot");
                         assert_eq!(shot.grinder_model.as_deref(), want);
+                        assert_eq!(
+                            shot.grinder_id.as_deref(),
+                            active.map(|_| "grinder:ek43"),
+                            "the id is stamped next to the name"
+                        );
                     }
                 }
 

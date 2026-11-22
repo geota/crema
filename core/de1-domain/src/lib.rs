@@ -57,6 +57,7 @@ pub mod app_settings;
 pub mod auto_tare;
 pub mod backup_plan;
 pub mod backup_retention;
+pub mod bag_grind;
 pub mod bean;
 pub mod bean_coerce;
 pub mod bean_filter;
@@ -89,6 +90,7 @@ pub mod firmware_builds;
 pub mod firmware_image;
 pub mod flow;
 pub mod grinder;
+pub mod grinder_catalogue;
 pub mod history;
 pub mod history_export;
 pub mod history_import;
@@ -150,6 +152,13 @@ pub use backup_retention::{
     describe_backup_file, describe_backup_file_json, newest_auto_backup, newest_auto_backup_json,
     parse_auto_backup_name,
 };
+pub use bag_grind::{
+    AutoSaveInput, BagGrind, BagSelectInput, BagSelection, GrindSave, GrinderSwitchInput,
+    LastGrind, NO_GRINDER_ID, SelectionChange, SetTo, auto_save_shot_grind,
+    auto_save_shot_grind_json, bag_grinds_to_fix, bag_grinds_to_fix_json, migrate_bag_grinds,
+    newest_shot_grind, pick_grind, resolve_bag_selection, resolve_bag_selection_json,
+    resolve_grinder_switch, resolve_grinder_switch_json, save_bag_grind, save_bag_grind_json,
+};
 pub use bean::{
     BREWS_REMAINING_WINDOW, BagStock, Bean, BeanMix, BeanOrigin, BeanRoastType,
     DEFAULT_DOSE_PER_BREW_G, LOW_STOCK_BREWS, RoastBand, RoastFreshness, Roaster, ShotBean,
@@ -158,7 +167,10 @@ pub use bean::{
     resettled_bag_debit, roast_band, roast_band5, roast_freshness, set_bean_frozen,
     set_bean_frozen_json,
 };
-pub use bean_coerce::{coerce_bean, coerce_bean_json, coerce_roaster, coerce_roaster_json};
+pub use bean_coerce::{
+    coerce_bean, coerce_bean_json, coerce_grinder, coerce_grinder_json, coerce_roaster,
+    coerce_roaster_json,
+};
 pub use bean_filter::{
     BeanFilterQuery, BeanFilterResult, BeanRoastCounts, BeanStatusCounts, BeanStatusFilter,
     BeanTagCount, filter_beans, filter_beans_json,
@@ -192,7 +204,7 @@ pub use bounds::{
     BrewDefaultsBounds, ProfileEditorBounds, QuickControlBounds, STEAM_TEMP_MIN_C,
     brew_defaults_bounds, brew_defaults_bounds_json, clamp_steam_temp, profile_editor_bounds,
     profile_editor_bounds_json, quick_control_bounds, quick_control_bounds_for,
-    quick_control_bounds_for_settings_json, quick_control_bounds_json,
+    quick_control_bounds_for_grinder_json, quick_control_bounds_json,
 };
 pub use brew::{
     BREW_METHOD_OTHER, BrewHistoryStats, BrewLogPrefill, BrewLogSeedInput, BrewLogSeeds,
@@ -280,12 +292,17 @@ pub use firmware_image::{
 };
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
 pub use grinder::{
-    GRINDER_PRESETS, GrindOnSelectInput, GrindScale, GrinderPreset, GrinderPresetInfo, LastGrind,
-    OwnedGrinder, active_grind_scale, active_grind_scale_json, active_grinder, active_grinder_name,
-    add_grinder, add_grinders_for_names, add_grinders_for_names_json, grind_on_select,
-    grind_on_select_json, grinder_key, grinder_presets, grinder_presets_json, last_grind_for,
-    migrate_grinders, migrate_grinders_json, preset_by_id, preset_for_name, remove_grinder,
+    GrindScale, Grinder, GrinderAdd, GrinderAddKind, GrinderArchive, GrinderLibraryMigration,
+    GrinderMatch, GrinderMatchKind, active_grind_scale, active_grinder, active_grinder_json,
+    add_grinder, add_grinder_json, archive_grinder, archive_grinder_json, grinder_key,
+    grinder_named, grinders_for_names, grinders_for_names_json, match_grinders,
+    match_grinders_json, merge_grinder_edit, merge_grinder_edit_json, migrate_grinder_library,
+    migrate_grinder_library_json, names_grinder, restore_grinder, restore_grinder_json,
     same_grinder,
+};
+pub use grinder_catalogue::{
+    CatalogueGrinder, CatalogueGrinderInfo, GRINDER_CATALOGUE, GrinderKind, VerifiedScale,
+    catalogue_entry, catalogue_entry_for_name, grinder_catalogue, grinder_catalogue_json,
 };
 pub use history::{
     HistoryStats, STORED_SHOT_FORMAT_VERSION, ShotMachine, ShotMetadata, ShotPrivacy,
