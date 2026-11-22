@@ -252,6 +252,17 @@ export class BrewParamState {
 		this.onWrite?.(key, value);
 	}
 
+	/**
+	 * Show `value` on the grind dial without it being a user edit: Brew's
+	 * stored grind (#488, `#lib/brew/grind-session`), or its placeholder when
+	 * there is none. No `onWrite`, so the placeholder never becomes a grind.
+	 */
+	seedGrind(value: number): void {
+		if (this.current.grind === value && this.grindDial === value) return;
+		this.current = { ...this.current, grind: value };
+		this.grindDial = value;
+	}
+
 	/** Restore the params to the current seed — the sheet's "Reset" action.
 	 *  The grind dial stays: it is the bag's, not the profile's. */
 	reset(): void {

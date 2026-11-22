@@ -2,7 +2,8 @@
  * Quick Controls' Save writes each changed part to its owner (save-boundaries
  * review F1, Android #496 parity). Before, web wrote the grind to the bag
  * before asking for a name (a cancelled prompt kept it) and always created a
- * new profile.
+ * new profile. Since #488 the grind goes to the (bag, active grinder) row of
+ * `Bean.grinds`, and the old `grinderSetting` is never written.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { blankBean, getBeanStore, type Bean } from '#lib/bean/index.js';
@@ -24,13 +25,22 @@ import {
 } from './quick-save';
 
 const beans = getBeanStore();
+const NO_GRINDER = '';
 const profiles = getProfileStore();
 const deps: QuickSaveDeps = { beans, profiles, bake: effectiveCremaProfile, newId: newProfileId };
 
 let builtin: CremaProfile;
 
+/** The bag's saved grind for the active grinder (none: the "no grinder" slot). */
+function saved(): string | undefined {
+	const id = beans.activeGrinder?.id ?? NO_GRINDER;
+	return beans.getBean('bean:a')!.grinds?.find((g) => g.grinderId === id)?.grind;
+}
+
 function bag(grind = '12'): Bean {
-	beans.upsertBean({ ...blankBean('bean:a'), name: 'Guji', grinderSetting: grind });
+	const id = beans.activeGrinder?.id ?? NO_GRINDER;
+	const grinds = grind ? [{ grinderId: id, grinderName: beans.activeGrinder?.name ?? '', grind, starred: false }] : [];
+	beans.upsertBean({ ...blankBean('bean:a'), name: 'Guji', grinderSetting: 'old', grinds });
 	return beans.getBean('bean:a')!;
 }
 
@@ -44,7 +54,7 @@ function custom(): CremaProfile {
 function dialled(profile: CremaProfile | null, dial: number, dose?: number) {
 	const overrides = profile && dose !== undefined ? normalizeBrewOverrides(profile, { dose }) : {};
 	return {
-		plan: quickSavePlan({ bean: beans.activeBean, dial, profile, overrides }),
+		plan: quickSavePlan({ bean: beans.activeBean, grinder: beans.activeGrinder, brewGrind: dial, profile, overrides }),
 		opts: { profile, overrides }
 	};
 }
@@ -67,10 +77,28 @@ describe('Quick Controls Save', () => {
 		expect(saveEnabled(plan)).toBe(true);
 		expect(needsName(plan), 'a grind-only Save asks for no name').toBe(false);
 		const r = runQuickSave(plan, deps, opts)!;
-		expect(beans.getBean('bean:a')!.grinderSetting).toBe('12.5');
+		expect(saved()).toBe('12.5');
+		expect(beans.getBean('bean:a')!.grinderSetting, 'the old field is never written').toBe('old');
 		expect(profiles.all.length, 'no profile copy').toBe(count);
 		expect(r.message).toBe('Grind 12.5 saved to Guji');
 		expect(r.undo).toBeNull();
+	});
+
+	it('saves to the active grinder\'s row, with its unit, and never moves the star', () => {
+		const niche = beans.addGrinder('', 'bookoo-motto-80')!;
+		beans.setActiveGrinder(niche.id);
+		beans.upsertBean({
+			...blankBean('bean:a'),
+			name: 'Guji',
+			grinds: [{ grinderId: 'grinder:other', grinderName: 'Other', grind: '9', starred: true }]
+		});
+		beans.setActiveBean('bean:a');
+		const { plan, opts } = dialled(null, 480);
+		const r = runQuickSave(plan, deps, opts)!;
+		const rows = beans.getBean('bean:a')!.grinds!;
+		expect(rows.find((g) => g.grinderId === niche.id)).toMatchObject({ grind: '480', starred: false });
+		expect(rows.find((g) => g.grinderId === 'grinder:other')).toMatchObject({ grind: '9', starred: true });
+		expect(r.message).toBe(`Grind 480 μm saved to Guji · ${niche.name}`);
 	});
 
 	it('nothing changed: Save is off', () => {
@@ -80,12 +108,12 @@ describe('Quick Controls Save', () => {
 		expect(saveEnabled(dialled(null, 12).plan)).toBe(false);
 	});
 
-	it('a bag with no saved grind and an untouched dial has nothing to save', () => {
+	it('no grind on Brew has nothing to save', () => {
 		bag('');
 		beans.setActiveBean('bean:a');
-		const plan = quickSavePlan({ bean: beans.activeBean, dial: 4.2, dialDefault: 4.2, profile: null, overrides: {} });
+		const plan = quickSavePlan({ bean: beans.activeBean, grinder: null, brewGrind: null, profile: null, overrides: {} });
 		expect(saveEnabled(plan)).toBe(false);
-		const moved = quickSavePlan({ bean: beans.activeBean, dial: 4.4, dialDefault: 4.2, profile: null, overrides: {} });
+		const moved = quickSavePlan({ bean: beans.activeBean, grinder: null, brewGrind: 4.4, profile: null, overrides: {} });
 		expect(moved.grind).toBe('4.4');
 	});
 
@@ -101,7 +129,7 @@ describe('Quick Controls Save', () => {
 		const { plan, opts } = dialled(null, 14);
 		expect(saveEnabled(plan)).toBe(true);
 		runQuickSave(plan, deps, opts);
-		expect(beans.getBean('bean:a')!.grinderSetting).toBe('14');
+		expect(saved()).toBe('14');
 	});
 
 	it('a custom profile is updated in place, with Undo, and Save as new is offered', () => {
@@ -139,13 +167,13 @@ describe('Quick Controls Save', () => {
 		const r = runQuickSave(first.plan, deps, first.opts)!;
 		expect(r.message).toBe('“Mine” updated · grind 13 saved to Guji');
 		undoQuickSave(r.undo!, deps);
-		expect(beans.getBean('bean:a')!.grinderSetting).toBe('12');
+		expect(saved()).toBe('12');
 
 		const again = dialled(profiles.get(mine.id)!, 13, mine.dose + 1);
 		const r2 = runQuickSave(again.plan, deps, again.opts)!;
-		beans.updateBean('bean:a', { grinderSetting: '15' });
+		beans.saveBagGrind('bean:a', null, '15');
 		undoQuickSave(r2.undo!, deps);
-		expect(beans.getBean('bean:a')!.grinderSetting).toBe('15');
+		expect(saved()).toBe('15');
 	});
 
 	it('Save as new copies a custom profile and leaves it as it was', () => {
@@ -167,7 +195,7 @@ describe('Quick Controls Save', () => {
 		expect(needsName(plan)).toBe(true);
 		expect(offersSaveAsNew(plan)).toBe(false);
 		expect(runQuickSave(plan, deps, { ...opts, copyName: null })).toBeNull();
-		expect(beans.getBean('bean:a')!.grinderSetting, 'a cancelled prompt writes no grind').toBe('12');
+		expect(saved(), 'a cancelled prompt writes no grind').toBe('12');
 		expect(profiles.all.length).toBe(count);
 
 		const r = runQuickSave(plan, deps, { ...opts, copyName: 'My blooming' })!;
@@ -175,7 +203,7 @@ describe('Quick Controls Save', () => {
 		expect(copy.source).toBe('custom');
 		expect(copy.dose).toBe(builtin.dose + 1);
 		expect(profiles.activeId).toBe(copy.id);
-		expect(beans.getBean('bean:a')!.grinderSetting).toBe('13');
+		expect(saved()).toBe('13');
 		expect(r.message).toBe('Saved “My blooming” · grind 13 saved to Guji');
 	});
 });

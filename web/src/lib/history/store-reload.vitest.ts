@@ -128,6 +128,7 @@ describe('HistoryStore reload', () => {
 			record: { duration: 30_000, samples: [] },
 			bean,
 			grinderModel: 'Niche Zero',
+			grinderId: 'grinder:niche-zero',
 			tags: ['dial-in'],
 			yieldTarget: 36,
 			brewTempTarget: 93.5,

@@ -14,6 +14,7 @@ import BrewDashboard from './BrewDashboard.svelte';
 import { brewTempRange, getProfileStore, type CremaProfile } from '#lib/profiles/index.js';
 import { getCremaUiState } from '#lib/state/ui-state.svelte.js';
 import type { CremaApp } from '#lib/state/index.js';
+import { getBrewGrind } from '#lib/brew/grind-session.svelte.js';
 import { blankBean, getBeanStore } from '#lib/bean/index.js';
 import { dismissConfirm, getActiveDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 
@@ -104,12 +105,22 @@ describe('Quick Controls Save on the dashboard', () => {
 		flushSync();
 	}
 
+	/** The active bag with `grind` saved for no grinder (#488), and Brew's grind at it. */
 	function activeBag(grind: string): void {
 		const beans = getBeanStore();
 		beans.clearAll();
-		beans.upsertBean({ ...blankBean('bean:a'), name: 'Guji', grinderSetting: grind, bagSize: 250, remaining: 200 });
+		beans.upsertBean({
+			...blankBean('bean:a'),
+			name: 'Guji',
+			grinds: [{ grinderId: '', grinderName: '', grind, starred: false }],
+			bagSize: 250,
+			remaining: 200
+		});
 		beans.setActiveBean('bean:a');
+		getBrewGrind().set(Number(grind));
 	}
+	/** The bag's saved grind for no grinder. */
+	const savedGrind = () => getBeanStore().getBean('bean:a')!.grinds?.find((g) => g.grinderId === '')?.grind;
 
 	it('with no profile, Save is shown, off until the grind moves, then saves just the grind', async () => {
 		const profiles = getProfileStore();
@@ -127,7 +138,8 @@ describe('Quick Controls Save on the dashboard', () => {
 		click(root, 'Save');
 		await tick();
 		expect(getActiveDialog(), 'no name prompt for a grind').toBeNull();
-		expect(getBeanStore().getBean('bean:a')!.grinderSetting).toBe('4.6');
+		expect(savedGrind()).toBe('4.6');
+		expect(getBeanStore().getBean('bean:a')!.grinderSetting, 'the old field is never written').toBe('');
 	});
 
 	it('an unsaved dial survives a shot debit (REVIEW-497 M1)', async () => {
@@ -141,11 +153,12 @@ describe('Quick Controls Save on the dashboard', () => {
 		flushSync();
 		await tick();
 		expect(buttonIn(root, 'Save')!.disabled, 'the unsaved dial is still there').toBe(false);
-		// A new saved grind on the bag still re-seeds the dial.
-		getBeanStore().updateBean('bean:a', { grinderSetting: '5' });
+		// The bag's saved grind catching up with the dial (another tab's
+		// Save) leaves nothing to save; the dial itself never moves (#488 F9).
+		getBeanStore().saveBagGrind('bean:a', null, '4.6');
 		flushSync();
 		await tick();
-		expect(buttonIn(root, 'Save')!.disabled, 'the dial follows the bag’s new grind').toBe(true);
+		expect(buttonIn(root, 'Save')!.disabled, 'saved: nothing left to save').toBe(true);
 	});
 
 	it('a built-in with a changed recipe asks for a name before writing anything', async () => {
@@ -164,12 +177,12 @@ describe('Quick Controls Save on the dashboard', () => {
 		await tick();
 		const prompt = getActiveDialog();
 		expect(prompt?.kind).toBe('prompt');
-		expect(getBeanStore().getBean('bean:a')!.grinderSetting, 'the grind waits for the name').toBe('4.2');
+		expect(savedGrind(), 'the grind waits for the name').toBe('4.2');
 		prompt!.resolve(null);
 		dismissConfirm(prompt!.options);
 		await tick();
 		await tick();
-		expect(getBeanStore().getBean('bean:a')!.grinderSetting, 'Cancel writes nothing').toBe('4.2');
+		expect(savedGrind(), 'Cancel writes nothing').toBe('4.2');
 		expect(profiles.all.length).toBe(count);
 	});
 });

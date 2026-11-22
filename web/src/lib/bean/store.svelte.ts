@@ -18,8 +18,10 @@
  * {@link getBeanLibraryStore} or the legacy alias {@link getBeanStore}.
  */
 
+import { getSettingsStore } from '#lib/settings/store.svelte.js';
 import {
 	followOtherTabs,
+	storeHealth,
 	isIdOrNull,
 	isJsonObject,
 	keepSkippedRows,
@@ -35,6 +37,20 @@ import {
 	resettle_remaining,
 	resettled_bag_debit
 } from '#lib/wasm/de1_wasm.js';
+import {
+	type Grinder,
+	type GrindSave,
+	addGrinder as coreAddGrinder,
+	archiveGrinder as coreArchiveGrinder,
+	activeGrinder as coreActiveGrinder,
+	coerceGrinder,
+	grindersForNames,
+	isLiveGrinder,
+	mergeGrinderEdit,
+	migrateGrinderLibrary,
+	restoreGrinder as coreRestoreGrinder,
+	saveBagGrind as coreSaveBagGrind
+} from './grinder';
 import {
 	type Bean,
 	type Roaster,
@@ -54,6 +70,11 @@ const LIBRARY_KEY = 'crema.beans.v1';
 const LIBRARY_WHAT = 'bean library';
 /** Active bean id — the brew-page picker's pointer. */
 const ACTIVE_KEY = 'crema.beans.activeBeanId.v1';
+/**
+ * The active grinder — a per-device pointer like the active bag (#488): not a
+ * setting, not in backups.
+ */
+export const ACTIVE_GRINDER_KEY = 'crema.grinders.activeId.v1';
 /** The pre-library single-bean key — read once for migration, then untouched. */
 const LEGACY_KEY = 'crema.bean.current.v1';
 
@@ -83,7 +104,16 @@ interface LibraryEnvelope {
 	schemaVersion: number;
 	beans: Bean[];
 	roasters: Roaster[];
+	/**
+	 * The owned grinders (#488), archived and tombstones included: library
+	 * records next to the roasters, in the same blob as the bags whose saved
+	 * grinds name them. Absent in an envelope written before #488.
+	 */
+	grinders?: Grinder[];
 }
+
+/** How the library's stored value read at load: only a readable (or absent) one may be migrated. */
+type LibraryRead = 'loaded' | 'absent' | 'unavailable' | 'corrupt';
 
 function isLibraryEnvelope(raw: unknown): raw is LibraryEnvelope {
 	return (
@@ -94,25 +124,36 @@ function isLibraryEnvelope(raw: unknown): raw is LibraryEnvelope {
 	);
 }
 
-function readLibrary(): LibraryEnvelope {
+function readLibrary(): { env: LibraryEnvelope; read: LibraryRead } {
 	// A stored value that isn't an envelope is kept aside (not silently read
 	// as an empty library and overwritten by the next save).
 	const read = readStore<LibraryEnvelope>(LIBRARY_KEY, {
 		what: LIBRARY_WHAT,
 		valid: isLibraryEnvelope
 	});
-	if (read.kind === 'unavailable') return { schemaVersion: LIBRARY_SCHEMA, beans: [], roasters: [] };
-	if (read.kind === 'loaded') return libraryOf(read.value);
+	if (read.kind === 'unavailable') return { env: emptyLibrary(), read: 'unavailable' };
+	if (read.kind === 'loaded') return { env: libraryOf(read.value), read: 'loaded' };
+	if (read.kind === 'corrupt') return { env: firstLibrary(), read: 'corrupt' };
+	return { env: firstLibrary(), read: 'absent' };
+}
+
+function emptyLibrary(): LibraryEnvelope {
+	return { schemaVersion: LIBRARY_SCHEMA, beans: [], roasters: [], grinders: [] };
+}
+
+/** First load: the legacy single-bean migration, else an empty library. */
+function firstLibrary(): LibraryEnvelope {
 	// First load — try the legacy single-bean migration.
 	const migrated = migrateLegacyCurrentBean(readJson<unknown>(LEGACY_KEY, null));
 	if (migrated) {
 		return {
 			schemaVersion: LIBRARY_SCHEMA,
 			beans: [migrated.bean],
-			roasters: migrated.roaster ? [migrated.roaster] : []
+			roasters: migrated.roaster ? [migrated.roaster] : [],
+			grinders: []
 		};
 	}
-	return { schemaVersion: LIBRARY_SCHEMA, beans: [], roasters: [] };
+	return emptyLibrary();
 }
 
 /** A stored envelope, its rows coerced; a row that can't be is kept aside. */
@@ -126,8 +167,9 @@ function libraryOf(env: LibraryEnvelope): LibraryEnvelope {
 		});
 	const beans = dedupById(coerced(env.beans, coerceBean));
 	const roasters = dedupById(coerced(env.roasters, coerceRoaster));
+	const grinders = dedupById(coerced(Array.isArray(env.grinders) ? env.grinders : [], coerceGrinder));
 	keepSkippedRows(LIBRARY_KEY, skipped, LIBRARY_WHAT);
-	return { schemaVersion: LIBRARY_SCHEMA, beans, roasters };
+	return { schemaVersion: LIBRARY_SCHEMA, beans, roasters, grinders };
 }
 
 // ── BeanLibraryStore ───────────────────────────────────────────────────
@@ -145,9 +187,15 @@ export interface BagDebit {
 }
 
 export class BeanLibraryStore {
-	private envelope = $state.raw<LibraryEnvelope>(readLibrary());
+	private readonly initial = readLibrary();
+	private envelope = $state.raw<LibraryEnvelope>(this.initial.env);
+	/** How the stored library read at load: the migration runs only over one that loaded. */
+	readonly libraryRead: LibraryRead = this.initial.read;
 	private activeId = $state.raw<string | null>(
 		readJson<string | null>(ACTIVE_KEY, null, { valid: isIdOrNull })
+	);
+	private activeGrinderPtr = $state.raw<string | null>(
+		readJson<string | null>(ACTIVE_GRINDER_KEY, null, { valid: isIdOrNull })
 	);
 
 	constructor() {
@@ -157,6 +205,9 @@ export class BeanLibraryStore {
 		});
 		followOtherTabs(ACTIVE_KEY, isIdOrNull, (v) => {
 			this.activeId = v as string | null;
+		});
+		followOtherTabs(ACTIVE_GRINDER_KEY, isIdOrNull, (v) => {
+			this.activeGrinderPtr = v as string | null;
 		});
 	}
 
@@ -170,6 +221,38 @@ export class BeanLibraryStore {
 	/** The full roaster directory. */
 	get roasters(): Roaster[] {
 		return this.envelope.roasters;
+	}
+
+	/** Every grinder record: owned, archived and tombstones (#488). */
+	get allGrinders(): Grinder[] {
+		return this.envelope.grinders ?? [];
+	}
+
+	/** The owned grinders: what the pickers and Devices list. */
+	get grinders(): Grinder[] {
+		return this.allGrinders.filter(isLiveGrinder);
+	}
+
+	/** The archived grinders (Devices' "Archived" section), tombstones left out. */
+	get archivedGrinders(): Grinder[] {
+		return this.allGrinders.filter((g) => g.archivedAt != null && g.deletedAt == null);
+	}
+
+	/** Look up a grinder record by id, archived included. */
+	getGrinder(id: string): Grinder | null {
+		return this.allGrinders.find((g) => g.id === id) ?? null;
+	}
+
+	/** The active-grinder pointer as stored (may name an archived or unknown grinder). */
+	get activeGrinderId(): string | null {
+		return this.activeGrinderPtr;
+	}
+
+	/** The active grinder, or `null`: an archived, deleted or unknown id is no grinder. */
+	get activeGrinder(): Grinder | null {
+		const id = this.activeGrinderPtr;
+		if (!id) return null;
+		return coreActiveGrinder(this.allGrinders, id);
 	}
 
 	/** The id of the currently-selected bean (brew picker), or `null`. */
@@ -214,14 +297,19 @@ export class BeanLibraryStore {
 	private persistActive(): void {
 		writeJson(ACTIVE_KEY, this.activeId);
 	}
+	private persistActiveGrinder(): void {
+		writeJson(ACTIVE_GRINDER_KEY, this.activeGrinderPtr);
+	}
 
 	/** Wipe the entire library (beans + roasters + active pointer) — for a
 	 *  "replace from backup" restore, which writes the bundle fresh after. */
 	clearAll(): void {
-		this.envelope = { schemaVersion: LIBRARY_SCHEMA, beans: [], roasters: [] };
+		this.envelope = emptyLibrary();
 		this.activeId = null;
+		this.activeGrinderPtr = null;
 		this.persist();
 		this.persistActive();
+		this.persistActiveGrinder();
 	}
 
 	/**
@@ -229,12 +317,22 @@ export class BeanLibraryStore {
 	 * edit made while it lands stacks on the restored state. `clearActive` for a
 	 * Replace whose backup lacks the active bean. Whether it was stored.
 	 */
-	restoreLibrary(beans: Bean[], roasters: Roaster[], clearActive: boolean): boolean {
-		this.envelope = { ...this.envelope, beans, roasters };
-		const stored = writeJsonChecked(LIBRARY_KEY, this.envelope);
+	restoreLibrary(
+		beans: Bean[],
+		roasters: Roaster[],
+		clearActive: boolean,
+		grinders: Grinder[] = this.allGrinders,
+		clearActiveGrinder = false
+	): boolean {
+		this.envelope = { ...this.envelope, beans, roasters, grinders };
+		let stored = writeJsonChecked(LIBRARY_KEY, this.envelope);
 		if (clearActive && this.activeId !== null) {
 			this.activeId = null;
-			return writeJsonChecked(ACTIVE_KEY, null) && stored;
+			stored = writeJsonChecked(ACTIVE_KEY, null) && stored;
+		}
+		if (clearActiveGrinder && this.activeGrinderPtr !== null) {
+			this.activeGrinderPtr = null;
+			stored = writeJsonChecked(ACTIVE_GRINDER_KEY, null) && stored;
 		}
 		return stored;
 	}
@@ -600,6 +698,146 @@ export class BeanLibraryStore {
 		return bean;
 	}
 
+	// ── Grinders (#488) ──────────────────────────────────────────────
+
+	/** Insert or replace grinder rows by id, as given (`updatedAt` is the core's). */
+	private putGrinders(rows: readonly Grinder[]): void {
+		if (rows.length === 0) return;
+		const byId = new Map(rows.map((g) => [g.id, g]));
+		const kept = this.allGrinders.map((g) => byId.get(g.id) ?? g);
+		const known = new Set(kept.map((g) => g.id));
+		const added = rows.filter((g) => !known.has(g.id));
+		this.envelope = { ...this.envelope, grinders: [...kept, ...added] };
+		this.persist();
+	}
+
+	/**
+	 * Add a grinder: a catalogue entry (`catalogueId`) or a typed name. A
+	 * match among the archived records comes back with the same id, so its
+	 * bag grinds come back; an owned match is returned as it is. `null` when
+	 * both are blank.
+	 */
+	addGrinder(name: string, catalogueId = ''): Grinder | null {
+		const add = coreAddGrinder(this.allGrinders, name, catalogueId);
+		if (!add) return null;
+		if (add.kind !== 'existing') this.putGrinders([add.grinder]);
+		return add.grinder;
+	}
+
+	/** A Devices edit's Save (rename, scale, preset): merged onto the row as stored now. */
+	saveGrinderEdit(base: Grinder, edited: Grinder): Grinder | null {
+		const current = this.getGrinder(base.id);
+		if (!current) return null;
+		const merged = mergeGrinderEdit(base, edited, current);
+		this.putGrinders([merged]);
+		return merged;
+	}
+
+	/**
+	 * Remove a grinder from Devices: it is archived, never deleted, so bags'
+	 * saved grinds and shots that name it stay. Archiving the active grinder
+	 * clears the pointer (review F5): Brew shows "No grinder".
+	 */
+	archiveGrinder(id: string): void {
+		const g = this.getGrinder(id);
+		if (!g) return;
+		const out = coreArchiveGrinder(g, this.activeGrinderPtr);
+		this.putGrinders([out.grinder]);
+		const next = out.activeGrinderId ?? null;
+		if (next !== this.activeGrinderPtr) {
+			this.activeGrinderPtr = next;
+			this.persistActiveGrinder();
+		}
+	}
+
+	/** An archived grinder back on Devices, same id. */
+	restoreGrinder(id: string): Grinder | null {
+		const g = this.getGrinder(id);
+		if (!g) return null;
+		const out = coreRestoreGrinder(g);
+		this.putGrinders([out]);
+		return out;
+	}
+
+	/** Point Brew at a grinder (`null` = no grinder). */
+	setActiveGrinder(id: string | null): void {
+		if (this.activeGrinderPtr === id) return;
+		this.activeGrinderPtr = id;
+		this.persistActiveGrinder();
+	}
+
+	/**
+	 * Brew's Save of the grind to (bag, active grinder) — or auto-save's —
+	 * through the core rule: the row takes the value or is added (not
+	 * starred); the star never changes. Stored only when the value changed.
+	 */
+	saveBagGrind(beanId: string, grinder: Grinder | null, grind: string): GrindSave | null {
+		const bean = this.getBean(beanId);
+		if (!bean) return null;
+		const out = coreSaveBagGrind(bean, grinder, grind);
+		if (out.changed) this.replaceBean(out.bean);
+		return out;
+	}
+
+	/** Store a bag the core produced (a grind save), its `updatedAt` as the core set it. */
+	storeBagFromCore(bean: Bean): void {
+		this.replaceBean(bean);
+	}
+
+	/** Records for grinder names an import carried that no grinder has yet. */
+	addGrindersForNames(names: readonly string[]): Grinder[] {
+		const fresh = grindersForNames(this.allGrinders, names);
+		this.putGrinders(fresh);
+		return fresh;
+	}
+
+	/** Bulk-insert or replace grinder records by id (an import's merge). */
+	putImportedGrinders(rows: readonly Grinder[]): void {
+		this.putGrinders(rows);
+	}
+
+	/**
+	 * The library migration (#488), run once the library has loaded and after
+	 * every import or restore; idempotent. With no grinder records it creates
+	 * one per distinct name in `grinderModel` and the bags' `grinder`, and the
+	 * one `grinderModel` names becomes active; every bag not yet migrated gets
+	 * its old grind as a saved grind. The old fields and `updatedAt` are never
+	 * written. Skipped over a library that couldn't be read (its rows would
+	 * look absent), and with `settingsReadable` false (the settings grinder
+	 * would look blank). Whether anything changed.
+	 */
+	migrateGrinders(grinderModel: string, settingsReadable = true): boolean {
+		if (!this.canMigrate || !settingsReadable) return false;
+		let m;
+		try {
+			m = migrateGrinderLibrary(this.allGrinders, this.beans, grinderModel);
+		} catch (e) {
+			// Malformed rows: keep what there is; a later load tries again.
+			console.warn('[beans] grinder migration skipped', e);
+			return false;
+		}
+		const changed = m.newGrinders.length > 0 || m.updatedBeans.length > 0;
+		if (changed) {
+			const updated = new Map(m.updatedBeans.map((b) => [b.id, b as Bean]));
+			const beans = this.envelope.beans.map((b) => updated.get(b.id) ?? b);
+			this.envelope = { ...this.envelope, beans, grinders: [...this.allGrinders, ...m.newGrinders] };
+			this.persist();
+		}
+		if (m.grindersMigrated) {
+			const next = m.activeGrinderId ?? null;
+			if (next !== this.activeGrinderPtr) {
+				this.activeGrinderPtr = next;
+				this.persistActiveGrinder();
+			}
+		}
+		return changed;
+	}
+
+	/** The stored library read (or was absent): one that couldn't be read is never migrated. */
+	private get canMigrate(): boolean {
+		return this.libraryRead === 'loaded' || this.libraryRead === 'absent';
+	}
+
 	// ── Visualizer sync helpers ──────────────────────────────────────
 
 	/**
@@ -640,8 +878,32 @@ let store: BeanLibraryStore | undefined;
 
 /** Get the shared bean library store, creating it on first call. */
 export function getBeanLibraryStore(): BeanLibraryStore {
-	if (!store) store = new BeanLibraryStore();
+	if (!store) {
+		store = new BeanLibraryStore();
+		// After the library has loaded (#488): the stored rows are in memory.
+		runGrinderMigration(store);
+	}
 	return store;
+}
+
+/** The settings key the migration reads `grinderModel` from. */
+const SETTINGS_KEY = 'crema.settings.v1';
+
+/**
+ * Run the library migration on `lib` with the settings grinder (or
+ * `grinderModel`, a restore's own): at load, and after every import or
+ * restore. Not while the settings couldn't be read: a blank grinder there
+ * would leave no grinder active.
+ */
+export function runGrinderMigration(
+	lib: BeanLibraryStore = getBeanLibraryStore(),
+	grinderModel?: string
+): boolean {
+	if (grinderModel !== undefined) return lib.migrateGrinders(grinderModel, true);
+	const settings = getSettingsStore();
+	const health = storeHealth(SETTINGS_KEY);
+	const readable = health === 'ok' || health === 'absent';
+	return lib.migrateGrinders(settings.current.grinderModel ?? '', readable);
 }
 
 /**

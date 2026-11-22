@@ -42,6 +42,8 @@
 		type Roaster
 	} from '#lib/bean/index.js';
 	import { mergeBeanImport } from '#lib/bean/import-merge.js';
+	import type { Grinder } from '#lib/bean/grinder.js';
+	import { runGrinderMigration } from '#lib/bean/store.svelte.js';
 	import {
 		getHistoryStore,
 		historyDroppedNotice,
@@ -94,6 +96,8 @@
 	interface CorePlan {
 		readonly beans: Bean[];
 		readonly roasters: Roaster[];
+		/** Grinder records (#488): a Crema export's, or the names a Beanconqueror file carries. */
+		readonly grinders?: Grinder[];
 		readonly shots: CoreImportedShot[];
 		readonly diagnostics: {
 			readonly nonEspressoBrewsSkipped: number;
@@ -118,6 +122,8 @@
 		newRoasters: Roaster[];
 		/** Incoming rows that replace a library roaster with the same id (newer). */
 		updatedRoasters: Roaster[];
+		/** Grinder records to add or replace (#488). */
+		grinders: Grinder[];
 		newShots: PreparedShot[];
 		duplicatesSkipped: number;
 		/** Shots already in history (same completed-at + bean — a re-import). */
@@ -448,7 +454,15 @@
 	 * `beanIdRemap`.
 	 */
 	async function buildPreview(plan: CorePlan, filename: string): Promise<Preview> {
-		const merge = mergeBeanImport(plan.beans, plan.roasters, library.beans, library.roasters);
+		const merge = mergeBeanImport(
+			plan.beans,
+			plan.roasters,
+			library.beans,
+			library.roasters,
+			plan.grinders ?? [],
+			library.allGrinders
+		);
+		const grinders = [...(merge.newGrinders ?? []), ...(merge.updatedGrinders ?? [])] as Grinder[];
 		const newBeans = merge.newBeans as Bean[];
 		const updatedBeans = merge.updatedBeans as Bean[];
 		const newRoasters = merge.newRoasters as Roaster[];
@@ -502,6 +516,7 @@
 			updatedBeans,
 			newRoasters,
 			updatedRoasters,
+			grinders,
 			newShots,
 			duplicatesSkipped,
 			shotDuplicatesSkipped,
@@ -551,10 +566,15 @@
 			// library; the photo loop below picks up on re-import via
 			// the resume-photos scan.
 			// bulkAdd upserts by id, so the updated rows replace their library ones.
+			// The grinders first: the bags' saved grinds name them (#488).
+			library.putImportedGrinders(snapshot.grinders);
 			library.bulkAdd(
 				[...snapshot.newBeans, ...snapshot.updatedBeans],
 				[...snapshot.newRoasters, ...snapshot.updatedRoasters]
 			);
+			// Bags from an older app get their saved grinds; a first import
+			// with no grinder records creates them from the names.
+			runGrinderMigration(library);
 			const { kept, dropped: droppedShots } = history.insertMany(
 				snapshot.newShots.map((prep) => prep.shot)
 			);

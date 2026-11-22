@@ -284,6 +284,12 @@ export interface Settings {
 	 * persisted, so an untouched user follows the default.
 	 */
 	brewCueSound: boolean | null;
+	/**
+	 * "Save each shot's grind to its bag" (#488, Devices → Grinder): a
+	 * personal, per-device setting. `null` = never set, read as off. Only the
+	 * device that records a shot auto-saves.
+	 */
+	grindAutoSave: boolean | null;
 	/** Guided-brew step cues as vibration, where the device supports it.
 	 *  `null` = never touched, read via {@link brewCueHapticsOn} as ON. */
 	brewCueHaptics: boolean | null;
@@ -428,6 +434,7 @@ const COMMON_KEYS = [
 	'baristaName',
 	'keepScreenOnBrew',
 	'brewCueSound',
+	'grindAutoSave',
 	'brewCueHaptics',
 	'qcSteamTimeS',
 	'qcSteamFlowMlS',
@@ -544,6 +551,7 @@ export function settingsToCommon(s: Settings): CommonSettings {
 		keepScreenOnBrew: s.keepScreenOnBrew,
 		// Only an explicit choice travels — unset stays unset.
 		brewCueSound: s.brewCueSound ?? undefined,
+		grindAutoSave: s.grindAutoSave ?? undefined,
 		brewCueHaptics: s.brewCueHaptics ?? undefined,
 		showDebugPanel: s.showDebugPanel,
 		defaultDoseG: s.defaultDoseG,
@@ -637,6 +645,7 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		showWeightFlow: on.has('weightFlow'),
 		keepScreenOnBrew: c.keepScreenOnBrew,
 		brewCueSound: c.brewCueSound ?? null,
+		grindAutoSave: c.grindAutoSave ?? null,
 		brewCueHaptics: c.brewCueHaptics ?? null,
 		showDebugPanel: c.showDebugPanel,
 		defaultDoseG: c.defaultDoseG,

@@ -317,6 +317,12 @@ export interface StoredShot {
 	 * back to the settings default. Editable post-completion.
 	 */
 	grinderModel?: string | null;
+	/**
+	 * The active grinder's id at shot start (#488, review F4): lookups use
+	 * it, display uses the `grinderModel` snapshot. Absent on older rows,
+	 * which are matched by name.
+	 */
+	grinderId?: string | null;
 	/** Shot-level free-form tags. Mutable. */
 	tags?: string[];
 	/** Yield target the user dialed in, grams (stop-on-weight target). */

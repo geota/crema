@@ -99,6 +99,8 @@
 		type Bean,
 		type Roaster, activateBean } from '#lib/bean/index.js';
 	import { scoreMap, searchBeans } from '#lib/bean/search.js';
+	import { DEFAULT_GRIND_SCALE, grindPlaceholder } from '#lib/bean/grinder.js';
+	import { getBrewGrind } from '#lib/brew/grind-session.svelte.js';
 	import BeanPicker from '#lib/components/history/BeanPicker.svelte';
 	import { getMaintenanceStore } from '#lib/maintenance/index.js';
 	import { dismissToast, toast } from '#lib/components/shared/toast.svelte.js';
@@ -451,6 +453,8 @@
 	// ── Bean library — drives the bean half of the unified favourites strip ─
 	/** The shared bean library — pinned beans + roasters + active pointer. */
 	const beanLibrary = getBeanStore();
+	/** Brew's grind for the next shot (#488): per device, persisted. */
+	const brewGrind = getBrewGrind();
 	/**
 	 * The pinned beans shown alongside profiles in the Quick Sheet's unified
 	 * favourites strip. "Pinned" = favourited and not archived; an archived
@@ -525,6 +529,10 @@
 			// core's desired profile (the effect below), and the core takes the
 			// stop target from there (`DESIGN.md` §3.10), Reset included.
 			switch (key) {
+				case 'grind':
+					// Brew's grind, per device and persisted (#488, review F9).
+					brewGrind.set(value);
+					break;
 				case // Steam temp/time + the hot-water temperature share the one
 				// cuuid_0B packet with the hot-water dose — persist, then the
 				// app's one push sends them from the settings store (issue 14).
@@ -590,8 +598,8 @@
 	const quickSave = $derived(
 		quickSavePlan({
 			bean: beanLibrary.activeBean,
-			dial: params.current.grind,
-			dialDefault: DEFAULT_BREW_PARAMS.grind,
+			grinder: beanLibrary.activeGrinder,
+			brewGrind: brewGrind.value,
 			profile: activeProfile ?? null,
 			overrides: activeProfile ? effectiveOverrides() : {}
 		})
@@ -673,24 +681,17 @@
 	 * the primary view; the header's QuickPill opens the sheet, and its Close
 	 * button or a scrim tap dismisses it again.
 	 */
-	// Seed the QC grind dial from the active bean's saved setting (issue #16
-	// round 2, Android parity): "tweak slightly from last time" must START at
-	// last time. Switching bags re-seeds the dial to THAT bag's grind; the
-	// user's subsequent dial edits win until the next switch. The effect
-	// tracks only the bag's id and saved grind (`$derived` primitives, which
-	// notify only when they change): the library is `$state.raw`, so any
-	// write to it — a shot's debit, a sync, a favourite — would otherwise
-	// re-run it and snap an unsaved dial back (REVIEW-497 M1). `untrack`ed
-	// writes, so it doesn't track `params.current` either.
-	const activeBagId = $derived(beanLibrary.activeBean?.id ?? null);
-	const activeBagGrind = $derived(beanLibrary.activeBean?.grinderSetting ?? '');
+	// The grind dial shows Brew's grind (#488, review F9): per device,
+	// persisted, and reset only by a bag or grinder pick (`activateBean`,
+	// `selectGrinder`, through the core's pick order). A library write — a
+	// shot's debit, a sync, a favourite — never touches it, so an unsaved
+	// dial is never snapped back (REVIEW-497 M1). With no grind yet the dial
+	// shows a placeholder on the active scale, which is not a grind.
+	const activeGrindScale = $derived(beanLibrary.activeGrinder?.scale ?? DEFAULT_GRIND_SCALE);
 	$effect(() => {
-		void activeBagId;
-		const raw = activeBagGrind.trim().replace(',', '.');
-		const parsed = raw ? Number.parseFloat(raw) : NaN;
-		const next = Number.isFinite(parsed) ? parsed : 4.2;
+		const next = brewGrind.value ?? grindPlaceholder(activeGrindScale);
 		if (untrack(() => params.current.grind) !== next) {
-			untrack(() => params.set('grind', next));
+			untrack(() => params.seedGrind(next));
 		}
 	});
 
@@ -1771,10 +1772,6 @@
 			// bean seeded it, or the user dialed it. The bare placeholder
 			// (no bean grind, untouched dial) records nothing, so history
 			// falls back to the frozen bean snapshot as before.
-			const beanGrindRaw = beanLibrary.activeBean?.grinderSetting?.trim().replace(',', '.');
-			const beanHasGrind = beanGrindRaw
-				? Number.isFinite(Number.parseFloat(beanGrindRaw))
-				: false;
 			// The brew temp and pre-infusion the shot actually runs with
 			// (after the core's clamp), so history records what was sent.
 			const qc = effectiveOverrides();
@@ -1784,7 +1781,8 @@
 				preinfuseTarget: qc.preinf ?? paramSeed.preinf,
 				stopOnWeight: live.stopOnWeight,
 				autoTare: live.autoTare,
-				grind: beanHasGrind || live.grind !== DEFAULT_BREW_PARAMS.grind ? live.grind : null
+				// Brew's grind (#488); none set records none.
+				grind: brewGrind.value
 			});
 			// The fingerprint compare + lazy re-upload happens inside
 			// `startShot()`; when no upload is needed the call returns

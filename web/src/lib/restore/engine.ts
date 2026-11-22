@@ -38,6 +38,8 @@ import {
 } from '#lib/core/crema-core.js';
 import { getBeanStore } from '#lib/bean/index.js';
 import { coerceBean, coerceRoaster, type Bean, type Roaster } from '#lib/bean/model.js';
+import { coerceGrinder, type Grinder } from '#lib/bean/grinder.js';
+import { runGrinderMigration } from '#lib/bean/store.svelte.js';
 import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
 import type { StoredShot } from '#lib/history/index.js';
 import { coerceStoredShot } from '#lib/history/store.svelte.js';
@@ -400,6 +402,7 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 		health,
 		beans: beans.beans.map((b) => b.id),
 		roasters: beans.roasters.map((r) => r.id),
+		grinders: beans.allGrinders.map((g) => g.id),
 		profiles: profiles.customProfiles.map((p) => p.id),
 		recipes: recipes.ownRecipes.map((r) => r.id),
 		customMethods: methods.everything.map((m) => m.id),
@@ -412,6 +415,7 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 		visualizerPrefs: visualizerSyncPrefs(),
 		totalLitres: maintenance.current.totalLitres ?? 0,
 		activeBeanId: beans.activeBeanId,
+		activeGrinderId: beans.activeGrinderId ?? undefined,
 		// Filled per backup by planNow, from the marker of a run of that same backup.
 		addedBeans: []
 	} as unknown as LocalState;
@@ -460,6 +464,7 @@ export interface BackupRecords {
 	profiles: CremaProfile[];
 	beans: Bean[];
 	roasters: Roaster[];
+	grinders: Grinder[];
 	shots: StoredShot[];
 	recipes: BrewRecipe[];
 	customMethods: CustomBrewMethod[];
@@ -473,6 +478,7 @@ type ImportedRecord =
 	| { line: 'shot'; shot: Record<string, unknown> }
 	| { line: 'bean'; bean: unknown }
 	| { line: 'roaster'; roaster: unknown }
+	| { line: 'grinder'; grinder: unknown }
 	| { line: 'recipe'; recipe: unknown }
 	| { line: 'brewMethod'; method: unknown }
 	| { line: 'profile'; profile: unknown }
@@ -494,6 +500,7 @@ export async function readRecords(prepared: PreparedBackup, shots?: ReadonlySet<
 		profiles: [],
 		beans: [],
 		roasters: [],
+		grinders: [],
 		shots: [],
 		recipes: [],
 		customMethods: [],
@@ -531,6 +538,9 @@ export async function readRecords(prepared: PreparedBackup, shots?: ReadonlySet<
 					break;
 				case 'roaster':
 					out.roasters.push(one(r.roaster, 'roaster', coerceRoaster));
+					break;
+				case 'grinder':
+					out.grinders.push(one(r.grinder, 'grinder', coerceGrinder));
 					break;
 				case 'recipe':
 					out.recipes.push(one(r.recipe, 'recipe', withId<BrewRecipe>));
@@ -606,6 +616,21 @@ export function nextRows<T extends { id: string }>(
 		.map((r) => (overwrite.has(r.id) ? (theirs.get(r.id) ?? r) : r));
 	const added = plan.add.map((id) => theirs.get(id)).filter((r): r is T => r !== undefined);
 	return [...added, ...kept];
+}
+
+/**
+ * The bags a restore writes, with the device's saved grinds kept on the ones
+ * the plan names (review F7): their backup row came from an app from before
+ * #488 and carries no `grinds`, which would otherwise erase them.
+ */
+export function keepLocalGrinds(next: Bean[], local: readonly Bean[], keep: readonly string[]): Bean[] {
+	if (keep.length === 0) return next;
+	const ids = new Set(keep);
+	const mine = new Map(local.map((b) => [b.id, b]));
+	return next.map((b) => {
+		const here = mine.get(b.id);
+		return ids.has(b.id) && here && b.grinds == null && here.grinds != null ? { ...b, grinds: here.grinds } : b;
+	});
 }
 
 // ── Applying ────────────────────────────────────────────────────────────────
@@ -900,15 +925,28 @@ async function applyPlan(
 		return stopped('recipes');
 	}
 
-	// 5. Roasters and beans, one blob, and the active bean.
+	// 5. Roasters, grinders and beans, one blob, and the active bean and
+	// grinder. Then the library migration, so bags from an older app get
+	// their saved grinds.
 	if (
 		!(await step('beans', () => {
 			const beans = getBeanStore();
-			return beans.restoreLibrary(
-				nextRows(beans.beans, records.beans, plan.beans),
+			const ok = beans.restoreLibrary(
+				keepLocalGrinds(nextRows(beans.beans, records.beans, plan.beans), beans.beans, plan.beansKeepGrinds),
 				nextRows(beans.roasters, records.roasters, plan.roasters),
-				plan.clearActiveBean
+				plan.clearActiveBean,
+				nextRows(beans.allGrinders, records.grinders, plan.grinders),
+				plan.clearActiveGrinder
 			);
+			// The settings grinder the restore brings, when it applies them
+			// (step 8): an older backup's grinder becomes the active one.
+			const common = records.settings?.common as { grinderModel?: unknown } | undefined;
+			const restoredModel =
+				plan.settings.common === PlanAction.Apply && typeof common?.grinderModel === 'string'
+					? common.grinderModel
+					: undefined;
+			if (ok) runGrinderMigration(beans, restoredModel);
+			return ok;
 		}))
 	) {
 		return stopped('beans');
