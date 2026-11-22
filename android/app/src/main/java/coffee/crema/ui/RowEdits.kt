@@ -44,9 +44,15 @@ typealias RoasterRows = Rows<Roaster>
 typealias GrinderView = RowView<Grinder>
 typealias GrinderRows = Rows<Grinder>
 
-private class ViewOf<T>(val rows: List<T>) : AbstractList<T>(), RowView<T> {
-    override val size: Int get() = rows.size
-    override fun get(index: Int): T = rows[index]
+/** [rows], all of them, read as [shown]: a bean view leaves tombstones out. */
+private class ViewOf<T>(val rows: List<T>, private val shown: List<T> = rows) : AbstractList<T>(), RowView<T> {
+    override val size: Int get() = shown.size
+    override fun get(index: Int): T = shown[index]
+
+    // Two views differ when their hidden rows do, or the state would keep the
+    // old one and lose a tombstone edit.
+    override fun equals(other: Any?): Boolean = if (other is ViewOf<*>) rows == other.rows else super.equals(other)
+    override fun hashCode(): Int = super.hashCode()
 }
 
 private class EditOf<T>(val rows: List<T>) : AbstractList<T>(), Rows<T> {
@@ -57,6 +63,16 @@ private class EditOf<T>(val rows: List<T>) : AbstractList<T>(), Rows<T> {
 /** Rows for a state that isn't the app's: the defaults, tests, fixtures. A write
  *  of one still has no effect outside [UiStore.edit]. */
 fun <T> rowViewOf(rows: List<T> = emptyList()): RowView<T> = ViewOf(rows)
+
+/**
+ * The bags as the state hands them out: a tombstone (a Visualizer bag deleted
+ * here, kept so the next pull doesn't add it back; #488 review S5) is left
+ * out. Edits get every row, and [withTombstones] reads them all.
+ */
+fun beanViewOf(rows: List<Bean>): BeanView = ViewOf(rows, rows.filter { it.deletedAt == null })
+
+/** Every bag row, tombstones included: what the sync, the library file and backups take. */
+fun BeanView.withTombstones(): List<Bean> = (this as ViewOf<Bean>).rows
 
 /** Rows for an edit outside [UiStore], in tests of what an edit does. */
 fun <T> rowsForTest(rows: List<T>): Rows<T> = EditOf(rows)
@@ -105,7 +121,7 @@ class UiStore(initial: MainUiState) {
         flow.update { current ->
             val edited = rows(LibraryRows(current.beans.forEdit(), current.roasters.forEdit(), current.grinders.forEdit()))
             rest(current).copy(
-                beans = edited.beans.forState(),
+                beans = beanViewOf((edited.beans as EditOf<Bean>).rows),
                 roasters = edited.roasters.forState(),
                 grinders = edited.grinders.forState(),
             )

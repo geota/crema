@@ -5,6 +5,7 @@ import coffee.crema.core.Bean
 import coffee.crema.core.BeanOrigin
 import coffee.crema.core.Grinder
 import coffee.crema.core.Roaster
+import coffee.crema.core.beanTombstoneJson
 import coffee.crema.core.duplicateBeanJson
 import coffee.crema.core.setBeanFrozenJson
 import coffee.crema.persist.eraseStore
@@ -132,6 +133,20 @@ fun duplicateBean(
 ): Bean = coreBeanJson.decodeFromString(
     Bean.serializer(),
     core(coreBeanJson.encodeToString(Bean.serializer(), source), newId, nowMs),
+)
+
+/**
+ * The row a bag deleted on this device leaves (#488 review S5): the core's
+ * `bean_tombstone`, as web — its id, Visualizer id, the signature fields and
+ * the stamps, nothing the user wrote. [core] is the UniFFI `beanTombstoneJson`.
+ */
+fun beanTombstone(
+    source: Bean,
+    nowMs: Long,
+    core: (beanJson: String, nowMs: Long) -> String = ::beanTombstoneJson,
+): Bean = coreBeanJson.decodeFromString(
+    Bean.serializer(),
+    core(coreBeanJson.encodeToString(Bean.serializer(), source), nowMs),
 )
 
 /**

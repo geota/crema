@@ -404,6 +404,17 @@ pub fn resettled_bag_debit(
     de1_domain::resettled_bag_debit(remaining, bag_size, bag_debit, old_dose, new_dose)
 }
 
+/// The row a bag deleted on this device leaves (`Bean` JSON in and out):
+/// only what matching needs. See [`de1_domain::bean_tombstone`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the bean JSON is malformed.
+#[uniffi::export]
+pub fn bean_tombstone_json(bean_json: String, now_unix_ms: i64) -> Result<String, CremaError> {
+    de1_domain::bean_tombstone_json(&bean_json, now_unix_ms).map_err(CremaError::from)
+}
+
 /// A new bag copied from a bean (`Bean` JSON in and out): `new_id`,
 /// "<name> (copy)", `now_unix_ms` stamps, and no Visualizer id,
 /// Beanconqueror id, photo ref, tombstone, archive or pin. See

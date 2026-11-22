@@ -343,6 +343,17 @@ export interface BackupFileInfo {
 }
 
 /**
+ * The bags a report counts: the beans' [`StorePlan`] without tombstones
+ * (#488 review S5), the backup's or this device's.
+ */
+export interface BagCounts {
+	add: number;
+	overwrite: number;
+	keep: number;
+	remove: number;
+}
+
+/**
  * A grinder's grind scale: the stepper's range and the unit shown next to a
  * value. `unit` is free text and may be empty ("μm", "clicks", "turns", …).
  */
@@ -4061,7 +4072,15 @@ export interface LocalState {
 	/** A shot or a firmware flash is running, in any tab. */
 	machineBusy: boolean;
 	health: LocalStoreHealth[];
+	/** Tombstones included. */
 	beans: string[];
+	/**
+	 * Of [`Self::beans`], the tombstones: bags deleted on this device, kept
+	 * so a Visualizer pull doesn't add them back (#488 review S5). Replace
+	 * keeps one the backup doesn't carry; a backup row with its id wins as
+	 * any row does.
+	 */
+	deletedBeans: string[];
 	roasters: string[];
 	/** Grinder records (#488), archived and tombstones included. */
 	grinders: string[];
@@ -4175,12 +4194,14 @@ export interface MigrationGate {
 	 */
 	settings: boolean;
 	/**
-	 * The settings read as absent because a damaged copy was kept aside
-	 * (quarantined on an earlier load), with `settings` true. Their
-	 * `grinder_model` is then unknown, not blank (PLAN follow-up 40): only
-	 * the bags that name their own grinder migrate, and the rest wait for a
-	 * load whose settings read. Settings that are absent because they were
-	 * never written are not this: they read, with no settings grinder.
+	 * A damaged settings copy was kept aside (quarantined on an earlier
+	 * load) and the settings `grinder_model` is blank now, whether the
+	 * settings read as absent or were written again since (REVIEW-514): the
+	 * grinder the old settings named is unknown, not blank (PLAN follow-up
+	 * 40). Only the bags that name their own grinder migrate; the rest wait
+	 * until a settings grinder is known (picked, or restored). Settings
+	 * never written, with nothing kept aside, are not this: they read, with
+	 * no settings grinder.
 	 */
 	settingsQuarantined?: boolean;
 }
@@ -5020,6 +5041,8 @@ export interface RestorePlan {
 	 * (review F7).
 	 */
 	beansKeepGrinds: string[];
+	/** What a report counts of [`Self::beans`]: bags, not tombstones. */
+	bagCounts?: BagCounts;
 	profiles: StorePlan;
 	recipes: StorePlan;
 	customMethods: StorePlan;
@@ -5061,6 +5084,12 @@ export interface RoasterDeletePlan {
 	 * other bag is made active), else as it was.
 	 */
 	activeBeanIdAfter?: string;
+	/**
+	 * Of [`Self::deleted_bean_ids`], the bags on Visualizer: the shell keeps
+	 * each as a tombstone (`deleted_at` set, photo dropped) rather than
+	 * removing it, so the next pull doesn't add it back (#488 review S5).
+	 */
+	tombstonedBeanIds?: string[];
 }
 
 /**

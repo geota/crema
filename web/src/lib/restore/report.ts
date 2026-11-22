@@ -3,8 +3,14 @@
  * "User-visible changes"): the refusal, the report before a restore that needs
  * the user's yes, and the line after.
  */
-import { PlanCode, RestoreMode, type PlanNote, type RestorePlan } from '#lib/core/crema-core.js';
+import { PlanCode, RestoreMode, type BagCounts, type PlanNote, type RestorePlan } from '#lib/core/crema-core.js';
 import type { RestoreOutcome, RestoreStep } from './engine';
+
+/** The bags a report counts: the plan's beans without tombstones (#488 review S5). */
+function bags(plan: RestorePlan): BagCounts {
+	const b = plan.beans;
+	return plan.bagCounts ?? { add: b.add.length, overwrite: b.overwrite.length, keep: b.keep, remove: b.remove.length };
+}
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
@@ -106,14 +112,14 @@ export function confirmText(plan: RestorePlan): { title: string; message: string
 	if (plan.mode === RestoreMode.Replace) {
 		const gone = counts([
 			[plan.shots.remove.length, 'shot'],
-			[plan.beans.remove.length, 'bean'],
+			[bags(plan).remove, 'bean'],
 			[plan.profiles.remove.length, 'profile'],
 			[plan.recipes.remove.length, 'recipe']
 		]);
 		const pinned = plan.shots.pinnedRemoved > 0 ? ` (${plan.shots.pinnedRemoved} pinned)` : '';
 		const set = counts([
 			[plan.shots.add.length + plan.shots.overwrite.length + plan.shots.revive.length, 'shot'],
-			[plan.beans.add.length + plan.beans.overwrite.length, 'bean'],
+			[bags(plan).add + bags(plan).overwrite, 'bean'],
 			[plan.profiles.add.length + plan.profiles.overwrite.length, 'profile']
 		]);
 		return {
@@ -131,12 +137,12 @@ export function confirmText(plan: RestorePlan): { title: string; message: string
 	}
 	const adds = counts([
 		[plan.shots.add.length + plan.shots.revive.length, 'shot'],
-		[plan.beans.add.length, 'bean'],
+		[bags(plan).add, 'bean'],
 		[plan.roasters.add.length, 'roaster'],
 		[plan.profiles.add.length, 'profile'],
 		[plan.recipes.add.length, 'recipe']
 	]);
-	const keeps = counts([[plan.shots.keep, 'shot'], [plan.beans.keep, 'bean']]);
+	const keeps = counts([[plan.shots.keep, 'shot'], [bags(plan).keep, 'bean']]);
 	const deleted = plan.shots.deletedHere.length;
 	return {
 		title: `Restore from ${sourceLine(plan)}?`,
@@ -185,7 +191,7 @@ export function outcomeMessage(outcome: RestoreOutcome): string {
 			const plan = outcome.plan;
 			const added = counts([
 				[plan.shots.add.length + plan.shots.revive.length + plan.shots.overwrite.length, 'shot'],
-				[plan.beans.add.length + plan.beans.overwrite.length, 'bean'],
+				[bags(plan).add + bags(plan).overwrite, 'bean'],
 				[plan.profiles.add.length + plan.profiles.overwrite.length, 'profile'],
 				[plan.recipes.add.length + plan.recipes.overwrite.length, 'recipe']
 			]);

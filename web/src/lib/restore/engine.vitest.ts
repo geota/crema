@@ -274,6 +274,27 @@ describe('the plan, written per store', () => {
 		expect(readMarker()).toMatchObject({ phase: 'finishing', mode: 'replace', deletes: { shots: ['s7'] } });
 	});
 
+	it('a bag deleted here stays deleted through Replace, and no report counts a tombstone (#488 review S5)', async () => {
+		resetAll();
+		const beans = getBeanStore();
+		beans.bulkAdd([{ ...blankBean('b1'), name: 'Bean b1' }, { ...blankBean('b2'), name: 'Gone there', visualizerId: 'v2' }], []);
+		beans.deleteBean('b2');
+		const built = (await buildBackupJsonl())!;
+		resetAll();
+		const prepared = await prepareBackup(built.jsonl, 'test backup');
+		getBeanStore().bulkAdd([{ ...blankBean('b3'), name: 'Gone here', visualizerId: 'v3' }], []);
+		getBeanStore().deleteBean('b3');
+		captureMessages(new FakeLocks());
+		const plan = await planNow(prepared, 'wipe', false, new FakeLocks());
+		expect(plan.beans.remove).toEqual([]);
+		expect(confirmText(plan).message).toContain('Sets up 1 bean.');
+		const out = await runRestore(prepared, 'wipe', { expected: plan }, deps(new FakeLocks()));
+		expect(out.kind).toBe('done');
+		const after = getBeanStore();
+		expect(after.beans.map((b) => b.id)).toEqual(['b1']);
+		expect(after.allBeans.filter((b) => b.deletedAt != null).map((b) => b.id).sort()).toEqual(['b2', 'b3']);
+	});
+
 	it('a shot from elsewhere on a bean already here pays nothing from this bag', async () => {
 		const prepared = await backupOf(['b1', 'b2'], ['s1', 's2'], (id) => (id === 's1' ? 'b1' : 'b2'));
 		getBeanStore().bulkAdd([{ ...blankBean('b1'), name: 'Mine' }], []);

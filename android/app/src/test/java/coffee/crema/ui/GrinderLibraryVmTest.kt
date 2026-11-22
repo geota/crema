@@ -386,12 +386,16 @@ class GrinderLibraryVmTest {
         assertEquals(listOf(coffee.crema.persist.StoreHealth.OK, coffee.crema.persist.StoreHealth.ABSENT), read)
         assertFalse(coffee.crema.beans.migrationGate(coffee.crema.persist.StoreHealth.OK, coffee.crema.persist.StoreHealth.DAMAGED).settings)
         assertFalse(coffee.crema.beans.migrationGate(coffee.crema.persist.StoreHealth.UNAVAILABLE, coffee.crema.persist.StoreHealth.OK).library)
-        // PLAN follow-up 40: settings absent with a kept-aside copy are quarantined; never written, or read, they aren't.
+        // PLAN follow-up 40 / REVIEW-514: a kept-aside settings copy with no settings grinder is quarantined,
+        // whether the settings read absent or were written again since; never written (nothing kept aside) isn't.
         val ok = coffee.crema.persist.StoreHealth.OK
         val absent = coffee.crema.persist.StoreHealth.ABSENT
-        assertTrue(coffee.crema.beans.migrationGate(ok, absent, settingsKeptAside = true).settingsQuarantined == true)
-        assertFalse(coffee.crema.beans.migrationGate(ok, absent, settingsKeptAside = false).settingsQuarantined == true)
-        assertFalse(coffee.crema.beans.migrationGate(ok, ok, settingsKeptAside = true).settingsQuarantined == true)
+        fun q(settings: coffee.crema.persist.StoreHealth, keptAside: Boolean, model: String) =
+            coffee.crema.beans.migrationGate(ok, settings, settingsKeptAside = keptAside, grinderModel = model).settingsQuarantined == true
+        assertTrue(q(absent, keptAside = true, model = ""))
+        assertTrue(q(ok, keptAside = true, model = " "), "a write after the quarantine keeps the gate")
+        assertFalse(q(ok, keptAside = true, model = "Niche Zero"), "a known settings grinder opens it")
+        assertFalse(q(absent, keptAside = false, model = ""), "never written")
     }
 
     /** N7: re-picking the bag already on Brew keeps an unsaved dial, with no message. */

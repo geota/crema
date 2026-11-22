@@ -400,7 +400,9 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 		historyCapacity: history.restoreCapacity,
 		machineBusy: getMachineBusy().busy || shotIsOpen() || (await busyElsewhere(locks)),
 		health,
-		beans: beans.beans.map((b) => b.id),
+		// Tombstones too, named, so Replace keeps them (#488 review S5).
+		beans: beans.allBeans.map((b) => b.id),
+		deletedBeans: beans.allBeans.filter((b) => b.deletedAt != null).map((b) => b.id),
 		roasters: beans.roasters.map((r) => r.id),
 		grinders: beans.allGrinders.map((g) => g.id),
 		profiles: profiles.customProfiles.map((p) => p.id),
@@ -932,7 +934,7 @@ async function applyPlan(
 		!(await step('beans', () => {
 			const beans = getBeanStore();
 			const ok = beans.restoreLibrary(
-				keepLocalGrinds(nextRows(beans.beans, records.beans, plan.beans), beans.beans, plan.beansKeepGrinds),
+				keepLocalGrinds(nextRows(beans.allBeans, records.beans, plan.beans), beans.allBeans, plan.beansKeepGrinds),
 				nextRows(beans.roasters, records.roasters, plan.roasters),
 				plan.clearActiveBean,
 				nextRows(beans.allGrinders, records.grinders, plan.grinders),

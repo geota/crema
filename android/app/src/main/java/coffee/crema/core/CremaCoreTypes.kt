@@ -302,6 +302,16 @@ data class BackupFileInfo (
 	val counts: BackupCounts? = null
 )
 
+/// The bags a report counts: the beans' [`StorePlan`] without tombstones
+/// (#488 review S5), the backup's or this device's.
+@Serializable
+data class BagCounts (
+	val add: UInt,
+	val overwrite: UInt,
+	val keep: UInt,
+	val remove: UInt
+)
+
 /// A grinder's grind scale: the stepper's range and the unit shown next to a
 /// value. `unit` is free text and may be empty ("μm", "clicks", "turns", …).
 @Serializable
@@ -4103,7 +4113,13 @@ data class LocalState (
 	/// A shot or a firmware flash is running, in any tab.
 	val machineBusy: Boolean,
 	val health: List<LocalStoreHealth>,
+	/// Tombstones included.
 	val beans: List<String>,
+	/// Of [`Self::beans`], the tombstones: bags deleted on this device, kept
+	/// so a Visualizer pull doesn't add them back (#488 review S5). Replace
+	/// keeps one the backup doesn't carry; a backup row with its id wins as
+	/// any row does.
+	val deletedBeans: List<String>,
 	val roasters: List<String>,
 	/// Grinder records (#488), archived and tombstones included.
 	val grinders: List<String>,
@@ -4203,12 +4219,14 @@ data class MigrationGate (
 	/// couldn't be read: `grinder_model` would look blank and every bag's
 	/// old grind would land under "no grinder" for good.
 	val settings: Boolean,
-	/// The settings read as absent because a damaged copy was kept aside
-	/// (quarantined on an earlier load), with `settings` true. Their
-	/// `grinder_model` is then unknown, not blank (PLAN follow-up 40): only
-	/// the bags that name their own grinder migrate, and the rest wait for a
-	/// load whose settings read. Settings that are absent because they were
-	/// never written are not this: they read, with no settings grinder.
+	/// A damaged settings copy was kept aside (quarantined on an earlier
+	/// load) and the settings `grinder_model` is blank now, whether the
+	/// settings read as absent or were written again since (REVIEW-514): the
+	/// grinder the old settings named is unknown, not blank (PLAN follow-up
+	/// 40). Only the bags that name their own grinder migrate; the rest wait
+	/// until a settings grinder is known (picked, or restored). Settings
+	/// never written, with nothing kept aside, are not this: they read, with
+	/// no settings grinder.
 	val settingsQuarantined: Boolean? = null
 )
 
@@ -5065,6 +5083,8 @@ data class RestorePlan (
 	/// app from before #488): the shell keeps the device's `grinds` on them
 	/// (review F7).
 	val beansKeepGrinds: List<String>,
+	/// What a report counts of [`Self::beans`]: bags, not tombstones.
+	val bagCounts: BagCounts? = null,
 	val profiles: StorePlan,
 	val recipes: StorePlan,
 	val customMethods: StorePlan,
@@ -5102,7 +5122,11 @@ data class RoasterDeletePlan (
 	/// The active-bag pointer afterwards (REVIEW-CORE M3): cleared when the
 	/// cascade deletes the active bag (review F5: Brew shows "No bag"; no
 	/// other bag is made active), else as it was.
-	val activeBeanIdAfter: String? = null
+	val activeBeanIdAfter: String? = null,
+	/// Of [`Self::deleted_bean_ids`], the bags on Visualizer: the shell keeps
+	/// each as a tombstone (`deleted_at` set, photo dropped) rather than
+	/// removing it, so the next pull doesn't add it back (#488 review S5).
+	val tombstonedBeanIds: List<String>? = null
 )
 
 /// A probable duplicate pair in the roaster directory: `dupe_id` looks like

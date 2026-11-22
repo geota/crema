@@ -58,6 +58,7 @@ import type { RoasterDeletePlan } from '#lib/core/crema-core.js';
 import {
 	type Bean,
 	type Roaster,
+	beanTombstone,
 	blankBean,
 	blankRoaster,
 	coerceBean,
@@ -218,8 +219,19 @@ export class BeanLibraryStore {
 
 	// ── Reads ────────────────────────────────────────────────────────
 
-	/** The full bean list, ordered by `updatedAt` desc by default in the UI. */
+	/**
+	 * The bags, ordered by `updatedAt` desc by default in the UI. Tombstones
+	 * (a Visualizer bag deleted here, {@link deleteBean}) are left out.
+	 */
 	get beans(): Bean[] {
+		return this.envelope.beans.filter((b) => b.deletedAt == null);
+	}
+
+	/**
+	 * Every bag row, tombstones included: what the Visualizer sync, backup,
+	 * restore and import read, so a bag deleted here stays deleted.
+	 */
+	get allBeans(): Bean[] {
 		return this.envelope.beans;
 	}
 
@@ -269,12 +281,12 @@ export class BeanLibraryStore {
 	get activeBean(): Bean | null {
 		const id = this.activeId;
 		if (!id) return null;
-		return this.envelope.beans.find((b) => b.id === id) ?? null;
+		return this.getBean(id);
 	}
 
-	/** Look up a bean by id. */
+	/** Look up a bag by id; a tombstone is not one. */
 	getBean(id: string): Bean | null {
-		return this.envelope.beans.find((b) => b.id === id) ?? null;
+		return this.envelope.beans.find((b) => b.id === id && b.deletedAt == null) ?? null;
 	}
 
 	/** Look up a roaster by id. */
@@ -383,7 +395,11 @@ export class BeanLibraryStore {
 	}
 
 	/**
-	 * Hard-delete a bean locally (and clear the active pointer if it was active).
+	 * Delete a bag on this device (and clear the active pointer if it was
+	 * active). A bag that is on Visualizer leaves a tombstone: the row stays,
+	 * hidden, with `deletedAt` set and its photo dropped, so the next pull
+	 * doesn't add it back (#488 review S5). That holds for both scopes, as the
+	 * remote DELETE is best-effort. Any other bag is removed outright.
 	 *
 	 * Local-only by design: the Visualizer-side DELETE is owned by the caller
 	 * (the delete-split component), which runs `BeanSync.deleteBean` on the app
@@ -392,9 +408,12 @@ export class BeanLibraryStore {
 	 * which a module-scope store can't do under Option 3.
 	 */
 	deleteBean(id: string): void {
-		const doomed = this.envelope.beans.filter((b) => b.id === id);
+		const doomed = this.envelope.beans.filter((b) => b.id === id && b.deletedAt == null);
 		if (doomed.length === 0) return;
-		const beans = this.envelope.beans.filter((b) => b.id !== id);
+		const now = Date.now();
+		const beans = this.envelope.beans.flatMap((b) =>
+			b.id !== id ? [b] : b.visualizerId ? [beanTombstone(b, now)] : []
+		);
 		this.envelope = { ...this.envelope, beans };
 		this.persist();
 		if (this.activeId === id) {
@@ -634,9 +653,15 @@ export class BeanLibraryStore {
 		const plan = planRoasterDelete(this.envelope.roasters, this.envelope.beans, id, true, this.activeId);
 		if (!plan) return null;
 		// GEN6: the whole cascade as ONE envelope update + ONE persist.
+		// A bag on Visualizer stays as a tombstone, as `deleteBean` keeps one
+		// (#488 review S5); the rest go.
 		const gone = new Set(plan.deletedBeanIds);
+		const kept = new Set(plan.tombstonedBeanIds ?? []);
+		const now = Date.now();
 		const doomed = this.envelope.beans.filter((b) => gone.has(b.id));
-		const beans = this.envelope.beans.filter((b) => !gone.has(b.id));
+		const beans = this.envelope.beans.flatMap((b) =>
+			!gone.has(b.id) ? [b] : kept.has(b.id) ? [beanTombstone(b, now)] : []
+		);
 		const roasters = this.envelope.roasters.filter((r) => r.id !== id);
 		this.envelope = { ...this.envelope, beans, roasters };
 		this.persist();
@@ -843,8 +868,8 @@ export class BeanLibraryStore {
 	 * its old grind as a saved grind. The old fields and `updatedAt` are never
 	 * written. Skipped over a library that couldn't be read (its rows would
 	 * look absent), and with `settingsReadable` false (the settings grinder
-	 * would look blank). With `settingsQuarantined` (the settings read as
-	 * absent because a damaged copy was kept aside) over a library with bags,
+	 * would look blank). With `settingsQuarantined` (a damaged settings copy
+	 * was kept aside and no settings grinder is known) over a library with bags,
 	 * only the bags that name their own grinder migrate (the core's gate,
 	 * PLAN follow-up 40). Settings never written read normally. Whether
 	 * anything changed.
@@ -950,9 +975,12 @@ export function runGrinderMigration(
 	const settings = getSettingsStore();
 	const health = storeHealth(SETTINGS_KEY);
 	const readable = health === 'ok' || health === 'absent';
-	// Absent because a damaged copy was kept aside, not because never written (PLAN follow-up 40).
-	const quarantined = health === 'absent' && hasKeptAside(SETTINGS_KEY);
-	return lib.migrateGrinders(settings.current.grinderModel ?? '', readable, quarantined);
+	// A damaged copy was kept aside and no settings grinder is known now, even
+	// after the settings were written again (PLAN follow-up 40, REVIEW-514).
+	// Never-written settings have no kept-aside copy and read normally.
+	const model = settings.current.grinderModel ?? '';
+	const quarantined = hasKeptAside(SETTINGS_KEY) && model.trim() === '';
+	return lib.migrateGrinders(model, readable, quarantined);
 }
 
 /**
