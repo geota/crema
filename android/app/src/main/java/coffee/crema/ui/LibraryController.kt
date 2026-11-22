@@ -277,6 +277,11 @@ class LibraryController(
      */
     private var draftProfileJson: String? = null
 
+    /** The profile the editor opened on (REVIEW-FINAL-2 N2): a Save merges what the
+     *  user changed against it onto the stored row, so a pin or a Quick Save written
+     *  meanwhile stays. Set when the editor opens, and to what a Save wrote. */
+    private var editorBaseJson: String? = null
+
     /** The aborted shot held for the undo window (not yet in history), and
      *  what it does when the Undo keeps it. */
     private var discardedShot: Pair<StoredShot, ShotEffects>? = null
@@ -1077,6 +1082,7 @@ class LibraryController(
     /** Open an existing saved (custom) profile in the editor. */
     fun startEditProfile(id: String) {
         draftProfileJson = null
+        editorBaseJson = customProfilesJson.firstOrNull { profileIdOf(it, json) == id }
         updateUi { it.copy(editingProfileId = id, draftProfile = null) }
     }
 
@@ -1132,16 +1138,20 @@ class LibraryController(
             return
         }
         draftProfileJson = fullJson
+        editorBaseJson = fullJson
         updateUi { it.copy(editingProfileId = thin.id, draftProfile = thin) }
     }
 
     /**
      * Save the editor's non-curve edits. Patches only the edited fields into the
      * profile's complete JSON base (the draft for a new / duplicated profile, else
-     * the stored custom), so every wire-relevant field — per-segment temp / mode /
-     * ramp, notes, beverage type — round-trips untouched to the DE1. Upserts into
-     * the custom store (newest first for a new profile; in place for an edit),
-     * refreshes the merged list, and persists.
+     * the custom the editor opened on), so every wire-relevant field — per-segment
+     * temp / mode / ramp, notes, beverage type — round-trips untouched to the DE1.
+     * An edit of a stored custom then goes through the core's `merge_profile_edit`
+     * (REVIEW-FINAL-2 N2): only the fields the user changed land on the row as it
+     * is stored now, so a pin or an in-place Quick Save made meanwhile stays.
+     * Upserts into the custom store (newest first for a new profile; in place for
+     * an edit), refreshes the merged list, and persists.
      *
      * @param segments (target, time) per existing segment, in order — the non-curve
      *   editor never adds / removes segments, so this matches the base length.
@@ -1163,10 +1173,11 @@ class LibraryController(
         tankTemperatureC: Float,
         segments: List<SegmentEdit>,
     ) {
-        val isExisting = customProfilesJson.any { profileIdOf(it, json) == id }
+        val current = customProfilesJson.firstOrNull { profileIdOf(it, json) == id }
+        val isExisting = current != null
         val base = when {
             draftProfileJson != null && uiState().editingProfileId == id -> draftProfileJson
-            isExisting -> customProfilesJson.firstOrNull { profileIdOf(it, json) == id }
+            isExisting -> editorBaseJson?.takeIf { uiState().editingProfileId == id && profileIdOf(it, json) == id } ?: current
             else -> null
         }
         if (base == null) {
@@ -1198,7 +1209,16 @@ class LibraryController(
         }
         // The saved brew temp is the first step's (the editor's field shifted
         // every step as it moved; a direct segment 0 edit moves it too).
-        val saved = derivedBrewTemp(patched)
+        val edited = derivedBrewTemp(patched)
+        // A stored custom: what the user changed, onto the row as it is now.
+        val saved = if (current == null) edited else runCatching {
+            val opened = derivedBrewTemp(coffee.crema.profiles.profileEditorSeedJson(base, json))
+            coffee.crema.profiles.mergeProfileSave(opened, edited, current)
+        }.getOrElse {
+            appendLog("Save profile failed: ${it.message}")
+            return
+        }
+        editorBaseJson = saved
         customProfilesJson = if (isExisting) {
             customProfilesJson.map { if (profileIdOf(it, json) == id) saved else it }
         } else {
@@ -1223,6 +1243,7 @@ class LibraryController(
     /** Close the editor without saving (discards any new / duplicated draft). */
     fun cancelProfileEdit() {
         draftProfileJson = null
+        editorBaseJson = null
         updateUi { it.copy(editingProfileId = null, draftProfile = null) }
     }
 
