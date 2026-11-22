@@ -582,6 +582,11 @@ pub struct RoasterDeletePlan {
     /// cascade deletes the active bag (review F5: Brew shows "No bag"; no
     /// other bag is made active), else as it was.
     pub active_bean_id_after: Option<String>,
+    /// Of [`Self::deleted_bean_ids`], the bags on Visualizer: the shell keeps
+    /// each as a tombstone (`deleted_at` set, photo dropped) rather than
+    /// removing it, so the next pull doesn't add it back (#488 review S5).
+    #[serde(default)]
+    pub tombstoned_bean_ids: Vec<String>,
 }
 
 /// Plan a roaster delete, or `None` when the roaster isn't in `roasters`.
@@ -596,9 +601,10 @@ pub fn plan_roaster_delete(
     active_bean_id: Option<&str>,
 ) -> Option<RoasterDeletePlan> {
     let roaster = roasters.iter().find(|r| r.id == roaster_id)?;
+    // A tombstone is already deleted: the plan leaves it as it is.
     let linked: Vec<&Bean> = beans
         .iter()
-        .filter(|b| b.roaster_id.as_deref() == Some(roaster_id))
+        .filter(|b| b.roaster_id.as_deref() == Some(roaster_id) && b.deleted_at.is_none())
         .collect();
     let ids = |v: &[&Bean]| v.iter().map(|b| b.id.clone()).collect::<Vec<_>>();
     let (deleted, detached) = if cascade {
@@ -606,13 +612,21 @@ pub fn plan_roaster_delete(
     } else {
         (Vec::new(), ids(&linked))
     };
-    let remote_bean_ids = if cascade {
-        linked
+    let (remote_bean_ids, tombstoned_bean_ids) = if cascade {
+        let bound: Vec<&Bean> = linked
             .iter()
-            .filter_map(|b| non_empty(b.visualizer_id.as_ref()).cloned())
-            .collect()
+            .copied()
+            .filter(|b| non_empty(b.visualizer_id.as_ref()).is_some())
+            .collect();
+        (
+            bound
+                .iter()
+                .filter_map(|b| b.visualizer_id.clone())
+                .collect(),
+            ids(&bound),
+        )
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
     let active_bean_id_after = active_bean_id
         .filter(|id| !deleted.iter().any(|d| d == id))
@@ -622,6 +636,7 @@ pub fn plan_roaster_delete(
         active_bean_id_after,
         deleted_bean_ids: deleted,
         detached_bean_ids: detached,
+        tombstoned_bean_ids,
         remote_bean_ids,
         remote_roaster_id: non_empty(roaster.visualizer_id.as_ref()).cloned(),
     })
@@ -1437,6 +1452,32 @@ mod tests {
         assert!(plan_roaster_delete(&roasters, &beans, "roaster:9", true, None).is_none());
         let none = json!({"roasters": [], "roasterId": "x", "cascade": true}).to_string();
         assert_eq!(plan_roaster_delete_json(&none).unwrap(), "null");
+    }
+
+    /// #488 review S5: a cascade keeps the bags on Visualizer as tombstones,
+    /// or the next pull would add them back.
+    #[test]
+    fn roaster_cascade_tombstones_the_bags_on_visualizer() {
+        let roasters = vec![roaster("roaster:1", "Sey", 1)];
+        let mut synced = bean("bean:a", Some("roaster:1"));
+        synced.visualizer_id = Some("vz-a".into());
+        let local_only = bean("bean:b", Some("roaster:1"));
+        let mut gone = bean("bean:t", Some("roaster:1"));
+        gone.visualizer_id = Some("vz-t".into());
+        gone.deleted_at = Some(5);
+        let beans = vec![synced, local_only, gone];
+
+        let cascade = plan_roaster_delete(&roasters, &beans, "roaster:1", true, None).unwrap();
+        assert_eq!(cascade.deleted_bean_ids, vec!["bean:a", "bean:b"]);
+        assert_eq!(cascade.tombstoned_bean_ids, vec!["bean:a"]);
+        assert_eq!(
+            cascade.remote_bean_ids,
+            vec!["vz-a"],
+            "an old tombstone isn't deleted again"
+        );
+        let detach = plan_roaster_delete(&roasters, &beans, "roaster:1", false, None).unwrap();
+        assert!(detach.tombstoned_bean_ids.is_empty());
+        assert_eq!(detach.detached_bean_ids, vec!["bean:a", "bean:b"]);
     }
 
     #[test]

@@ -115,11 +115,14 @@ fun migrationGate(
     library: coffee.crema.persist.StoreHealth,
     settings: coffee.crema.persist.StoreHealth,
     settingsKeptAside: Boolean = false,
+    grinderModel: String = "",
 ): MigrationGate {
     fun read(h: coffee.crema.persist.StoreHealth) = h == coffee.crema.persist.StoreHealth.OK || h == coffee.crema.persist.StoreHealth.ABSENT
-    // Settings absent because a damaged file was kept aside (not because never
-    // written): the core then migrates only bags with their own grinder (PLAN follow-up 40).
-    val quarantined = settings == coffee.crema.persist.StoreHealth.ABSENT && settingsKeptAside
+    // A damaged settings file was kept aside and no settings grinder is known
+    // now, even after the settings were written again (REVIEW-514): the core
+    // then migrates only bags with their own grinder (PLAN follow-up 40).
+    // Never-written settings have nothing kept aside and read normally.
+    val quarantined = settingsKeptAside && grinderModel.isBlank()
     return MigrationGate(library = read(library), settings = read(settings), settingsQuarantined = quarantined)
 }
 

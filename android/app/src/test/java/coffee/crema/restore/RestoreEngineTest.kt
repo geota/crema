@@ -48,6 +48,7 @@ class RestoreEngineTest {
         machineBusy = busy,
         health = emptyList(),
         beans = beans,
+        deletedBeans = emptyList(),
         roasters = emptyList(),
         grinders = emptyList(),
         profiles = emptyList(),

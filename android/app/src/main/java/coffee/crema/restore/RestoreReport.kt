@@ -5,6 +5,11 @@ import coffee.crema.core.PlanNote
 import coffee.crema.core.RestoreMode
 import coffee.crema.core.RestorePlan
 
+/** The bags a report counts: the plan's beans without tombstones (#488 review S5). */
+private fun bags(plan: RestorePlan): coffee.crema.core.BagCounts = plan.bagCounts ?: plan.beans.let {
+    coffee.crema.core.BagCounts(it.add.size.toUInt(), it.overwrite.size.toUInt(), it.keep, it.remove.size.toUInt())
+}
+
 /*
  * A restore plan in words (restore-safety design, "User-visible changes"),
  * worded as the web words it: the refusal, the report before a restore that
@@ -79,13 +84,13 @@ private fun sourceLine(plan: RestorePlan): String {
 fun confirmText(plan: RestorePlan): Pair<String, String> {
     if (plan.mode == RestoreMode.Replace) {
         val gone = counts(
-            plan.shots.remove.size to "shot", plan.beans.remove.size to "bean",
+            plan.shots.remove.size to "shot", bags(plan).remove.toInt() to "bean",
             plan.profiles.remove.size to "profile", plan.recipes.remove.size to "recipe",
         )
         val pinned = if (plan.shots.pinnedRemoved > 0u) " (${plan.shots.pinnedRemoved} pinned)" else ""
         val set = counts(
             plan.shots.add.size + plan.shots.overwrite.size + plan.shots.revive.size to "shot",
-            plan.beans.add.size + plan.beans.overwrite.size to "bean",
+            (bags(plan).add + bags(plan).overwrite).toInt() to "bean",
             plan.profiles.add.size + plan.profiles.overwrite.size to "profile",
         )
         return "Replace everything on this device?" to listOfNotNull(
@@ -97,10 +102,10 @@ fun confirmText(plan: RestorePlan): Pair<String, String> {
         ).joinToString(" ")
     }
     val adds = counts(
-        plan.shots.add.size + plan.shots.revive.size to "shot", plan.beans.add.size to "bean",
+        plan.shots.add.size + plan.shots.revive.size to "shot", bags(plan).add.toInt() to "bean",
         plan.roasters.add.size to "roaster", plan.profiles.add.size to "profile", plan.recipes.add.size to "recipe",
     )
-    val keeps = counts(plan.shots.keep.toInt() to "shot", plan.beans.keep.toInt() to "bean")
+    val keeps = counts(plan.shots.keep.toInt() to "shot", bags(plan).keep.toInt() to "bean")
     val deleted = plan.shots.deletedHere.size
     return "Restore from ${sourceLine(plan)}?" to listOfNotNull(
         adds?.let { "Adds $it." } ?: "Adds nothing new.",
@@ -150,7 +155,7 @@ fun outcomeMessage(outcome: RestoreOutcome): String = when (outcome) {
         val p = outcome.plan
         val added = counts(
             p.shots.add.size + p.shots.revive.size + p.shots.overwrite.size to "shot",
-            p.beans.add.size + p.beans.overwrite.size to "bean",
+            (bags(p).add + bags(p).overwrite).toInt() to "bean",
             p.profiles.add.size + p.profiles.overwrite.size to "profile",
             p.recipes.add.size + p.recipes.overwrite.size to "recipe",
         )

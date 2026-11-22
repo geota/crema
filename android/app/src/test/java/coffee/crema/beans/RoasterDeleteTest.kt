@@ -44,6 +44,21 @@ class RoasterDeleteTest {
         assertNull(out.activeBeanId)
     }
 
+    /** #488 review S5: a bag on Visualizer stays a tombstone, so the next pull can't add it back. */
+    @Test
+    fun `cascade keeps a tombstone for each bag on Visualizer`() {
+        val photo = lib.copy(beans = lib.beans.map { if (it.id == a.id) it.copy(imageRef = "bean:a", notes = "lovely") else it })
+        val plan = RoasterDeletePlan(sey.id, listOf(a.id, b.id), emptyList(), listOf("vz-a"), "vz-r", null, listOf(a.id))
+        val out = applyRoasterDelete(photo, plan, nowMs = 99)
+        assertEquals(listOf(a.id, c.id), out.beans.map { it.id })
+        val tomb = out.beans.single { it.id == a.id }
+        assertEquals(99L, tomb.deletedAt)
+        assertNull(tomb.imageRef)
+        assertEquals("vz-a", tomb.visualizerId)
+        assertTrue(tomb.notes.isNullOrEmpty())
+        assertNull(out.activeBeanId)
+    }
+
     @Test
     fun `the Visualizer option shows only when the chosen scope has a synced copy`() {
         // Sey is synced itself.

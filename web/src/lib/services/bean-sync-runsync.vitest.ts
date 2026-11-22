@@ -102,6 +102,9 @@ function mkLibrary(init: { roasters?: Roaster[]; beans?: Bean[] } = {}) {
 			return roasters;
 		},
 		get beans() {
+			return beans.filter((b) => b.deletedAt == null);
+		},
+		get allBeans() {
 			return beans;
 		},
 		findRoasterByName: (n: string) => roasters.find((r) => r.name.toLowerCase() === n.toLowerCase()),
@@ -179,6 +182,22 @@ describe('BeanSync.runSync — pull', () => {
 		const result = await run(lib, layer);
 		expect(result.pulled).toBe(1);
 		expect(lib.beans.find((b) => b.visualizerId === 'b1')?.name).toBe('Yirg');
+	});
+
+	it('never pulls back a bag deleted on this device (#488 review S5)', async () => {
+		const gone: Bean = { ...blankBean('bean:gone'), name: 'Yirg', visualizerId: 'b1', deletedAt: 5 };
+		const lib = mkLibrary({ beans: [gone] });
+		const { layer, calls } = mkHttp((method, url) => {
+			if (method === 'GET' && isList(url, '/coffee_bags'))
+				return { ok: true, json: { data: [{ id: 'b1', name: 'Yirgacheffe' }], paging: { pages: 1 } } };
+			return { ok: true, json: { data: [], paging: { pages: 1 } } };
+		});
+		const result = await run(lib, layer);
+		expect(result.ok).toBe(true);
+		expect(lib.beans).toEqual([]);
+		expect(lib.allBeans).toEqual([gone]);
+		// No detail fetch either: the bag isn't new here.
+		expect(calls.some((c) => new URL(c.url).pathname === '/api/coffee_bags/b1')).toBe(false);
 	});
 
 	it('binds a local roaster to the matching remote by name (no duplicate)', async () => {

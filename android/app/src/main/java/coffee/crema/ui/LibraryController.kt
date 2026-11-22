@@ -1848,7 +1848,9 @@ class LibraryController(
                     health("profileMeta", PinnedProfileStore.FILE_NAME),
                     health("profileMeta", HiddenProfileStore.FILE_NAME),
                 ),
-                beans = s.beans.map { it.id },
+                // Bag tombstones too, named, so Replace keeps them (#488 review S5).
+                beans = s.beans.withTombstones().map { it.id },
+                deletedBeans = s.beans.withTombstones().filter { it.deletedAt != null }.map { it.id },
                 roasters = s.roasters.map { it.id },
                 // #488: grinder records, archived and tombstones included, and the device's pointer.
                 grinders = s.grinders.map { it.id },
@@ -2746,6 +2748,7 @@ class LibraryController(
             library = coffee.crema.persist.Stores.health(java.io.File(app.filesDir, LibraryStore.FILE_NAME)),
             settings = coffee.crema.persist.Stores.health(settingsFile),
             settingsKeptAside = coffee.crema.persist.SafeFile.keptAside(settingsFile).isNotEmpty(),
+            grinderModel = s.grinderModel,
         )
         val out = runCatching { coffee.crema.beans.migrateGrinderLibrary(s.grinders, s.beans, s.grinderModel, gate, now) }.getOrElse {
             appendLog("Grinder migration failed (runs again next load): ${it.message}")
@@ -3112,18 +3115,36 @@ class LibraryController(
      * shows "No bag", review 2026-11-21 F5). [alsoOnVisualizer] then deletes
      * its Visualizer copy (best-effort; the id is captured before the local
      * row goes). Persisted.
+     *
+     * A bag that is on Visualizer leaves a tombstone, in either scope: the row
+     * stays, hidden, with `deletedAt` set and no photo, so the next pull
+     * doesn't add it back (#488 review S5). Any other bag is removed outright.
      */
     fun deleteBean(id: String, alsoOnVisualizer: Boolean = false) {
-        val doomed = uiState().beans.firstOrNull { it.id == id }
+        val doomed = uiState().beans.firstOrNull { it.id == id } ?: return
         val wasActive = uiState().activeBeanId == id
+        val now = System.currentTimeMillis()
         editRows(
-            { rows -> rows.copy(beans = rows.beans.filtered { it.id != id }) },
+            { rows ->
+                rows.copy(
+                    beans = rows.beans.with(
+                        rows.beans.mapNotNull { b ->
+                            when {
+                                b.id != id -> b
+                                !b.visualizerId.isNullOrEmpty() && b.deletedAt == null -> coffee.crema.beans.beanTombstone(b, now)
+                                b.deletedAt != null -> b
+                                else -> null
+                            }
+                        },
+                    ),
+                )
+            },
             { if (wasActive) it.copy(activeBeanId = null) else it },
         )
         // Drop the bag's photo too, so a deleted bean leaves no orphan blob.
         scope.launch(Dispatchers.IO) { BeanImageStore.delete(app, id) }
         persistLibrary()
-        if (alsoOnVisualizer) doomed?.visualizerId?.let { visualizer.deleteRemote(listOf(it), label = doomed.name) }
+        if (alsoOnVisualizer) doomed.visualizerId?.let { visualizer.deleteRemote(listOf(it), label = doomed.name) }
     }
 
     /**

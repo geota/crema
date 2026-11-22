@@ -92,7 +92,7 @@ internal data class BuiltBackup(
  *  that won't read has no id to give. */
 internal fun omittedRowId(row: OmittedBackupRow, snap: BackupSnapshot): String? = row.id ?: when (row.kind) {
     "shot" -> snap.shots.getOrNull(row.index)?.id
-    "bean" -> snap.state.beans.getOrNull(row.index)?.id
+    "bean" -> snap.state.beans.withTombstones().getOrNull(row.index)?.id
     "roaster" -> snap.state.roasters.getOrNull(row.index)?.id
     "grinder" -> snap.state.grinders.getOrNull(row.index)?.id
     "recipe" -> snap.userRecipes.getOrNull(row.index)?.id
@@ -162,7 +162,8 @@ internal fun backupEnvelope(snap: BackupSnapshot, json: Json, withShots: Boolean
         proxyPrimaryPort = 0,
         replayPrimary = false,
     )
-    val beans = rowStrings(s.beans) { json.encodeToString(Bean.serializer(), it) }
+    // Bag tombstones too (#488 review S5): a restore keeps a bag deleted here deleted.
+    val beans = rowStrings(s.beans.withTombstones()) { json.encodeToString(Bean.serializer(), it) }
     val roasters = rowStrings(s.roasters) { json.encodeToString(Roaster.serializer(), it) }
     // Grinder records (#488), archived and tombstones included: a `grinder`
     // line each and a `grinderCount`, so a restore on either shell brings them.

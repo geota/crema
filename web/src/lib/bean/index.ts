@@ -19,6 +19,7 @@ export {
 	coerceRoaster,
 	daysOffRoast,
 	duplicateBean,
+	beanTombstone,
 	setBeanFrozen,
 	mergeBeanEdit,
 	editedRemaining,

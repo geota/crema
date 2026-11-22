@@ -671,7 +671,7 @@ export const BeanSyncLive = Layer.effect(
 					const { rows: remoteBags, failures } = yield* withDetails(
 						'/coffee_bags',
 						summaries,
-						remoteIdsNeedingDetail(library.beans, summaries)
+						remoteIdsNeedingDetail(library.allBeans, summaries)
 					);
 					for (const f of failures) {
 						log.push({ direction: 'pull', kind: 'bean', id: f.id, name: 'Bag details', at: Date.now(), error: f.error });
@@ -683,7 +683,8 @@ export const BeanSyncLive = Layer.effect(
 					}));
 					const roasterNames: Record<string, string> = {};
 					for (const r of library.roasters) roasterNames[r.id] = r.name;
-					for (const action of reconcileBeans(library.beans, pulledBags, roasterNames, lastSyncAt, pulledStamp)) {
+					// Tombstones too: a bag deleted here is never pulled back (#488 review S5).
+					for (const action of reconcileBeans(library.allBeans, pulledBags, roasterNames, lastSyncAt, pulledStamp)) {
 						const decoded = action.remote;
 						// Stored as the core hands it back — a replace keeps the local
 						// id + `updatedAt`, so the pull doesn't read as a local edit.
