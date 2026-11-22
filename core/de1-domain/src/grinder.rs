@@ -832,7 +832,7 @@ mod tests {
     // ── Add, archive, restore ──
 
     #[test]
-    fn adding_a_catalogue_grinder_takes_its_verified_scale_or_the_default() {
+    fn adding_a_catalogue_grinder_takes_its_verified_scale() {
         let a = add_grinder(&[], "", Some("niche-zero"), NOW).unwrap();
         assert_eq!(a.kind, GrinderAddKind::Created);
         assert_eq!(a.grinder.id, "grinder:niche-zero");
@@ -840,11 +840,20 @@ mod tests {
         assert_eq!(a.grinder.preset_id.as_deref(), Some("niche-zero"));
         assert_eq!(a.grinder.scale.max, 50.0);
         assert_eq!(a.grinder.updated_at, NOW);
-        // No verified range: the default scale.
-        let df = add_grinder(&[], "", Some("df64"), NOW).unwrap().grinder;
+        let ek = add_grinder(&[], "", Some("mahlkonig-ek43"), NOW)
+            .unwrap()
+            .grinder;
+        assert_eq!(
+            (ek.name.as_str(), ek.scale.min, ek.scale.max, ek.scale.step),
+            ("Mahlkönig EK43", 0.0, 16.0, 0.1)
+        );
+        // An id that left the catalogue names nothing.
+        assert_eq!(add_grinder(&[], "", Some("df64"), NOW), None);
+        // A name the catalogue doesn't list: the default scale, no preset.
+        let df = add_grinder(&[], "DF64", None, NOW).unwrap().grinder;
         assert_eq!(
             (df.preset_id.as_deref(), df.scale),
-            (Some("df64"), GrindScale::default())
+            (None, GrindScale::default())
         );
         // A typed name the catalogue knows strictly takes that entry.
         let nz = add_grinder(&[], "nichezero", None, NOW).unwrap().grinder;
@@ -862,6 +871,41 @@ mod tests {
         );
         assert_eq!(add_grinder(&[], " ", None, NOW), None);
         assert_eq!(add_grinder(&[], "x", Some("no-such-entry"), NOW), None);
+    }
+
+    /// A grinder added from an entry the catalogue later dropped (#488's
+    /// verified list) keeps its stored name, scale and `preset_id`; nothing
+    /// rewrites it, and it still answers to its own name.
+    #[test]
+    fn a_grinder_from_a_dropped_entry_is_never_rewritten() {
+        let mut df = grinder("grinder:turin-df64", "Turin DF64");
+        df.preset_id = Some("df64".into());
+        df.scale = GrindScale {
+            min: 0.0,
+            max: 90.0,
+            step: 1.0,
+            unit: String::new(),
+        };
+        let before = df.clone();
+        let gs = vec![df];
+        assert_eq!(gs[0].catalogue_entry(), None);
+        assert!(names_grinder(&gs[0], "turin df64"));
+        assert_eq!(grinder_named(&gs, "Turin DF64"), Some(&before));
+        assert!(grinders_for_names(&gs, &["Turin DF64"], NOW).is_empty());
+        let again = add_grinder(&gs, "Turin DF64", None, NOW).unwrap();
+        assert_eq!(
+            (again.kind, &again.grinder),
+            (GrinderAddKind::Existing, &before)
+        );
+        let m = migrate_grinder_library(&gs, &[bag("b1", "Turin DF64", "")], "Turin DF64", NOW);
+        assert!(m.new_grinders.is_empty());
+        assert_eq!(
+            active_grind_scale(&gs, Some("grinder:turin-df64")),
+            before.scale
+        );
+        let found = match_grinders("df64", &gs, &[]);
+        assert_eq!(found[0].id, "grinder:turin-df64");
+        assert_eq!(gs[0], before);
     }
 
     #[test]
@@ -1143,12 +1187,13 @@ mod tests {
     #[test]
     fn typos_missing_makers_and_spacing_dont_matter() {
         for (query, id) in [
-            ("df46", "df64"),
+            ("nihce", "niche-zero"),
             ("niche", "niche-zero"),
-            ("c40", "comandante-c40"),
             ("nichezero", "niche-zero"),
             ("niche  zero", "niche-zero"),
-            ("specialita", "eureka-mignon-specialita"),
+            ("smart grinder", "breville-smart-grinder-pro"),
+            ("virtuso", "baratza-virtuoso-plus"),
+            ("sculptor 64s", "timemore-sculptor-064s"),
             ("mahlkonig x54", "mahlkonig-x54"),
         ] {
             let top = match_grinders(query, &[], &[]);

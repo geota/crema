@@ -1260,11 +1260,11 @@ export interface CatalogueGrinderInfo {
 	/** Electric or hand. */
 	kind: GrinderKind;
 	/**
-	 * Its verified scale; `None` = "Range not set: check your grinder's
-	 * dial".
+	 * Its verified scale. Every entry has one now; it stays optional so the
+	 * shells' "Range not set" path keeps compiling and the JSON shape holds.
 	 */
 	scale?: GrindScale;
-	/** Where the scale was checked; `None` without one. */
+	/** Where the scale was checked; set whenever `scale` is. */
 	source?: string;
 }
 
