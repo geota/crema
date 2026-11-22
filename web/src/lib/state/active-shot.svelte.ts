@@ -9,20 +9,19 @@
  * The two populators:
  *
  *   - Live path. The orchestrator builds an `ActiveShotData` at
- *     `ShotStarted` from `BeanStore.activeBean`, the active profile,
- *     the Quick Sheet snapshot captured when the user tapped Coffee,
- *     and the grinder-model cascade. Clears at `ShotCompleted`.
+ *     `ShotStarted` from `BeanStore.activeBean`, the active profile and
+ *     the Quick Sheet snapshot captured when the user tapped Coffee.
+ *     Clears at `ShotCompleted`.
  *   - Replay path. `replayCapture()` builds an `ActiveShotData` from
  *     the parsed META *before* events fire, so the brew UI immediately
  *     reflects the replayed shot's context. Clears in the `finally`.
  *
- * Both downstream consumers — the `HistoryStore.record(...)` payload
- * builder and the `buildAtShotStartMeta()` capture-slice META authoring —
- * read from this store. There is exactly one source of truth for the
- * in-flight shot's context; replay does not branch the readers.
+ * The Brew screen and the capture-slice META (its profile name and Quick
+ * Sheet values) read from this store; replay does not branch the readers.
  *
- * Pure shell state. The Rust core has no opinion on bean / grinder /
- * profile-library selections — those are shell concerns.
+ * What the shot records — its bag, profile, grinder and grind, and so the
+ * bag it debits — is not read from here: the core froze those at its own
+ * shot start (`CremaCore.setShotSelections`, REVIEW-CORE H3).
  *
  * See docs/49-replay-architecture-activeshot.md for the design and
  * docs/48 for the broader replay architecture.
@@ -42,10 +41,6 @@ export interface ActiveShotBrewParams {
 	readonly preinfuseTarget: number;
 	readonly stopOnWeight: boolean;
 	readonly autoTare: boolean;
-	/** Brew's grind at shot start as text (the core's `BrewGrindView.value`,
-	 *  "2.25", "2.1.3"), or `null` when not set. Captured per-shot so the
-	 *  record holds the grind Brew showed (#30, #488). */
-	readonly grind?: string | null;
 }
 
 /**
@@ -59,21 +54,19 @@ export interface ActiveShotBrewParams {
  *   - `brewParams` is null on a live shot with no active profile, or a
  *     replay META without QC fields. A manual on-machine start records the
  *     dial the DE1 was given (`CremaApp.pushedBrewParams`).
- *   - `grinderModel` / `grinderId` are the active grinder's at shot start
- *     (#488), or null with none.
+ *   - `grinderModel` is a replay's grinder (its META), for the Brew screen.
+ *
+ * What the shot records — the bag, profile, grinder and grind — is not
+ * taken from here: the core froze it at its own shot start
+ * (`setShotSelections`, REVIEW-CORE H3), a group-head start included.
  */
 export interface ActiveShotData {
 	readonly bean: ShotBean | null;
 	readonly profileName: string | null;
-	/** The library id of the profile active at shot start (save-boundaries
-	 *  review F4/F9): the core's fallback for the shot's `profileId`, stamped
-	 *  only when the shot's name is this profile's. Absent on a replay. */
-	readonly profileId?: string | null;
 	readonly dose: number | null;
 	readonly brewParams: ActiveShotBrewParams | null;
-	readonly grinderModel: string | null;
-	/** The active grinder's id at shot start (#488, review F4/F9); `null` = none or a replay. */
-	readonly grinderId?: string | null;
+	/** A replay's grinder name (its META); absent on a live shot. */
+	readonly grinderModel?: string | null;
 	readonly source: 'live' | 'replay';
 }
 
@@ -121,14 +114,9 @@ export class ActiveShotStore {
 		return this.data?.brewParams ?? null;
 	}
 
-	/** The active grinder's name at shot start, or `null`. */
+	/** A replay's grinder name, or `null` (a live shot, or none). */
 	get grinderModel(): string | null {
 		return this.data?.grinderModel ?? null;
-	}
-
-	/** The active grinder's id at shot start, or `null`. */
-	get grinderId(): string | null {
-		return this.data?.grinderId ?? null;
 	}
 
 	/** Set the in-flight shot. Overwrites any prior value (typically `null`). */

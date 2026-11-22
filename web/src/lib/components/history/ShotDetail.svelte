@@ -136,9 +136,8 @@
 		 */
 		onPrivacyChange: (id: string, privacy: 'public' | 'unlisted' | 'private' | null) => void;
 		/**
-		 * Persist an edited equipment-level grinder model. `null` clears
-		 * the override (cascade re-engages → settings default), a string
-		 * sets a shot-specific override.
+		 * Persist an edited grinder name. `null` clears it (the shot then has
+		 * no grinder), a string sets it.
 		 */
 		onGrinderModelChange: (id: string, grinderModel: string | null) => void;
 		/**
@@ -481,16 +480,10 @@
 	});
 
 	// ── Grinder model override (#81) ─────────────────────────────────────
-	// The shot's own override wins; empty input clears it and the
-	// upload-time cascade falls back to the settings default. The
-	// placeholder shows the current settings default so the user can see
-	// what the upload *would* use today without committing to an override.
-	const settingsDefaultGrinder = $derived(settings.current.grinderModel?.trim() ?? '');
+	// The shot's grinder name; empty input clears it, and the upload then
+	// sends no grinder (no settings fallback, REVIEW-FINAL S3).
 	const detailUid = $props.id();
 	const grinderInputId = `${detailUid}-grinder`;
-	const grinderPlaceholder = $derived(
-		settingsDefaultGrinder ? settingsDefaultGrinder : 'No default set'
-	);
 	function commitGrinderModel(raw: string): void {
 		const trimmed = raw.trim();
 		const next = trimmed.length > 0 ? trimmed : null;
@@ -1105,16 +1098,12 @@
 			id={grinderInputId}
 			class="hi-grinder-input"
 			type="text"
-			placeholder={grinderPlaceholder}
+			placeholder="No grinder"
 			value={shot.grinderModel ?? ''}
 			{@attach commitField(() => shot.grinderModel ?? '', commitGrinderModel)}
 		/>
 		<span class="hi-grinder-hint">
-			{shot.grinderModel
-				? 'Per-shot override.'
-				: settingsDefaultGrinder
-					? `Using settings default (“${settingsDefaultGrinder}”). Type to override.`
-					: 'Override the settings default. Free text.'}
+			{shot.grinderModel ? 'The grinder this shot names.' : 'No grinder recorded. Free text.'}
 		</span>
 	</div>
 {/snippet}
@@ -1690,10 +1679,8 @@
 	     `tag_list` on the next PATCH. -->
 	{@render tagsField()}
 
-	<!-- Grinder model — equipment-level override of the settings default
-	     (`prefs.grinderModel`). Empty saves as `null` so the upload-time
-	     cascade re-engages. The placeholder shows the current default so
-	     the user knows what the upload *would* use today. -->
+	<!-- Grinder model — the shot's grinder name. Empty saves as `null`: the
+	     shot then has no grinder, and uploads none. -->
 	{@render grinderField()}
 
 	<!-- Barista / drinker — who made it and who drank it. Suggestions are
