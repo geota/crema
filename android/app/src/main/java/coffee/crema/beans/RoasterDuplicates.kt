@@ -86,16 +86,26 @@ fun planRoasterDelete(json: Json, roasters: List<Roaster>, beans: List<Bean>, ro
 /**
  * Apply a roaster delete plan to the library: drop the roaster, delete the
  * cascaded bags, detach the rest (roaster cleared, stamped so the next sync
- * PATCHes it), and clear the active bag if it was deleted. Pure.
+ * PATCHes it), and clear the active bag if it was deleted. A cascaded bag on
+ * Visualizer stays as a tombstone (deletedAt set, no photo), as
+ * `deleteBean` keeps one, so the next pull doesn't add it back (#488 review
+ * S5). Pure.
  */
 fun applyRoasterDelete(library: BeanLibrary, plan: coffee.crema.core.RoasterDeletePlan, nowMs: Long): BeanLibrary {
     val deleted = plan.deletedBeanIds.toSet()
+    val tombstoned = plan.tombstonedBeanIds.orEmpty().toSet()
     val detached = plan.detachedBeanIds.toSet()
     return library.copy(
         roasters = library.roasters.filterNot { it.id == plan.roasterId },
         beans = library.beans
-            .filterNot { it.id in deleted }
-            .map { if (it.id in detached) it.copy(roasterId = null, updatedAt = nowMs) else it },
+            .mapNotNull { b ->
+                when {
+                    b.id in tombstoned -> b.copy(deletedAt = nowMs, imageRef = null)
+                    b.id in deleted -> null
+                    b.id in detached -> b.copy(roasterId = null, updatedAt = nowMs)
+                    else -> b
+                }
+            },
         activeBeanId = library.activeBeanId?.takeUnless { it in deleted },
     )
 }

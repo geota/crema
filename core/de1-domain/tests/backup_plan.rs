@@ -209,6 +209,35 @@ fn a_restore_keeps_the_tombstone_of_a_bag_deleted_here() {
     assert!(merge.beans.add.is_empty() && merge.beans.overwrite.is_empty());
 }
 
+/// Review S5: a report counts bags, not tombstones, the backup's or the device's.
+#[test]
+fn a_restore_report_counts_no_tombstones() {
+    let mut dead = bean_row("bean:dead", None);
+    dead["deletedAt"] = json!(5);
+    let rows = [
+        bean_row("bean:live", None),
+        dead,
+        bean_row("bean:here", None),
+        bean_row("bean:gone", None),
+    ];
+    let m = scan_backup_bytes(&grinder_backup(None, &rows));
+    assert_eq!(m.deleted_beans, ["bean:dead"]);
+    let mut local = local_with(&["bean:here", "bean:gone"], &[], None);
+    local.deleted_beans = vec!["bean:gone".to_owned()];
+    let merge = plan_restore(&m, &local, RestoreMode::Merge, RestoreOpts::default());
+    assert_eq!(
+        merge.beans.add,
+        ["bean:live", "bean:dead"],
+        "both rows are written"
+    );
+    assert_eq!((merge.bag_counts.add, merge.bag_counts.keep), (1, 1));
+    let replace = plan_restore(&m, &local, RestoreMode::Replace, RestoreOpts::default());
+    assert_eq!(
+        (replace.bag_counts.add, replace.bag_counts.overwrite),
+        (1, 2)
+    );
+}
+
 #[test]
 fn import_reads_what_the_old_parser_read() {
     for bytes in [WEB, ANDROID] {

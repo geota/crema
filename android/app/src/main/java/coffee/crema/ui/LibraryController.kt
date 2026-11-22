@@ -3055,7 +3055,7 @@ class LibraryController(
                         rows.beans.mapNotNull { b ->
                             when {
                                 b.id != id -> b
-                                b.visualizerId != null && b.deletedAt == null -> b.copy(deletedAt = now, imageRef = null)
+                                !b.visualizerId.isNullOrEmpty() && b.deletedAt == null -> b.copy(deletedAt = now, imageRef = null)
                                 b.deletedAt != null -> b
                                 else -> null
                             }
@@ -3207,7 +3207,7 @@ class LibraryController(
             },
             { st ->
                 val activeGone = st.activeBeanId != null && after.activeBeanId == null
-                st.copy(activeBeanId = if (activeGone) after.beans.firstOrNull()?.id else st.activeBeanId)
+                st.copy(activeBeanId = if (activeGone) after.beans.firstOrNull { it.deletedAt == null }?.id else st.activeBeanId)
             },
         )
         // Cascaded bags leave no orphan photos.

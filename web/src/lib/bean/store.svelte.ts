@@ -651,9 +651,15 @@ export class BeanLibraryStore {
 		const plan = planRoasterDelete(this.envelope.roasters, this.envelope.beans, id, true, this.activeId);
 		if (!plan) return null;
 		// GEN6: the whole cascade as ONE envelope update + ONE persist.
+		// A bag on Visualizer stays as a tombstone, as `deleteBean` keeps one
+		// (#488 review S5); the rest go.
 		const gone = new Set(plan.deletedBeanIds);
+		const kept = new Set(plan.tombstonedBeanIds ?? []);
+		const now = Date.now();
 		const doomed = this.envelope.beans.filter((b) => gone.has(b.id));
-		const beans = this.envelope.beans.filter((b) => !gone.has(b.id));
+		const beans = this.envelope.beans.flatMap((b) =>
+			!gone.has(b.id) ? [b] : kept.has(b.id) ? [{ ...b, deletedAt: now, imageRef: null }] : []
+		);
 		const roasters = this.envelope.roasters.filter((r) => r.id !== id);
 		this.envelope = { ...this.envelope, beans, roasters };
 		this.persist();

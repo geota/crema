@@ -504,6 +504,11 @@ pub struct BackupManifest {
     /// #488): a Replace keeps the device's saved grinds on them (review F7).
     #[serde(default)]
     pub beans_without_grinds: Vec<String>,
+    /// Bean ids whose row is a tombstone (`deletedAt` set: a bag deleted on
+    /// the device that wrote it, #488 review S5). Restored as rows, not
+    /// counted as bags.
+    #[serde(default)]
+    pub deleted_beans: Vec<String>,
     /// Bean ids with a photo in the backup. The shell's, from the zip.
     pub photos: Vec<String>,
     /// The settings line's `_shell`, if there's a settings line.
@@ -710,6 +715,9 @@ impl BackupScan {
                 if self.row(RowStore::Beans, &b.id) {
                     if b.grinds.is_none() {
                         self.manifest.beans_without_grinds.push(b.id.clone());
+                    }
+                    if b.deleted_at.is_some() {
+                        self.manifest.deleted_beans.push(b.id.clone());
                     }
                     self.manifest.beans.push(b.id);
                 }
@@ -1317,6 +1325,57 @@ pub struct RecipeMetaPlan {
     pub hidden_builtins: Vec<String>,
 }
 
+/// The bags a report counts: the beans' [`StorePlan`] without tombstones
+/// (#488 review S5), the backup's or this device's.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BagCounts {
+    pub add: u32,
+    pub overwrite: u32,
+    pub keep: u32,
+    pub remove: u32,
+}
+
+/// [`BagCounts`] for `beans`, the plan of `m` over `local`.
+fn bag_counts(
+    m: &BackupManifest,
+    local: &LocalState,
+    mode: RestoreMode,
+    beans: &StorePlan,
+) -> BagCounts {
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    let live = |ids: &[String]| {
+        count(
+            ids.iter()
+                .filter(|id| !m.deleted_beans.contains(id))
+                .count(),
+        )
+    };
+    // The tombstones here that `keep` counted: all of them when Replace keeps
+    // everything (no bean lines), those the backup has too on Merge.
+    let kept_here = if mode == RestoreMode::Replace {
+        if m.carries(RowStore::Beans) {
+            0
+        } else {
+            local.deleted_beans.len()
+        }
+    } else {
+        let backup: HashSet<&str> = m.ids(RowStore::Beans).into_iter().collect();
+        local
+            .deleted_beans
+            .iter()
+            .filter(|id| backup.contains(id.as_str()))
+            .count()
+    };
+    BagCounts {
+        add: live(&beans.add),
+        overwrite: live(&beans.overwrite),
+        keep: beans.keep.saturating_sub(count(kept_here)),
+        remove: count(beans.remove.len()),
+    }
+}
+
 /// One restore, decided: ids and actions, no row data.
 #[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1335,6 +1394,9 @@ pub struct RestorePlan {
     /// app from before #488): the shell keeps the device's `grinds` on them
     /// (review F7).
     pub beans_keep_grinds: Vec<String>,
+    /// What a report counts of [`Self::beans`]: bags, not tombstones.
+    #[serde(default)]
+    pub bag_counts: BagCounts,
     pub profiles: StorePlan,
     pub recipes: StorePlan,
     pub custom_methods: StorePlan,
@@ -1539,6 +1601,7 @@ pub fn plan_restore(
     // ── Rows ──
     let mut beans = row_plan(m, local, mode, RowStore::Beans);
     beans.remove.retain(|id| !local.deleted_beans.contains(id));
+    let bag_counts = bag_counts(m, local, mode, &beans);
     let roasters = row_plan(m, local, mode, RowStore::Roasters);
     let grinders = row_plan(m, local, mode, RowStore::Grinders);
     let beans_keep_grinds: Vec<String> = beans
@@ -1657,6 +1720,7 @@ pub fn plan_restore(
         roasters,
         grinders,
         beans_keep_grinds,
+        bag_counts,
         profiles,
         recipes,
         custom_methods,

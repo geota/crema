@@ -6,7 +6,7 @@
 
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { blankBean, getBeanStore, type Bean } from './index';
+import { blankBean, blankRoaster, getBeanStore, type Bean } from './index';
 
 const library = getBeanStore();
 
@@ -47,5 +47,17 @@ describe('deleting a bag on this device', () => {
 		library.deleteBean('bean:a');
 		expect(library.allBeans).toHaveLength(1);
 		expect(library.allBeans[0].deletedAt).toBe(first);
+	});
+});
+
+describe('deleting a roaster with its bags', () => {
+	it('keeps a tombstone for each bag on Visualizer', () => {
+		library.upsertRoaster({ ...blankRoaster('X'), id: 'roaster:x' });
+		bag('bean:a', { roasterId: 'roaster:x', visualizerId: 'b1' });
+		bag('bean:b', { roasterId: 'roaster:x' });
+		const plan = library.deleteRoasterAndBeans('roaster:x');
+		expect(plan?.remoteBeanIds).toEqual(['b1']);
+		expect(library.beans).toEqual([]);
+		expect(library.allBeans.map((b) => [b.id, b.deletedAt != null])).toEqual([['bean:a', true]]);
 	});
 });
