@@ -7,7 +7,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -122,5 +126,28 @@ class ForgetRevokesTest {
             scope.cancel()
             rig.stop()
         }
+    }
+
+    /**
+     * The same Forget on a machine too slow to send the revoke within a second:
+     * the CLOSE(REVOKED) still goes. Under a 1 s bound it was dropped unsent,
+     * nothing closed the socket, and the remote sat connected and told nothing
+     * (the test above timed out waiting for its refusal on a loaded run).
+     * Virtual time, so the slow send is exact.
+     */
+    @Test
+    fun `a revoke at admission that takes a while still goes`() = runTest {
+        var revoked = false
+        val slow = object : FrameLink {
+            override suspend fun send(frame: Frame) = error("a forgotten session is sent nothing: $frame")
+            override fun incoming(): Flow<Frame> = emptyFlow()
+            override suspend fun close() = error("closed without the revoke")
+            override suspend fun revoke() {
+                delay(5_000)
+                revoked = true
+            }
+        }
+        RelayRig.defaultHub().serve(slow, TEST_PEER, stillTrusted = { false })
+        assertTrue(revoked, "the revoke went, however long it took")
     }
 }
