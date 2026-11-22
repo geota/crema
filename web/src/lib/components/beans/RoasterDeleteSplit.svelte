@@ -82,11 +82,10 @@
 			? `Delete "${roasterName}" and its ${beansLabel}, here and on Visualizer? This cannot be undone.`
 			: `Delete "${roasterName}" and its ${beansLabel} from this device? This cannot be undone.`;
 		if (!(await confirmDialog({ message: msg, confirmLabel: 'Delete', danger: true }))) return;
-		// Plan (core `plan_roaster_delete`) BEFORE the cascade removes the rows:
-		// the roaster's + every synced linked bag's remote id. Then delete
-		// locally and fire the remote DELETEs.
-		const plan = planRoasterDelete(library.roasters, library.beans, roasterId, true);
-		library.deleteRoasterAndBeans(roasterId);
+		// The store deletes by the core's plan (`plan_roaster_delete`), taken
+		// before the rows go: the roaster's + every synced linked bag's remote
+		// id, and the active-bag pointer afterwards. Then the remote DELETEs.
+		const plan = library.deleteRoasterAndBeans(roasterId);
 		if (remote && plan) {
 			void bestEffortRemoteDelete(appCtx().services, plan.remoteBeanIds, plan.remoteRoasterId ?? null);
 		}

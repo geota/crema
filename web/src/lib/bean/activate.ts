@@ -22,6 +22,7 @@ import { getBrewGrind } from '#lib/brew/grind-session.svelte.js';
 import { getHistoryReads, lastGrinds } from '#lib/history/reads.svelte.js';
 import {
 	DEFAULT_GRIND_SCALE,
+	bagSelectionUndo,
 	formatGrind,
 	resolveBagSelection,
 	resolveGrinderSwitch,
@@ -46,12 +47,28 @@ function applyChange(c: SelectionChange): void {
 }
 
 /**
+ * Whether a shot is running: a value read at the pick, or a getter, so the
+ * Undo (which can come seconds later) reads it again.
+ */
+export type ShotInProgress = boolean | (() => boolean);
+
+function shotRunning(s: ShotInProgress | undefined): boolean {
+	return typeof s === 'function' ? s() : s === true;
+}
+
+/**
  * Select bag `id`. Resolves once the change (if any) is applied. With a shot
  * in progress the linked profile is not loaded (`setActive` uploads to the
- * DE1), and a note says so.
+ * DE1), and a note says so. Picking the bag that is already selected changes
+ * nothing (FINAL N7): an unsaved grind on Brew stays.
+ *
+ * Undo puts back only the parts still as the pick set them (the core's
+ * `bag_selection_undo`): a dial, grinder or profile change made since
+ * stands, and with a shot in progress the profile stays (FINAL S9).
  */
-export async function activateBean(id: string, opts: { shotInProgress?: boolean } = {}): Promise<void> {
+export async function activateBean(id: string, opts: { shotInProgress?: ShotInProgress } = {}): Promise<void> {
 	const library = getBeanStore();
+	const before = library.activeBeanId;
 	library.setActiveBean(id);
 
 	const bean = library.beans.find((b) => b.id === id);
@@ -60,6 +77,7 @@ export async function activateBean(id: string, opts: { shotInProgress?: boolean 
 	const linkedId = bean.linkedProfileId ?? null;
 	const linked = linkedId ? profiles.get(linkedId) : undefined;
 	const linkedMissing = linkedId != null && !linked;
+	const shotInProgress = shotRunning(opts.shotInProgress);
 
 	const history = await bagLastGrinds(id);
 	// Another bag picked meanwhile: that selection is the one that counts.
@@ -68,22 +86,35 @@ export async function activateBean(id: string, opts: { shotInProgress?: boolean 
 	const brewGrind = getBrewGrind().value;
 	const sel = resolveBagSelection({
 		bag: library.getBean(id) ?? bean,
+		activeBeanId: before ?? undefined,
 		activeProfileId: profiles.activeId ?? undefined,
-		linkedProfileMissing: linkedMissing || opts.shotInProgress === true,
+		linkedProfileMissing: linkedMissing || shotInProgress,
 		activeGrinderId: library.activeGrinderId ?? undefined,
 		grind: brewGrind ?? undefined,
 		grinders: library.allGrinders,
 		lastGrinds: history
 	});
 
+	// A re-pick loads nothing (the core answers no change): nothing to note.
 	const notes: string[] = [];
-	if (linkedMissing) notes.push(`${bean.name}'s linked profile no longer exists.`);
-	else if (opts.shotInProgress && linked && profiles.activeId !== linkedId) {
-		notes.push(`Shot in progress — "${linked.name}" not loaded.`);
+	if (before !== id) {
+		if (linkedMissing) notes.push(`${bean.name}'s linked profile no longer exists.`);
+		else if (shotInProgress && linked && profiles.activeId !== linkedId) {
+			notes.push(`Shot in progress — "${linked.name}" not loaded.`);
+		}
 	}
 	if (sel.changed) {
 		applyChange(sel.change);
-		toast.action(selectionMessage(bean.name, sel.change), 'Undo', () => applyChange(sel.undo));
+		toast.action(selectionMessage(bean.name, sel.change), 'Undo', () =>
+			applyChange(
+				bagSelectionUndo(sel, {
+					profileId: profiles.activeId ?? undefined,
+					grinderId: library.activeGrinderId ?? undefined,
+					grind: getBrewGrind().value ?? undefined,
+					shotInProgress: shotRunning(opts.shotInProgress)
+				})
+			)
+		);
 	}
 	for (const n of notes) toast.info(n);
 }

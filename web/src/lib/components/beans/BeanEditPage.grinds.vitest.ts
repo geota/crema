@@ -205,8 +205,24 @@ describe('Grind per grinder', () => {
 		expect(stored().map((g) => g.grinderId)).not.toContain(hand.id);
 	});
 
-	it('Add from the catalogue creates the grinder and a row seeded from the newest shot', async () => {
+	/** Type in the Add box and pick the option titled `title`. */
+	function addGrinder(root: HTMLElement, typed: string, title = `+ Create “${typed}”`): void {
+		const box = root.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+		box.focus();
+		box.value = typed;
+		box.dispatchEvent(new Event('input', { bubbles: true }));
+		flushSync();
+		const opt = [...root.querySelectorAll('[role="option"]')].find(
+			(o) => o.querySelector('.gtp-title')?.textContent?.trim() === title
+		);
+		if (!opt) throw new Error(`no option ${title}`);
+		opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+		flushSync();
+	}
+
+	it('Add from the catalogue stages the grinder: written, and made active, only on Save (FINAL S7)', async () => {
 		setup(() => []);
+		library.setActiveGrinder(null);
 		setHistoryReadsForTest({
 			answer: async () => [{ grinder: 'niche zero', grind: '14', completedAt: 1 }]
 		} as unknown as HistoryReads);
@@ -220,16 +236,66 @@ describe('Grind per grinder', () => {
 		box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 		flushSync();
 
-		const niche = library.grinders.find((g) => /niche/i.test(g.name));
-		expect(niche, 'on Devices at once').toBeDefined();
-		expect(niche!.presetId, 'from the catalogue').toBeTruthy();
+		expect(library.grinders.some((g) => /niche/i.test(g.name)), 'not on Devices before Save').toBe(false);
+		expect(library.activeGrinderId, 'Brew unchanged before Save').toBeNull();
 		expect(stored(), 'the bag waits for Save').toEqual([]);
 		for (let i = 0; i < 5; i++) await tick();
 		flushSync();
-		expect(root.querySelector(`button[aria-label^="${niche!.name} grind: 14"]`), 'seeded from the last shot').not.toBeNull();
+		const label = root.querySelector('button[aria-label^="Niche"][aria-label*=" grind: 14"]');
+		expect(label, 'the row is seeded from the last shot, on the catalogue scale').not.toBeNull();
 
 		await save(root);
+		const niche = library.grinders.find((g) => /niche/i.test(g.name));
+		expect(niche, 'on Devices after Save').toBeDefined();
+		expect(niche!.presetId, 'from the catalogue').toBeTruthy();
 		expect(stored()).toEqual([{ grinderId: niche!.id, grinderName: niche!.name, grind: '14', starred: false }]);
+		expect(library.activeGrinderId, 'with none active, the saved one becomes it').toBe(niche!.id);
+	});
+
+	it('Cancel after "+ Create" on a typo writes no grinder and leaves Brew as it was', async () => {
+		setup(() => []);
+		library.setActiveGrinder(null);
+		const before = library.allGrinders;
+		const root = mountComp(BeanEditPage as Component<Record<string, unknown>>, { bean: library.getBean('bean:a')! });
+		addGrinder(root, 'Nichx');
+		expect(root.querySelector('button[aria-label="Remove Nichx from this bag"]')).not.toBeNull();
+		expect(library.allGrinders, 'nothing on Devices').toEqual(before);
+
+		button(root, 'Cancel').click();
+		await tick();
+		const d = getActiveDialog();
+		d!.resolve(true);
+		dismissConfirm(d!.options);
+		await tick();
+		expect(library.allGrinders.some((g) => g.name === 'Nichx')).toBe(false);
+		expect(library.activeGrinderId).toBeNull();
+		expect(stored()).toEqual([]);
+	});
+
+	it('an archived grinder picked comes back only on Save, with its id', async () => {
+		const { hand } = setup(() => []);
+		library.archiveGrinder(hand.id);
+		const root = mountComp(BeanEditPage as Component<Record<string, unknown>>, { bean: library.getBean('bean:a')! });
+		addGrinder(root, 'Hand', 'Hand');
+		expect(root.querySelector('button[aria-label="Increase Hand grind"]'), 'an editable row').not.toBeNull();
+		expect(library.getGrinder(hand.id)!.archivedAt, 'still archived before Save').not.toBeNull();
+
+		byLabel(root, 'Increase Hand grind').click();
+		flushSync();
+		await save(root);
+		expect(library.getGrinder(hand.id)!.archivedAt ?? null, 'restored on Save').toBeNull();
+		expect(stored().map((g) => g.grinderId)).toEqual([hand.id]);
+	});
+
+	it('a staged grinder whose row was removed again writes nothing', async () => {
+		setup(() => []);
+		const before = library.allGrinders;
+		const root = mountComp(BeanEditPage as Component<Record<string, unknown>>, { bean: library.getBean('bean:a')! });
+		addGrinder(root, 'Zqx Mill');
+		byLabel(root, 'Remove Zqx Mill from this bag').click();
+		flushSync();
+		await save(root);
+		expect(library.allGrinders).toEqual(before);
 	});
 
 	it('a new bag shows only the Add box', () => {

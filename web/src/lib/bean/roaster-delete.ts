@@ -3,7 +3,9 @@
  * Rust core (`de1_domain::plan_roaster_delete`) so the Android shell plans it
  * identically: detach (keep the linked bags, clear their roaster) or cascade
  * (delete them too), plus the Visualizer ids an "also delete on Visualizer"
- * sends — every synced deleted bag, then the roaster.
+ * sends — every synced deleted bag, then the roaster — and what the
+ * active-bag pointer becomes (cleared when the cascade deletes the active
+ * bag; no other bag is made active, REVIEW-CORE M3).
  */
 
 import type { RoasterDeletePlan } from '#lib/core/crema-core.js';
@@ -15,9 +17,12 @@ export function planRoasterDelete(
 	roasters: readonly Roaster[],
 	beans: readonly Bean[],
 	roasterId: string,
-	cascade: boolean
+	cascade: boolean,
+	activeBeanId: string | null = null
 ): RoasterDeletePlan | null {
 	return JSON.parse(
-		wasmPlanRoasterDelete(JSON.stringify({ roasters, beans, roasterId, cascade }))
+		wasmPlanRoasterDelete(
+			JSON.stringify({ roasters, beans, roasterId, cascade, activeBeanId: activeBeanId ?? undefined })
+		)
 	) as RoasterDeletePlan | null;
 }

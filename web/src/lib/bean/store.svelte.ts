@@ -50,8 +50,10 @@ import {
 	mergeGrinderEdit,
 	migrateGrinderLibrary,
 	restoreGrinder as coreRestoreGrinder,
-	saveBagGrind as coreSaveBagGrind
+	saveBagGrind as coreSaveBagGrind,
+	stagedGrindersOnSave
 } from './grinder';
+import type { RoasterDeletePlan } from '#lib/core/crema-core.js';
 import {
 	type Bean,
 	type Roaster,
@@ -62,6 +64,7 @@ import {
 	migrateLegacyCurrentBean
 } from './model';
 import { getBeanImageStore } from './image-storage';
+import { planRoasterDelete } from './roaster-delete';
 
 // ── localStorage keys (versioned envelope) ─────────────────────────────
 
@@ -620,30 +623,29 @@ export class BeanLibraryStore {
 	 * (soft-detach) since beans carry the high-value data. This is
 	 * the rarer "I imported a roaster with junk beans I don't want
 	 * either" flow. Local-only; the caller fires the Visualizer DELETEs
-	 * for the roaster + each cascaded bag (it collects their ids first).
+	 * from the returned plan (`null`: the roaster isn't in the directory,
+	 * nothing deleted).
 	 */
-	deleteRoasterAndBeans(id: string): void {
-		// GEN6: do the whole cascade as ONE envelope update + ONE persist, rather
-		// than N `deleteBean` calls (each persisting) + a trailing `deleteRoaster`
-		// (another). Removing every bean that points at the roaster means no
-		// survivor needs its `roasterId` detached.
-		const doomed = this.envelope.beans.filter((b) => b.roasterId === id);
-		const beanIds = doomed.map((b) => b.id);
-		const beans = this.envelope.beans.filter((b) => b.roasterId !== id);
+	deleteRoasterAndBeans(id: string): RoasterDeletePlan | null {
+		// The core plans it (`plan_roaster_delete`): the bags it removes, their
+		// Visualizer ids, and the active-bag pointer afterwards, cleared when
+		// one of them was active and never moved to another bag (REVIEW-CORE M3).
+		const plan = planRoasterDelete(this.envelope.roasters, this.envelope.beans, id, true, this.activeId);
+		if (!plan) return null;
+		// GEN6: the whole cascade as ONE envelope update + ONE persist.
+		const gone = new Set(plan.deletedBeanIds);
+		const doomed = this.envelope.beans.filter((b) => gone.has(b.id));
+		const beans = this.envelope.beans.filter((b) => !gone.has(b.id));
 		const roasters = this.envelope.roasters.filter((r) => r.id !== id);
-		const changed =
-			beans.length !== this.envelope.beans.length ||
-			roasters.length !== this.envelope.roasters.length;
-		if (!changed) return;
 		this.envelope = { ...this.envelope, beans, roasters };
 		this.persist();
-		// Clear the active-bean pointer if it pointed at a cascaded bag (mirrors
-		// `deleteBean`'s active-pointer cleanup).
-		if (this.activeId !== null && beanIds.includes(this.activeId)) {
-			this.activeId = null;
+		const next = plan.activeBeanIdAfter ?? null;
+		if (next !== this.activeId) {
+			this.activeId = next;
 			this.persistActive();
 		}
 		this.dropPhotos(doomed);
+		return plan;
 	}
 
 	/**
@@ -778,6 +780,21 @@ export class BeanLibraryStore {
 		// uses its scale without a second pick.
 		if (g && this.activeGrinder === null) this.setActiveGrinder(g.id);
 		return g;
+	}
+
+	/**
+	 * The bag editor's Save of the grinders its Add box staged (FINAL S7),
+	 * after the bag itself is stored: the core writes only those the saved
+	 * bag still has a row for (new ones as staged, archived ones restored as
+	 * stored now). Returns the grinder to make active when no live one is,
+	 * for the caller's grinder pick (it sets the pointer and the grind);
+	 * `null` = the pointer stays. Nothing here changes the pointer.
+	 */
+	saveStagedGrinders(staged: readonly Grinder[], bag: Bean): string | null {
+		if (staged.length === 0) return null;
+		const out = stagedGrindersOnSave(this.allGrinders, staged, bag, this.activeGrinderPtr);
+		this.putGrinders(out.grinders);
+		return out.activeGrinderId?.value ?? null;
 	}
 
 	/** Point Brew at a grinder (`null` = no grinder). */

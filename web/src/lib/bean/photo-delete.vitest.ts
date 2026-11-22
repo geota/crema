@@ -5,7 +5,7 @@
 
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { blankBean, getBeanImageStore, getBeanStore, beanImageRefFor, type Bean } from './index';
+import { blankBean, blankRoaster, getBeanImageStore, getBeanStore, beanImageRefFor, type Bean } from './index';
 
 const library = getBeanStore();
 const images = getBeanImageStore();
@@ -46,6 +46,7 @@ describe('deleting a bag deletes its photo', () => {
 	});
 
 	it('deleting a roaster with its bags deletes their photos', async () => {
+		library.upsertRoaster({ ...blankRoaster('X'), id: 'roaster:x' });
 		const bean = await bagWithPhoto('bean:a', beanImageRefFor('bean:a'), 'roaster:x');
 		const other = await bagWithPhoto('bean:b');
 		library.deleteRoasterAndBeans('roaster:x');

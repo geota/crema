@@ -176,3 +176,80 @@ describe('selecting a bag is one change (#488, review F6)', () => {
 		expect(t.unsaved(t.beans.activeBean, t.niche.id, t.grind.value), 'it matches the bag: no marker').toBe(false);
 	});
 });
+
+describe('the bag-pick Undo keeps later changes (REVIEW-CORE H4, FINAL S9)', () => {
+	async function undoSetup() {
+		const t = await setup();
+		const { getBeanStore } = await import('./store.svelte');
+		const { getBrewGrind } = await import('#lib/brew/grind-session.svelte.js');
+		const { getToasts } = await import('#lib/components/shared/toast.svelte.js');
+		const beans = getBeanStore();
+		const niche = beans.addGrinder('Niche Zero')!;
+		const df64 = beans.addGrinder('DF64')!;
+		beans.setActiveGrinder(niche.id);
+		beans.upsertBean({
+			...blankBean('bean:b'),
+			name: 'B',
+			grinds: [{ grinderId: df64.id, grinderName: df64.name, grind: '30', starred: true }]
+		});
+		const grind = getBrewGrind();
+		const undo = () => {
+			const [msg] = getToasts().filter((x) => x.action);
+			msg.action!.run();
+		};
+		return { ...t, beans, niche, df64, grind, undo };
+	}
+
+	it('a dial change after the pick stands; the grinder the pick set goes back', async () => {
+		const t = await undoSetup();
+		t.grind.set('12');
+		await t.activateBean('bean:b');
+		expect(t.grind.value).toBe('30');
+		t.grind.set('31'); // dialled after the pick
+		t.undo();
+		expect(t.beans.activeGrinder?.id, 'still the DF64 the pick set: it goes back').toBe(t.niche.id);
+		expect(t.grind.value, 'the later dial stands').toBe('31');
+	});
+
+	it('a grinder picked after the pick stands', async () => {
+		const t = await undoSetup();
+		const other = t.beans.addGrinder('Comandante')!;
+		await t.activateBean('bean:b');
+		t.beans.setActiveGrinder(other.id);
+		t.undo();
+		expect(t.beans.activeGrinder?.id).toBe(other.id);
+	});
+
+	it('a profile picked after the pick stands', async () => {
+		const t = await undoSetup();
+		const other = t.profiles.all.find((p) => p.id !== t.builtin.id)!;
+		await t.activateBean('bean-1'); // loads its linked built-in
+		expect(t.profiles.activeId).toBe(t.builtin.id);
+		t.profiles.setActive(other.id);
+		t.undo();
+		expect(t.profiles.activeId, 'the profile picked since stays').toBe(other.id);
+	});
+
+	it('with a shot in progress at Undo the profile stays (no upload mid-shot)', async () => {
+		const t = await undoSetup();
+		let shot = false;
+		await t.activateBean('bean-1', { shotInProgress: () => shot });
+		expect(t.profiles.activeId).toBe(t.builtin.id);
+		shot = true;
+		t.activated.length = 0;
+		t.undo();
+		expect(t.profiles.activeId).toBe(t.builtin.id);
+		expect(t.activated, 'nothing sent to the DE1').toEqual([]);
+	});
+
+	it('re-picking the selected bag changes nothing (FINAL N7)', async () => {
+		const t = await undoSetup();
+		await t.activateBean('bean:b');
+		const { getToasts } = await import('#lib/components/shared/toast.svelte.js');
+		const before = getToasts().length;
+		t.grind.set('31'); // unsaved on Brew
+		await t.activateBean('bean:b');
+		expect(t.grind.value, 'the unsaved grind stays').toBe('31');
+		expect(getToasts(), 'no second message').toHaveLength(before);
+	});
+});
