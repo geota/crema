@@ -2319,7 +2319,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         shot.effectiveGrindSetting?.let { grind ->
             when {
                 _ui.value.mirror == null -> setGrindDial(grind)
-                else -> coffee.crema.beans.grindDouble(grind)?.let { setQcGrind(it.toFloat()) }
+                else -> coffee.crema.beans.grindNumber(grind)?.let { setQcGrind(it.toFloat()) }
             }
         }
         if (shot.doseG != null || shot.yieldTargetG != null) {

@@ -9,13 +9,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { page } from '$app/state';
 import { blankBean, getBeanStore } from '#lib/bean/index.js';
-import { DEFAULT_GRIND_SCALE, grinderCatalogue, type Grinder } from '#lib/bean/grinder.js';
+import { DEFAULT_GRIND_SCALE, grinderCatalogue, ScaleTier, type Grinder } from '#lib/bean/grinder.js';
 import { getSettingsStore } from '#lib/settings/index.js';
 import WithAppContext from '#lib/testing/WithAppContext.svelte';
 import DevicesPage from '../../../routes/scale/+page.svelte';
 import GrinderTab from './GrinderTab.svelte';
 import { devicesHref, devicesTabOf } from './devices-link';
-import { parseScaleDraft, rangeNotSet, savedOnBags } from './grinder-devices';
+import { catalogueOfferLine, draftOf, parseScaleDraft, presetLabel, rangeNotSet, savedOnBags } from './grinder-devices';
 
 const lib = getBeanStore();
 const settings = getSettingsStore();
@@ -204,6 +204,35 @@ describe('the Grinder tab', () => {
 		expect(lib.getGrinder(g.id)?.scale).toEqual(entry.scale);
 	});
 
+	it('labels a typical preset "Typical range — check your dial" and a verified one by name (#501)', () => {
+		const typical = grinderCatalogue().find((c) => c.tier === ScaleTier.Typical && c.scale)!;
+		const verified = grinderCatalogue().find((c) => c.tier === ScaleTier.Verified && c.scale)!;
+		expect(presetLabel(typical)).toBe('Typical range — check your dial');
+		expect(presetLabel(verified)).toBe(`From the ${verified.name} preset`);
+		lib.addGrinder('', typical.id);
+		const root = render();
+		expect(root.textContent).toContain('Typical range — check your dial');
+		expect(root.textContent).not.toContain(`From the ${typical.name} preset`);
+	});
+
+	it('shows a Fellow Ode in thirds: the step as ⅓, the preview as a third (#488)', () => {
+		const g = lib.addGrinder('', 'fellow-ode')!;
+		expect(draftOf(g.scale).step).toBe('⅓');
+		const root = render();
+		expect(root.textContent).toContain('Steps of ⅓');
+		expect(root.textContent).not.toContain('0.333');
+		const step = [...root.querySelectorAll<HTMLInputElement>('.gdv-field input')][2];
+		expect(step.value).toBe('⅓');
+		// Saving another field keeps the thirds step.
+		const max = [...root.querySelectorAll<HTMLInputElement>('.gdv-field input')][1];
+		max.value = '10';
+		max.dispatchEvent(new Event('input', { bubbles: true }));
+		max.dispatchEvent(new Event('change', { bubbles: true }));
+		flushSync();
+		expect(lib.getGrinder(g.id)?.scale.max).toBe(10);
+		expect(lib.getGrinder(g.id)?.scale.step).toBeCloseTo(1 / 3, 6);
+	});
+
 	it('lists the grind each bag saved for the grinder', () => {
 		const g = typedGrinder();
 		lib.upsertBean({
@@ -255,6 +284,22 @@ describe('parseScaleDraft', () => {
 		expect(parseScaleDraft({ min: '5', max: '5', step: '1', unit: '' }).error).not.toBeNull();
 		expect(parseScaleDraft({ min: '0', max: '5', step: '-1', unit: '' }).error).not.toBeNull();
 		expect(parseScaleDraft({ min: '', max: '5', step: '1', unit: '' }).error).not.toBeNull();
+	});
+
+	it('reads a thirds step typed as ⅓ or 1/3', () => {
+		for (const step of ['⅓', '1/3']) {
+			const { scale, error } = parseScaleDraft({ min: '1', max: '11', step, unit: '' });
+			expect(error, step).toBeNull();
+			expect(scale.step, step).toBeCloseTo(1 / 3, 9);
+		}
+	});
+
+	it('says what a catalogue offer brings: its scale, a typical range, or Devices', () => {
+		const typical = grinderCatalogue().find((c) => c.tier === ScaleTier.Typical && c.scale)!;
+		const verified = grinderCatalogue().find((c) => c.tier === ScaleTier.Verified && c.scale)!;
+		expect(catalogueOfferLine(verified)).toBe('Adds it to your grinders, with its scale');
+		expect(catalogueOfferLine(typical)).toBe('Adds it to your grinders · Typical range — check your dial');
+		expect(catalogueOfferLine(undefined)).toBe('Adds it to your grinders; set its range on Devices');
 	});
 
 	it('"Range not set" clears once the scale is set by hand', () => {

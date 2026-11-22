@@ -184,6 +184,8 @@ private fun LogBrewFormBody(
                         onChange = { v -> update { it.edited(BrewLogDraft.GRIND).copy(grind = v) } },
                         step = scale.step.toDouble(), min = scale.min.toDouble(), max = scale.max.toDouble(),
                         fmt = { coffee.crema.beans.grindText(it, scale) },
+                        parse = { coffee.crema.beans.grindNumber(it) },
+                        fullKeyboard = coffee.crema.beans.grindFullKeyboard(scale),
                         modifier = m, style = CremaStepperStyle.Boxed,
                         blank = if (draft.grind == null) coffee.crema.ui.components.StepperBlank("—", start) else null,
                     )

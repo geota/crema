@@ -19,19 +19,21 @@
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import StarIcon from 'phosphor-svelte/lib/StarIcon';
 	import { getBeanStore } from '#lib/bean/store.svelte.js';
-	import { formatGrind, grindStartFromBlank, grindText, type GrinderChoice } from '#lib/bean/grinder.js';
+	import { formatGrind, grindStartFromBlank, grindText, stepText as scaleStepText, type GrinderChoice } from '#lib/bean/grinder.js';
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import GrinderTypeOrPick from './GrinderTypeOrPick.svelte';
 	import {
 		parseScaleDraft,
 		presetChoices,
+		presetLabel,
 		presetOf,
 		presetScaleOf,
 		rangeNotSet,
 		sameScale,
 		savedOnBags,
-		scaleSummary
+		scaleSummary,
+		stepFieldText
 	} from './grinder-devices.js';
 
 	let { tabs }: { /** The Devices tabs, drawn under the header. */ tabs?: Snippet } = $props();
@@ -54,7 +56,7 @@
 	// A save (or another grinder) brings them back to what is stored.
 	let minText = $derived(selected ? String(selected.scale.min) : '');
 	let maxText = $derived(selected ? String(selected.scale.max) : '');
-	let stepText = $derived(selected ? String(selected.scale.step) : '');
+	let stepText = $derived(selected ? stepFieldText(selected.scale) : '');
 	let unitText = $derived(selected ? selected.scale.unit : '');
 	let scaleError = $derived.by<string | null>(() => {
 		void selected?.id;
@@ -268,7 +270,7 @@
 					<h3 class="gdv-h3 gdv-grow">Grind scale</h3>
 					{#if preset && presetScale}
 						<span class="gdv-muted">
-							{atPreset ? `From the ${preset.name} preset` : `Changed from the ${preset.name} preset`}
+							{atPreset ? presetLabel(preset) : `Changed from the ${preset.name} preset`}
 						</span>
 						<button type="button" class="gdv-link" onclick={resetToPreset}>Reset to preset</button>
 					{/if}
@@ -321,7 +323,7 @@
 					<div class="gdv-panel">
 						<span class="t-eyebrow">On the Brew screen</span>
 						<span class="gdv-preview">{preview}</span>
-						<span class="gdv-muted">Steps of {selected.scale.step}</span>
+						<span class="gdv-muted">Steps of {scaleStepText(selected.scale)}</span>
 					</div>
 					<div class="gdv-panel">
 						<span class="t-eyebrow">Saved on bags</span>

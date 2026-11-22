@@ -12,7 +12,7 @@
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import { getSettingsStore, formatWeight } from '#lib/settings/index.js';
 	import GrindMarker from '#lib/components/grinders/GrindMarker.svelte';
-	import { grindChips, grindNumber, grindText } from '#lib/bean/grinder.js';
+	import { grindChips, grindInputMode, grindNumber, grindText } from '#lib/bean/grinder.js';
 	import type { GrindView } from '#lib/brew/grind-view.js';
 	import { getBrewGrind } from '#lib/brew/grind-session.svelte.js';
 
@@ -114,6 +114,8 @@
 			clampTyped={false}
 			onChange={setGrind}
 			fmt={grindFmt}
+			parse={grindNumber}
+			inputmode={grindInputMode(gs)}
 			sub={outOfRange ? rangeWarning : undefined}
 		/>
 		<div style="height:8px"></div>

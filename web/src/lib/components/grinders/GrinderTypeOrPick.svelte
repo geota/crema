@@ -13,6 +13,7 @@
 	 */
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 	import { grinderCatalogue, matchGrinders, type Grinder, type GrinderChoice, type GrinderMatch } from '#lib/bean/grinder.js';
+	import { catalogueOfferLine } from './grinder-devices.js';
 
 	let {
 		grinders,
@@ -78,10 +79,7 @@
 			return s ? `${s.min}–${s.max}${s.unit ? ' ' + s.unit : ''}` : '';
 		}
 		if (m.kind === 'catalogue') {
-			const entry = grinderCatalogue().find((c) => c.id === m.id);
-			return entry?.scale
-				? 'Adds it to your grinders, with its scale'
-				: 'Adds it to your grinders; set its range on Devices';
+			return catalogueOfferLine(grinderCatalogue().find((c) => c.id === m.id));
 		}
 		return 'Removed from Devices: picking it brings it back';
 	}
