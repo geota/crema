@@ -404,6 +404,7 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 		beans: beans.allBeans.map((b) => b.id),
 		deletedBeans: beans.allBeans.filter((b) => b.deletedAt != null).map((b) => b.id),
 		roasters: beans.roasters.map((r) => r.id),
+		deletedRoasters: beans.roasters.filter((r) => r.deletedAt != null).map((r) => r.id),
 		grinders: beans.allGrinders.map((g) => g.id),
 		profiles: profiles.customProfiles.map((p) => p.id),
 		recipes: recipes.ownRecipes.map((r) => r.id),

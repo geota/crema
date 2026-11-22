@@ -378,7 +378,9 @@ function captureContext(activeShot: ActiveShotData | null): ShotCaptureContext {
 		// The DE1 this ran on — frozen here so a later upload (Decent shot
 		// history, #84) carries the serial the server verifies, even after
 		// the machine disconnects or another one is paired.
-		machine: liveMachineIdentity() ?? undefined
+		machine: liveMachineIdentity() ?? undefined,
+		// A replay's row carries the replay mark (#488 batch 6).
+		replay: activeShot?.source === 'replay'
 	};
 }
 

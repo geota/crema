@@ -394,6 +394,7 @@ class HistorySourceTest {
             beans = emptyList(),
             deletedBeans = emptyList(),
             roasters = emptyList(),
+            deletedRoasters = emptyList(),
             grinders = emptyList(),
             profiles = emptyList(),
             recipes = emptyList(),
