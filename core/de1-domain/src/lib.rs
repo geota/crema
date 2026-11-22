@@ -341,7 +341,7 @@ pub use hot_water::{
 pub use ids::{new_custom_method_id, new_profile_id, new_recipe_id, new_shot_id};
 pub use library_edit::{
     RemainingEdit, edited_remaining, edited_remaining_json, merge_bean_edit, merge_bean_edit_json,
-    merge_roaster_edit, merge_roaster_edit_json,
+    merge_profile_edit, merge_profile_edit_json, merge_roaster_edit, merge_roaster_edit_json,
 };
 pub use maintenance::{
     MAX_COUNTED_GAP_S, MaintenanceReadout, MaintenanceState, counts_toward_water,
