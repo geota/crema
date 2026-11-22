@@ -779,6 +779,15 @@ pub fn add_another_grinder_json(
     de1_domain::add_another_grinder_json(grinders_json, name, catalogue_id, f64_to_ms(now_ms))
 }
 
+/// A grinder name as stored (REVIEW-513 follow-up 1): control characters,
+/// newlines included, become one space, and the ends are trimmed. See
+/// `de1_domain::clean_grinder_name`.
+#[wasm_bindgen(js_name = cleanGrinderName)]
+#[must_use]
+pub fn clean_grinder_name(name: &str) -> String {
+    de1_domain::clean_grinder_name(name)
+}
+
 /// The newest shot grind for a grinder (REVIEW-CORE M1): a `LastGrind` JSON
 /// or `null`. See `de1_domain::newest_shot_grind`.
 ///
@@ -1730,9 +1739,10 @@ pub fn reconcile_roasters(payload: &str) -> Result<String, String> {
 }
 
 /// Reconcile a remote bean pull against the local library (CORE4). `payload`
-/// is `{"local": Bean[], "remote": Bean[], "roasterNames": {id: name}}` (the
-/// remote beans are already decoded via `beanFromWire`); the result is a JSON
-/// array of `BeanReconcileAction`. See `de1_domain::reconcile_beans`.
+/// is `{"local": Bean[], "remote": PulledBag[] ({wire, localRoasterId?,
+/// fallbackId}), "roasterNames": {id: name}, "lastSyncAt"?, "nowMs"}`; the
+/// result is a JSON array of `BeanReconcileAction`. See
+/// `de1_domain::reconcile_pulled_bags`.
 ///
 /// # Errors
 /// The JSON error string when `payload` can't be deserialised.

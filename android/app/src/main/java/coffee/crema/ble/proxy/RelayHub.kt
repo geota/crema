@@ -234,7 +234,11 @@ class RelayHub(
         if (!stillTrusted()) {
             clients.remove(session)
             Log.i(TAG, "Revoking a session forgotten while it was admitted")
-            withTimeoutOrNull(CLOSE_TIMEOUT_MS) { runCatching { link.revoke() } }
+            // Not on a timer, like the pump's revoke: a stalled machine ran out a
+            // 1 s bound before the CLOSE(REVOKED) was sent, and nothing else
+            // closes this socket, so the remote sat connected and told nothing.
+            // The wire bounds its own socket close; a server stop cancels this.
+            runCatching { link.revoke() }
             return@coroutineScope
         }
         deliver(session, Frame.Welcome(primaryName, AUTHORITY_PRIMARY, roster(), if (peer.canControl) SCOPE_CONTROL else SCOPE_MIRROR))

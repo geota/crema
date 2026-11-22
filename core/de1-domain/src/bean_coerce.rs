@@ -224,7 +224,7 @@ pub fn coerce_grinder(raw: &Value) -> Option<Grinder> {
         ..Grinder::default()
     };
     if let Some(v) = str_field(obj, "name") {
-        g.name = v;
+        g.name = crate::grinder::clean_grinder_name(&v);
     }
     if let Some(scale) = obj.get("scale").and_then(Value::as_object) {
         let num = |k: &str| scale.get(k).and_then(crate::coerce::as_f64);

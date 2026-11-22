@@ -198,6 +198,10 @@ pub struct QuickSaveGrindUndo {
     pub before: Option<BagGrind>,
     /// The row as the Save wrote it.
     pub written: Option<BagGrind>,
+    /// The bag had no grinds list before the Save (`grinds: None`, not
+    /// migrated): an Undo that leaves no rows puts `None` back, not `[]`
+    /// (#488 follow-up 44). Absent on an older Undo record = `false`.
+    pub grinds_were_none: bool,
 }
 
 impl QuickSaveGrindUndo {
@@ -210,6 +214,7 @@ impl QuickSaveGrindUndo {
             grinder_id: grinder_id.to_owned(),
             before: saved_grind(before, grinder_id).cloned(),
             written: saved_grind(after, grinder_id).cloned(),
+            grinds_were_none: before.grinds.is_none(),
         }
     }
 }
@@ -280,7 +285,8 @@ pub struct QuickSaveUndoPlan {
 /// body equals [`QuickSaveUndo::written_profile`] (by value); the grind
 /// while the bag's row for that grinder equals the written row, checked per
 /// row, so a save to another grinder's row since doesn't block it. The row
-/// goes back in place (or goes, when there was none before).
+/// goes back in place (or goes, when there was none before); a bag that had
+/// no grinds list before the Save gets `None` back when no rows are left.
 #[must_use]
 pub fn quick_save_undo(input: &QuickSaveUndoInput, now_ms: i64) -> QuickSaveUndoPlan {
     let undo = &input.undo;
@@ -302,6 +308,10 @@ pub fn quick_save_undo(input: &QuickSaveUndoInput, now_ms: i64) -> QuickSaveUndo
                 rows.remove(i);
             }
             (None, _) => return None,
+        }
+        // The Save made the list: an Undo that empties it puts back `None`.
+        if g.grinds_were_none && rows.is_empty() {
+            out.grinds = None;
         }
         out.updated_at = now_ms.max(bag.updated_at);
         Some(out)
@@ -580,6 +590,40 @@ mod tests {
             NOW,
         );
         assert!(plan.restore_bean.is_none());
+    }
+
+    /// #488 follow-up 44: a bag whose grinds were `None` gets `None` back.
+    #[test]
+    fn undo_puts_back_no_grinds_list_when_the_bag_had_none() {
+        let mut before = bag(Vec::new());
+        before.grinds = None;
+        let (after, undo) = undo_after_save(&before, "grinder:ek", "9");
+        let grind = undo.grind.clone().unwrap();
+        assert!(grind.grinds_were_none);
+        let run = |now_bag: Bean| {
+            quick_save_undo(
+                &QuickSaveUndoInput {
+                    undo: undo.clone(),
+                    now_profile: json!(null),
+                    now_bag: Some(now_bag),
+                },
+                NOW,
+            )
+        };
+        assert_eq!(run(after.clone()).restore_bean.unwrap().grinds, None);
+        // A row for another grinder added since stays, so the list does too.
+        let auto = save_bag_grind(&after, Some(&grinder("grinder:c40", "C40")), "22", NOW).bean;
+        let kept = run(auto).restore_bean.unwrap().grinds.unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].grinder_id, "grinder:c40");
+        // On the wire; an older record without it reads as false.
+        let wire = serde_json::to_value(&grind).unwrap();
+        assert_eq!(wire["grindsWereNone"], true);
+        let old: QuickSaveGrindUndo =
+            serde_json::from_value(json!({ "beanId": "bean:1", "grinderId": "g" })).unwrap();
+        assert!(!old.grinds_were_none);
+        let migrated = QuickSaveGrindUndo::of(&bag(Vec::new()), &after, "grinder:ek");
+        assert!(!migrated.grinds_were_none, "a bag with a list, even empty");
     }
 
     #[test]

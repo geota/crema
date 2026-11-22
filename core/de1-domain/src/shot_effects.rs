@@ -178,17 +178,30 @@ pub struct ShotBagMoveInput {
     pub bag_debit: Option<f32>,
     /// The row's dose, grams; `None` or non-positive = no dose.
     pub dose_g: Option<f32>,
-    /// This device is a remote: it never debits its own copy of a bag
-    /// (owner decision, round 2), so the new bag isn't debited here either.
+    /// Deprecated: read as [`Self::mirror_row`] (either one counts). It said
+    /// "this device is a remote"; since REVIEW-521 the shells pass the row's
+    /// own provenance instead, and since the mirror-copy mark (#488 follow-up
+    /// 51) that is [`Self::mirror_copy`]. Drop once no shell sends it.
     pub remote: bool,
     /// The row is a replay ([`StoredShot::replay`](crate::StoredShot::replay)):
     /// it never debits.
     pub replay: bool,
-    /// The row is a remote's mirror copy of the hub's shot: recorded
-    /// elsewhere, never debited here. Its `bag_debit` of `None` (what Android
-    /// wrote for these rows from #506 until `shot_debit`) then means nothing
-    /// was taken, not "a row from before the field". `false` for a row this
-    /// device recorded, so a legacy local row keeps the dose rule.
+    /// The row's mirror-copy mark
+    /// ([`StoredShot::mirror_copy`](crate::StoredShot::mirror_copy)): a
+    /// remote's copy of the hub's shot, recorded elsewhere and never debited
+    /// here. It credits only what its `bag_debit` says it took (0 when
+    /// `None`), and the new bag isn't debited.
+    pub mirror_copy: bool,
+    /// Legacy only: the shell's guess that a row **without the mark** is a
+    /// mirror copy (Android: the device is a remote and the row isn't a Brew
+    /// Log). Honoured only for a row with no recorded `bag_debit` (`None`):
+    /// what Android wrote for mirror rows from #506 until `shot_debit`, and
+    /// what local rows from before the field have, so the move credits and
+    /// debits nothing (conservative). An unmarked row that records a
+    /// `bag_debit` (0 included) was written since `shot_debit`, when mirror
+    /// copies already carry the mark, so it was recorded here and keeps the
+    /// dose rule (REVIEW-521: a hub-era row with 0 moved on a remote debits
+    /// the new bag).
     pub mirror_row: bool,
 }
 
@@ -215,15 +228,20 @@ pub struct ShotBagMove {
 /// came from the bag the user now names, so the debit moves with the
 /// attribution.
 ///
-/// - The old bag gets back **only what the row took**
-///   ([`crate::credit_shot_debit`]): a recorded `bag_debit` says how much, so
-///   a row that was never debited (`Some(0)`: a mirror shot, a replay)
-///   credits nothing, and neither does a remote's mirror row with `None`
-///   ([`ShotBagMoveInput::mirror_row`]). A row this device recorded before
-///   the field (`None`) took its dose if the bag still holds grams.
-/// - The new bag is debited by the dose **only where a recorded shot would
-///   debit it** ([`shot_effects`]: not on a remote, not for a replay); the
-///   row records what it took ([`shot_debit`]), 0 when nothing.
+/// - **A mirror copy** (a remote's copy of the hub's shot) was never debited
+///   here and moves nothing: the old bag gets back only what its `bag_debit`
+///   records (nothing for `None`), the new bag isn't debited, and the row
+///   records 0. A row is a mirror copy when it carries the mark
+///   ([`ShotBagMoveInput::mirror_copy`]), or, for a legacy row without it,
+///   when the shell guesses so and the row records no `bag_debit`
+///   ([`ShotBagMoveInput::mirror_row`]).
+/// - **Any other row was recorded here**, on whatever device it is moved: the
+///   old bag gets back **only what the row took**
+///   ([`crate::credit_shot_debit`]; `Some(0)`, e.g. a replay or an empty bag,
+///   credits nothing; a row from before the field, `None`, took its dose if
+///   the bag still holds grams), and the new bag is debited by the dose
+///   unless the row is a replay ([`shot_effects`]); the row records what it
+///   took ([`shot_debit`]), 0 when nothing.
 /// - Moving to no bag records `None`.
 #[must_use]
 pub fn shot_bag_move(input: &ShotBagMoveInput) -> ShotBagMove {
@@ -237,8 +255,10 @@ pub fn shot_bag_move(input: &ShotBagMoveInput) -> ShotBagMove {
         return ShotBagMove::default();
     }
     let dose = input.dose_g.unwrap_or(0.0);
-    // A mirror row took nothing here unless it says otherwise.
-    let taken = if input.mirror_row {
+    let legacy_guess = (input.mirror_row || input.remote) && input.bag_debit.is_none();
+    let mirror = input.mirror_copy || legacy_guess;
+    // A mirror copy took nothing here unless it says otherwise.
+    let taken = if mirror {
         Some(input.bag_debit.unwrap_or(0.0))
     } else {
         input.bag_debit
@@ -249,7 +269,7 @@ pub fn shot_bag_move(input: &ShotBagMoveInput) -> ShotBagMove {
         .and_then(|bag| crate::credit_shot_debit(bag.remaining, bag.bag_size, taken, dose));
     let debit = shot_effects(&ShotEffectsInput {
         disposition: ShotDisposition::Record,
-        recorded_here: !input.remote,
+        recorded_here: !mirror,
         replay: input.replay,
     })
     .debit;
@@ -457,7 +477,8 @@ mod tests {
         assert_eq!((no_dose.remaining, no_dose.bag_debit), (None, Some(0.0)));
     }
 
-    fn mv(bag_debit: Option<f32>, remote: bool, replay: bool) -> ShotBagMoveInput {
+    /// A move of a row from bag B (300 of 340 g) to C (200 of 250 g), 18 g.
+    fn mv(bag_debit: Option<f32>, mirror_copy: bool, replay: bool) -> ShotBagMoveInput {
         ShotBagMoveInput {
             from_bag_id: Some("bean:b".into()),
             from_bag: bag(300.0, 340.0),
@@ -465,50 +486,96 @@ mod tests {
             to_bag: bag(200.0, 250.0),
             bag_debit,
             dose_g: Some(18.0),
-            remote,
+            remote: false,
             replay,
+            mirror_copy,
             mirror_row: false,
         }
     }
 
     #[test]
-    fn a_mirror_row_with_no_recorded_debit_credits_nothing() {
-        // REVIEW-518: Android wrote None on a remote's mirror rows from #506.
-        let mut input = mv(None, true, false);
+    fn a_marked_mirror_copy_moves_nothing() {
+        // #488 follow-up 51: the mark, whatever the row records.
+        for bag_debit in [None, Some(0.0)] {
+            let plan = shot_bag_move(&mv(bag_debit, true, false));
+            assert_eq!(
+                plan,
+                ShotBagMove {
+                    moves: true,
+                    from_remaining: None,
+                    to_remaining: None,
+                    bag_debit: Some(0.0),
+                    to_emptied: false
+                },
+                "{bag_debit:?}"
+            );
+        }
+        // A recorded debit on a mirror copy still says what it took.
+        let plan = shot_bag_move(&mv(Some(5.0), true, false));
+        assert_eq!(
+            (plan.from_remaining, plan.to_remaining),
+            (Some(305.0), None)
+        );
+    }
+
+    #[test]
+    fn an_unmarked_row_with_a_recorded_debit_was_recorded_here() {
+        // REVIEW-521 / follow-up 51: a row this device recorded as the hub on
+        // an empty bag (0), moved while it is a remote, debits the new bag;
+        // the shell's legacy guess doesn't make it a mirror copy.
+        let mut input = mv(Some(0.0), false, false);
         input.mirror_row = true;
+        input.remote = true;
         let plan = shot_bag_move(&input);
         assert_eq!(
             (plan.from_remaining, plan.to_remaining, plan.bag_debit),
-            (None, None, Some(0.0))
+            (None, Some(182.0), Some(18.0))
         );
-        // A recorded debit on a mirror row still says what it took.
-        input.bag_debit = Some(5.0);
-        assert_eq!(shot_bag_move(&input).from_remaining, Some(305.0));
-        // A legacy row this device recorded keeps the dose rule.
-        let legacy = shot_bag_move(&mv(None, true, false));
-        assert_eq!(legacy.from_remaining, Some(318.0));
-        assert_eq!(legacy.to_remaining, None, "a remote still never debits");
+        // A Brew Log logged on a remote moves its 18 g with it.
+        input.bag_debit = Some(18.0);
+        let plan = shot_bag_move(&input);
+        assert_eq!(
+            (plan.from_remaining, plan.to_remaining, plan.bag_debit),
+            (Some(318.0), Some(182.0), Some(18.0))
+        );
+    }
+
+    #[test]
+    fn a_legacy_row_the_shell_guesses_is_a_mirror_credits_nothing() {
+        // REVIEW-518: Android wrote None on a remote's mirror rows from #506,
+        // before the mark. `remote` is read as the same guess.
+        for (mirror_row, remote) in [(true, false), (false, true)] {
+            let mut input = mv(None, false, false);
+            input.mirror_row = mirror_row;
+            input.remote = remote;
+            let plan = shot_bag_move(&input);
+            assert_eq!(
+                (plan.from_remaining, plan.to_remaining, plan.bag_debit),
+                (None, None, Some(0.0))
+            );
+        }
+        // A legacy row with no guess keeps the dose rule.
+        let legacy = shot_bag_move(&mv(None, false, false));
+        assert_eq!(
+            (legacy.from_remaining, legacy.to_remaining),
+            (Some(318.0), Some(182.0))
+        );
     }
 
     #[test]
     fn moving_a_shot_that_was_never_debited_credits_nothing() {
-        // The MF1 repro on the remote: B keeps 300 g, C isn't debited.
-        let plan = shot_bag_move(&mv(Some(0.0), true, false));
-        assert_eq!(
-            plan,
-            ShotBagMove {
-                moves: true,
-                from_remaining: None,
-                to_remaining: None,
-                bag_debit: Some(0.0),
-                to_emptied: false
-            }
-        );
-        // A replay on the recording device: the same.
+        // A replay on the recording device: nothing comes back, nothing goes.
         let replay = shot_bag_move(&mv(Some(0.0), false, true));
         assert_eq!(
             (replay.from_remaining, replay.to_remaining, replay.bag_debit),
             (None, None, Some(0.0))
+        );
+        // An empty bag at the time (0): nothing comes back; the new bag is
+        // debited, as a shot recorded on it would be.
+        let empty = shot_bag_move(&mv(Some(0.0), false, false));
+        assert_eq!(
+            (empty.from_remaining, empty.to_remaining),
+            (None, Some(182.0))
         );
     }
 
@@ -575,7 +642,7 @@ mod tests {
     #[test]
     fn the_debit_bridges_read_the_wire_names() {
         let out = shot_bag_move_json(
-            r#"{"fromBagId":"bean:b","fromBag":{"remaining":300,"bagSize":340},"toBagId":"bean:c","toBag":{"remaining":200},"bagDebit":0,"doseG":18,"remote":true}"#,
+            r#"{"fromBagId":"bean:b","fromBag":{"remaining":300,"bagSize":340},"toBagId":"bean:c","toBag":{"remaining":200},"bagDebit":0,"doseG":18,"mirrorCopy":true}"#,
         )
         .unwrap();
         let back: serde_json::Value = serde_json::from_str(&out).unwrap();

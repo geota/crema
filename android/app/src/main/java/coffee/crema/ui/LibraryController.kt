@@ -1001,6 +1001,7 @@ class LibraryController(
                         wrote = u.wrote.copy(
                             grind = coffee.crema.core.QuickSaveGrindUndo(
                                 beanId = beanId, grinderId = slot, before = was.savedGrind(slot), written = out.bean.savedGrind(slot),
+                                grindsWereNone = was.grinds == null,
                             ),
                         ),
                         bagHadNoGrinds = was.grinds == null,
@@ -3606,6 +3607,9 @@ class LibraryController(
             machine = liveMachine(),
             // A replay's row carries the replay mark (#488 batch 6).
             replay = s.replayPrimary,
+            // A remote's copy of the hub's shot carries the mirror-copy mark
+            // (#488 follow-up 51): a History move of it then moves nothing.
+            mirrorCopy = s.mirror != null,
         )
         assembling()
         val assembled = runCatching {
@@ -4009,11 +4013,13 @@ class LibraryController(
         // for a replay), with the row recording what it took. Read from what
         // the bags hold now. Web's moveShotBag is the same rule.
         val toBagId = bean?.id
-        // The flags describe the row, not the device (REVIEW-521 M1): on a
-        // remote, only the hub's watched-shot copies are mirror rows, and they
-        // took nothing here (0, or null from an older build). A row this device
-        // recorded and debited itself (a logged brew, a shot from when it held
-        // the machine) moves as on any device: credit the old bag, debit the new.
+        // The flags describe the row, not the device (REVIEW-521 M1). The hub's
+        // watched-shot copies carry the mirror-copy mark (#488 follow-up 51) and
+        // move nothing. For an older row without it, the guess below counts in
+        // the core only when the row records no debit (null, from before
+        // `shot_debit`). A row this device recorded (a logged brew, a shot from
+        // when it held the machine) moves as on any device: credit the old bag,
+        // debit the new.
         val mirrorRow = s.mirror != null && !shot.isBrewLog && (shot.bagDebitG ?: 0f) <= 0f
         val now = System.currentTimeMillis()
         var planned: ShotBagMove? = null
@@ -4027,10 +4033,13 @@ class LibraryController(
                     toBag = held(toBagId)?.weight(),
                     bagDebit = shot.bagDebitG,
                     doseG = shot.doseG,
-                    remote = mirrorRow,
+                    // Deprecated in the core (read as `mirrorRow`).
+                    remote = false,
                     replay = shot.replay,
-                    // Before `shot_debit` this shell wrote null on a remote's mirror
-                    // rows, and they took nothing (REVIEW-518 follow-up 1).
+                    mirrorCopy = shot.mirrorCopy,
+                    // Legacy only: before `shot_debit` this shell wrote null on a
+                    // remote's mirror rows, and they took nothing (REVIEW-518
+                    // follow-up 1).
                     mirrorRow = mirrorRow,
                 ),
             )

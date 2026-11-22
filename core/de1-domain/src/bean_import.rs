@@ -8,7 +8,7 @@
 
 use crate::bag_grind::BagGrind;
 use crate::bean::{Bean, Roaster};
-use crate::grinder::{Grinder, grinder_named};
+use crate::grinder::{Grinder, clean_grinder_name, grinder_named};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use typeshare::typeshare;
@@ -135,14 +135,20 @@ pub fn merge_library_import(
         .collect();
     let mut grinder_remap: HashMap<String, String> = HashMap::new();
     for g in incoming_grinders {
+        // Stored with a clean name (REVIEW-513 follow-up 1).
+        let cleaned = || {
+            let mut g = g.clone();
+            g.name = clean_grinder_name(&g.name);
+            g
+        };
         if let Some(local) = library_grinder_by_id.get(g.id.as_str()) {
             if g.updated_at > local_stamp(local.updated_at, local.deleted_at) {
-                out.updated_grinders.push(g.clone());
+                out.updated_grinders.push(cleaned());
             }
         } else if let Some(local) = grinder_named(library_grinders, &g.name) {
             grinder_remap.insert(g.id.clone(), local.id.clone());
         } else if g.deleted_at.is_none() && !out.new_grinders.iter().any(|n| n.id == g.id) {
-            out.new_grinders.push(g.clone());
+            out.new_grinders.push(cleaned());
         }
     }
 
@@ -649,6 +655,19 @@ mod tests {
             &[dead],
         );
         assert!(m.updated_grinders.is_empty() && m.new_grinders.is_empty());
+    }
+
+    /// REVIEW-513 follow-up 1: an imported grinder's name is stored clean.
+    #[test]
+    fn imported_grinder_names_lose_their_control_characters() {
+        let lib = vec![grinder("grinder:ek43", "EK43", 100)];
+        let incoming = vec![
+            grinder("grinder:ek43", "EK43\nshop", 200),
+            grinder("grinder:c40", "Comandante\r\nC40", 50),
+        ];
+        let m = merge_library_import(&[], &[], &incoming, &[], &[], &lib);
+        assert_eq!(m.updated_grinders[0].name, "EK43 shop");
+        assert_eq!(m.new_grinders[0].name, "Comandante C40");
     }
 
     #[test]

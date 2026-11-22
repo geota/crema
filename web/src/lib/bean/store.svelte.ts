@@ -565,6 +565,7 @@ export class BeanLibraryStore {
 		bagDebit: number | null;
 		doseG: number | null;
 		replay: boolean;
+		mirrorCopy: boolean;
 	}): ShotBagMove {
 		const from = input.fromBagId ? this.getBean(input.fromBagId) : null;
 		const to = input.toBagId ? this.getBean(input.toBagId) : null;
@@ -578,9 +579,11 @@ export class BeanLibraryStore {
 					bagDebit: input.bagDebit ?? undefined,
 					doseG: input.doseG ?? undefined,
 					// The web is never a remote: it records every shot it sees, so it
-					// holds no mirror rows either.
+					// writes no mirror copies and has no legacy ones to guess at. A
+					// copy restored from an Android backup carries its mark.
 					remote: false,
 					mirrorRow: false,
+					mirrorCopy: input.mirrorCopy,
 					replay: input.replay
 				} satisfies ShotBagMoveInput)
 			)
