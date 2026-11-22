@@ -457,7 +457,8 @@
 		const merge = mergeBeanImport(
 			plan.beans,
 			plan.roasters,
-			library.beans,
+			// Tombstones too: an older copy of a bag deleted here doesn't revive it.
+			library.allBeans,
 			library.roasters,
 			plan.grinders ?? [],
 			library.allGrinders
