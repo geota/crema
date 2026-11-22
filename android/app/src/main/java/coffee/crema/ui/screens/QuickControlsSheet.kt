@@ -69,7 +69,9 @@ import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.QuickSaveNameDialog
 import coffee.crema.ui.components.QuickSavePrompt
 import coffee.crema.ui.components.title
-import coffee.crema.ui.QuickSavePlan
+import coffee.crema.core.QuickSavePlan
+import coffee.crema.ui.NO_QUICK_SAVE
+import coffee.crema.ui.label
 import coffee.crema.ui.components.CremaSearchPill
 import coffee.crema.ui.components.CremaStepper
 import coffee.crema.ui.stepperBlank
@@ -133,7 +135,7 @@ fun QuickControlsSheet(
     onAdjustBrew: (dose: Double, yieldOut: Double, brewTemp: Double, preinf: Double?) -> Unit,
     onResetBrew: () -> Unit,
     /** What Quick Controls' Save would write ([quickSavePlan]). */
-    quickSave: QuickSavePlan = QuickSavePlan(),
+    quickSave: QuickSavePlan = NO_QUICK_SAVE,
     /** Run the Save: a copy's name (null: none needed), and "Save as new…". */
     onQuickSave: (copyName: String?, asNew: Boolean) -> Unit = { _, _ -> },
     onAutoTare: (Boolean) -> Unit,

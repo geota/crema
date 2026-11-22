@@ -73,8 +73,8 @@ class OwnStateReadsTest {
             // active grinder clears it (F5); an edit of it is pushed to remotes.
             "migrateGrinderLibrary" to setOf("grinderModel", "activeGrinderId"),
             "archiveGrinder" to setOf("activeGrinderId"),
-            // The first grinder added becomes the own active one (review 499).
-            "addGrinder" to setOf("activeGrinderId"),
+            // The first grinder added (or added again, "Add another") becomes the own active one (review 499).
+            "landGrinderAdd" to setOf("activeGrinderId"),
             // The bag editor's Save of its staged grinders, the same rule at Save (FINAL S7).
             "saveStagedGrinders" to setOf("activeGrinderId"),
             "saveGrinderEdit" to setOf("activeGrinderId"),

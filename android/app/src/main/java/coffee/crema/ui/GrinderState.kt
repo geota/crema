@@ -128,14 +128,19 @@ fun scaleFieldNumber(text: String): Float? =
 fun presetLabel(entry: coffee.crema.core.CatalogueGrinderInfo): String =
     if (entry.tier == coffee.crema.core.ScaleTier.Typical) "Typical range — check your dial" else "From the ${entry.name} preset"
 
+/**
+ * Settings → Connected devices' Grinders line (#488 follow-up 38): Brew's
+ * active grinder by name (on a remote, the hub's), never the retired
+ * settings `grinderModel`; with none, where grinders live.
+ */
+fun grindersSettingsLine(activeGrinder: String?): String =
+    activeGrinder?.trim()?.takeIf { it.isNotEmpty() }
+        ?.let { "Brew uses $it. Your grinders and their grind scales are on Devices." }
+        ?: "No grinder on Brew. Your grinders and their grind scales are on Devices."
+
 /** "0–999 μm", or "0–20" with no unit. */
 fun scaleRangeText(scale: GrindScale): String =
     "${scaleNumber(scale.min)}–${scaleNumber(scale.max)}" + scale.unit.trim().takeIf { it.isNotEmpty() }?.let { " $it" }.orEmpty()
-
-/** The newest shot grind on [lastGrinds] for [grinder]: stamped with its id, or an older row by its name. */
-fun newestShotGrind(lastGrinds: List<coffee.crema.core.LastGrind>, grinder: Grinder): coffee.crema.core.LastGrind? =
-    lastGrinds.filter { it.grind.isNotBlank() && (it.grinderId == grinder.id || (it.grinderId == null && it.grinder.trim().equals(grinder.name.trim(), ignoreCase = true))) }
-        .maxByOrNull { it.completedAt }
 
 /** The scale a stored shot's grind is on: its grinder's by id, an older row's by name, else the default. */
 fun shotGrindScale(shot: coffee.crema.history.ShotMeta, grinders: List<Grinder>): GrindScale =
@@ -148,22 +153,27 @@ fun shotGrindScale(shot: coffee.crema.history.ShotMeta, grinders: List<Grinder>)
 data class GrinderPickRow(val grinder: Grinder, val starred: Boolean, val meta: String)
 
 /**
- * The pickers' rows for [grinders] (the live ones) with bag [bag] selected:
- * "This bag's grinder · saved 14" on the starred one, "Saved 480 μm", or
- * "Nothing saved · last shot 32"; with no bag, the grinder's range.
+ * The pickers' rows for [grinders] (the live ones) with bag [bag] selected,
+ * from the core (`grinder_pick_rows`, REVIEW-CORE M1: the same lookups a bag
+ * pick loads from): "This bag's grinder · saved 14" on the starred one,
+ * "Saved 480 μm", or "Nothing saved · last shot 32"; with no bag, the
+ * grinder's range.
  */
-fun grinderPickRows(grinders: List<Grinder>, bag: Bean?, lastGrinds: List<coffee.crema.core.LastGrind>): List<GrinderPickRow> =
-    grinders.map { g ->
-        val saved = bag?.savedGrind(g.id)
-        val starred = saved?.starred == true
+fun grinderPickRows(grinders: List<Grinder>, bag: Bean?, lastGrinds: List<coffee.crema.core.LastGrind>): List<GrinderPickRow> {
+    val rows = coffee.crema.beans.grinderPickRows(grinders, bag, lastGrinds).associateBy { it.grinderId }
+    return grinders.map { g ->
+        val row = rows[g.id]
+        val starred = row?.starred == true
         val meta = when {
             bag == null -> scaleRangeText(g.scale)
-            saved != null && starred -> "This bag's grinder · saved ${formatGrind(saved.grind, g.scale)}"
-            saved != null -> "Saved ${formatGrind(saved.grind, g.scale)}"
-            else -> newestShotGrind(lastGrinds, g)?.let { "Nothing saved · last shot ${formatGrind(it.grind, g.scale)}" } ?: "Nothing saved"
+            row?.saved != null && starred -> "This bag's grinder · saved ${formatGrind(row.saved, g.scale)}"
+            row?.saved != null -> "Saved ${formatGrind(row.saved, g.scale)}"
+            row?.lastShot != null -> "Nothing saved · last shot ${formatGrind(row.lastShot, g.scale)}"
+            else -> "Nothing saved"
         }
         GrinderPickRow(g, starred, meta)
     }
+}
 
 /** The explanation behind the unsaved-grind marker (hover / long-press). */
 fun MainUiState.unsavedGrindExplanation(): String? {

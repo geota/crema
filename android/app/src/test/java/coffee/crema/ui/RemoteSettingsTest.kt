@@ -10,6 +10,7 @@ import coffee.crema.settings.SettingGroup
 import coffee.crema.ui.RemoteFixture.Companion.BEAN_P
 import coffee.crema.ui.RemoteFixture.Companion.BEAN_S
 import coffee.crema.ui.RemoteFixture.Companion.P
+import coffee.crema.ui.RemoteFixture.Companion.PROFILE_P
 import coffee.crema.ui.RemoteFixture.Companion.PROFILE_S
 import coffee.crema.ui.RemoteFixture.Companion.S
 import coffee.crema.ui.RemoteFixture.Companion.savedActiveBean
@@ -213,6 +214,53 @@ class RemoteSettingsTest {
         assertEquals(grinds, VmHarness.ownState(vm).beans.first { it.id == BEAN_S }.grinds, "no grind saved to this device's bag")
         assertEquals("", VmHarness.ownState(vm).beans.first { it.id == BEAN_S }.grinderSetting, "nor to the old field")
         assertEquals(profiles, vm.ui.value.profiles.size, "no profile copy here")
+    }
+
+    /** AC-30, the behaviour half (PLAN follow-up 7): on a remote, the library
+     *  actions that run here act on what is on screen (the hub's), not on this
+     *  device's own values: Log brew opens on the hub's bag, and Save's plan
+     *  reads the hub's dial, bag and profile. */
+    @Test
+    fun `library actions on a remote read the values on screen`() {
+        val vm = fixture.start()
+        fixture.push()
+        assertEquals(BEAN_P, VmHarness.ownState(vm).activeBeanId, "this device's own bag differs from the hub's")
+        assertEquals(BEAN_S, vm.ui.value.activeBeanId)
+        vm.openLogBrew(coffee.crema.ui.brewlog.BrewLogOwner.HISTORY)
+        VmHarness.idle()
+        assertEquals(BEAN_S, vm.logBrew.value?.beanId, "Log brew opens on the hub's bag")
+        val plan = vm.ui.value.quickSavePlan()
+        assertEquals(BEAN_S, plan.beanId, "Save's bag is the hub's")
+        assertEquals(PROFILE_S, plan.profileId, "and its profile")
+        assertEquals("15", plan.grind, "and its dial")
+    }
+
+    /** PLAN follow-up 5: a remote keeps its own cleared profile across a
+     *  restart, as any device does (it saves the cleared selection, and the
+     *  launch doesn't seed one). */
+    @Test
+    fun `a remote's cleared profile is saved and stays cleared`() {
+        val vm = fixture.start()
+        fixture.push()
+        assertEquals(PROFILE_P, VmHarness.ownState(vm).activeProfileId)
+        vm.archiveBuiltinProfile(PROFILE_P)
+        VmHarness.idle()
+        assertNull(VmHarness.ownState(vm).activeProfileId)
+        VmHarness.idleUntil("the cleared selection saved") { savedPrefs().let { it.profileCleared && it.activeProfileId == null } }
+        store.clear()
+        VmHarness.idle()
+        fixture.kill()
+
+        val nextStore = ViewModelStore()
+        val again = RemoteFixture(nextStore)
+        try {
+            val next = again.start(own = P.copy(activeProfileId = null, profileCleared = true))
+            assertNull(VmHarness.ownState(next).activeProfileId, "no profile picked at launch")
+        } finally {
+            nextStore.clear()
+            VmHarness.idle()
+            again.kill()
+        }
     }
 
     /** #488: a remote's grinder pick is relayed to the hub like a bag pick, and

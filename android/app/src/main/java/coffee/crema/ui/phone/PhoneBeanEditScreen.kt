@@ -65,7 +65,8 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             containerColor = MaterialTheme.colorScheme.background,
         ) { inner ->
             Box(Modifier.padding(inner).fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No bean selected.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Deleted elsewhere while open (a sync, another device): say so (PLAN follow-up 10).
+                Text(coffee.crema.ui.screens.beanEditorEmptyText(ui.editingBeanGone), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         return

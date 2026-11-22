@@ -23,6 +23,7 @@ import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -511,5 +512,26 @@ class GrinderLibraryVmTest {
         VmHarness.idle()
         assertNull(vm.grinder(niche.id).archivedAt, "restored on Save")
         assertTrue("Niche Zero is back, with its saved grinds" in vm.ui.value.userMessages, "${vm.ui.value.userMessages}")
+    }
+
+    /** #488 follow-up 18: an Add that finds the model already yours offers
+     *  "Add another", which makes a second record with its own id. */
+    @Test
+    fun `adding an owned grinder offers Add another, which makes a second one`() {
+        writeLibrary(BeanLibrary(listOf(bag("a", grinds = emptyList()))))
+        val vm = vm()
+        val first = assertNotNull(vm.addGrinder("Niche Zero"))
+        assertNull(vm.ui.value.addAnotherOffer, "a new grinder offers nothing")
+        assertEquals(first.id, vm.addGrinder("Niche Zero")?.id, "the same one again")
+        val offer = assertNotNull(vm.ui.value.addAnotherOffer, "already yours: Add another is offered")
+        assertEquals("Niche Zero is already one of your grinders", offer.message)
+        val second = assertNotNull(vm.addAnotherGrinder(offer.seq))
+        VmHarness.idle()
+        assertEquals("Niche Zero 2", second.name)
+        assertNotEquals(first.id, second.id, "its own id")
+        assertEquals(listOf(first.id, second.id), vm.own().grinders.filter { it.archivedAt == null && it.deletedAt == null }.map { it.id })
+        assertNull(vm.ui.value.addAnotherOffer)
+        assertNull(vm.addAnotherGrinder(offer.seq), "the offer is used up")
+        assertTrue("Added Niche Zero 2" in vm.ui.value.userMessages, "${vm.ui.value.userMessages}")
     }
 }

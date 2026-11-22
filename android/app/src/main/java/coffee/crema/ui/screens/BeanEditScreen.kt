@@ -110,6 +110,10 @@ private val ROASTTYPE_OPTIONS = listOf(
     SegOption("omni", "Omni"),
 )
 
+/** What the bag editor says with no bag to show: [gone] names one deleted elsewhere while it was open. */
+fun beanEditorEmptyText(gone: String?): String =
+    gone?.let { "“$it” was deleted elsewhere (a sync or another device), so your changes weren’t saved." } ?: "No bean selected."
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
@@ -120,7 +124,8 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     if (bean == null) {
         Column(Modifier.fillMaxSize().padding(14.dp)) {
             CremaIconButton(icon = "arrow-left", onClick = onBack)
-            Text("No bean selected.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // Deleted elsewhere while open (a sync, another device): say so (PLAN follow-up 10).
+            Text(beanEditorEmptyText(ui.editingBeanGone), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         return
     }

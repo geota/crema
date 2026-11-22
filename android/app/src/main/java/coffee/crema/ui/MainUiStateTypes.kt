@@ -6,6 +6,16 @@ import coffee.crema.history.StoredShot
 data class UndoNotice(val message: String, val seq: Long)
 
 /**
+ * An Add grinder that answered "already yours" (#488 follow-up 18): the
+ * message offers "Add another" (the core's `add_another_grinder`: an archived
+ * one of the model back, else "‹name› 2"). [name] / [catalogueId] are what the
+ * add was asked; [existing] the grinder it found.
+ */
+data class AddAnotherOffer(val name: String, val catalogueId: String?, val existing: String, val seq: Long) {
+    val message: String get() = "$existing is already one of your grinders"
+}
+
+/**
  * Summary of the most recently completed espresso shot — assembled from
  * `Event.ShotCompleted` for the Brew screen's "Last shot" card. Null until a
  * shot finishes; held until the next shot starts.

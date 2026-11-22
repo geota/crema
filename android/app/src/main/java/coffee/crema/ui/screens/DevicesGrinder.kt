@@ -57,7 +57,7 @@ import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.GrinderAddBox
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.liveGrinders
-import coffee.crema.ui.newestShotGrind
+import coffee.crema.beans.newestShotGrind
 import coffee.crema.ui.presetLabel
 import coffee.crema.ui.scaleFieldNumber
 import coffee.crema.ui.scaleNumber

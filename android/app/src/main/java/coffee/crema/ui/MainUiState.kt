@@ -175,6 +175,9 @@ data class MainUiState(
     /** Non-null while a bag selection's one change (profile, grinder, grind;
      *  review F6) can be undone — MainActivity shows it with "Undo". */
     val bagSelectUndo: UndoNotice? = null,
+    /** Non-null when an Add grinder named one already owned (#488 follow-up
+     *  18): MainActivity offers "Add another" (a second record of the model). */
+    val addAnotherOffer: AddAnotherOffer? = null,
     /** Non-null when a store file was unreadable at load and was kept aside
      *  ("Couldn't read your shot history; …") — MainActivity shows it once in an
      *  action snackbar whose "Share" sends the kept-aside copies. */
@@ -217,6 +220,11 @@ data class MainUiState(
     val hiddenProfileIds: Set<String> = emptySet(),
     /** The selected profile's id (the Brew header's active profile), or null. */
     val activeProfileId: String? = null,
+    /** This device's own profile selection was cleared by the user (the
+     *  active one deleted or hidden, a bag pick with none): kept across a
+     *  restart, so the launch doesn't seed the first profile as it does on a
+     *  fresh install (PLAN follow-up 5). Any pick sets it back. */
+    val profileCleared: Boolean = false,
     /** Transient Quick-Controls brew override, or null = use the active profile. */
     val brewParams: BrewParams? = null,
     /**
@@ -426,6 +434,10 @@ data class MainUiState(
      *  route resolves this when [editingBeanId] names a bean not yet in [beans]
      *  (the "Add bean" → full-editor path). Committed to the library on Save. */
     val draftBean: Bean? = null,
+    /** The name of the bag open in the editor that was deleted elsewhere (a
+     *  sync, another device) while it was open: the editor says its changes
+     *  weren't saved (PLAN follow-up 10). Null otherwise. */
+    val editingBeanGone: String? = null,
     /** The profile currently open in the editor (`profile-edit` route), or null. */
     val editingProfileId: String? = null,
     /**

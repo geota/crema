@@ -15,6 +15,8 @@ import coffee.crema.core.GrinderLibraryMigration
 import coffee.crema.core.GrinderMatch
 import coffee.crema.core.GrinderSwitchInput
 import coffee.crema.core.LastGrind
+import coffee.crema.core.LastGrindRow
+import coffee.crema.core.GrinderPickRow
 import coffee.crema.core.GrinderPickInput
 import coffee.crema.core.MigrationGate
 import coffee.crema.core.SelectionChange
@@ -39,6 +41,11 @@ import coffee.crema.core.resolveBagSelectionJson
 import coffee.crema.core.resolveGrinderSwitchJson
 import coffee.crema.core.restoreGrinderJson
 import coffee.crema.core.saveBagGrindJson
+import coffee.crema.core.lastGrindsFromRowsJson
+import coffee.crema.core.newestShotGrindJson
+import coffee.crema.core.grinderPickRowsJson
+import coffee.crema.core.newBagGrindRowJson
+import coffee.crema.core.addAnotherGrinderJson
 import coffee.crema.history.ShotMeta
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
@@ -81,28 +88,72 @@ val Bean.starredGrind: BagGrind? get() = grinds?.firstOrNull { it.starred }
 
 /**
  * The newest grind per grinder on bag [beanId] among [shots] (newest first or
- * not), the history's answer `last_grinds_for_bag` gives on web: one per
- * grinder id, and per name for rows from before grinder ids. Shots without a
- * grind don't count.
+ * not), the history's `last_grinds_for_bag` grouping through the core
+ * (`last_grinds_from_rows`, REVIEW-CORE M1): one per grinder id, and per name
+ * for rows from before grinder ids. Shots without a grind don't count.
  */
-fun lastGrindsForBag(beanId: String, shots: List<ShotMeta>): List<LastGrind> {
-    val newest = LinkedHashMap<String, ShotMeta>()
-    for (s in shots) {
-        if (s.bean?.beanId != beanId) continue
-        if (s.grindSetting.isNullOrBlank()) continue
-        val key = s.grinderId?.takeIf { it.isNotEmpty() }?.let { "id:$it" } ?: "name:${s.grinderModel?.trim()?.lowercase().orEmpty()}"
-        val held = newest[key]
-        if (held == null || s.completedAtMs > held.completedAtMs) newest[key] = s
+fun lastGrindsForBag(
+    beanId: String,
+    shots: List<ShotMeta>,
+    core: (String) -> String = ::lastGrindsFromRowsJson,
+): List<LastGrind> {
+    val rows = shots.filter { it.bean?.beanId == beanId }.map { s ->
+        LastGrindRow(completedAt = s.completedAtMs, id = s.id, grinderId = s.grinderId, grinderModel = s.grinderModel, grind = s.grindSetting)
     }
-    return newest.values.sortedByDescending { it.completedAtMs }.map { s ->
-        LastGrind(
-            grinderId = s.grinderId?.takeIf { it.isNotEmpty() },
-            grinder = s.grinderModel.orEmpty(),
-            grind = s.grindSetting!!.trim(),
-            completedAt = s.completedAtMs,
-        )
-    }
+    if (rows.isEmpty()) return emptyList()
+    return grinderJson.decodeFromString(lastGrindList, core(grinderJson.encodeToString(ListSerializer(LastGrindRow.serializer()), rows)))
 }
+
+private val lastGrindList = ListSerializer(LastGrind.serializer())
+
+/** What the core's history lookups read (`{lastGrinds, grinder | grinders, bag}`). */
+private fun lookupJson(lastGrinds: List<LastGrind>, grinder: Grinder? = null, grinderRows: List<Grinder>? = null, bag: Bean? = null): String =
+    buildJsonObject {
+        put("lastGrinds", grinderJson.encodeToJsonElement(lastGrindList, lastGrinds))
+        grinder?.let { put("grinder", grinderJson.encodeToJsonElement(Grinder.serializer(), it)) }
+        grinderRows?.let { put("grinders", grinderJson.encodeToJsonElement(grinders, it)) }
+        put("bag", bag?.let { grinderJson.encodeToJsonElement(Bean.serializer(), it) } ?: JsonNull)
+    }.toString()
+
+/**
+ * The newest shot grind on [lastGrinds] for [grinder] (core
+ * `newest_shot_grind`, REVIEW-CORE M1): a row stamped with its id, or an
+ * older row by its name through the catalogue's aliases ("Niche" finds the
+ * Niche Zero). Blank grinds don't count.
+ */
+fun newestShotGrind(
+    lastGrinds: List<LastGrind>,
+    grinder: Grinder,
+    core: (String) -> String = ::newestShotGrindJson,
+): LastGrind? {
+    if (lastGrinds.isEmpty()) return null
+    val out = core(lookupJson(lastGrinds, grinder = grinder))
+    return if (out.trim() == "null") null else grinderJson.decodeFromString(LastGrind.serializer(), out)
+}
+
+/**
+ * Brew's grinder picker rows for [grinderRows] (the live ones) with [bag]
+ * selected (core `grinder_pick_rows`, REVIEW-CORE M1): the starred row, the
+ * saved grind, else the newest shot grind; the shell words them.
+ */
+fun grinderPickRows(
+    grinderRows: List<Grinder>,
+    bag: Bean?,
+    lastGrinds: List<LastGrind>,
+    core: (String) -> String = ::grinderPickRowsJson,
+): List<GrinderPickRow> =
+    grinderJson.decodeFromString(ListSerializer(GrinderPickRow.serializer()), core(lookupJson(lastGrinds, grinderRows = grinderRows, bag = bag)))
+
+/**
+ * The bag editor's new row for [grinder] (core `new_bag_grind_row`,
+ * REVIEW-CORE M1): seeded from the newest shot on the bag with it, else
+ * empty (Save asks for one). Not starred.
+ */
+fun newBagGrindRow(
+    grinder: Grinder,
+    lastGrinds: List<LastGrind>,
+    core: (String) -> String = ::newBagGrindRowJson,
+): BagGrind = grinderJson.decodeFromString(BagGrind.serializer(), core(lookupJson(lastGrinds, grinder = grinder)))
 
 /**
  * Whether the migration's inputs read (REVIEW-CORE H5, PLAN follow-up 20),
@@ -152,6 +203,22 @@ fun addGrinder(
     catalogueId: String?,
     nowMs: Long,
     core: (String, String, String, Long) -> String = ::addGrinderJson,
+): GrinderAdd? {
+    val out = core(grinderJson.encodeToString(grinders, grinderRows), name, catalogueId.orEmpty(), nowMs)
+    return if (out.trim() == "null") null else grinderJson.decodeFromString(GrinderAdd.serializer(), out)
+}
+
+/**
+ * Add **another** grinder of a model already owned (core
+ * `add_another_grinder`, #488 follow-up 18: two Niche Zeros): an archived
+ * one of that model comes back, else a new record "‹name› 2" with its own id.
+ */
+fun addAnotherGrinder(
+    grinderRows: List<Grinder>,
+    name: String,
+    catalogueId: String?,
+    nowMs: Long,
+    core: (String, String, String, Long) -> String = ::addAnotherGrinderJson,
 ): GrinderAdd? {
     val out = core(grinderJson.encodeToString(grinders, grinderRows), name, catalogueId.orEmpty(), nowMs)
     return if (out.trim() == "null") null else grinderJson.decodeFromString(GrinderAdd.serializer(), out)

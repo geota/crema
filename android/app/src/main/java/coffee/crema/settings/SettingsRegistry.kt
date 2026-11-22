@@ -252,6 +252,9 @@ val NOT_SETTINGS: Map<String, String> = mapOf(
     "DecentState.lastUpload" to "upload log",
     "DecentState.rejectedShotIds" to "upload log",
     "DecentState.log" to "upload log",
+    // The active profile's cleared state (PLAN follow-up 5): part of the
+    // ACTIVE_PROFILE selection (its "none", told from a fresh install), not a setting.
+    "AppPrefs.profileCleared" to "selection state (the active profile's none)",
     // Setters of library data, drafts and screen state.
     "$VM.setBuiltinRecipeHidden(String, Boolean)" to "library data (recipe organisation)",
     "$VM.setDefaultBrewRecipe(BrewRecipe)" to "library pointer (lastRecipeByMethod)",

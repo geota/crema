@@ -505,6 +505,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             persistPrefs()
             session.pushStopTargets(effectiveState())
         },
+        persistSelection = { persistPrefs() },
         onShotAnnotationsEdited = { id -> decent.scheduleReplaceAfterEdit(id) },
         setGrindDial = { v -> setGrindDial(v) },
         pushConfig = { proxy.pushConfig() },
@@ -1443,6 +1444,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     library.mirrorHistoryLive(coffee.crema.history.historyLiveOf(beans, roasters, methods))
                 }
         }
+        // The bag the editor is on, deleted elsewhere while open (PLAN follow-up 10).
+        viewModelScope.launch {
+            _ui.state.map { Triple(it.editingBeanId, it.beans, it.draftBean) }
+                .distinctUntilChanged()
+                .collect { library.watchEditedBag(_ui.value) }
+        }
         // The other persisted stores in one coroutine, sequentially.
         startupLoad = viewModelScope.launch {
             holdStartupLoad?.await()
@@ -1545,6 +1552,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Add a grinder from the type-or-pick box: a catalogue entry or a typed name (an archived match comes back). */
     fun addGrinder(name: String, catalogueId: String? = null): coffee.crema.core.Grinder? = library.addGrinder(name, catalogueId)
+
+    /** "Add another" on an Add that found the model already yours (#488 follow-up 18). */
+    fun addAnotherGrinder(seq: Long): coffee.crema.core.Grinder? = library.addAnotherGrinder(seq)
+
+    /** The "Add another" offer [seq] went without the action. */
+    fun consumeAddAnotherOffer(seq: Long) = library.consumeAddAnotherOffer(seq)
 
     /** Add (or bring back) a grinder and make it Brew's: the Brew picker's Add. */
     fun addAndSelectGrinder(name: String, catalogueId: String? = null) {

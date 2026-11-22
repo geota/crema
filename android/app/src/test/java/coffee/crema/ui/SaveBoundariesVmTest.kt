@@ -241,6 +241,64 @@ class SaveBoundariesVmTest {
         assertNull(vm.ui.value.brewParams, "no dial back without its profile body")
     }
 
+    /** PLAN follow-up 3: a newer Save retires the older Save's Undo, even one
+     *  with no Undo of its own; the old message's Undo then does nothing. */
+    @Test
+    fun `a second Save dismisses the older Undo message`() {
+        val vm = vmWith()
+        activeCustom(vm)
+        val dose = dialDose(vm)
+        vm.quickSave(); VmHarness.idle()
+        val first = assertNotNull(vm.ui.value.quickSaveUndo, "the first Save offers Undo")
+        // Then a grind-only Save: no Undo of its own.
+        vm.setQcGrind(6f); VmHarness.idle()
+        vm.quickSave(); VmHarness.idle()
+        assertEquals("6", vm.bean("a").savedGrind(null)?.grind)
+        assertNull(vm.ui.value.quickSaveUndo, "the older Undo message goes")
+        vm.undoQuickSave(first.seq); VmHarness.idle()
+        assertEquals(dose.toFloat(), vm.customs().single().dose, "the older Undo does nothing now")
+    }
+
+    /** REVIEW-CORE M2: the core's Undo checks each half; the profile comes back
+     *  while the grind changed since stands, and the message says which. */
+    @Test
+    fun `undo after a later grind edit puts the profile back and keeps the grind`() {
+        val vm = vmWith()
+        val custom = activeCustom(vm)
+        dialDose(vm)
+        vm.setQcGrind(3f); VmHarness.idle()
+        vm.quickSave(); VmHarness.idle()
+        val undo = assertNotNull(vm.ui.value.quickSaveUndo)
+        // The bag editor sets another grind for the same row since.
+        val opened = vm.bean("a")
+        vm.updateBean("a", "", opened = opened) { b -> b.copy(grinds = b.grinds.orEmpty().map { it.copy(grind = "8") }) }
+        VmHarness.idle()
+        assertEquals("8", vm.bean("a").savedGrind(null)?.grind)
+        vm.undoQuickSave(undo.seq); VmHarness.idle()
+        assertEquals(custom.dose, vm.customs().single().dose, "the profile is put back")
+        assertEquals("8", vm.bean("a").savedGrind(null)?.grind, "the later grind stands")
+        assertTrue("“Mine” put back; the grind changed since, not undone" in vm.messages(), "${vm.messages()}")
+    }
+
+    /** PLAN follow-up 13: Undo puts a bag with no grind rows back to none, not an empty list. */
+    @Test
+    fun `undo of a grind saved to a bag with none restores none`() {
+        val vm = vmWith(listOf(bag("a", grind = null)))
+        // A bag made after the grinder migration has no rows at all (null).
+        vm.updateBean("a", "") { it.copy(grinds = null) }
+        VmHarness.idle()
+        assertNull(vm.bean("a").grinds, "the bag starts with no grind rows")
+        val custom = activeCustom(vm)
+        dialDose(vm)
+        vm.setQcGrind(3f); VmHarness.idle()
+        vm.quickSave(); VmHarness.idle()
+        assertEquals("3", vm.bean("a").savedGrind(null)?.grind)
+        vm.undoQuickSave(assertNotNull(vm.ui.value.quickSaveUndo).seq); VmHarness.idle()
+        assertEquals(custom.dose, vm.customs().single().dose)
+        assertNull(vm.bean("a").grinds, "none, as before the Save")
+        assertTrue("Save undone" in vm.messages(), "${vm.messages()}")
+    }
+
     // ── F5: deleting the selection clears it ─────────────────────────────────
 
     @Test
@@ -260,6 +318,36 @@ class SaveBoundariesVmTest {
         assertEquals("Can’t start shot — no profile selected", vm.ui.value.shotStartError ?: vm.messages().lastOrNull())
     }
 
+    /** PLAN follow-up 5: a cleared profile or bag stays cleared across a
+     *  restart; only a fresh install gets the first profile. */
+    @Test
+    fun `a cleared profile and bag stay cleared across a restart`() {
+        val vm = vmWith(listOf(bag("a"), bag("b")), active = "b")
+        assertNotNull(vm.ui.value.activeProfileId, "a fresh install picks the first profile")
+        val custom = activeCustom(vm)
+        vm.deleteProfile(custom.id)
+        vm.deleteBean("b")
+        VmHarness.idle()
+        assertNull(vm.ui.value.activeProfileId)
+        VmHarness.idleUntil("the cleared selection saved") { RemoteFixture.savedPrefs().let { it.profileCleared && it.activeProfileId == null } }
+        VmHarness.idleUntil("the library saved") { RemoteFixture.savedActiveBean() == null }
+        store.clear()
+        VmHarness.idle()
+
+        val next = VmHarness.build(store)
+        VmHarness.idle()
+        VmHarness.awaitPrefsLoaded(next)
+        VmHarness.awaitStartupLoaded(next)
+        assertNull(next.ui.value.activeProfileId, "still no profile after the restart")
+        assertNull(VmHarness.ownState(next).activeBeanId, "still no bag")
+        // A pick is a selection again: the next launch keeps it.
+        val picked = next.ui.value.profiles.first().id
+        next.setActiveProfile(picked)
+        VmHarness.idle()
+        assertFalse(next.ui.value.profileCleared)
+        VmHarness.idleUntil("the pick saved") { RemoteFixture.savedPrefs().let { !it.profileCleared && it.activeProfileId == picked } }
+    }
+
     @Test
     fun `deleting the active bag clears the selection`() {
         val vm = vmWith(listOf(bag("a"), bag("b")), active = "b")
@@ -267,6 +355,32 @@ class SaveBoundariesVmTest {
         VmHarness.idle()
         assertNull(VmHarness.ownState(vm).activeBeanId, "no bag, not the first remaining")
         assertEquals(listOf("a"), VmHarness.ownState(vm).beans.map { it.id })
+    }
+
+    /** PLAN follow-up 10: the bag open in the editor deleted elsewhere (a
+     *  sync) says so; this device's own delete doesn't. */
+    @Test
+    fun `a bag deleted elsewhere while its editor is open says so`() {
+        val vm = vmWith(listOf(bag("a"), bag("b")), active = "a")
+        vm.startEditBean("b")
+        VmHarness.idle()
+        assertNull(vm.ui.value.editingBeanGone)
+        // A Visualizer sync removes it.
+        VmHarness.library(vm).editBeanLibrary { lib -> lib.copy(beans = lib.beans.filter { it.id != "b" }) }
+        VmHarness.idle()
+        assertEquals("Bag b", vm.ui.value.editingBeanGone)
+        assertTrue("“Bag b” was deleted elsewhere; your changes weren’t saved" in vm.messages(), "${vm.messages()}")
+        assertEquals("“Bag b” was deleted elsewhere (a sync or another device), so your changes weren’t saved.", coffee.crema.ui.screens.beanEditorEmptyText(vm.ui.value.editingBeanGone))
+
+        // Its own Delete is no news.
+        vm.startEditBean("a")
+        VmHarness.idle()
+        assertNull(vm.ui.value.editingBeanGone)
+        val before = vm.messages().size
+        vm.deleteBean("a")
+        VmHarness.idle()
+        assertNull(vm.ui.value.editingBeanGone)
+        assertEquals(before, vm.messages().size, "${vm.messages()}")
     }
 
     @Test
@@ -278,6 +392,26 @@ class SaveBoundariesVmTest {
     }
 
     // ── #488 review S5: a bag deleted here stays deleted ────────────────────
+
+    /** REVIEW-516 follow-up 1: the editor's Save over a bag tombstoned while
+     *  it was open writes nothing to the tombstone, and says so. */
+    @Test
+    fun `a Save over a tombstoned bag leaves the tombstone as it is`() {
+        val vm = vmWith(listOf(bag("a").copy(visualizerId = "b1"), bag("b")), active = "b")
+        vm.startEditBean("a")
+        VmHarness.idle()
+        val opened = vm.bean("a")
+        vm.deleteBean("a")
+        VmHarness.idle()
+        val tomb = VmHarness.ownState(vm).beans.withTombstones().single { it.id == "a" }
+        assertNotNull(tomb.deletedAt)
+        vm.updateBean("a", "Some roaster", opened = opened) { it.copy(notes = "written after the delete", tags = listOf("late")) }
+        VmHarness.idle()
+        assertEquals(tomb, VmHarness.ownState(vm).beans.withTombstones().single { it.id == "a" }, "the tombstone stays stripped")
+        assertTrue(VmHarness.ownState(vm).roasters.none { it.name == "Some roaster" }, "no roaster made for it either")
+        assertEquals("Bag a", vm.ui.value.editingBeanGone)
+        assertTrue("“Bag a” was deleted elsewhere; your changes weren’t saved" in vm.messages(), "${vm.messages()}")
+    }
 
     @Test
     fun `a bag on Visualizer deleted here stays as a hidden tombstone`() {

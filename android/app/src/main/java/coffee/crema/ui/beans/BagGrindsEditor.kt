@@ -36,7 +36,7 @@ import coffee.crema.ui.components.CremaStepperStyle
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.GrinderAddBox
 import coffee.crema.ui.components.PhIcon
-import coffee.crema.ui.newestShotGrind
+import coffee.crema.beans.newestShotGrind
 
 /*
  * The bag editor's "Grind per grinder" block (#488, boards WideBagGrind,
@@ -150,9 +150,8 @@ fun BagGrindsEditor(
                 }
                 val g = picked.grinder
                 if (rows.none { it.grinderId == g.id }) {
-                    // The newest shot on this bag with it, else empty (Save asks for one).
-                    val seed = newestShotGrind(lastGrinds, g)?.grind.orEmpty()
-                    rows.add(BagGrind(grinderId = g.id, grinderName = g.name, grind = seed, starred = false))
+                    // The newest shot on this bag with it, else empty (Save asks for one): the core's seed.
+                    rows.add(coffee.crema.beans.newBagGrindRow(g, lastGrinds))
                 }
             },
         )

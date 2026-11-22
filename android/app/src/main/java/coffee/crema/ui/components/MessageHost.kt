@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -138,11 +139,51 @@ suspend fun SnackbarHostState.showUndoMessage(
     message: String,
     onUndo: () -> Unit,
     onDrop: () -> Unit,
+) = showActionMessage(message, "Undo", onAction = onUndo, onDrop = onDrop)
+
+/** A message with one action ([actionLabel]): [onAction] on the tap, else [onDrop]. */
+suspend fun SnackbarHostState.showActionMessage(
+    message: String,
+    actionLabel: String,
+    onAction: () -> Unit,
+    onDrop: () -> Unit,
 ) {
     val result = showSnackbar(
-        CremaMessageVisuals(message, actionLabel = "Undo", duration = SnackbarDuration.Long),
+        CremaMessageVisuals(message, actionLabel = actionLabel, duration = SnackbarDuration.Long),
     )
-    if (result == SnackbarResult.ActionPerformed) onUndo() else onDrop()
+    if (result == SnackbarResult.ActionPerformed) onAction() else onDrop()
+}
+
+/**
+ * One Undo message at a time for one kind of Save (PLAN follow-up 3): showing
+ * the next notice, or the notice going (a newer Save without an Undo, or the
+ * one it named consumed), dismisses the older message, so an Undo that would
+ * do nothing never stays on screen. [follow] is fed the notice as the state
+ * holds it; `onUndo` / `onDrop` get the notice's seq.
+ */
+class UndoMessageSlot(private val scope: kotlinx.coroutines.CoroutineScope, private val host: SnackbarHostState) {
+    private var shownSeq: Long? = null
+    private var shown: kotlinx.coroutines.Job? = null
+
+    fun follow(notice: coffee.crema.ui.UndoNotice?, onUndo: (Long) -> Unit, onDrop: (Long) -> Unit) {
+        if (shownSeq != null && shownSeq != notice?.seq) {
+            // Cancelling the show takes the message down (or out of the queue).
+            shown?.cancel()
+            shown = null
+            shownSeq = null
+        }
+        if (notice == null || shownSeq == notice.seq) return
+        val seq = notice.seq
+        val job = scope.launch { host.showUndoMessage(notice.message, onUndo = { onUndo(seq) }, onDrop = { onDrop(seq) }) }
+        shown = job
+        shownSeq = seq
+        job.invokeOnCompletion {
+            if (shown === job) {
+                shown = null
+                shownSeq = null
+            }
+        }
+    }
 }
 
 /** Show the kept-aside notice: it stays until Share or the ✕. */
