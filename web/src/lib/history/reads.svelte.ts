@@ -36,6 +36,7 @@ import { ORACLE_ON } from '#lib/history-db/oracle.js';
 import { collectSyncProjection } from '#lib/history-db/sync-projection.js';
 import { decodeRow } from './index-list.svelte';
 import type { ShotRow } from './model';
+import { lastGrindsOf, type LastGrind } from '#lib/bean/grinder.js';
 import { p3RowsOf, type P3Rows } from './p3-rows';
 import { getHistoryStore, type HistoryStore } from './store.svelte';
 
@@ -149,6 +150,25 @@ export function bagRows(beanId: string): Query<ShotRow[]> {
 		p3: (rows) => rows.live.filter((s) => s.bean?.beanId === beanId),
 		index: (read) => walkRows(read, listQuery({ bean: { bag: beanId } })),
 		differ: rowIdsDiffer
+	};
+}
+
+/**
+ * The newest grind per grinder on a bag (#488), newest first: by grinder id,
+ * and by name for rows from before grinder ids. Brew's pick order reads it
+ * when no grind is saved for the active grinder.
+ */
+export function lastGrinds(beanId: string): Query<LastGrind[]> {
+	return {
+		key: `lastGrinds:${beanId}`,
+		p3: (rows) => lastGrindsOf(rows.live.filter((s) => s.bean?.beanId === beanId)),
+		index: (read) => read<LastGrind[]>('lastGrindsForBag', beanId),
+		differ: (a, b) => {
+			const of = (l: readonly LastGrind[]) => l.map((g) => `${g.grinderId ?? ''}|${g.grinder.trim().toLowerCase()}|${g.grind}`);
+			const x = of(a).join(';');
+			const y = of(b).join(';');
+			return x === y ? null : `${x} vs ${y}`;
+		}
 	};
 }
 

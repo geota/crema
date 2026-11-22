@@ -171,17 +171,13 @@ export class BrewContext {
 	}
 
 	/**
-	 * The grinder model resolved at read time — equipment cascade:
-	 * in-flight snapshot wins, then the active bean's own grinder
-	 * label, then the settings-page default. `null` when none of the
-	 * three carries a value.
+	 * The grinder name (#488): the in-flight shot's snapshot (taken at shot
+	 * start), else the active grinder's. `null` with no grinder.
 	 */
 	get grinderModel(): string | null {
 		const inFlight = this.active.grinderModel?.trim();
 		if (inFlight) return inFlight;
-		const fromBean = this.beans.activeBean?.grinder?.trim();
-		if (fromBean) return fromBean;
-		return this.settings.current.grinderModel?.trim() || null;
+		return this.beans.activeGrinder?.name.trim() || null;
 	}
 
 	/**

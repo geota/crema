@@ -1020,14 +1020,12 @@ export class CremaApp {
 			? profiles.get(profiles.activeId)
 			: undefined;
 
-		// Three-tier cascade for grinder model (most-specific wins) —
-		// matches the resolution that today's ShotCompleted handler
-		// performs inline. Resolved at WRITE time (now) so a later
-		// settings change can't rewrite the historical record.
-		const grinderModel =
-			activeBean?.grinder?.trim() ||
-			getSettingsStore().current.grinderModel?.trim() ||
-			null;
+		// The active grinder at shot start (#488, review F4/F9): its id and
+		// a snapshot of its name, so switching mid-shot can't mislabel the
+		// shot and a later rename can't rewrite it.
+		const grinder = library.activeGrinder;
+		const grinderModel = grinder?.name.trim() || null;
+		const grinderId = grinder?.id ?? null;
 
 		const snapshot = this.state.current;
 		const profileName = snapshot.activeProfileName ?? activeProfile?.name ?? null;
@@ -1044,6 +1042,7 @@ export class CremaApp {
 			dose,
 			brewParams: brewParams ? { ...brewParams } : null,
 			grinderModel,
+			grinderId,
 			source: 'live'
 		};
 	}

@@ -20,6 +20,7 @@
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	import { getBeanStore, type Roaster } from '#lib/bean/index.js';
+	import { boundsForGrinder, grindText } from '#lib/bean/grinder.js';
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { openingBeanId } from '#lib/brew/bean-pick.js';
 	import {
@@ -70,6 +71,8 @@
 	} = $props();
 
 	const library = getBeanStore();
+	/** The grind range: the active grinder's scale, as Brew and the bag editor use (#488). */
+	const grindBounds = $derived(boundsForGrinder(library.activeGrinder));
 	const history = getHistoryStore();
 
 	// The dialog is created fresh per open (the host `{#if}`s it), so the
@@ -309,12 +312,7 @@
 			dose: dose > 0 ? dose : null,
 			waterG: !espresso && water > 0 ? water : null,
 			yieldOut: espresso && water > 0 ? water : (seed?.yieldOut ?? null),
-			grinderSetting:
-				grind != null && grind > 0
-					? Number.isInteger(grind)
-						? String(grind)
-						: grind.toFixed(1)
-					: null,
+			grinderSetting: grind != null && grind > 0 ? grindText(grind) : null,
 			brewTempC: temp != null && temp > 0 ? temp : null,
 			durationMs: parseDuration(timeStr),
 			rating: rating > 0 ? rating : null,
@@ -488,10 +486,10 @@
 				<QuickStepper
 					label=""
 					value={grind ?? 0}
-					unit=""
-					min={0}
-					max={200}
-					step={0.1}
+					unit={grindBounds.grindUnit}
+					min={grindBounds.grind.min}
+					max={grindBounds.grind.max}
+					step={grindBounds.grind.step}
 					onChange={(n) => {
 						dirty.add('grind');
 						grind = n > 0 ? n : null;

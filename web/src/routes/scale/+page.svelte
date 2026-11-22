@@ -11,7 +11,11 @@
 	import TimerIcon from 'phosphor-svelte/lib/TimerIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
-	 * Scale — the `/scale` route: the calm, focused weighing view, ported from
+	 * Devices — the `/scale` route (#488): tabs Scale | Grinder, the tab in the
+	 * URL (`?tab=grinder`; none = Scale, see `devicesHref`). The Grinder tab is
+	 * `GrinderTab`; the rest of this file is the Scale tab, unchanged.
+	 *
+	 * Scale tab: the calm, focused weighing view, ported from
 	 * `ScalePage` in `scale-page.jsx`.
 	 *
 	 * Header (scale name / status / battery / firmware + Re-pair), the giant
@@ -48,10 +52,28 @@
 	import BluetoothIcon from 'phosphor-svelte/lib/BluetoothIcon';
 	import GearSixIcon from 'phosphor-svelte/lib/GearSixIcon';
 	import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
+	import FunnelIcon from 'phosphor-svelte/lib/FunnelIcon';
+	import ScalesIcon from 'phosphor-svelte/lib/ScalesIcon';
+	import PhoneTabs from '#lib/shell/PhoneTabs.svelte';
+	import GrinderTab from '#lib/components/grinders/GrinderTab.svelte';
+	import { devicesHref, devicesTabOf, type DevicesTab } from '#lib/components/grinders/devices-link.js';
+	import { getBeanStore } from '#lib/bean/store.svelte.js';
 
 	const ctx = getCremaAppContext();
 	const profiles = getProfileStore();
 	const settings = getSettingsStore();
+	const beans = getBeanStore();
+
+	// ── Devices tabs (#488) ──────────────────────────────────────────────
+	// The tab lives in the URL, so a reload, Back and links from Brew, the bag
+	// editor and Settings land on it. A switch replaces the entry, as Beans'.
+	const tab = $derived<DevicesTab>(devicesTabOf(page.url.searchParams));
+	function selectTab(next: DevicesTab): void {
+		if (next === tab) return;
+		void goto(devicesHref(next), { replaceState: true, reset: false });
+	}
 
 	// ── Weigh | Brew segment (issue #10 Phase 2) ─────────────────────────
 	// Weigh is the classic standalone weighing surface; Brew is the guided
@@ -127,9 +149,10 @@
 	const statusLabel = $derived(bleStateLabel(scaleState));
 
 	// Android's Scale bar: reconnect until a scale is paired, then the gear.
+	// The Grinder tab has only the gear.
 	usePhoneBar(() => ({
 		actions: [
-			...(connected
+			...(connected || tab === 'grinder'
 				? []
 				: [
 						{
@@ -401,8 +424,49 @@
 </script>
 
 <svelte:head>
-	<title>Crema — Scale</title>
+	<title>Crema — Devices</title>
 </svelte:head>
+
+{#snippet deviceTabs()}
+	{#if phoneLayout.current}
+		<PhoneTabs
+			label="Devices"
+			options={[
+				{ id: 'scale', label: 'Scale' },
+				{ id: 'grinder', label: 'Grinder' }
+			]}
+			value={tab}
+			onchange={(id) => selectTab(id as DevicesTab)}
+		/>
+	{:else}
+		<div class="dv-tabs" role="group" aria-label="Devices">
+			<button
+				type="button"
+				class={['dv-tab', { 'is-active': tab === 'scale' }]}
+				aria-pressed={tab === 'scale'}
+				onclick={() => selectTab('scale')}
+			>
+				<ScalesIcon weight="duotone" aria-hidden="true" />
+				<span>Scale</span>
+				<span
+					class={['dv-tab-dot', { 'is-on': connected }]}
+					role="img"
+					aria-label={connected ? 'connected' : 'not connected'}
+				></span>
+			</button>
+			<button
+				type="button"
+				class={['dv-tab', { 'is-active': tab === 'grinder' }]}
+				aria-pressed={tab === 'grinder'}
+				onclick={() => selectTab('grinder')}
+			>
+				<FunnelIcon weight="duotone" aria-hidden="true" />
+				<span>Grinder</span>
+				<span class="dv-tab-count">{beans.grinders.length}</span>
+			</button>
+		</div>
+	{/if}
+{/snippet}
 
 {#snippet modeTabs()}
 			<div class="sc-mode" role="tablist" aria-label="Scale page mode">
@@ -715,7 +779,6 @@
 {#snippet phoneScale()}
 	<!-- Android's `PhoneScaleScreen`: the Weigh | Brew switch, the status, the
 	     hero, then Connect scale, or the tools and settings once one is paired. -->
-	<h1 class="phone-bar-title"><span class="sr-only">Scale:</span> {scaleName}</h1>
 	<div class="sc-pswitch">{@render modeTabs()}</div>
 	{#if mode === 'brew'}
 		<GuidedBrewPanel {connected} {weightG} flowGs={deviceFlow} />
@@ -814,7 +877,15 @@
 
 <div class="qcontain sc-page">
 	{#if phoneLayout.current}
-		{@render phoneScale()}
+		<h1 class="phone-bar-title">Devices</h1>
+		{@render deviceTabs()}
+		{#if tab === 'grinder'}
+			<GrinderTab />
+		{:else}
+			{@render phoneScale()}
+		{/if}
+	{:else if tab === 'grinder'}
+		<GrinderTab tabs={deviceTabs} />
 	{:else}
 	<!-- Header strip -->
 	<div class="sc-head">
@@ -822,7 +893,7 @@
 			<div class="t-eyebrow" style="color:var(--fg-3)">Connected scale</div>
 			<!-- The h1 names the screen; the device name follows (final review
 			     07 N12e: it read "No scale" as the page heading). -->
-			<h1 class="t-page-title sc-head-name"><span class="sr-only">Scale:</span> {scaleName}</h1>
+			<h1 class="t-page-title sc-head-name"><span class="sr-only">Devices, scale:</span> {scaleName}</h1>
 			<div class="sc-head-meta">
 				<span
 					class="sc-dot"
@@ -855,6 +926,8 @@
 			{@render modeTabs()}
 		</div>
 	</div>
+
+	{@render deviceTabs()}
 
 	{#if mode === 'brew'}
 		<GuidedBrewPanel {connected} {weightG} flowGs={deviceFlow} />
@@ -959,6 +1032,65 @@
 		/* Shared page-header rhythm — see --page-pad-* in app.css. */
 		padding: var(--page-pad-top) var(--page-pad-x) 40px;
 		gap: 24px;
+	}
+	/* Devices tabs (#488): Beans' Bags | Roasters pills. */
+	.dv-tabs {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding-bottom: 12px;
+		border-bottom: 1px solid rgba(var(--tint-rgb), 0.06);
+	}
+	.dv-tab {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		min-height: 44px;
+		padding: 8px 14px;
+		background: transparent;
+		border: 0;
+		color: var(--fg-3);
+		font-family: var(--font-sans);
+		font-size: 13px;
+		font-weight: 500;
+		cursor: pointer;
+		border-radius: var(--radius-pill);
+		transition: all var(--dur-1) var(--ease);
+	}
+	.dv-tab :global(svg) {
+		font-size: 16px;
+	}
+	.dv-tab:hover {
+		color: var(--fg-1);
+	}
+	.dv-tab:focus-visible {
+		outline: none;
+		box-shadow: var(--shadow-focus);
+	}
+	.dv-tab.is-active {
+		color: var(--fg-1);
+		background: rgba(var(--tint-rgb), 0.06);
+	}
+	.dv-tab-count {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--fg-muted);
+		padding: 1px 6px;
+		background: rgba(var(--tint-rgb), 0.06);
+		border-radius: 999px;
+	}
+	.dv-tab.is-active .dv-tab-count {
+		background: var(--copper-500);
+		color: var(--fg-on-accent);
+	}
+	.dv-tab-dot {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: rgba(var(--tint-rgb), 0.25);
+	}
+	.dv-tab-dot.is-on {
+		background: var(--success);
 	}
 	/* Weigh | Brew segment (issue #10). */
 	.sc-mode {

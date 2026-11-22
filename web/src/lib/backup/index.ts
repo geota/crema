@@ -362,6 +362,7 @@ async function backupPartsAround(
 		customProfiles.length === 0 &&
 		beans.length === 0 &&
 		roasters.length === 0 &&
+		getBeanStore().allGrinders.length === 0 &&
 		shots.total === 0 &&
 		recipes.length === 0 &&
 		customMethods.length === 0;
@@ -379,6 +380,10 @@ async function backupPartsAround(
 		profiles: rowStrings(customProfiles),
 		beans: rowStrings(beans),
 		roasters: rowStrings(roasters),
+		// Grinder records (#488), archived and tombstones included: written
+		// as `grinder` lines with a `grinderCount`, so a restore on either
+		// shell brings them back and a Replace knows the backup carries them.
+		grinders: rowStrings(getBeanStore().allGrinders),
 		recipes: rowStrings(recipes),
 		customMethods: rowStrings(customMethods),
 		// Settings line: the shared cross-shell `common` block (CommonSettings —

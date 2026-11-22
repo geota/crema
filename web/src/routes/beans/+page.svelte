@@ -95,7 +95,7 @@
 	function doExportCrema(): void {
 		void (async () => {
 			try {
-				await exportCrema(library.beans, library.roasters, '0.0.1');
+				await exportCrema(library.beans, library.roasters, '0.0.1', library.allGrinders);
 			} catch (err) {
 				console.error('Crema export failed', err);
 				toast.error(`Export failed: ${err instanceof Error ? err.message : String(err)}`);

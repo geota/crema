@@ -29,7 +29,8 @@
 		dimension,
 		overridden = false,
 		overriddenTooltip,
-		sub
+		sub,
+		clampTyped = true
 	}: {
 		/** Optional caption above the stepper row. */
 		label?: string;
@@ -89,6 +90,8 @@
 		 * bottom padding, so the row keeps its height and the digits stay put.
 		 */
 		sub?: Snippet;
+		/** Clamp a typed value into the range (default); false keeps it as typed (the grind, #488). */
+		clampTyped?: boolean;
 	} = $props();
 
 	// Numeric core (clamp + canonical↔display + grid-snapped inc + click-to-type)
@@ -106,7 +109,8 @@
 		unit: () => unit,
 		decimals: () => (step < 1 ? 1 : 0),
 		incPrecision: 2,
-		canEdit: () => !!onChange
+		canEdit: () => !!onChange,
+		clampTyped: () => clampTyped
 	});
 
 	/** Format a value (already in display units) — the supplied `fmt`, or step-aware default. */

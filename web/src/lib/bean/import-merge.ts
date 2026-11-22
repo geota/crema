@@ -9,17 +9,32 @@
 
 import type { BeanImportMerge } from '#lib/core/crema-core.js';
 import { mergeBeanImportJson } from '#lib/wasm/de1_wasm.js';
+import type { Grinder } from './grinder';
 import type { Bean, Roaster } from './model';
 
+/**
+ * Grinder records (#488) merge by id, then by name, and the bags' saved
+ * grinds are repointed to match; the caller runs the library migration
+ * after applying it, so bags from an older app get their saved grinds.
+ */
 export function mergeBeanImport(
 	incomingBeans: readonly Bean[],
 	incomingRoasters: readonly Roaster[],
 	libraryBeans: readonly Bean[],
-	libraryRoasters: readonly Roaster[]
+	libraryRoasters: readonly Roaster[],
+	incomingGrinders: readonly Grinder[] = [],
+	libraryGrinders: readonly Grinder[] = []
 ): BeanImportMerge {
 	return JSON.parse(
 		mergeBeanImportJson(
-			JSON.stringify({ incomingBeans, incomingRoasters, libraryBeans, libraryRoasters })
+			JSON.stringify({
+				incomingBeans,
+				incomingRoasters,
+				libraryBeans,
+				libraryRoasters,
+				incomingGrinders,
+				libraryGrinders
+			})
 		)
 	) as BeanImportMerge;
 }

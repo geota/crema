@@ -22,6 +22,7 @@ import {
 	exportBeanconquerorMainJson
 } from '#lib/wasm/de1_wasm.js';
 import type { Bean, Roaster } from './model';
+import type { Grinder } from './grinder';
 import type { StoredShot } from '#lib/history/index.js';
 import { getBeanImageStore } from './image-storage';
 import { downloadBlob, filenameStamp } from '#lib/utils/download.js';
@@ -43,9 +44,11 @@ import { downloadBlob, filenameStamp } from '#lib/utils/download.js';
 export async function exportCrema(
 	beans: readonly Bean[],
 	roasters: readonly Roaster[],
-	cremaVersion: string
+	cremaVersion: string,
+	grinders?: readonly Grinder[]
 ): Promise<void> {
-	const envelope = JSON.stringify({ beans, roasters, shots: [] });
+	// The grinder records (#488) the bags' saved grinds name, when given.
+	const envelope = JSON.stringify(grinders ? { beans, roasters, grinders, shots: [] } : { beans, roasters, shots: [] });
 	const jsonl = exportCremaJsonl(envelope, Date.now(), cremaVersion);
 	const entries: Record<string, Uint8Array> = {
 		'crema.jsonl': strToU8(jsonl)

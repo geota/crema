@@ -60,24 +60,105 @@ describe('activateBean with a hidden built-in linked profile', () => {
 		expect(t.profiles.isHidden(t.builtin.id)).toBe(true);
 		expect(t.profiles.all.some((p) => p.id === t.builtin.id)).toBe(false);
 
-		t.activateBean('bean-1');
+		await t.activateBean('bean-1');
 
 		expect(t.profiles.activeId).toBe(t.builtin.id);
 		// The DE1 upload hook and the core both get the profile, not null.
 		expect(t.activated).toEqual([t.builtin.id]);
 		await vi.waitFor(() => expect(core.setActiveProfile).toHaveBeenCalledOnce());
 		expect(core.setActiveProfile.mock.calls[0][0]).toContain(t.builtin.id);
-		expect(t.toasts()).toEqual([
-			`Loaded "${t.builtin.name}" — linked to Gesha`
-		]);
+		// One message for the whole selection (#488, review F6).
+		expect(t.toasts()).toEqual([`Gesha: ${t.builtin.name} profile`]);
 	});
 
 	it('still reports a dangling link to a deleted custom profile', async () => {
 		const t = await setup();
 		const { getBeanStore } = await import('./store.svelte');
 		getBeanStore().upsertBean({ ...blankBean('bean-2'), name: 'Kenya', linkedProfileId: 'gone' });
-		t.activateBean('bean-2');
+		await t.activateBean('bean-2');
 		expect(t.activated).toEqual([]);
 		expect(t.toasts()).toEqual(["Kenya's linked profile no longer exists."]);
+	});
+});
+
+describe('selecting a bag is one change (#488, review F6)', () => {
+	async function grinderSetup() {
+		const t = await setup();
+		const { getBeanStore } = await import('./store.svelte');
+		const { getBrewGrind } = await import('#lib/brew/grind-session.svelte.js');
+		const { getToasts } = await import('#lib/components/shared/toast.svelte.js');
+		const { quickSavePlan, runQuickSave } = await import('#lib/brew/quick-save.js');
+		const { grindUnsaved } = await import('./grinder');
+		const { effectiveCremaProfile, newProfileId } = await import('#lib/profiles/index.js');
+		const beans = getBeanStore();
+		const niche = beans.addGrinder('Niche Zero')!;
+		const df64 = beans.addGrinder('DF64')!;
+		beans.setActiveGrinder(niche.id);
+		const row = (id: string, name: string, grind: string, starred = false) => ({ grinderId: id, grinderName: name, grind, starred });
+		beans.upsertBean({ ...blankBean('bean:a'), name: 'A', grinds: [row(niche.id, niche.name, '10')] });
+		beans.upsertBean({
+			...blankBean('bean:b'),
+			name: 'B',
+			grinds: [row(niche.id, niche.name, '14'), row(df64.id, df64.name, '30', true)]
+		});
+		const grind = getBrewGrind();
+		const actions = () => getToasts().filter((x) => x.action);
+		return { ...t, beans, niche, df64, grind, actions, quickSavePlan, runQuickSave, grindUnsaved, effectiveCremaProfile, newProfileId };
+	}
+
+	it('dial on bag A, select bag B: the grind becomes B\'s, the marker follows B, Save never writes A\'s dial to B', async () => {
+		const t = await grinderSetup();
+		t.beans.upsertBean({ ...t.beans.getBean('bean:b')!, grinds: [{ grinderId: t.niche.id, grinderName: t.niche.name, grind: '14', starred: false }] });
+		await t.activateBean('bean:a');
+		expect(t.grind.value).toBe(10);
+		t.grind.set(11); // dialled on A, not saved
+		expect(t.grindUnsaved(t.beans.activeBean, t.niche.id, t.grind.value)).toBe(true);
+
+		await t.activateBean('bean:b');
+		expect(t.grind.value, "B's saved grind for the active grinder").toBe(14);
+		expect(t.grindUnsaved(t.beans.activeBean, t.niche.id, t.grind.value), 'the marker reflects B').toBe(false);
+		const plan = t.quickSavePlan({
+			bean: t.beans.activeBean,
+			grinder: t.beans.activeGrinder,
+			brewGrind: t.grind.value,
+			profile: null,
+			overrides: {}
+		});
+		expect(plan.grind, 'nothing to save on B').toBeNull();
+		expect(t.beans.getBean('bean:b')!.grinds![0].grind).toBe('14');
+		expect(t.beans.getBean('bean:a')!.grinds![0].grind, "A's dial was never saved").toBe('10');
+	});
+
+	it('a starred bag switches grinder and grind with one message and one Undo', async () => {
+		const t = await grinderSetup();
+		t.grind.set(12);
+		await t.activateBean('bean:b');
+		expect(t.beans.activeGrinder?.id).toBe(t.df64.id);
+		expect(t.grind.value).toBe(30);
+		const [msg] = t.actions();
+		expect(t.actions()).toHaveLength(1);
+		expect(msg.message).toBe('B: DF64 at 30');
+		msg.action!.run();
+		expect(t.beans.activeGrinder?.id, 'Undo puts the grinder back').toBe(t.niche.id);
+		expect(t.grind.value, 'and the grind').toBe(12);
+	});
+
+	it('nothing besides the bag changed: no message', async () => {
+		const t = await grinderSetup();
+		t.grind.set(10);
+		await t.activateBean('bean:a');
+		expect(t.actions()).toEqual([]);
+	});
+
+	it('a grinder switch takes the pick order: the saved grind, else the grind stays', async () => {
+		const t = await grinderSetup();
+		const { selectGrinder } = await import('./activate');
+		await t.activateBean('bean:a');
+		t.grind.set(9);
+		await selectGrinder(t.df64.id);
+		expect(t.grind.value, 'A has nothing for the DF64: the grind stays').toBe(9);
+		t.beans.setActiveBean('bean:b');
+		await selectGrinder(t.df64.id);
+		expect(t.grind.value).toBe(30);
 	});
 });
