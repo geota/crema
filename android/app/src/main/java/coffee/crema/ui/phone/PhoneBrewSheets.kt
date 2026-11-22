@@ -45,6 +45,7 @@ import coffee.crema.ui.components.StepperExtraChip
 import coffee.crema.ui.YieldRatioMode
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.effectiveBrew
+import coffee.crema.ui.quickSavePlan
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.CremaEdge
 import coffee.crema.ui.theme.CremaTheme
@@ -105,6 +106,12 @@ fun PhoneQuickSheet(
     var steamMode by remember { mutableStateOf(SteamMode.Time) }
     var waterMode by remember { mutableStateOf(WaterMode.Amount) }
     val brewGate = ui.gate(Setting.BREW_PARAMS)
+    // Save writes each changed part to its owner (review 2026-11-21 F1), the
+    // same as the tablet's: the grind to the bag, the recipe dials to a
+    // custom profile in place or, for a built-in, to a named copy.
+    val quickSave = ui.quickSavePlan()
+    var savePrompt by remember { mutableStateOf<QuickSavePrompt?>(null) }
+    val onSave = { if (quickSave.needsName) savePrompt = QuickSavePrompt.Copy else vm.quickSave() }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -129,17 +136,12 @@ fun PhoneQuickSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                // Scope-aware Save (issue #16): the grind dial writes back to
-                // the active bean; brew params to a CUSTOM profile in place
-                // (the tablet's name-a-copy flow for built-ins stays tablet-only).
                 CremaButton(
-                    onClick = {
-                        vm.saveQuickGrindToBean()
-                        if (ui.brewParams != null && active?.source == "custom") vm.saveQuickPreset(active.name)
-                    },
+                    onClick = onSave,
                     variant = CremaButtonVariant.Text,
                     icon = "bookmark-simple",
-                    label = "Save",
+                    label = quickSave.label,
+                    enabled = quickSave.enabled,
                 )
             }
 
@@ -377,11 +379,9 @@ fun PhoneQuickSheet(
                 }
             }
 
-            // Foot: Reset + Save profile. The dial is a per-shot override (baked
-            // into the next shot) that never touches the saved profile — Reset
-            // clears it. Save profile persists the dialled dose/yield/temp: it
-            // updates the profile in place when it's user-defined, or saves a copy
-            // when it's a read-only built-in.
+            // Foot: Reset + Save. The dial is a per-shot override (baked into
+            // the next shot) that never touches the saved profile — Reset
+            // clears it. Save is the header's: each changed part to its owner.
             Row(
                 Modifier.fillMaxWidth().padding(top = 2.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -395,22 +395,32 @@ fun PhoneQuickSheet(
                     label = "Reset",
                 )
                 Spacer(Modifier.weight(1f))
+                if (quickSave.offersSaveAsNew) {
+                    CremaButton(
+                        onClick = { savePrompt = QuickSavePrompt.AsNew },
+                        variant = CremaButtonVariant.Text,
+                        label = "Save as new…",
+                    )
+                }
                 CremaButton(
-                    onClick = {
-                        active?.let { a ->
-                            if (a.source == "custom") vm.saveQuickPreset(a.name)
-                            else vm.saveQuickPreset("${a.name} (copy)")
-                        }
-                    },
+                    onClick = onSave,
                     variant = CremaButtonVariant.Filled,
                     icon = "bookmark-simple",
-                    enabled = active != null,
-                    label = "Save profile",
+                    enabled = quickSave.enabled,
+                    label = quickSave.label,
                 )
             }
         }
     }
 
+    savePrompt?.let { prompt ->
+        QuickSaveNameDialog(
+            title = prompt.title,
+            seed = quickSave.copyNameSeed,
+            onSave = { name -> savePrompt = null; vm.quickSave(name, prompt == QuickSavePrompt.AsNew) },
+            onDismiss = { savePrompt = null },
+        )
+    }
 }
 
 // One Quick-Controls stepper cell (proto .pf-qc-step): header, − value +, presets.

@@ -78,6 +78,13 @@ data class StoredShot(
     /** Active profile name at capture, or null. */
     override val profileName: String? = null,
     /**
+     * The library id of the profile pulled (custom or built-in), next to the
+     * [profileName] snapshot: lookups use the id, display the name (save
+     * boundaries F4). Mirrors core `StoredShot.profile_id` (`profileId`);
+     * null on older rows and for a profile another app loaded.
+     */
+    override val profileId: String? = null,
+    /**
      * The active profile's *recipe* (the core wire `Profile` shape) snapshotted at
      * capture, or null. Embedded into the Visualizer upload (#12) so a profile
      * downloaded back imports as a real profile, not an empty stub — `profileName`

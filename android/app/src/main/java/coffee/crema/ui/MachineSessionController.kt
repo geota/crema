@@ -80,6 +80,9 @@ internal class MachineSessionController(
     private val setLinkPriority: suspend (Boolean) -> Unit,
     /** The library records a completed shot ([LibraryController.captureCompletedShot]). */
     private val captureCompletedShot: (Long, Float?, Float?, Float?, Long, String, ShotDisposition, Float?) -> Unit,
+    /** A shot started: the library freezes what it records of the selections
+     *  ([LibraryController.freezeShotSelections]). */
+    private val onShotStarted: () -> Unit = {},
     /** Show the core's hot-water target (a hub tells its remotes). */
     private val setHotWaterTarget: (HotWaterTarget?) -> Unit,
     /** Push the hub's config snapshot to its remotes (a no-op elsewhere). */
@@ -252,6 +255,9 @@ internal class MachineSessionController(
             // Fresh shot — clear the previous shot's record markers so a
             // stale "armed" line can never be attributed to this one (#56).
             lastArmedTargets = null
+            // The bag, profile and grind the shot records are the ones it
+            // started with (review 2026-11-21 F9).
+            onShotStarted()
             // Tighten the DE1 link for the shot window (steadier ShotSample
             // cadence + lower-latency SAW stop write); restored to BALANCED
             // on ShotCompleted. Best-effort — see De1BleManager.

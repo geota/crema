@@ -201,6 +201,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         captureCompletedShot = { durationMs, yieldG, peakPressure, peakTemp, completedAtMs, id, disposition, peakWeightG ->
             library.captureCompletedShot(durationMs, yieldG, peakPressure, peakTemp, completedAtMs, id, disposition, peakWeightG = peakWeightG)
         },
+        onShotStarted = { library.freezeShotSelections() },
         setHotWaterTarget = { machineConfig.setHotWaterTarget(it) },
         pushConfig = { proxy.pushConfig() },
         armWake = { wake.arm(it) },
@@ -500,6 +501,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         },
         setActiveProfile = { setActiveProfile(it) },
         resetBrewParams = { resetBrewParams() },
+        restoreBrewParams = { p -> quickAdjustBrew(p.dose, p.yieldOut, p.brewTemp, p.preinf) },
+        onProfileCleared = {
+            persistPrefs()
+            session.pushStopTargets(effectiveState())
+        },
         onShotAnnotationsEdited = { id -> decent.scheduleReplaceAfterEdit(id) },
     )
 
@@ -1509,8 +1515,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Toggle a profile's Favorites star (custom JSON patch / pinned-ids set). */
     fun togglePinProfile(id: String) = library.togglePinProfile(id)
 
-    /** Persist the Quick-Controls dial values into the active profile (or a copy). */
-    fun saveQuickPreset(name: String) = library.saveQuickPreset(name)
+    /** Quick Controls' Save: each changed part to its owner ([LibraryController.quickSave]). */
+    fun quickSave(copyName: String? = null, asNew: Boolean = false) = library.quickSave(copyName, asNew)
+
+    /** Undo the in-place Quick Controls Save [seq]. */
+    fun undoQuickSave(seq: Long) = library.undoQuickSave(seq)
+
+    /** The Save [seq]'s Undo message went: the save stands. */
+    fun consumeQuickSaveUndo(seq: Long) = library.consumeQuickSaveUndo(seq)
 
     /** Open an existing saved (custom) profile in the editor. */
     fun startEditProfile(id: String) = library.startEditProfile(id)
@@ -3020,32 +3032,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Toggle the coupled machine wake on saver dismiss. Persisted. */
     fun setWakeMachineWithSaver(on: Boolean) = settings.setWakeMachineWithSaver(on)
 
-    /**
-     * The bean half of the quick sheets' scope-aware **Save** (issue #16):
-     * write the QC grind dial back to the active bean's reference setting
-     * when they differ. Returns true when a bean write happened — the sheet
-     * runs this alongside the existing profile-preset half, so one button
-     * saves each dirty part to its owner. Overwriting free-text like
-     * "6 + a tooth" with the dial number is deliberate: Save is an explicit
-     * action and the field keeps its reference-dial meaning.
-     */
     /** Undo an aborted-shot discard: persist the held shot after all. */
     fun undoDiscardShot() = library.undoDiscardShot()
 
     /** The discard snackbar timed out / was dismissed — drop the held shot. */
     fun consumeDiscardToast() = library.consumeDiscardToast()
-
-    fun saveQuickGrindToBean(): Boolean {
-        // The dial and bean on screen: on a remote, the hub's.
-        val st = effectiveState()
-        val dial = st.qcGrind ?: return false
-        val bean = st.beans.firstOrNull { it.id == st.activeBeanId } ?: return false
-        val fmt = if (dial % 1f == 0f) fmt("%.0f", dial) else fmt("%.1f", dial)
-        if (bean.grinderSetting == fmt) return false
-        library.mutateBean(bean.id) { it.copy(grinderSetting = fmt) }
-        notifyUser("Grind $fmt saved to ${bean.name}")
-        return true
-    }
 
     // ── Maintenance intervals (web WaterSection "Maintenance intervals") ─────
 
