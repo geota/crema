@@ -167,6 +167,8 @@ data class AppPrefs(
     val brewCueSound: Boolean? = null,
     /** Guided-brew cue vibration. Null = never chosen → on. */
     val brewCueHaptics: Boolean? = null,
+    /** "Save each shot's grind to its bag" (#488, Devices → Grinder). Null = never set → off. */
+    val grindAutoSave: Boolean? = null,
     // ── Machine sleep ────────────────────────────────────────────────────────
     /** "Sleep after": idle minutes before Crema puts the DE1 to sleep — one
      *  of the core's `idleSleepChoices()`, 0 = Never (de1app
@@ -362,6 +364,7 @@ fun AppPrefs.toCommonSettings(): CommonSettings = CommonSettings(
     keepScreenOnBrew = keepScreenOnBrew,
     brewCueSound = brewCueSound,
     brewCueHaptics = brewCueHaptics,
+    grindAutoSave = grindAutoSave,
     showDebugPanel = showDebugPanel,
     defaultDoseG = defaultDoseG,
     defaultRatio = defaultRatio,
@@ -414,6 +417,7 @@ fun AppPrefs.withCommonSettings(cIn: CommonSettings): AppPrefs = sanitizeCommonS
     keepScreenOnBrew = c.keepScreenOnBrew,
     brewCueSound = c.brewCueSound,
     brewCueHaptics = c.brewCueHaptics,
+    grindAutoSave = c.grindAutoSave,
     showDebugPanel = c.showDebugPanel,
     defaultDoseG = c.defaultDoseG,
     defaultRatio = c.defaultRatio,
@@ -607,6 +611,12 @@ data class ConfigSnapshot(
     /** The active bag is empty on the hub, for a remote's Brew banner (#302). A
      *  remote holds no live copy of the hub's stock. Display only. */
     val activeBagEmpty: Boolean = false,
+    /** The hub's active grinder (#488): its id (a pointer into the hub's own
+     *  library, review F3), and its name and scale so a remote shows the hub's
+     *  grind range and unit without the record. Display only; null = none. */
+    val activeGrinderId: String? = null,
+    val activeGrinderName: String? = null,
+    val activeGrinderScale: coffee.crema.core.GrindScale? = null,
     val stopOnWeight: Boolean = false,
     val autoTare: Boolean = false,
     val maxShotDurationS: Float = 45f,

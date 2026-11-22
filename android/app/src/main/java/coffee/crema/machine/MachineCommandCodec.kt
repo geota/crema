@@ -39,6 +39,17 @@ object MachineCommandCodec {
         is MachineCommand.SetActiveProfile -> Wire(SET_ACTIVE_PROFILE, cmd.id)
         // No bean travels as an empty argument.
         is MachineCommand.SetActiveBean -> Wire(SET_ACTIVE_BEAN, cmd.id.orEmpty())
+        // No grinder travels as an empty argument, like no bean.
+        is MachineCommand.SetActiveGrinder -> Wire(SET_ACTIVE_GRINDER, cmd.id.orEmpty())
+        // `` = Save; `copy:<name>` = a built-in's copy; `new:<name>` = Save as new.
+        is MachineCommand.QuickSave -> Wire(
+            QUICK_SAVE,
+            when {
+                cmd.copyName == null -> ""
+                cmd.asNew -> "$SAVE_AS_NEW${cmd.copyName}"
+                else -> "$SAVE_COPY${cmd.copyName}"
+            },
+        )
         is MachineCommand.SetStopOnWeight -> Wire(SET_STOP_ON_WEIGHT, cmd.on.toString())
         is MachineCommand.SetAutoTare -> Wire(SET_AUTO_TARE, cmd.on.toString())
         // Float.toString is locale-independent.
@@ -60,6 +71,7 @@ object MachineCommandCodec {
         setOf(
             START_SHOT, MACHINE_STATE, CANCEL_MAINTENANCE, TARE_SCALE, SET_ACTIVE_PROFILE,
             SET_ACTIVE_BEAN, SET_STOP_ON_WEIGHT, SET_AUTO_TARE, QUICK_ADJUST_BREW, RESET_BREW,
+            SET_ACTIVE_GRINDER, QUICK_SAVE,
         ) + QcField.entries.mapNotNull(::qcMethod)
     }
 
@@ -92,6 +104,8 @@ object MachineCommandCodec {
             MACHINE_STATE -> stateRequests[args]
             SET_ACTIVE_PROFILE -> MachineCommand.SetActiveProfile(args)
             SET_ACTIVE_BEAN -> MachineCommand.SetActiveBean(args.ifEmpty { null })
+            SET_ACTIVE_GRINDER -> MachineCommand.SetActiveGrinder(args.ifEmpty { null })
+            QUICK_SAVE -> quickSave(args)
             SET_STOP_ON_WEIGHT -> flag(args)?.let { MachineCommand.SetStopOnWeight(it) }
             SET_AUTO_TARE -> flag(args)?.let { MachineCommand.SetAutoTare(it) }
             QUICK_ADJUST_BREW -> brew(args)
@@ -105,6 +119,7 @@ object MachineCommandCodec {
         method == MACHINE_STATE -> "machine state not relayable: ${args.take(32)}"
         method == SET_STOP_ON_WEIGHT || method == SET_AUTO_TARE -> "$method needs true or false"
         method == QUICK_ADJUST_BREW -> "quickAdjustBrew needs dose,yield,temp[,preinf]"
+        method == QUICK_SAVE -> "quickSave takes nothing, copy:<name> or new:<name>"
         method in METHODS -> "$method takes no arguments"
         else -> "unknown relayed control: ${method.take(32)}"
     }
@@ -114,6 +129,14 @@ object MachineCommandCodec {
     private fun flag(args: String): Boolean? = when (args) {
         "true" -> true
         "false" -> false
+        else -> null
+    }
+
+    /** `` = Save, `copy:<name>` = a named copy, `new:<name>` = Save as new. */
+    private fun quickSave(args: String): MachineCommand.QuickSave? = when {
+        args.isEmpty() -> MachineCommand.QuickSave(copyName = null, asNew = false)
+        args.startsWith(SAVE_COPY) -> MachineCommand.QuickSave(args.removePrefix(SAVE_COPY), asNew = false)
+        args.startsWith(SAVE_AS_NEW) -> MachineCommand.QuickSave(args.removePrefix(SAVE_AS_NEW), asNew = true)
         else -> null
     }
 
@@ -148,4 +171,8 @@ object MachineCommandCodec {
     private const val SET_AUTO_TARE = "setAutoTare"
     private const val QUICK_ADJUST_BREW = "quickAdjustBrew"
     private const val RESET_BREW = "resetBrew"
+    private const val SET_ACTIVE_GRINDER = "setActiveGrinder"
+    private const val QUICK_SAVE = "quickSave"
+    private const val SAVE_COPY = "copy:"
+    private const val SAVE_AS_NEW = "new:"
 }

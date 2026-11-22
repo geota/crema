@@ -172,7 +172,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pushConfig = { proxy.pushConfig() },
         profileJson = { library.profileJson(it) },
         persistLibrary = { library.persistLibrary() },
-        maybeLoadLinkedProfile = { library.maybeLoadLinkedProfile(it) },
+        onBagSelected = { library.onBagSelected(it) },
+        onGrinderSelected = { library.onGrinderSelected(it) },
         pushStopTargets = { state -> session.pushStopTargets(state) },
         refreshStopTargetProjection = { session.refreshStopTargetProjection() },
         pushStartSettings = { session.pushStartSettings() },
@@ -377,7 +378,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         shotsLoaded = { library.rowsReady },
         historyRefused = { library.historyRefused },
         restoreRunning = { restoreState() == coffee.crema.restore.RestoreState.RUNNING },
-        beanLibrary = { effectiveState().let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
+        beanLibrary = { effectiveState().libraryFile() },
         editBeanLibrary = { edit -> library.editBeanLibrary(edit) },
         onBeansSynced = { library.persistLibrary() },
         networkWatcher = coffee.crema.visualizer.DefaultNetworkWatcher(app),
@@ -507,6 +508,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             session.pushStopTargets(effectiveState())
         },
         onShotAnnotationsEdited = { id -> decent.scheduleReplaceAfterEdit(id) },
+        setGrindDial = { v -> setGrindDial(v) },
+        pushConfig = { proxy.pushConfig() },
     )
 
     // ── Guided brew sessions, recipes, custom methods and the Brew Log ────
@@ -653,6 +656,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         override fun commitConfig(cmd: MachineCommand.Config) = machineConfig.commitConfig(cmd)
         override fun hasProfile(id: String): Boolean = library.hasProfile(id)
         override fun hasBean(id: String): Boolean = _ui.value.beans.any { it.id == id }
+        override fun hasGrinder(id: String): Boolean = _ui.value.liveGrinders.any { it.id == id }
+        override fun applyQuickSave(copyName: String?, asNew: Boolean): CommandOutcome = library.quickSave(copyName, asNew)
         // Someone is using Crema on a mirror: that's presence at the machine.
         override fun notePeerActivity() = presence.idleActivity(coffee.crema.core.IdleActivity.Mirror)
         override fun configReady(): Boolean = settings.loaded
@@ -1232,7 +1237,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         files.forEach(SafeFile::closeSaves)
         try {
             when (store.file.name) {
-                LibraryStore.FILE_NAME -> library.loadLibrary()
+                LibraryStore.FILE_NAME -> {
+                    library.loadLibrary()
+                    library.migrateGrinderLibrary()
+                }
                 HistoryStore.FILE_NAME -> library.reloadHistory()
                 SettingsStore.FILE_NAME -> loadPrefs()
                 PinnedProfileStore.FILE_NAME, HiddenProfileStore.FILE_NAME, CustomProfileStore.FILE_NAME -> {
@@ -1432,6 +1440,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             holdStartupLoad?.await()
             library.loadLibrary()
             loadPrefs()
+            // Grinder records and bag grinds (#488): once the library and the
+            // settings (whose grinderModel it reads) are in.
+            library.migrateGrinderLibrary()
             // Seed the learned SAW drip model into the core (it survives
             // bridge.reset() in-core, so startup is the only seed point).
             // A corrupt blob is quarantined, not lost (SawModelStore.seed).
@@ -1516,10 +1527,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun togglePinProfile(id: String) = library.togglePinProfile(id)
 
     /** Quick Controls' Save: each changed part to its owner ([LibraryController.quickSave]). */
-    fun quickSave(copyName: String? = null, asNew: Boolean = false) = library.quickSave(copyName, asNew)
+    /** Quick Controls' Save: here, or on a remote sent to the hub, which saves to its own bag and profile (#488, review F8). */
+    fun quickSave(copyName: String? = null, asNew: Boolean = false) = machine.execute(MachineCommand.QuickSave(copyName, asNew))
 
     /** Undo the in-place Quick Controls Save [seq]. */
     fun undoQuickSave(seq: Long) = library.undoQuickSave(seq)
+
+    // ── Grinders and bag grinds (#488) ────────────────────────────────────────
+
+    /** Add a grinder from the type-or-pick box: a catalogue entry or a typed name (an archived match comes back). */
+    fun addGrinder(name: String, catalogueId: String? = null): coffee.crema.core.Grinder? = library.addGrinder(name, catalogueId)
+
+    /** Add (or bring back) a grinder and make it Brew's: the Brew picker's Add. */
+    fun addAndSelectGrinder(name: String, catalogueId: String? = null) {
+        val g = library.addGrinder(name, catalogueId) ?: return
+        setActiveGrinder(g.id)
+    }
+
+    /** Devices → Grinder "Remove": archive it; the active one is cleared. */
+    fun archiveGrinder(id: String) = library.archiveGrinder(id)
+
+    /** Devices → Grinder "Archived" → Restore. */
+    fun restoreGrinder(id: String) = library.restoreGrinder(id)
+
+    /** Devices → Grinder edit's Save; false when refused (an unusable scale, no name). */
+    fun saveGrinderEdit(base: coffee.crema.core.Grinder, edited: coffee.crema.core.Grinder): Boolean = library.saveGrinderEdit(base, edited)
+
+    /** A bag's newest grind per grinder, from this device's history (pickers' "last shot …"). */
+    fun lastGrindsForBag(beanId: String): List<coffee.crema.core.LastGrind> = library.lastGrindsForBag(beanId)
+
+    /** Undo a bag selection's one change (review F6). */
+    fun undoBagSelection(seq: Long) = library.undoBagSelection(seq)
+
+    /** The bag selection message went without Undo. */
+    fun consumeBagSelectUndo(seq: Long) = library.consumeBagSelectUndo(seq)
 
     /** The Save [seq]'s Undo message went: the save stands. */
     fun consumeQuickSaveUndo(seq: Long) = library.consumeQuickSaveUndo(seq)
@@ -1995,6 +2036,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // that dealt with the damage (REVIEW-366, REVIEW-370).
         if (outcome is coffee.crema.restore.RestoreOutcome.Done) {
             drive.restoreCompleted(coffee.crema.restore.writtenStores(outcome.plan, outcome.singletonsSkipped), pending.from)
+            // Restored bags from an app before #488 get their saved grinds.
+            library.migrateGrinderLibrary()
         }
         val held = coffee.crema.ui.heldSharingNotice(library.restoreHeldSharing)
         notifyUser(coffee.crema.restore.outcomeMessage(outcome) + (held?.let { " $it" } ?: ""))
@@ -2778,6 +2821,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun setQcGrind(clicks: Float) = machine.execute(MachineCommand.SetQc(QcField.GRIND, clicks))
 
+    /** Brew's grind dial, set by a bag or grinder pick on the device that owns
+     *  the session (#488, review F9): persisted and pushed to remotes. Null =
+     *  no dial (the bag's saved grind shows). */
+    private fun setGrindDial(value: Float?) {
+        _ui.update { it.copy(qcGrind = value) }
+        persistPrefs()
+        proxy.pushConfig()
+    }
+
     /** Show/hide a live-chart channel (Quick Controls). Persisted display pref. */
     fun toggleChartChannel(key: String, enabled: Boolean) = settings.toggleChartChannel(key, enabled)
 
@@ -2872,6 +2924,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Guided-brew cue vibration (Settings → Display). Persisted as an explicit choice. */
     fun setBrewCueHaptics(enabled: Boolean) = settings.setBrewCueHaptics(enabled)
 
+    /** Devices → Grinder "Save each shot's grind to its bag" (#488). */
+    fun setGrindAutoSave(enabled: Boolean) = settings.setGrindAutoSave(enabled)
+
     /** Settings → Brew defaults: the dose / ratio / temp / pre-infusion a NEW
      *  profile seeds from ([startNewProfile] → brewDefaultsJson). Persisted. */
     fun setBrewDefaults(doseG: Float, ratio: Float, brewTempC: Float, preinfuseS: Float) =
@@ -2881,6 +2936,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Set (or with `null`, clear) the active bean (the Brew bean block). Persisted. */
     fun setActiveBean(id: String?) = machine.execute(MachineCommand.SetActiveBean(id))
+
+    /** Pick Brew's grinder (#488), or none: on a remote, relayed to the hub like a bag pick. */
+    fun setActiveGrinder(id: String?) = machine.execute(MachineCommand.SetActiveGrinder(id))
 
     // ── Maintenance — see [MaintenanceController] ───────────────────────────
 
@@ -3336,6 +3394,7 @@ internal fun MainUiState.commonSettings(): CommonSettings = AppPrefs(
     keepScreenOnBrew = keepScreenOnBrew,
     brewCueSound = brewCueSound,
     brewCueHaptics = brewCueHaptics,
+    grindAutoSave = grindAutoSave,
     idleSleepMin = idleSleepMin,
     grinderModel = grinderModel,
     baristaName = baristaName,

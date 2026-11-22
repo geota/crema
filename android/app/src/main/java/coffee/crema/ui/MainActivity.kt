@@ -314,6 +314,18 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+                // A bag selection that changed the profile, grinder or grind
+                // (#488, review F6): one message, one Undo for all of it.
+                LaunchedEffect(ui.bagSelectUndo) {
+                    val notice = ui.bagSelectUndo ?: return@LaunchedEffect
+                    snackbarScope.launch {
+                        snackbarHostState.showUndoMessage(
+                            notice.message,
+                            onUndo = { viewModel.undoBagSelection(notice.seq) },
+                            onDrop = { viewModel.consumeBagSelectUndo(notice.seq) },
+                        )
+                    }
+                }
                 // An unreadable store file was kept aside at load: say so once, with
                 // a "Share" action for the kept-aside copies.
                 LaunchedEffect(ui.keptAsideNotice) {

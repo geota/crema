@@ -94,6 +94,7 @@ internal fun omittedRowId(row: OmittedBackupRow, snap: BackupSnapshot): String? 
     "shot" -> snap.shots.getOrNull(row.index)?.id
     "bean" -> snap.state.beans.getOrNull(row.index)?.id
     "roaster" -> snap.state.roasters.getOrNull(row.index)?.id
+    "grinder" -> snap.state.grinders.getOrNull(row.index)?.id
     "recipe" -> snap.userRecipes.getOrNull(row.index)?.id
     "brewMethod" -> snap.state.customMethods.getOrNull(row.index)?.id
     else -> null
@@ -163,6 +164,9 @@ internal fun backupEnvelope(snap: BackupSnapshot, json: Json, withShots: Boolean
     )
     val beans = rowStrings(s.beans) { json.encodeToString(Bean.serializer(), it) }
     val roasters = rowStrings(s.roasters) { json.encodeToString(Roaster.serializer(), it) }
+    // Grinder records (#488), archived and tombstones included: a `grinder`
+    // line each and a `grinderCount`, so a restore on either shell brings them.
+    val grinders = rowStrings(s.grinders) { json.encodeToString(coffee.crema.core.Grinder.serializer(), it) }
     // Shots ride in the canonical core `StoredShot` wire shape (the SAME shape
     // the Visualizer path emits via `export_v2_json_shot`), NOT Android's flat
     // store shape: the core backup exporter parses `shots:[StoredShot]`, so the
@@ -219,6 +223,7 @@ internal fun backupEnvelope(snap: BackupSnapshot, json: Json, withShots: Boolean
         put("profiles", rowStrings(customs) { it })
         put("beans", beans)
         put("roasters", roasters)
+        put("grinders", grinders)
         shots?.let { put("shots", it) }
         put("settings", json.parseToJsonElement(settingsJson))
         put("profileMeta", json.parseToJsonElement(profileMetaJson))
@@ -243,6 +248,8 @@ data class ParsedBackup(
     val beans: List<Bean>,
     val roasters: List<Roaster>,
     val shots: List<StoredShot>,
+    /** Grinder records (#488); empty in a backup from before them. */
+    val grinders: List<coffee.crema.core.Grinder> = emptyList(),
     val prefs: AppPrefs?,
     val common: CommonSettings?,
     val qcGrind: Float?,
@@ -301,6 +308,7 @@ private fun parseImportPlan(plan: JsonObject, json: Json, nowMs: Long): ParsedBa
         profiles = array("profiles").map { json.encodeToString(JsonObject.serializer(), it) },
         beans = typed("beans", Bean.serializer()),
         roasters = typed("roasters", Roaster.serializer()),
+        grinders = typed("grinders", coffee.crema.core.Grinder.serializer()),
         shots = array("shots").map { row -> storedShotFromBackupJson(row, json) ?: throw BackupDecodeError("shot", idOf(row)) },
         prefs = prefs,
         common = common,

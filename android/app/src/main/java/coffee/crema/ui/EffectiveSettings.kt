@@ -59,6 +59,15 @@ private fun MainUiState.withSnapshot(cfg: ConfigSnapshot, m: MirroredSettings): 
         mirroredBagEmpty = cfg.activeBagEmpty,
         brewParams = brew,
         activeBeanId = cfg.activeBeanId,
+        activeGrinderId = cfg.activeGrinderId,
+        mirroredGrinder = cfg.activeGrinderId?.takeIf { it.isNotEmpty() }?.let { id ->
+            coffee.crema.core.Grinder(
+                id = id,
+                name = cfg.activeGrinderName.orEmpty(),
+                scale = cfg.activeGrinderScale ?: coffee.crema.beans.DEFAULT_GRIND_SCALE,
+                updatedAt = 0L,
+            )
+        },
         stopOnWeight = cfg.stopOnWeight,
         autoTare = cfg.autoTare,
         maxShotDurationS = cfg.maxShotDurationS,
@@ -112,6 +121,8 @@ fun MachineCommand.Config.applyTo(s: MainUiState): MainUiState = when (this) {
     is MachineCommand.SetActiveProfile ->
         s.withActiveProfileId(id).copy(mirroredProfile = null, mirroredProfileJson = null)
     is MachineCommand.SetActiveBean -> s.copy(activeBeanId = id)
+    // A remote's pending pick shows its own record until the hub's snapshot comes.
+    is MachineCommand.SetActiveGrinder -> s.copy(activeGrinderId = id, mirroredGrinder = null)
     is MachineCommand.SetStopOnWeight -> s.copy(stopOnWeight = on)
     is MachineCommand.SetAutoTare -> s.copy(autoTare = on)
     is MachineCommand.SetQc -> when (field) {

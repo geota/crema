@@ -22,14 +22,6 @@ import kotlin.test.assertEquals
 class CommonSettingsMappingTest {
     private val json = Json { encodeDefaults = true }
 
-    /**
-     * #488's grind auto-save setting: the core has it (issue 04), the Android
-     * shell doesn't carry it through AppPrefs / MainUiState yet. Issue 03
-     * (`.scratch/grinder-488/issues/03-android-ui.md`) maps it and removes
-     * this list.
-     */
-    private val NOT_MAPPED_YET = setOf("grindAutoSave")
-
     private val nonDefault = CommonSettings(
         themeMode = "light", maxShotDurationS = 40f, autoTare = false, stopOnWeight = false,
         volumeStopWithScale = true, requireScale = true, steamEco = true, steamTwoTap = true, fanThresholdC = 40f,
@@ -40,7 +32,7 @@ class CommonSettingsMappingTest {
         grinderModel = "Niche", baristaName = "Ana", suppressDe1Sleep = true, idleSleepMin = 60u,
         qcSteamTimeS = 30f, qcSteamFlowMlS = 1.6f, qcSteamTempC = 150f, qcHotWaterTempC = 85f, qcHotWaterVolumeMl = 200f,
         qcHotWaterMode = HotWaterMode.Time, qcHotWaterTimeS = 45f, qcHotWaterTimeNoLimit = true, qcHotWaterRatio = 2.5f,
-        qcFlushTimeS = 6f, qcFlushTempC = 93f,
+        qcFlushTimeS = 6f, qcFlushTempC = 93f, grindAutoSave = true,
     )
 
     @Test
@@ -49,7 +41,6 @@ class CommonSettingsMappingTest {
         val d = json.encodeToJsonElement(CommonSettings.serializer(), CommonDefaults.common).jsonObject
         val same = CommonSettings.serializer().descriptor.elementNames
             .filter { it != "suppressDe1Sleep" } // retired, always written true
-            .filter { it !in NOT_MAPPED_YET }
             .filter { nd[it] == d[it] }
         assertEquals(emptyList(), same, "set these to a non-default value above")
     }

@@ -84,9 +84,10 @@ class ControlVerbGoldenTest {
     /** `control/` holds exactly the live verbs' fixtures, and the retired
      *  take-over has none any more (relay v4 R2, AC-41). */
     @Test
-    fun `control holds the 21 live fixtures and no retired ones`() {
-        // 21: relay v4 R4 removed the seven read-only Quick Controls verbs' 8 fixtures.
-        assertEquals(21, Golden.list("control").size, "${Golden.list("control").sorted()}")
+    fun `control holds the 26 live fixtures and no retired ones`() {
+        // 21: relay v4 R4 removed the seven read-only Quick Controls verbs' 8 fixtures;
+        // 26: #488 added setActiveGrinder (2) and quickSave (3).
+        assertEquals(26, Golden.list("control").size, "${Golden.list("control").sorted()}")
         assertEquals(emptySet(), Golden.list("control/retired"))
     }
 }

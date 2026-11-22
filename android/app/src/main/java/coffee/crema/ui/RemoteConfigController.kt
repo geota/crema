@@ -84,6 +84,10 @@ internal class RemoteConfigController(
                 activeBeanId = ui.activeBeanId,
                 activeBeanSummary = activeBeanSummaryLine(),
                 activeBagEmpty = ui.beans.firstOrNull { it.id == ui.activeBeanId }?.let { bagStock(it) == BagStock.Empty } ?: false,
+                // The hub's own active grinder (#488): a remote shows its name and scale.
+                activeGrinderId = ui.activeGrinder()?.id,
+                activeGrinderName = ui.activeGrinder()?.name,
+                activeGrinderScale = ui.activeGrinder()?.scale,
                 stopOnWeight = ui.stopOnWeight,
                 autoTare = ui.autoTare,
                 maxShotDurationS = ui.maxShotDurationS,

@@ -152,6 +152,8 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
             } ?: JsonNull,
         )
         put("grinderModel", resolveGrinderModel(shot, grinderModel))
+        // Omitted when absent, as the core writes it (#488).
+        shot.grinderId?.let { put("grinderId", it) }
         put("tags", buildJsonArray { shot.tags.forEach { add(JsonPrimitive(it)) } })
         // The stop-at-weight target dialled for this shot (Decent's `targetYield`).
         put("yieldTarget", shot.yieldTargetG)
@@ -328,6 +330,7 @@ fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Jso
         nextPlan = metaStr("nextPlan"),
         barista = metaStr("barista")?.takeIf { it.isNotBlank() },
         grinderModel = str("grinderModel")?.takeIf { it.isNotBlank() },
+        grinderId = str("grinderId")?.takeIf { it.isNotBlank() },
         drinker = metaStr("drinker")?.takeIf { it.isNotBlank() },
         waterG = metaStr("waterG")?.toFloatOrNull(),
         brewTempC = str("brewTempTarget")?.toFloatOrNull(),

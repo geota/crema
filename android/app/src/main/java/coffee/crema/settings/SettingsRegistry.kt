@@ -110,7 +110,7 @@ enum class Setting(
     SCALE_MODE(A, RO, SettingStore.SCALE, null, MirrorSource.NONE_AVAILABLE, null, false, listOf("$VM.setScaleMode(Int)"), uiField = "scaleActiveMode"),
     SCALE_AUTO_STOP(A, RO, SettingStore.SCALE, null, MirrorSource.SCALE_ECHO, null, false, listOf("$VM.setScaleAutoStop(Int)"), uiField = "scaleAutoStop"),
 
-    // ── B: session (13) ──────────────────────────────────────────────────────
+    // ── B: session (14) ──────────────────────────────────────────────────────
     STOP_ON_WEIGHT(B, REL, AP, "stopOnWeight", SNAP, "stopOnWeight", true, listOf("$VM.setStopOnWeight(Boolean)")),
     AUTO_TARE(B, REL, AP, "autoTare", SNAP, "autoTare", true, listOf("$VM.setAutoTare(Boolean)")),
     MAX_SHOT_DURATION(B, RO, AP, "maxShotDurationS", SNAP, "maxShotDurationS", true, listOf("$VM.setMaxShotDuration(Float?)")),
@@ -123,13 +123,19 @@ enum class Setting(
     QC_GRIND(B, REL, AP, "qcGrind", SNAP, "qcGrind", true, listOf("$VM.setQcGrind(Float)")),
     ACTIVE_PROFILE(B, REL, AP, "activeProfileId", SNAP, "activeProfileId", true, listOf("$VM.setActiveProfile(String)")),
     ACTIVE_BEAN(B, REL, SettingStore.LIBRARY, null, SNAP, "activeBeanId", true, listOf("$VM.setActiveBean(String?)"), uiField = "activeBeanId"),
+    /** The active grinder (#488): a pointer into the hub's library, so a remote
+     *  never adopts it (its own grinders are its own, review F3). */
+    ACTIVE_GRINDER(
+        B, REL, SettingStore.LIBRARY, null, SNAP, "activeGrinderId", false, listOf("$VM.setActiveGrinder(String?)"),
+        uiField = "activeGrinderId", snapshotExtras = listOf("activeGrinderName", "activeGrinderScale"),
+    ),
     BREW_PARAMS(
         B, REL, SettingStore.MEMORY, null, SNAP, "brewDoseG", true,
         listOf("$VM.quickAdjustBrew(Double, Double, Double, Double?)", "$VM.resetBrewParams()"),
         uiField = "brewParams", snapshotExtras = listOf("brewYieldG", "brewTempC", "brewPreinfuseS"),
     ),
 
-    // ── C: personal (57) ─────────────────────────────────────────────────────
+    // ── C: personal (58) ─────────────────────────────────────────────────────
     THEME_MODE(C, LOC, AP, "themeMode", NONE, null, false, listOf("$VM.setThemeMode(String)")),
     WEIGHT_UNIT(C, LOC, AP, "weightUnit", NONE, null, false, listOf("$VM.setWeightUnit(String)")),
     TEMP_UNIT(C, LOC, AP, "tempUnit", NONE, null, false, listOf("$VM.setTempUnit(String)")),
@@ -141,6 +147,7 @@ enum class Setting(
     KEEP_SCREEN_ON_BREW(C, LOC, AP, "keepScreenOnBrew", NONE, null, false, listOf("$VM.setKeepScreenOnBrew(Boolean)")),
     BREW_CUE_SOUND(C, LOC, AP, "brewCueSound", NONE, null, false, listOf("$VM.setBrewCueSound(Boolean)")),
     BREW_CUE_HAPTICS(C, LOC, AP, "brewCueHaptics", NONE, null, false, listOf("$VM.setBrewCueHaptics(Boolean)")),
+    GRIND_AUTO_SAVE(C, LOC, AP, "grindAutoSave", NONE, null, false, listOf("$VM.setGrindAutoSave(Boolean)")),
     SCREENSAVER_AFTER(C, LOC, AP, "screensaverAfterMin", NONE, null, false, listOf("$VM.setScreensaverAfterMin(Int)")),
     WAKE_MACHINE_WITH_SAVER(C, LOC, AP, "wakeMachineWithSaver", NONE, null, false, listOf("$VM.setWakeMachineWithSaver(Boolean)")),
     SLEEP_ON_QUIT(C, LOC, AP, "sleepOnQuit", NONE, null, false, listOf("$VM.setSleepOnQuit(Boolean)")),
@@ -291,6 +298,7 @@ val SNAPSHOT_META: Set<String> = setOf(
 fun MachineCommand.Config.setting(): Setting = when (this) {
     is MachineCommand.SetActiveProfile -> Setting.ACTIVE_PROFILE
     is MachineCommand.SetActiveBean -> Setting.ACTIVE_BEAN
+    is MachineCommand.SetActiveGrinder -> Setting.ACTIVE_GRINDER
     is MachineCommand.SetStopOnWeight -> Setting.STOP_ON_WEIGHT
     is MachineCommand.SetAutoTare -> Setting.AUTO_TARE
     is MachineCommand.SetQc -> field.setting()

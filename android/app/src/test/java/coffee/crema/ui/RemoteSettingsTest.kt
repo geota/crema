@@ -191,24 +191,51 @@ class RemoteSettingsTest {
         assertTrue(VmHarness.log(vm).any { "Config snapshot 3 dropped" in it }, "the rev-3 snapshot was dropped")
     }
 
-    /** Review 2026-11-21 F8 (interim): on a remote, Quick Controls' Save is
-     *  off and says where to save. It used to write the hub's dial into this
-     *  device's own copy of the bag and profile, which the hub never reads. */
+    /** Review 2026-11-21 F8 (#488): on a remote, Quick Controls' Save is sent
+     *  to the hub as a command, and the hub saves to its own bag and profile.
+     *  Nothing is written to this device's own copy, which the hub never reads. */
     @Test
-    fun `quick save on a remote writes nothing and names the hub`() {
+    fun `quick save on a remote is sent to the hub and writes nothing here`() {
         val vm = fixture.start()
         fixture.push()
         VmHarness.awaitStartupLoaded(vm)
         val plan = vm.ui.value.quickSavePlan()
         assertTrue(plan.grind != null && plan.recipeChanged, "the hub's dial differs from the bag and the profile: $plan")
-        assertFalse(plan.enabled)
-        assertEquals("Save on Kitchen tablet", plan.label)
+        assertTrue(plan.enabled)
+        assertEquals("Save", plan.label)
         val profiles = vm.ui.value.profiles.size
+        val grinds = VmHarness.ownState(vm).beans.first { it.id == BEAN_S }.grinds
         vm.quickSave("Hub dial")
+        idleRelays(1)
+        assertEquals("quickSave" to "copy:Hub dial", fixture.handled.last())
         VmHarness.idle()
-        assertEquals("", vm.ui.value.beans.first { it.id == BEAN_S }.grinderSetting, "no grind saved to the bag")
-        assertEquals(profiles, vm.ui.value.profiles.size, "no profile copy")
-        assertTrue(vm.ui.value.userMessages.any { it == "Save on Kitchen tablet" }, "${vm.ui.value.userMessages}")
+        assertEquals(grinds, VmHarness.ownState(vm).beans.first { it.id == BEAN_S }.grinds, "no grind saved to this device's bag")
+        assertEquals("", VmHarness.ownState(vm).beans.first { it.id == BEAN_S }.grinderSetting, "nor to the old field")
+        assertEquals(profiles, vm.ui.value.profiles.size, "no profile copy here")
+    }
+
+    /** #488: a remote's grinder pick is relayed to the hub like a bag pick, and
+     *  the hub's snapshot carries its active grinder's name and scale. */
+    @Test
+    fun `a remote's grinder pick is relayed and the hub's grinder shows from its snapshot`() {
+        val vm = fixture.start()
+        fixture.push(
+            S.copy(
+                activeGrinderId = "grinder:motto", activeGrinderName = "Motto 80",
+                activeGrinderScale = coffee.crema.core.GrindScale(0f, 999f, 1f, "μm"),
+            ),
+        )
+        VmHarness.awaitStartupLoaded(vm)
+        val shown = assertNotNull(vm.ui.value.activeGrinder(), "the hub's grinder, without its record here")
+        assertEquals("Motto 80", shown.name)
+        assertEquals(999f, vm.ui.value.activeGrindScale().max)
+        assertTrue(VmHarness.ownState(vm).grinders.none { it.id == "grinder:motto" }, "nothing added to this library")
+        val own = VmHarness.ownState(vm).activeGrinderId
+        vm.setActiveGrinder("grinder:niche")
+        idleRelays(1)
+        assertEquals("setActiveGrinder" to "grinder:niche", fixture.handled.last())
+        VmHarness.idle()
+        assertEquals(own, VmHarness.ownState(vm).activeGrinderId, "this device's own pointer is untouched")
     }
 
     /** AC-31: the remote's core (its stop-target projection) follows the

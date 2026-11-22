@@ -1,0 +1,261 @@
+package coffee.crema.beans
+
+import coffee.crema.core.AutoSaveInput
+import coffee.crema.core.BagGrind
+import coffee.crema.core.BagSelectInput
+import coffee.crema.core.BagSelection
+import coffee.crema.core.Bean
+import coffee.crema.core.CatalogueGrinderInfo
+import coffee.crema.core.GrindSave
+import coffee.crema.core.GrindScale
+import coffee.crema.core.Grinder
+import coffee.crema.core.GrinderAdd
+import coffee.crema.core.GrinderArchive
+import coffee.crema.core.GrinderLibraryMigration
+import coffee.crema.core.GrinderMatch
+import coffee.crema.core.GrinderSwitchInput
+import coffee.crema.core.LastGrind
+import coffee.crema.core.addGrinderJson
+import coffee.crema.core.archiveGrinderJson
+import coffee.crema.core.autoSaveShotGrindJson
+import coffee.crema.core.bagGrindsToFixJson
+import coffee.crema.core.grindersForNamesJson
+import coffee.crema.core.matchGrindersJson
+import coffee.crema.core.mergeGrinderEditJson
+import coffee.crema.core.migrateGrinderLibraryJson
+import coffee.crema.core.resolveBagSelectionJson
+import coffee.crema.core.resolveGrinderSwitchJson
+import coffee.crema.core.restoreGrinderJson
+import coffee.crema.core.saveBagGrindJson
+import coffee.crema.history.ShotMeta
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+
+/*
+ * Grinder records and bag grinds (#488, DESIGN.md "Phase 1 spec" and "Bag
+ * grinds"). The core owns every rule: adding (and reviving an archived
+ * record), archiving, the library migration, the type-or-pick matcher, Brew's
+ * Save of a grind, the bag-selection resolve and auto-save. These are the
+ * typed calls onto it; each takes its UniFFI function as a parameter so JVM
+ * tests can swap it. The few Kotlin helpers below only read what's stored.
+ */
+
+private val grinderJson = Json { ignoreUnknownKeys = true }
+
+private val grinders = ListSerializer(Grinder.serializer())
+
+/** The "no grinder" slot's `BagGrind.grinderId` (core `NO_GRINDER_ID`). */
+const val NO_GRINDER_ID = ""
+
+/** The default grind scale (no active grinder): today's 0–20 in 0.1 steps, no unit. */
+val DEFAULT_GRIND_SCALE = GrindScale(min = 0f, max = 20f, step = 0.1f, unit = "")
+
+/** Owned: not archived, not deleted (core `Grinder::is_live`). */
+val Grinder.isLive: Boolean get() = archivedAt == null && deletedAt == null
+
+/** The grinder [activeId] names, when it's live (core `active_grinder`); else none. */
+fun List<Grinder>.activeGrinder(activeId: String?): Grinder? =
+    activeId?.takeIf { it.isNotEmpty() }?.let { id -> firstOrNull { it.id == id && it.isLive } }
+
+/** The bag's saved grind for [grinderId] (null = the "no grinder" slot), core `saved_grind`. */
+fun Bean.savedGrind(grinderId: String?): BagGrind? = grinds?.firstOrNull { it.grinderId == (grinderId ?: NO_GRINDER_ID) }
+
+/** The bag's starred row ("this bag's grinder"), if any. */
+val Bean.starredGrind: BagGrind? get() = grinds?.firstOrNull { it.starred }
+
+/** A grind as the bag and the shot store it: whole numbers without a decimal. */
+fun grindText(value: Float): String =
+    if (value % 1f == 0f) String.format(java.util.Locale.ROOT, "%.0f", value) else String.format(java.util.Locale.ROOT, "%.1f", value)
+
+/** A stored grind as a number for the stepper, or null when it isn't one ("2.5.3" stays text). */
+fun grindNumber(text: String?): Float? = text?.trim()?.replace(',', '.')?.toFloatOrNull()?.takeIf { it.isFinite() }
+
+/** Whether Brew's [grind] differs from the [saved] one: numerically when both are numbers, else as text. */
+fun grindDiffers(grind: String?, saved: String?): Boolean {
+    if (grind == null) return false
+    val a = grindNumber(grind)
+    val b = grindNumber(saved)
+    return if (a != null && b != null) a != b else grind.trim() != saved?.trim()
+}
+
+/** [value] shown on [scale]: "480 μm", or "4.2" with no unit. */
+fun grindLabel(value: String, scale: GrindScale?): String =
+    scale?.unit?.trim()?.takeIf { it.isNotEmpty() }?.let { "$value $it" } ?: value
+
+/** Why a typed scale can't be stored, or null: every value finite, the lowest
+ *  below the highest, the step positive (issue 03, "Bound typed scale values"). */
+fun scaleRefusal(min: Float?, max: Float?, step: Float?): String? = when {
+    min == null || max == null || step == null || !min.isFinite() || !max.isFinite() || !step.isFinite() -> "Enter a number in each field"
+    min >= max -> "Lowest must be below Highest"
+    step <= 0f -> "Step must be more than 0"
+    step > max - min -> "Step must fit between Lowest and Highest"
+    else -> null
+}
+
+/**
+ * The newest grind per grinder on bag [beanId] among [shots] (newest first or
+ * not), the history's answer `last_grinds_for_bag` gives on web: one per
+ * grinder id, and per name for rows from before grinder ids. Shots without a
+ * grind don't count.
+ */
+fun lastGrindsForBag(beanId: String, shots: List<ShotMeta>): List<LastGrind> {
+    val newest = LinkedHashMap<String, ShotMeta>()
+    for (s in shots) {
+        if (s.bean?.beanId != beanId) continue
+        val grind = s.grindSetting ?: continue
+        if (!grind.isFinite()) continue
+        val key = s.grinderId?.takeIf { it.isNotEmpty() }?.let { "id:$it" } ?: "name:${s.grinderModel?.trim()?.lowercase().orEmpty()}"
+        val held = newest[key]
+        if (held == null || s.completedAtMs > held.completedAtMs) newest[key] = s
+    }
+    return newest.values.sortedByDescending { it.completedAtMs }.map { s ->
+        LastGrind(
+            grinderId = s.grinderId?.takeIf { it.isNotEmpty() },
+            grinder = s.grinderModel.orEmpty(),
+            grind = grindText(s.grindSetting!!),
+            completedAt = s.completedAtMs,
+        )
+    }
+}
+
+/** The library migration (core `migrate_grinder_library`), run once the library and the settings have loaded. */
+fun migrateGrinderLibrary(
+    grinderRows: List<Grinder>,
+    beans: List<Bean>,
+    grinderModel: String,
+    nowMs: Long,
+    core: (payload: String, nowMs: Long) -> String = ::migrateGrinderLibraryJson,
+): GrinderLibraryMigration {
+    val payload = buildJsonObject {
+        put("grinders", grinderJson.encodeToJsonElement(grinders, grinderRows))
+        put("beans", grinderJson.encodeToJsonElement(ListSerializer(Bean.serializer()), beans))
+        put("grinderModel", JsonPrimitive(grinderModel))
+    }
+    return grinderJson.decodeFromString(GrinderLibraryMigration.serializer(), core(payload.toString(), nowMs))
+}
+
+/** Add a grinder from catalogue entry [catalogueId] (blank for none) or typed [name]: a new, revived or existing record. */
+fun addGrinder(
+    grinderRows: List<Grinder>,
+    name: String,
+    catalogueId: String?,
+    nowMs: Long,
+    core: (String, String, String, Long) -> String = ::addGrinderJson,
+): GrinderAdd? {
+    val out = core(grinderJson.encodeToString(grinders, grinderRows), name, catalogueId.orEmpty(), nowMs)
+    return if (out.trim() == "null") null else grinderJson.decodeFromString(GrinderAdd.serializer(), out)
+}
+
+/** Remove [grinder] from Devices: archive it, clearing [activeId] when it's this one (review F5). */
+fun archiveGrinder(
+    grinder: Grinder,
+    activeId: String?,
+    nowMs: Long,
+    core: (String, String, Long) -> String = ::archiveGrinderJson,
+): GrinderArchive = grinderJson.decodeFromString(
+    GrinderArchive.serializer(),
+    core(grinderJson.encodeToString(Grinder.serializer(), grinder), activeId.orEmpty(), nowMs),
+)
+
+/** An archived grinder brought back, same id. */
+fun restoreGrinder(
+    grinder: Grinder,
+    nowMs: Long,
+    core: (String, Long) -> String = ::restoreGrinderJson,
+): Grinder = grinderJson.decodeFromString(Grinder.serializer(), core(grinderJson.encodeToString(Grinder.serializer(), grinder), nowMs))
+
+/** A Devices edit's Save: the fields changed ([edited] against [base]) onto [current], the row as stored. */
+fun mergeGrinderEdit(
+    base: Grinder,
+    edited: Grinder,
+    current: Grinder,
+    nowMs: Long,
+    core: (String, String, String, Long) -> String = ::mergeGrinderEditJson,
+): Grinder {
+    val enc = { g: Grinder -> grinderJson.encodeToString(Grinder.serializer(), g) }
+    return grinderJson.decodeFromString(Grinder.serializer(), core(enc(base), enc(edited), enc(current), nowMs))
+}
+
+/** New grinder records for [names] no grinder has yet (imports' grinder names). */
+fun grindersForNames(
+    grinderRows: List<Grinder>,
+    names: List<String>,
+    nowMs: Long,
+    core: (String, String, Long) -> String = ::grindersForNamesJson,
+): List<Grinder> {
+    if (names.none { it.isNotBlank() }) return emptyList()
+    val namesJson = grinderJson.encodeToString(ListSerializer(String.serializer()), names)
+    return grinderJson.decodeFromString(grinders, core(grinderJson.encodeToString(grinders, grinderRows), namesJson, nowMs))
+}
+
+/** The type-or-pick box: owned grinders not in [excludeIds], then the catalogue, then archived ones. */
+fun matchGrinders(
+    query: String,
+    grinderRows: List<Grinder>,
+    excludeIds: List<String> = emptyList(),
+    core: (String, String, String) -> String = ::matchGrindersJson,
+): List<GrinderMatch> = runCatching {
+    grinderJson.decodeFromString(
+        ListSerializer(GrinderMatch.serializer()),
+        core(query, grinderJson.encodeToString(grinders, grinderRows), grinderJson.encodeToString(ListSerializer(String.serializer()), excludeIds)),
+    )
+}.getOrDefault(emptyList())
+
+/** The built-in grinder catalogue (maker, model, aliases, a scale only where verified). */
+val grinderCatalogue: List<CatalogueGrinderInfo> by lazy {
+    runCatching {
+        grinderJson.decodeFromString(ListSerializer(CatalogueGrinderInfo.serializer()), coffee.crema.core.grinderCatalogueJson())
+    }.getOrDefault(emptyList())
+}
+
+/** Brew's Save of [grind] to [bean]'s row for [grinder] (null = the "no grinder" slot). Never changes the star. */
+fun saveBagGrind(
+    bean: Bean,
+    grinder: Grinder?,
+    grind: String,
+    nowMs: Long,
+    core: (String, String, String, Long) -> String = ::saveBagGrindJson,
+): GrindSave = grinderJson.decodeFromString(
+    GrindSave.serializer(),
+    core(
+        grinderJson.encodeToString(Bean.serializer(), bean),
+        grinder?.let { grinderJson.encodeToString(Grinder.serializer(), it) } ?: JsonNull.toString(),
+        grind,
+        nowMs,
+    ),
+)
+
+/** The grinder ids of [bean]'s rows the bag editor's Save refuses (a blank grind). */
+fun bagGrindsToFix(
+    bean: Bean,
+    core: (String) -> String = ::bagGrindsToFixJson,
+): List<String> = grinderJson.decodeFromString(ListSerializer(String.serializer()), core(grinderJson.encodeToString(Bean.serializer(), bean)))
+
+/** Selecting a bag, resolved into one change and its one Undo (review F6). */
+fun resolveBagSelection(
+    input: BagSelectInput,
+    core: (String) -> String = ::resolveBagSelectionJson,
+): BagSelection = grinderJson.decodeFromString(BagSelection.serializer(), core(grinderJson.encodeToString(BagSelectInput.serializer(), input)))
+
+/** The grind Brew takes on switching grinder, or null to keep the grind as it is. */
+fun resolveGrinderSwitch(
+    input: GrinderSwitchInput,
+    core: (String) -> String = ::resolveGrinderSwitchJson,
+): String? {
+    val out = core(grinderJson.encodeToString(GrinderSwitchInput.serializer(), input)).trim()
+    return if (out == "null") null else grinderJson.decodeFromString(String.serializer(), out)
+}
+
+/** Auto-save after a kept shot, on the device that recorded it only (review F8): the bag to store, or null. */
+fun autoSaveShotGrind(
+    input: AutoSaveInput,
+    nowMs: Long,
+    core: (String, Long) -> String = ::autoSaveShotGrindJson,
+): GrindSave? {
+    val out = core(grinderJson.encodeToString(AutoSaveInput.serializer(), input), nowMs).trim()
+    return if (out == "null") null else grinderJson.decodeFromString(GrindSave.serializer(), out)
+}

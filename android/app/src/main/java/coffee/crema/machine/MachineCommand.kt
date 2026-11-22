@@ -32,7 +32,8 @@ sealed interface MachineCommand {
     /** A command with a wire form ([MachineCommandCodec]). */
     sealed interface Relayable : MachineCommand
 
-    /** Machine control: a mirror forwards it, authority first. */
+    /** Machine control, and Quick Controls' Save, which writes the hub's own
+     *  library: a mirror forwards it, authority first, and applies nothing. */
     sealed interface Control : Relayable {
         /** Why a mirror must not send this, judged from its own (possibly
          *  stale) view of the machine state, or null to send it. */
@@ -112,6 +113,12 @@ sealed interface MachineCommand {
         override fun refusal(): String? = id?.let(::idRefusal)
     }
 
+    /** Select the active grinder (#488), or none. A primary refuses an id
+     *  that isn't one of its own live grinders (review F3, F8). */
+    data class SetActiveGrinder(val id: String?) : Config {
+        override fun refusal(): String? = id?.let(::idRefusal)
+    }
+
     data class SetStopOnWeight(val on: Boolean) : Config
 
     data class SetAutoTare(val on: Boolean) : Config
@@ -144,6 +151,23 @@ sealed interface MachineCommand {
 
     /** Drop the brew override: the active profile's recipe applies again. */
     data object ResetBrew : Config
+
+    /**
+     * Quick Controls' Save (#488, review F8): the device holding the machine
+     * saves its own dials to its own bag and profile, each changed part to
+     * its owner ([coffee.crema.ui.QuickSavePlan]). A remote sends it rather
+     * than writing its own library, which the hub never reads, and shows
+     * nothing until the hub's snapshot and message arrive. [copyName] names a
+     * copy (a built-in's, or "Save as new…" when [asNew]).
+     */
+    data class QuickSave(val copyName: String?, val asNew: Boolean) : Control {
+        override fun refusal(): String? = when {
+            copyName == null -> if (asNew) "Save as new needs a name" else null
+            copyName.isBlank() -> "a copy needs a name"
+            copyName.length > MAX_NAME_LENGTH || copyName.any { it.isISOControl() } -> "malformed name"
+            else -> null
+        }
+    }
 
     /** The debug panel's raw Espresso request: skips the start sequence, so it
      *  never leaves the device holding the machine. */
@@ -182,8 +206,10 @@ private fun coffee.crema.core.StepRange.toRange(): ClosedFloatingPointRange<Doub
 
 private val ASLEEP = setOf("Sleep", "GoingToSleep")
 private const val MAX_ID_LENGTH = 128
+private const val MAX_NAME_LENGTH = 128
 private const val MAX_PREINF_S = 300.0
-private const val MAX_GRIND = 1_000.0
+/** A sanity bound, not the scale: a typed grind outside the active scale is kept (#488). */
+private const val MAX_GRIND = 10_000.0
 
 /** The core's temperature ceiling (`MAX_TEMPERATURE_C`, 100 °C), the one bound
  *  for a brew temperature on every path. */
