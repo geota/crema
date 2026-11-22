@@ -176,6 +176,26 @@ pub fn clean_grinder_name(name: &str) -> String {
     out.trim().to_owned()
 }
 
+/// The name an imported grinder with no usable one gets
+/// ([`imported_grinder_name`]).
+pub const FALLBACK_GRINDER_NAME: &str = "Grinder";
+
+/// The name an imported or stored grinder row is kept with (#488 closing
+/// check, PLAN 64): cleaned ([`clean_grinder_name`]); one that cleans to
+/// nothing (blank, or only control characters) takes its catalogue entry's
+/// name (by `preset_id`), else [`FALLBACK_GRINDER_NAME`], so no grinder is
+/// listed without a name.
+#[must_use]
+pub fn imported_grinder_name(grinder: &Grinder) -> String {
+    let name = clean_grinder_name(&grinder.name);
+    if !name.is_empty() {
+        return name;
+    }
+    grinder
+        .catalogue_entry()
+        .map_or_else(|| FALLBACK_GRINDER_NAME.to_owned(), CatalogueGrinder::name)
+}
+
 /// What two grinder names are compared by: cleaned ([`clean_grinder_name`])
 /// and lowercased. Empty for a blank name, which names no grinder.
 #[must_use]

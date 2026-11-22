@@ -129,6 +129,18 @@ fun PhoneBeansScreen(
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importBeanconquerorUri(uri)
     }
+    // Beans → Import says its rule first (PLAN 62): a bag you have is replaced when the file's copy is newer.
+    var importOpen by remember { mutableStateOf(false) }
+    if (importOpen) {
+        coffee.crema.ui.components.CremaConfirmDialog(
+            title = "Import beans",
+            body = coffee.crema.ui.BEANS_IMPORT_BODY,
+            confirmLabel = "Choose file",
+            icon = "upload-simple",
+            onConfirm = { importOpen = false; importLauncher.launch(arrayOf("*/*")) },
+            onDismiss = { importOpen = false },
+        )
+    }
     var pendingExport by remember { mutableStateOf<String?>(null) }
     // octet-stream keeps the suggested name as given: with "application/json" the
     // storage provider appends ".json" to "crema-beans.crema.jsonl", and web's
@@ -172,7 +184,7 @@ fun PhoneBeansScreen(
             CremaPhoneTopBar(
                 title = "Beans",
                 actions = listOf(
-                    BarAction("upload-simple") { importLauncher.launch(arrayOf("*/*")) },
+                    BarAction("upload-simple") { importOpen = true },
                     BarAction("download-simple") { exportSheet = true },
                     BarAction("gear-six") { onNav("settings") },
                 ),

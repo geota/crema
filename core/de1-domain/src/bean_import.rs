@@ -8,7 +8,7 @@
 
 use crate::bag_grind::BagGrind;
 use crate::bean::{Bean, Roaster};
-use crate::grinder::{Grinder, clean_grinder_name, grinder_named};
+use crate::grinder::{Grinder, grinder_named, imported_grinder_name};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use typeshare::typeshare;
@@ -138,7 +138,8 @@ pub fn merge_library_import(
         // Stored with a clean name (REVIEW-513 follow-up 1).
         let cleaned = || {
             let mut g = g.clone();
-            g.name = clean_grinder_name(&g.name);
+            // Never empty: its catalogue name, else "Grinder" (PLAN 64).
+            g.name = imported_grinder_name(&g);
             g
         };
         if let Some(local) = library_grinder_by_id.get(g.id.as_str()) {
@@ -668,6 +669,27 @@ mod tests {
         let m = merge_library_import(&[], &[], &incoming, &[], &[], &lib);
         assert_eq!(m.updated_grinders[0].name, "EK43 shop");
         assert_eq!(m.new_grinders[0].name, "Comandante C40");
+    }
+
+    /// PLAN 64: an imported grinder whose name cleans to nothing takes its
+    /// catalogue entry's name, else "Grinder".
+    #[test]
+    fn an_imported_grinder_with_no_usable_name_gets_one() {
+        let lib = vec![grinder("grinder:ek43", "EK43", 100)];
+        let mut preset = grinder("grinder:x", "\r\n", 50);
+        preset.preset_id = Some("niche-zero".to_owned());
+        let incoming = vec![
+            grinder("grinder:ek43", "\u{7}", 200),
+            preset,
+            grinder("grinder:y", " \t ", 50),
+        ];
+        let m = merge_library_import(&[], &[], &incoming, &[], &[], &lib);
+        assert_eq!(m.updated_grinders[0].name, "Grinder");
+        let niche = crate::grinder_catalogue::catalogue_entry("niche-zero")
+            .unwrap()
+            .name();
+        let names: Vec<&str> = m.new_grinders.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, vec![niche.as_str(), "Grinder"]);
     }
 
     #[test]
