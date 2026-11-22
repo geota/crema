@@ -891,8 +891,9 @@ class LibraryController(
      * sends it here (review F8).
      */
     fun quickSave(copyName: String? = null, asNew: Boolean = false, now: Long = System.currentTimeMillis()): CommandOutcome {
-        // This device's own selections and dials: on a hub, the remote's Save lands here too.
-        val s = uiState()
+        // The selections and dials on screen: on the hub (where a remote's Save
+        // lands too, review F8) they are its own; a remote sends Save there.
+        val s = effectiveState()
         val plan = s.quickSavePlan()
         if (!plan.enabled) return CommandOutcome.Refused("Nothing to save")
         val copying = plan.writesRecipe && (asNew || plan.profileKind == QuickSaveProfileKind.BuiltIn)

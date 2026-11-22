@@ -19,7 +19,7 @@ class NoHistoryListInUiStateTest {
         assertFalse(Collection::class.java.isAssignableFrom(HistoryState::class.java), "HistoryState is no collection")
         assertFalse(Iterable::class.java.isAssignableFrom(HistoryState::class.java), "nor anything to walk")
         val edits = LibraryRows::class.java.declaredFields.filterNot { java.lang.reflect.Modifier.isStatic(it.modifiers) }.map { it.name }.toSet()
-        assertEquals(setOf("beans", "roasters"), edits, "the UI state's edits carry no history rows")
+        assertEquals(setOf("beans", "roasters", "grinders"), edits, "the UI state's edits carry no history rows")
     }
 
     @Test

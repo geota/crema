@@ -78,14 +78,15 @@ class CoreShotAssemblyTest {
     fun `a shot is recorded through the core assembly`() {
         val vm = VmHarness.build(store)
         VmHarness.awaitPrefsLoaded(vm)
-        vm.setGrinderModel("EK43")
+        vm.addAndSelectGrinder("EK43")
         vm.setBaristaName("Sam")
         VmHarness.idle()
         val before = VmHarness.rows(vm).size
         pour(vm, 48) // 12 s: a shot, not an aborted pull
         val shot = recorded(vm, before)
         assertEquals(listOf(0, 2, 2, 3), shot.samples.take(4).map { it.frameNumber })
-        assertEquals("EK43", shot.grinderModel, "the core's rule: no bean → the Settings grinder")
+        assertEquals("EK43", shot.grinderModel, "the active grinder's name (#488), not the Settings grinder")
+        assertEquals(VmHarness.ownState(vm).activeGrinderId, shot.grinderId, "and its id")
         assertEquals("Sam", shot.barista)
         assertNotNull(shot.stopOnWeight, "the core's stop switches")
         assertNotNull(shot.autoTare)
@@ -142,12 +143,12 @@ class CoreShotAssemblyTest {
     fun `the grinder model is frozen at capture`() {
         val vm = VmHarness.build(store)
         VmHarness.awaitPrefsLoaded(vm)
-        vm.setGrinderModel("EK43")
+        vm.addAndSelectGrinder("EK43")
         VmHarness.idle()
         val before = VmHarness.rows(vm).size
         pour(vm, 48)
         val shot = recorded(vm, before)
-        vm.setGrinderModel("Niche Zero")
+        vm.addAndSelectGrinder("Niche Zero")
         VmHarness.idle()
         assertEquals("EK43", VmHarness.rows(vm).first().grinderModel)
         // The upload / export uses the frozen one, not today's Settings.
@@ -182,7 +183,7 @@ class CoreShotAssemblyTest {
 
     /** A shot recorded through the core, with the edits a user makes afterwards. */
     private fun recordedShot(vm: MainViewModel): StoredShot {
-        vm.setGrinderModel("EK43")
+        vm.addAndSelectGrinder("EK43")
         vm.setBaristaName("Sam")
         VmHarness.idle()
         val before = VmHarness.rows(vm).size
