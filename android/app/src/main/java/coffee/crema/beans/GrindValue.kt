@@ -8,6 +8,7 @@ import coffee.crema.core.GrindScale
 import coffee.crema.core.Grinder
 import coffee.crema.core.ScaleRefusal
 import coffee.crema.core.brewGrindViewJson
+import coffee.crema.core.countsInThirdsJson
 import coffee.crema.core.formatGrindJson
 import coffee.crema.core.grindChipsJson
 import coffee.crema.core.grindScaleRefusalJson
@@ -30,16 +31,16 @@ import kotlinx.serialization.json.buildJsonObject
  * a grind is text, as the core, the web and the backups keep it. The core's
  * `grind_value` module owns every rule: a dial number as text on its scale,
  * the comparison, the display with the unit, the scale refusal, what Brew's
- * grind is (header, shot, marker, Save part, start from blank) and the chips.
- * These are the typed calls onto it. Only the parse of a typed or stored
- * grind into the stepper's number stays here ([grindDouble]).
+ * grind is (header, shot, marker, Save part, start from blank), the chips,
+ * the parse of a typed or stored grind ([grindNumber]) and thirds (the
+ * Fellow Ode: 4, 4⅓, 4⅔). These are the typed calls onto it.
  */
 
 private val grindJson = Json { ignoreUnknownKeys = true }
 
 private fun scaleJson(scale: GrindScale): String = grindJson.encodeToString(GrindScale.serializer(), scale)
 
-/** [dial] as Brew's grind text on [scale] (core `grind_text`): "15", "4.2", "2.25", no float noise, never one-decimal rounding. */
+/** [dial] as Brew's grind text on [scale] (core `grind_text`): "15", "4.2", "2.25", "4⅓" on a thirds scale, no float noise, never one-decimal rounding. */
 fun grindText(dial: Double, scale: GrindScale = DEFAULT_GRIND_SCALE): String = grindTextJson(dial, scaleJson(scale))
 
 /** Whether [a] and [b] are the same grind (core `same_grind`): as numbers when both are ("15" = "15.0"), else as trimmed text. */
@@ -94,8 +95,18 @@ fun grindStartFromBlank(scale: GrindScale): Double =
 fun grindChips(scale: GrindScale, around: String?, count: Int = 5): List<GrindChip> =
     grindJson.decodeFromString(ListSerializer(GrindChip.serializer()), grindChipsJson(scaleJson(scale), around, count.toUInt()))
 
-/** A stored or typed grind as the stepper's number, or null when it isn't one ("2.5.3" stays text). */
-fun grindDouble(text: String?): Double? = text?.trim()?.replace(',', '.')?.toDoubleOrNull()?.takeIf { it.isFinite() }
+/**
+ * A stored or typed grind as the stepper's number (core `grind_number`), or
+ * null when it isn't one ("2.5.3" stays text): plain decimals ("2,5" too)
+ * and thirds ("4⅓", "4 1/3"); no exponent, nothing past 1e6.
+ */
+fun grindNumber(text: String?): Double? = text?.let { coffee.crema.core.grindNumber(it) }
+
+/** Whether [scale] counts in thirds (core `counts_in_thirds`, the Fellow Ode). */
+fun countsInThirds(scale: GrindScale): Boolean = countsInThirdsJson(scaleJson(scale))
+
+/** [scale]'s step as Devices shows it: "⅓" on a thirds scale, "0.05", "1" (core `grind_text` of the step). */
+fun grindStepText(scale: GrindScale): String = grindText(scale.step.toDouble(), scale)
 
 /**
  * A grind read from JSON: a string as stored (blank = none), a number from an

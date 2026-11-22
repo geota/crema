@@ -20,7 +20,7 @@
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	import { getBeanStore, type Roaster } from '#lib/bean/index.js';
-	import { boundsForGrinder, grindStartFromBlank } from '#lib/bean/grinder.js';
+	import { boundsForGrinder, grindNumber, grindStartFromBlank, grindText } from '#lib/bean/grinder.js';
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { openingBeanId } from '#lib/brew/bean-pick.js';
 	import {
@@ -500,6 +500,9 @@
 					min={grindBounds.grind.min}
 					max={grindBounds.grind.max}
 					step={grindBounds.grind.step}
+					precision={6}
+					fmt={(v) => grindText(v, library.activeGrinder?.scale ?? null)}
+					parse={grindNumber}
 					onChange={(n) => {
 						dirty.add('grind');
 						grind = n;

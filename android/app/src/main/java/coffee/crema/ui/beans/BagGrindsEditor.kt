@@ -147,7 +147,7 @@ fun BagGrindsEditor(
 private fun GrindStepper(row: BagGrind, scale: coffee.crema.core.GrindScale, modifier: Modifier, onChange: (String) -> Unit) {
     val lo = minOf(scale.min, scale.max).toDouble()
     val hi = maxOf(scale.min, scale.max).toDouble()
-    val value = coffee.crema.beans.grindDouble(row.grind)
+    val value = coffee.crema.beans.grindNumber(row.grind)
     // Blank ("—") or text ("2.1.3"): the first + or − goes to the middle of the scale on its step (the core's rule, as on Brew).
     val blank = if (value == null) coffee.crema.ui.components.StepperBlank(row.grind.trim().ifEmpty { "—" }, remember(scale) { coffee.crema.beans.grindStartFromBlank(scale) }) else null
     CremaStepper(
@@ -159,6 +159,7 @@ private fun GrindStepper(row: BagGrind, scale: coffee.crema.core.GrindScale, mod
         min = lo,
         max = hi,
         fmt = { v -> coffee.crema.beans.grindText(v, scale) },
+        parse = { coffee.crema.beans.grindNumber(it) },
         style = CremaStepperStyle.BareCompact,
         clampTyped = false,
         blank = blank,

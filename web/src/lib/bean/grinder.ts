@@ -31,7 +31,7 @@ import type {
 	LastGrind,
 	QuickControlBounds
 } from '#lib/core/crema-core.js';
-import { ScaleRefusal } from '#lib/core/crema-core.js';
+import { ScaleRefusal, ScaleTier } from '#lib/core/crema-core.js';
 import {
 	activeGrinderJson,
 	addGrinderJson,
@@ -40,10 +40,12 @@ import {
 	bagGrindsToFixJson,
 	brewGrindViewJson,
 	coerceGrinder as wasmCoerceGrinder,
+	countsInThirdsJson,
 	formatGrindJson,
 	grinderCatalogueJson,
 	grindChipsJson,
 	grindersForNamesJson,
+	grindNumber as wasmGrindNumber,
 	grindScaleRefusalJson,
 	grindTextJson,
 	matchGrindersJson,
@@ -71,7 +73,7 @@ export type {
 	GrindScale,
 	LastGrind
 };
-export { ScaleRefusal };
+export { ScaleRefusal, ScaleTier };
 
 /** What the type-or-pick box answers: one of its matches, or "+ Create “<typed>”". */
 export type GrinderChoice =
@@ -200,34 +202,62 @@ export function grinderIdForName(grinders: readonly Grinder[], name: string | nu
 	return (named.find(isLiveGrinder) ?? named[0])?.id ?? null;
 }
 
+/**
+ * The scale a shot's grind is on (history's grind stepper, as Android's
+ * `shotGrindScale`): its grinder record's, by id, else by the typed name for a
+ * shot from before grinder ids; the default scale when none matches.
+ */
+export function shotGrindScale(
+	shot: { grinderId?: string | null; grinderModel?: string | null },
+	grinders: readonly Grinder[]
+): GrindScale {
+	const id = shot.grinderId ?? '';
+	if (id !== '') {
+		const byId = grinders.find((g) => g.id === id);
+		if (byId) return byId.scale;
+	} else {
+		const name = (shot.grinderModel ?? '').trim().toLowerCase();
+		const byName = name ? grinders.find((g) => g.name.trim().toLowerCase() === name) : undefined;
+		if (byName) return byName.scale;
+	}
+	return DEFAULT_GRIND_SCALE;
+}
+
 /** The bag's saved row for `grinderId` (`NO_GRINDER_ID` for none), if any. */
 export function savedGrindRow(bean: Bean | null, grinderId: string | null): BagGrind | null {
 	const id = grinderId ?? NO_GRINDER_ID;
 	return bean?.grinds?.find((g) => g.grinderId === id) ?? null;
 }
 
-/** The largest grind read as a number; past it a grind stays text. */
+/** The largest grind read as a number; past it a grind stays text (`de1_domain::MAX_GRIND_NUMBER`). */
 export const MAX_GRIND_NUMBER = 1e6;
 
 /**
- * A typed grind as a number, or `null` when it isn't a plain number ("6 + a
- * tooth", "2.1.3"): the shell's parse of what the user types (REVIEW-CORE
- * H1). Plain decimals only ("0,5" reads as 0.5): no hex, no `Infinity`,
- * no exponent, and no more than {@link MAX_GRIND_NUMBER}.
+ * A typed or stored grind as a number, or `null` when it isn't a plain
+ * number ("6 + a tooth", "2.1.3") (`de1_domain::grind_number`, REVIEW-CORE
+ * H1): plain decimals ("0,5" reads as 0.5) and thirds ("4⅓", "4 1/3"); no
+ * hex, no `Infinity`, no exponent, at most 32 characters and no more than
+ * {@link MAX_GRIND_NUMBER}.
  */
 export function grindNumber(grind: string | null | undefined): number | null {
-	const raw = (grind ?? '').trim().replace(',', '.');
-	// No exponent: an imported "1e999999999" stays text, never a number to
-	// expand. And a bound well past any grinder's scale.
-	if (raw.length > 32 || !/^[+-]?(\d+\.?\d*|\.\d+)$/.test(raw)) return null;
-	const n = Number(raw);
-	return Number.isFinite(n) && Math.abs(n) <= MAX_GRIND_NUMBER ? n : null;
+	return wasmGrindNumber(grind ?? '') ?? null;
+}
+
+/** Whether `scale` counts in thirds (the Fellow Ode, `de1_domain::counts_in_thirds`): 4, 4⅓, 4⅔. */
+export function countsInThirds(scale: GrindScale): boolean {
+	return countsInThirdsJson(JSON.stringify(scale));
+}
+
+/** A scale's step as Devices shows it: "⅓" on a thirds scale, "0.05", "1" (`grind_text` of the step). */
+export function stepText(scale: GrindScale): string {
+	return grindText(scale.step, scale);
 }
 
 /**
  * A dial number as a bag stores it and a shot records it, on `scale`
  * (`de1_domain::grind_text`): whole numbers without a decimal, otherwise the
- * step's decimals; never rounded to one decimal (REVIEW-FINAL M2).
+ * step's decimals, thirds as 4⅓ on a thirds scale; never rounded to one
+ * decimal (REVIEW-FINAL M2).
  */
 export function grindText(dial: number, scale: GrindScale | null = null): string {
 	return grindTextJson(dial, JSON.stringify(scale ?? DEFAULT_GRIND_SCALE));

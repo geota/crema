@@ -114,6 +114,7 @@
 			clampTyped={false}
 			onChange={setGrind}
 			fmt={grindFmt}
+			parse={grindNumber}
 			sub={outOfRange ? rangeWarning : undefined}
 		/>
 		<div style="height:8px"></div>

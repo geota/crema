@@ -1144,6 +1144,12 @@ fun TapToEditValue(
     /** False keeps a typed value outside [min]..[max] as typed (a grind, #488:
      *  values are never clamped; the caller warns). */
     clampTyped: Boolean = true,
+    /** Reads the typed text as a number, null when it isn't one. With it the
+     *  field takes any text and starts from [editText]: a grind reads "4⅓"
+     *  and "4 1/3" through the core (#488). Default: a comma-tolerant decimal. */
+    parse: ((String) -> Double?)? = null,
+    /** The field's starting text for [value] when [parse] is set (the grind's own text, "4⅓"). */
+    editText: ((Double) -> String)? = null,
     content: @Composable () -> Unit,
 ) {
     var editing by remember { mutableStateOf(false) }
@@ -1164,23 +1170,27 @@ fun TapToEditValue(
     var hadFocus by remember { mutableStateOf(false) }
     var text by remember {
         mutableStateOf(
-            if (value == kotlin.math.floor(value)) fmt("%.0f", value)
-            else (kotlin.math.round(value * 100) / 100.0).toString(),
+            when {
+                parse != null && editText != null -> editText(value)
+                value == kotlin.math.floor(value) -> fmt("%.0f", value)
+                else -> (kotlin.math.round(value * 100) / 100.0).toString()
+            },
         )
     }
     fun commit() {
         if (!editing) return
         editing = false
-        text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }?.let { onCommit(if (clampTyped) it.coerceIn(min, max) else it) }
+        val typed = if (parse != null) parse(text) else text.trim().replace(',', '.').toDoubleOrNull()
+        typed?.takeIf { it.isFinite() }?.let { onCommit(if (clampTyped) it.coerceIn(min, max) else it) }
     }
     BasicTextField(
         value = text,
-        onValueChange = { new -> text = new.filter { it.isDigit() || it == '.' || it == ',' } },
+        onValueChange = { new -> text = if (parse != null) new else new.filter { it.isDigit() || it == '.' || it == ',' } },
         singleLine = true,
         enabled = enabled,
         textStyle = editStyle.copy(textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurface),
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+        keyboardOptions = KeyboardOptions(keyboardType = if (parse != null) KeyboardType.Text else KeyboardType.Decimal, imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(onDone = { commit() }),
         modifier = modifier
             .widthIn(min = 56.dp)
@@ -1970,6 +1980,21 @@ data class CremaStepperStyle(
     }
 }
 
+/**
+ * The decimals a stepper trims float error to after a step: 2 for a step on
+ * the 0.01 grid (every stepper's step but a grind's), else 6, so a finer or
+ * a thirds step (the Fellow Ode's 0.33333334, #488) lands on its value
+ * instead of 4.33.
+ */
+internal fun stepperPlaces(step: Double): Int =
+    if (kotlin.math.abs(step * 100 - kotlin.math.round(step * 100)) < 1e-6) 2 else 6
+
+/** [x] rounded to [places] decimals. */
+internal fun roundTo(x: Double, places: Int): Double {
+    val k = Math.pow(10.0, places.toDouble())
+    return kotlin.math.round(x * k) / k
+}
+
 @Composable
 fun CremaStepper(
     modifier: Modifier = Modifier,
@@ -2009,11 +2034,21 @@ fun CremaStepper(
     // #488 round 2): its text shows instead of [value] and no unit, and the
     // first + or − goes to its start.
     blank: StepperBlank? = null,
+    // Reads a typed value (null when it isn't a number): the field then takes
+    // any text, starting from [fmt]'s, and a typed value is kept as read. The
+    // grind reads "4⅓" and "4 1/3" through the core's grind_number (#488).
+    parse: ((String) -> Double?)? = null,
 ) {
     val chipLabel = gate.fmt(chipFmt ?: fmt)
+    val fmtRaw = fmt
     val fmt = gate.fmt(fmt)
-    fun snap(x: Double) = (kotlin.math.round(x * 100) / 100).coerceIn(min, max)
-    fun typed(x: Double) = if (clampTyped) snap(x) else kotlin.math.round(x * 100) / 100
+    val places = stepperPlaces(step)
+    fun snap(x: Double) = roundTo(x, places).coerceIn(min, max)
+    fun typed(x: Double) = when {
+        clampTyped -> snap(x)
+        parse != null -> x
+        else -> roundTo(x, places)
+    }
     val dec = { onChange(blank?.start ?: snap(value - step)) }
     val inc = { onChange(blank?.start ?: snap(value + step)) }
     val shown = blank?.text ?: fmt(value)
@@ -2033,6 +2068,8 @@ fun CremaStepper(
                         max = max,
                         onCommit = { onChange(typed(it)) },
                         clampTyped = clampTyped,
+                        parse = parse,
+                        editText = fmtRaw,
                         editStyle = CremaTheme.readout.readoutSm,
                         enabled = enabled,
                     ) {
@@ -2091,6 +2128,8 @@ fun CremaStepper(
                         max = max,
                         onCommit = { onChange(typed(it)) },
                         clampTyped = clampTyped,
+                        parse = parse,
+                        editText = fmtRaw,
                         editStyle = TextStyle(fontFamily = JetBrainsMono, fontSize = style.valueSize),
                         enabled = enabled,
                     ) {

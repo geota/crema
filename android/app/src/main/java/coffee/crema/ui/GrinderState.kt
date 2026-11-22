@@ -86,6 +86,21 @@ fun BrewGrindView.stepperBlank(): coffee.crema.ui.components.StepperBlank? =
 /** A scale bound or step as Devices and the pickers show it: "999", "0.1". */
 fun scaleNumber(v: Float): String = if (v % 1f == 0f) String.format(java.util.Locale.ROOT, "%.0f", v) else v.toString()
 
+/** The Step field's text: "⅓" on a thirds scale (core `counts_in_thirds`, the Fellow Ode), not 0.33333334; else [scaleNumber]. */
+fun scaleStepField(scale: GrindScale): String = if (coffee.crema.beans.countsInThirds(scale)) "⅓" else scaleNumber(scale.step)
+
+/** A typed scale field as a number: "0,5" reads 0.5, "⅓" and "1/3" a third (core `grind_number`); null when it isn't one. */
+fun scaleFieldNumber(text: String): Float? =
+    coffee.crema.beans.grindNumber(text)?.toFloat() ?: text.trim().replace(',', '.').toFloatOrNull()
+
+/**
+ * What Devices says about a catalogue preset's scale (#501): "From the X
+ * preset" for a verified range, "Typical range — check your dial" for a
+ * typical one.
+ */
+fun presetLabel(entry: coffee.crema.core.CatalogueGrinderInfo): String =
+    if (entry.tier == coffee.crema.core.ScaleTier.Typical) "Typical range — check your dial" else "From the ${entry.name} preset"
+
 /** "0–999 μm", or "0–20" with no unit. */
 fun scaleRangeText(scale: GrindScale): String =
     "${scaleNumber(scale.min)}–${scaleNumber(scale.max)}" + scale.unit.trim().takeIf { it.isNotEmpty() }?.let { " $it" }.orEmpty()
@@ -135,11 +150,17 @@ fun MainUiState.unsavedGrindExplanation(): String? {
     return "$has Brew is at $now for the next shot. Save in Quick Controls saves it."
 }
 
-/** What the type-or-pick box says under catalogue entry [id] (review 499): one
- *  without a verified range gets the default scale, set on Devices. */
-fun catalogueOfferLine(id: String): String =
-    if (coffee.crema.beans.grinderCatalogue.firstOrNull { it.id == id }?.scale != null) "Adds it to your grinders, with its scale"
-    else "Adds it to your grinders · set its range on Devices"
+/** What the type-or-pick box says under catalogue entry [id] (review 499, #501):
+ *  its scale comes with it, a typical range says to check the dial, and one
+ *  without a range gets the default scale, set on Devices. */
+fun catalogueOfferLine(id: String): String {
+    val entry = coffee.crema.beans.grinderCatalogue.firstOrNull { it.id == id }
+    return when {
+        entry?.scale == null -> "Adds it to your grinders · set its range on Devices"
+        entry.tier == coffee.crema.core.ScaleTier.Typical -> "Adds it to your grinders · Typical range — check your dial"
+        else -> "Adds it to your grinders, with its scale"
+    }
+}
 
 /** What the type-or-pick box picked (#488, "Add a grinder: type or pick"). */
 sealed interface GrinderPick {
