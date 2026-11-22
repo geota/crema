@@ -15,7 +15,7 @@ import coffee.crema.runCatchingCancellable
 import coffee.crema.core.exportV2JsonShot
 import coffee.crema.core.exportV2JsonShotFull
 import coffee.crema.core.signatureForShot
-import coffee.crema.core.uploadRefusedNoSamples
+import coffee.crema.core.uploadRefusedShot
 import coffee.crema.core.visualizerShotPatchJson
 import coffee.crema.core.VisualizerSyncPrefs
 import coffee.crema.history.ShotMeta
@@ -159,7 +159,8 @@ class VisualizerSync(
     /** How the retry timers wait (injected so a JVM test can see each wait). */
     private val retryDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
     /** Core `upload_refused_no_samples`: a machine shot with no telemetry doesn't go. */
-    private val uploadRefused: (isBrewLog: Boolean, sampleCount: UInt?) -> Boolean = ::uploadRefusedNoSamples,
+    /** The core's upload refusal (`upload_refused_shot`): no telemetry, or a replay (#488 batch 6). */
+    private val uploadRefused: (isBrewLog: Boolean, sampleCount: UInt?, replay: Boolean) -> Boolean = ::uploadRefusedShot,
     /** Whether the rows are in the history; a list taken before then is empty. */
     private val shotsLoaded: () -> Boolean = { true },
     /** The shot log couldn't be read: shots wait for the user, not for a load. */
@@ -305,9 +306,10 @@ class VisualizerSync(
     override val autoUpload: Boolean get() = persisted.prefs.autoUpload
     override fun isUploaded(shot: ShotRow): Boolean = shot.visualizerId != null
     override fun viewUrl(shot: ShotRow): String? = shot.visualizerId?.let { "https://visualizer.coffee/shots/$it" }
-    /** Brew Log rows (issue #10) are local-only — never in the Visualizer backlog. */
+    /** Brew Log rows (issue #10) are local-only, and a replay is never
+     *  uploaded (#488 batch 6): neither is in the Visualizer backlog. */
     override fun inBacklog(shot: ShotRow): Boolean =
-        shot.visualizerId == null && !shot.isBrewLog && !noTelemetry(shot) && !excluded(shot)
+        shot.visualizerId == null && !shot.isBrewLog && !shot.replay && !noTelemetry(shot) && !excluded(shot)
 
     /** The user kept this shot off the account signed in now. */
     private fun excluded(shot: ShotRow): Boolean =
@@ -315,11 +317,11 @@ class VisualizerSync(
 
     /** A machine shot no upload can take: no telemetry, by its summary, now the rows have settled. An unknown count isn't "none". */
     fun noTelemetry(shot: ShotRow): Boolean =
-        shot.visualizerId == null && shot.summary.sampleCount == 0u && shotsSettled && uploadRefused(shot.isBrewLog, 0u)
+        shot.visualizerId == null && shot.summary.sampleCount == 0u && shotsSettled && uploadRefused(shot.isBrewLog, 0u, false)
 
     /** The rows have loaded; until then a row may be on its way. */
     val shotsSettled: Boolean get() = shotsLoaded() && !historyRefused()
-    override fun canUpload(shot: ShotRow): Boolean = !shot.isBrewLog
+    override fun canUpload(shot: ShotRow): Boolean = !shot.isBrewLog && !shot.replay
     override fun pushShot(shot: ShotRow, replace: Boolean): Boolean = uploadShot(shot, silent = false)
     override suspend fun setAutoUploadNow(enabled: Boolean) {
         persist { it.copy(prefs = it.prefs.copy(autoUpload = enabled)) }
@@ -1158,7 +1160,9 @@ class VisualizerSync(
         // A read that fails throws, and the upload retries later; a shot no
         // longer here was deleted while this held its claim.
         val shot = loadShot(snapshot.id) ?: throw VisualizerError.RowDeleted()
-        if (uploadRefused(shot.isBrewLog, shot.samples.size.toUInt())) throw VisualizerError.NoSeries()
+        if (uploadRefused(shot.isBrewLog, shot.samples.size.toUInt(), shot.replay)) {
+            throw if (shot.replay) VisualizerError.Replay() else VisualizerError.NoSeries()
+        }
         val payload = buildShotPayload(shot)
         // Deleted while this held its claim: a POST would only make a copy to delete.
         if (shot.id in deletedHere) throw VisualizerError.RowDeleted()

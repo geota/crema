@@ -97,7 +97,7 @@ class ProxyLivenessTest {
         roster = { emptyList() },
         readSource = { _, _, _ -> error("unused") },
         isSnapshotChar = { _, _ -> false },
-        controlHandler = { _, _, _, _ -> Result.success(Unit) },
+        controlHandler = { _, _, _, _ -> Result.success(null) },
     )
 
     private fun pingingEngine(pingIntervalMs: Long): HttpClientEngine =

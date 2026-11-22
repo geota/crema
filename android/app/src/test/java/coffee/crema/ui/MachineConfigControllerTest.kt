@@ -60,7 +60,7 @@ class MachineConfigControllerTest {
         pushConfig = { calls += "pushConfig" },
         profileJson = { null },
         persistLibrary = { calls += "persistLibrary" },
-        onBagSelected = { id, before -> calls += "linkedProfile($id, before=$before)" },
+        onBagSelected = { id, before, relayed -> calls += "linkedProfile($id, before=$before${if (relayed) ", relayed" else ""})"; null },
         onGrinderSelected = { calls += "grinderSelected($it)" },
         pushStopTargets = { s -> pushed = s; calls += "pushStopTargets" },
         refreshStopTargetProjection = { calls += "refreshStopTargetProjection" },

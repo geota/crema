@@ -66,7 +66,7 @@ class RelayedCommandDispatcher(
         when (outcome) {
             // The command ran: a failed announcement is logged, never a refusal
             // (the remote would undo a change the hub kept).
-            CommandOutcome.Accepted -> {
+            CommandOutcome.Accepted, is CommandOutcome.BagPicked -> {
                 if (phrase != null && origin.id != null) {
                     runCatching { announce("${origin.name ?: "A remote"} $phrase", origin) }
                         .onFailure { log("Relayed $method ran, but announcing it failed: ${it.message}") }

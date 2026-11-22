@@ -557,6 +557,27 @@ class VisualizerRetryQueueTest {
         assertEquals(emptyMap<String, String>(), synced)
     }
 
+    /** #488 batch 6: a replay is never uploaded (core `upload_refused_shot`),
+     *  with its telemetry and all, and is never in the backlog. */
+    @Test
+    fun `a replay is never uploaded or in the backlog`() {
+        val s = sync()
+        runBlocking { s.load() }
+        val replay = shot("s1").copy(replay = true).also { history["s1"] = it }
+
+        assertFalse(s.inBacklog(replay.row()))
+        assertFalse(s.canUpload(replay.row()))
+        assertTrue(s.uploadShot(replay.row()))
+        repeat(200) {
+            if (notices.isNotEmpty()) return@repeat
+            Thread.sleep(10)
+        }
+
+        assertEquals(listOf("Visualizer upload failed: ${REPLAY_NOT_UPLOADED}"), notices.toList())
+        assertEquals(emptyList<String>(), uploads)
+        assertEquals(emptyList<QueuedUpload>(), runBlocking { store.load() }.retryQueue)
+    }
+
     @Test
     fun `non_brew_no_samples_refused - a direct upload POSTs nothing and isn't queued`() {
         val s = sync()

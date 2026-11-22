@@ -257,7 +257,8 @@ class GrinderLibraryVmTest {
         assertEquals("18", vm.bean("b").savedGrind(niche.id)?.grind)
         assertEquals("14", vm.bean("a").savedGrind(niche.id)?.grind)
         val undo = assertNotNull(vm.ui.value.bagSelectUndo, "one message with Undo")
-        assertEquals("Bag b: grind 18", undo.message)
+        // The core's words (REVIEW-FINAL-2 SF4): the grinder in use is named, as on web.
+        assertEquals("Bag b: Niche Zero at 18", undo.message)
         vm.undoBagSelection(undo.seq)
         VmHarness.idle()
         assertEquals("15", vm.ui.value.qcGrind, "Undo brings the dial back")
@@ -410,6 +411,65 @@ class GrinderLibraryVmTest {
         VmHarness.idle()
         assertEquals("15", vm.ui.value.qcGrind, "the unsaved dial stays")
         assertNull(vm.ui.value.bagSelectUndo, "no message, no Undo")
+    }
+
+    /** REVIEW-FINAL-2 SF4: mid-shot the core leaves the linked profile out and
+     *  says so; the grind still changes, and the one message is the core's. */
+    @Test
+    fun `a bag pick during a shot shows the core's notice and leaves the profile`() {
+        val a = bag("a", grinds = listOf(BagGrind(niche.id, niche.name, "14", starred = false)))
+        val b = bag("b", grinds = listOf(BagGrind(niche.id, niche.name, "18", starred = false)))
+        writeLibrary(BeanLibrary(listOf(a, b), activeBeanId = "a", grinders = listOf(niche), activeGrinderId = niche.id))
+        val vm = vm()
+        val (first, linked) = vm.ui.value.profiles.filter { it.source != "custom" }.take(2)
+        vm.setActiveProfile(first.id)
+        vm.updateBean("b", "") { it.copy(linkedProfileId = linked.id) }
+        VmHarness.idle()
+        VmHarness.deliverCoreOutput(vm, """{"events":[{"type":"ShotStarted"}],"commands":[]}""")
+        VmHarness.drainCoreLane(vm)
+        VmHarness.idle()
+        assertTrue(vm.ui.value.shotInProgress)
+        vm.setActiveBean("b")
+        VmHarness.idle()
+        assertEquals(first.id, vm.ui.value.activeProfileId, "not loaded mid-shot")
+        assertEquals("18", vm.ui.value.qcGrind, "the grind still changes")
+        assertTrue("Shot in progress \u2014 \u201c${linked.name}\u201d not loaded" in vm.ui.value.userMessages, "${vm.ui.value.userMessages}")
+        assertEquals("Bag b: Niche Zero at 18", assertNotNull(vm.ui.value.bagSelectUndo).message)
+    }
+
+    /** F6: a remote's pick is applied on the hub and answered with the core's
+     *  selection, for the remote to show with its own Undo; the hub shows none. */
+    @Test
+    fun `a relayed bag pick is answered with its selection and shows no Undo on the hub`() {
+        val a = bag("a", grinds = listOf(BagGrind(niche.id, niche.name, "14", starred = false)))
+        val b = bag("b", grinds = listOf(BagGrind(niche.id, niche.name, "18", starred = false)))
+        writeLibrary(BeanLibrary(listOf(a, b), activeBeanId = "a", grinders = listOf(niche), activeGrinderId = niche.id))
+        val vm = vm()
+        vm.setQcGrind(15f)
+        VmHarness.idle()
+        val outcome = runBlocking { VmHarness.proxyController(vm).handleRelayedControl("setActiveBean", "b", "remote-1", "Phone") }
+        VmHarness.idle()
+        val picked = kotlin.test.assertIs<coffee.crema.machine.CommandOutcome.BagPicked>(outcome)
+        assertEquals("Bag b: Niche Zero at 18", picked.selection.message)
+        assertEquals("15", picked.selection.undo.grind?.value, "the Undo the remote runs")
+        assertEquals("b", vm.ui.value.activeBeanId)
+        assertEquals("18", vm.ui.value.qcGrind, "applied on the hub")
+        assertNull(vm.ui.value.bagSelectUndo, "the remote shows it, not the hub")
+    }
+
+    /** REVIEW-FINAL-2 SF2: an import never selects a bag, as on web. */
+    @Test
+    fun `an import never selects a bag`() {
+        writeLibrary(BeanLibrary(listOf(bag("a")), activeBeanId = "a"))
+        val exported = assertNotNull(vm().beansLibraryJson())
+        val imported = freshDevice()
+        assertNull(imported.own().activeBeanId)
+        val file = File(app.cacheDir, "library.crema.jsonl").apply { writeText(exported) }
+        imported.importBeanconquerorUri(Uri.fromFile(file))
+        VmHarness.idleUntil("the import") { imported.own().beans.any { it.id == "a" } }
+        VmHarness.idle()
+        assertNull(imported.own().activeBeanId, "\"No bag\" stays")
+        assertNull(imported.ui.value.bagSelectUndo)
     }
 
     /** H4 / S9: mid-shot, Undo leaves the profile (loading one would upload it to the machine); the grind goes back. */

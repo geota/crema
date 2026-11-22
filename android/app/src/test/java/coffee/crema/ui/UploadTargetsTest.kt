@@ -73,6 +73,13 @@ class UploadTargetsTest {
         assertEquals("Re-upload to Visualizer", uploadMenuEntry(targets).title)
     }
 
+    /** #488 batch 6: a replay stays local, so it has no upload rows. */
+    @Test
+    fun `a replay has no upload rows`() {
+        val shot = StoredShot(id = "s", completedAtMs = 0, durationMs = 30_000, replay = true)
+        assertEquals(emptyList<UploadTarget>(), uploadTargetsFor(shot.row(), listOf(vizDest, decDest())))
+    }
+
     @Test
     fun `a placeholder Decent id can be viewed but not shared`() {
         val shot = StoredShot(id = "s", completedAtMs = 0, durationMs = 30_000, decentId = "uploaded:1")

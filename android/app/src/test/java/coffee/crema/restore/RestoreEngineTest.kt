@@ -110,6 +110,21 @@ class RestoreEngineTest {
     private fun engine(sink: FakeSink, waitMs: Long = 200) =
         RestoreEngine(sink, marker, json, machineWaitMs = waitMs)
 
+    /** #488 review SF1: a roaster tombstone in the backup is restored, but a report doesn't count it. */
+    @Test
+    fun aRestoreReportLeavesRoasterTombstonesOutOfItsCounts() {
+        val text = backup.decodeToString()
+        val tomb = """{"canonicalRoasterId":null,"catalogueRoasterId":null,"city":null,"country":null,"createdAt":1790000000000,""" +
+            """"deletedAt":1790000000001,"id":"roaster:gone","imageUrl":null,"kind":"roaster","metadata":{},"name":"Sey","notes":"",""" +
+            """"updatedAt":1790000000000,"visualizerId":"vz-r","website":null}"""
+        val withTomb = text.replace("\"roasterCount\":1", "\"roasterCount\":2").trimEnd('\n') + "\n" + tomb + "\n"
+        val p = prepareBackup(withTomb.toByteArray(), "test", File(dir, "stage"))
+        val plan = planFor(p, RestoreKind.MERGE, local(beans = emptyList()), json)
+        assertTrue("roaster:gone" in plan.roasters.add, "the tombstone is restored: ${plan.roasters}")
+        val (_, body) = confirmText(plan)
+        assertTrue("1 roaster" in body && "2 roasters" !in body, body)
+    }
+
     @Test
     fun aMergeRunsEveryStepInOrderThenClearsItsMarker() = runBlocking<Unit> {
         val sink = FakeSink(local(beans = listOf(BEAN)))

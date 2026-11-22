@@ -20,7 +20,7 @@ class RelayMachineTest {
     private val actions = RecordingMachineActions()
     private val sent = CopyOnWriteArrayList<MachineCommandCodec.Wire>()
     private val notices = CopyOnWriteArrayList<String>()
-    private var reply: ControlReply = ControlReply.Ok
+    private var reply: ControlReply = ControlReply.Ok()
     private var machineState: String? = "Idle"
     private var viewOnly = false
 
@@ -52,6 +52,24 @@ class RelayMachineTest {
         assertEquals(CommandOutcome.Accepted, run(MachineCommand.StartShot))
         assertEquals(listOf(MachineCommandCodec.Wire("startShot", "")), sent.toList())
         assertTrue(actions.applied.isEmpty() && shown.isEmpty(), "applied ${actions.applied}, shown $shown")
+        assertTrue(notices.isEmpty(), "$notices")
+    }
+
+    /** F6: the hub answers a bag pick with the core's selection, so the
+     *  remote that picked shows it; any other reply is a plain accept. */
+    @Test
+    fun `a bag pick's reply carries the hub's selection`() {
+        val selection = coffee.crema.core.BagSelection(
+            change = coffee.crema.core.SelectionChange(grind = coffee.crema.core.SetTo("18")),
+            undo = coffee.crema.core.SelectionChange(grind = coffee.crema.core.SetTo("15")),
+            changed = true,
+            message = "Bag b: Niche Zero at 18",
+        )
+        reply = ControlReply.Ok(MachineCommandCodec.encodeReply(CommandOutcome.BagPicked(selection)))
+        assertEquals(CommandOutcome.BagPicked(selection), run(MachineCommand.SetActiveBean("bean-1")))
+        assertEquals(CommandOutcome.Accepted, run(MachineCommand.SetGrind("14")), "a result with another command is a plain accept")
+        reply = ControlReply.Ok("not json")
+        assertEquals(CommandOutcome.Accepted, run(MachineCommand.SetActiveBean("bean-1")), "an unreadable result is still accepted")
         assertTrue(notices.isEmpty(), "$notices")
     }
 

@@ -40,7 +40,7 @@ class ProxyFaultTest {
             isSnapshotChar = { _, _ -> true },
             controlHandler = { method, args, _, _ ->
                 handled += method to args
-                Result.success(Unit)
+                Result.success(null)
             },
         )
         backgroundScope.launch { hub.serve(server, TEST_PEER) }

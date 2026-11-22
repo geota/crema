@@ -154,8 +154,8 @@ internal class RelayRig(
         const val ADDR = "AA:BB:CC:DD:EE:FF"
 
         fun defaultHub(
-            controlHandler: suspend (method: String, args: String, originId: String?, originName: String?) -> Result<Unit> =
-                { _, _, _, _ -> Result.success(Unit) },
+            controlHandler: suspend (method: String, args: String, originId: String?, originName: String?) -> Result<String?> =
+                { _, _, _, _ -> Result.success(null) },
             configSource: suspend () -> String = { "" },
         ): RelayHub = RelayHub(
             primaryName = "Kitchen tablet",

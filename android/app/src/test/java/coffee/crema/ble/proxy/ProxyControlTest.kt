@@ -37,7 +37,7 @@ class ProxyControlTest {
                 isSnapshotChar = { _, _ -> true },
                 controlHandler = { method, args, _, _ ->
                     relayed.add(method to args)
-                    if (method == "boom") Result.failure(IllegalStateException("nope")) else Result.success(Unit)
+                    if (method == "boom") Result.failure(IllegalStateException("nope")) else Result.success(null)
                 },
             )
             scope.launch { hub.serve(serverEnd, TEST_PEER) }
@@ -78,7 +78,7 @@ class ProxyControlTest {
                     // Mimic the VM: only the machine action announces; the sync helper
                     // below ("tareScale") must not, or it would pollute the assertion.
                     if (method == "machineState") hub.broadcastEvent("$originName drove", exceptClientId = originId)
-                    Result.success(Unit)
+                    Result.success(null)
                 },
             )
             val (aClient, aServer) = InMemoryFrameLink.pair()

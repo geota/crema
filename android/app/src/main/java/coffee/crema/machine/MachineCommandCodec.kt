@@ -66,6 +66,28 @@ object MachineCommandCodec {
     }
 
     /** Parse a relayed control and check its arguments. Nothing here applies it. */
+    /**
+     * What an accepted control's reply carries (`Frame.ControlOk.result`): a
+     * peer's bag pick answers with the core's selection as JSON (F6), so the
+     * remote that picked shows its message, notices and Undo. Null otherwise.
+     */
+    fun encodeReply(outcome: CommandOutcome): String? = when (outcome) {
+        is CommandOutcome.BagPicked -> coffee.crema.ui.coreJson.encodeToString(coffee.crema.core.BagSelection.serializer(), outcome.selection)
+        CommandOutcome.Accepted, is CommandOutcome.Refused, is CommandOutcome.Unknown -> null
+    }
+
+    /**
+     * What the hub's accepted reply to [cmd] means here: a bag pick with its
+     * selection ([encodeReply]), else [CommandOutcome.Accepted]. A result that
+     * doesn't decode, or comes with another command, is still accepted.
+     */
+    fun decodeReply(cmd: MachineCommand.Relayable, result: String?): CommandOutcome {
+        if (cmd !is MachineCommand.SetActiveBean || result.isNullOrEmpty()) return CommandOutcome.Accepted
+        return runCatching { coffee.crema.ui.coreJson.decodeFromString(coffee.crema.core.BagSelection.serializer(), result) }
+            .map { CommandOutcome.BagPicked(it) as CommandOutcome }
+            .getOrDefault(CommandOutcome.Accepted)
+    }
+
     fun decode(method: String, args: String): Decoded {
         val command = parse(method, args) ?: return Decoded.Invalid(parseRefusal(method, args))
         return command.refusal()?.let { Decoded.Invalid(it) } ?: Decoded.Valid(command)

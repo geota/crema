@@ -35,9 +35,6 @@ import coffee.crema.core.cremaProfileToWire
 import coffee.crema.core.effectiveCremaProfile
 import coffee.crema.core.withDerivedBrewTemp
 import coffee.crema.core.preinfusionSeconds
-import coffee.crema.core.creditShotDebit
-import coffee.crema.core.debitRemaining
-import coffee.crema.core.debitTaken
 import coffee.crema.core.resettleRemaining
 import coffee.crema.core.resettledBagDebit
 import coffee.crema.core.ShotCaptureContext
@@ -45,6 +42,13 @@ import coffee.crema.core.ShotSelections
 import coffee.crema.core.ShotEffects
 import coffee.crema.core.ShotEffectsInput
 import coffee.crema.core.shotEffectsJson
+import coffee.crema.core.shotDebitJson
+import coffee.crema.core.shotBagMoveJson
+import coffee.crema.core.ShotDebit
+import coffee.crema.core.ShotDebitInput
+import coffee.crema.core.ShotBagMove
+import coffee.crema.core.ShotBagMoveInput
+import coffee.crema.core.BagWeight
 import coffee.crema.core.shotBeanSnapshotJson
 import coffee.crema.core.BrewLogGrind
 import coffee.crema.core.BrewLogGrindInput
@@ -206,6 +210,10 @@ class LibraryController(
     private val setGrindDial: (String?) -> Unit = {},
     /** Push the hub's config snapshot (a grinder record edit changes what a remote shows). */
     private val pushConfig: () -> Unit = {},
+    /** A remote's Undo of its relayed bag pick (F6): send what goes back to
+     *  the hub as ordinary profile, grinder (with the hub's grinder name
+     *  before the pick) and grind commands. */
+    private val relaySelectionUndo: (change: coffee.crema.core.SelectionChange, grinderNameBefore: String?) -> Unit = { _, _ -> },
 ) {
 
     // ── Persistence (controller-owned stores) ────────────────────────────────
@@ -276,6 +284,11 @@ class LibraryController(
      * / [duplicateProfile] and the editor's [saveProfile]; null otherwise.
      */
     private var draftProfileJson: String? = null
+
+    /** The profile the editor opened on (REVIEW-FINAL-2 N2): a Save merges what the
+     *  user changed against it onto the stored row, so a pin or a Quick Save written
+     *  meanwhile stays. Set when the editor opens, and to what a Save wrote. */
+    private var editorBaseJson: String? = null
 
     /** The aborted shot held for the undo window (not yet in history), and
      *  what it does when the Undo keeps it. */
@@ -1077,6 +1090,7 @@ class LibraryController(
     /** Open an existing saved (custom) profile in the editor. */
     fun startEditProfile(id: String) {
         draftProfileJson = null
+        editorBaseJson = customProfilesJson.firstOrNull { profileIdOf(it, json) == id }
         updateUi { it.copy(editingProfileId = id, draftProfile = null) }
     }
 
@@ -1132,16 +1146,20 @@ class LibraryController(
             return
         }
         draftProfileJson = fullJson
+        editorBaseJson = fullJson
         updateUi { it.copy(editingProfileId = thin.id, draftProfile = thin) }
     }
 
     /**
      * Save the editor's non-curve edits. Patches only the edited fields into the
      * profile's complete JSON base (the draft for a new / duplicated profile, else
-     * the stored custom), so every wire-relevant field — per-segment temp / mode /
-     * ramp, notes, beverage type — round-trips untouched to the DE1. Upserts into
-     * the custom store (newest first for a new profile; in place for an edit),
-     * refreshes the merged list, and persists.
+     * the custom the editor opened on), so every wire-relevant field — per-segment
+     * temp / mode / ramp, notes, beverage type — round-trips untouched to the DE1.
+     * An edit of a stored custom then goes through the core's `merge_profile_edit`
+     * (REVIEW-FINAL-2 N2): only the fields the user changed land on the row as it
+     * is stored now, so a pin or an in-place Quick Save made meanwhile stays.
+     * Upserts into the custom store (newest first for a new profile; in place for
+     * an edit), refreshes the merged list, and persists.
      *
      * @param segments (target, time) per existing segment, in order — the non-curve
      *   editor never adds / removes segments, so this matches the base length.
@@ -1163,13 +1181,21 @@ class LibraryController(
         tankTemperatureC: Float,
         segments: List<SegmentEdit>,
     ) {
-        val isExisting = customProfilesJson.any { profileIdOf(it, json) == id }
+        val current = customProfilesJson.firstOrNull { profileIdOf(it, json) == id }
+        val isExisting = current != null
         val base = when {
             draftProfileJson != null && uiState().editingProfileId == id -> draftProfileJson
-            isExisting -> customProfilesJson.firstOrNull { profileIdOf(it, json) == id }
+            isExisting -> editorBaseJson?.takeIf { uiState().editingProfileId == id && profileIdOf(it, json) == id } ?: current
             else -> null
         }
         if (base == null) {
+            // The stored profile the editor opened on is gone (deleted elsewhere
+            // while open, REVIEW-519): the Save never adds it back, and says so,
+            // as the bag editor does.
+            if (editorBaseJson?.let { profileIdOf(it, json) } == id) {
+                val shown = name.trim().ifEmpty { "This profile" }
+                notify("“$shown” was deleted elsewhere; your changes weren’t saved")
+            }
             appendLog("Save profile: base for $id not found")
             return
         }
@@ -1198,7 +1224,16 @@ class LibraryController(
         }
         // The saved brew temp is the first step's (the editor's field shifted
         // every step as it moved; a direct segment 0 edit moves it too).
-        val saved = derivedBrewTemp(patched)
+        val edited = derivedBrewTemp(patched)
+        // A stored custom: what the user changed, onto the row as it is now.
+        val saved = if (current == null) edited else runCatching {
+            val opened = derivedBrewTemp(coffee.crema.profiles.profileEditorSeedJson(base, json))
+            coffee.crema.profiles.mergeProfileSave(opened, edited, current)
+        }.getOrElse {
+            appendLog("Save profile failed: ${it.message}")
+            return
+        }
+        editorBaseJson = saved
         customProfilesJson = if (isExisting) {
             customProfilesJson.map { if (profileIdOf(it, json) == id) saved else it }
         } else {
@@ -1223,6 +1258,7 @@ class LibraryController(
     /** Close the editor without saving (discards any new / duplicated draft). */
     fun cancelProfileEdit() {
         draftProfileJson = null
+        editorBaseJson = null
         updateUi { it.copy(editingProfileId = null, draftProfile = null) }
     }
 
@@ -1888,9 +1924,9 @@ class LibraryController(
                 // Bag tombstones too, named, so Replace keeps them (#488 review S5).
                 beans = s.beans.withTombstones().map { it.id },
                 deletedBeans = s.beans.withTombstones().filter { it.deletedAt != null }.map { it.id },
-                roasters = s.roasters.map { it.id },
-                // Roaster tombstones too (#488 review SF1).
-                deletedRoasters = s.roasters.filter { it.deletedAt != null }.map { it.id },
+                // Roaster tombstones too, named, so Replace keeps them (#488 review SF1).
+                roasters = s.roasters.withTombstones().map { it.id },
+                deletedRoasters = s.roasters.withTombstones().filter { it.deletedAt != null }.map { it.id },
                 // #488: grinder records, archived and tombstones included, and the device's pointer.
                 grinders = s.grinders.map { it.id },
                 activeGrinderId = s.activeGrinderId,
@@ -2373,7 +2409,8 @@ class LibraryController(
     ): Pair<String?, List<Roaster>> {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return null to roasters
-        val existing = roasters.firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
+        // A tombstone (#488 review SF1) is deleted: a bag is never filed under it by name.
+        val existing = roasters.firstOrNull { it.deletedAt == null && it.name.equals(trimmed, ignoreCase = true) }
         return if (existing != null) {
             existing.id to roasters
         } else {
@@ -2498,7 +2535,12 @@ class LibraryController(
         val wireGrinders = decodeList("grinders", coffee.crema.core.Grinder.serializer())
 
         val s = uiState()
-        val merge = mergeBeanImport(wireBeans, wireRoasters, s.beans, s.roasters, wireGrinders = wireGrinders, libGrinders = s.grinders)
+        // Every row, tombstones included, as the merge below reads them: a file
+        // row that only meets a tombstone is "nothing new" here too (#488 S5, SF1).
+        val merge = mergeBeanImport(
+            wireBeans, wireRoasters, s.beans.withTombstones(), s.roasters.withTombstones(),
+            wireGrinders = wireGrinders, libGrinders = s.grinders,
+        )
         val newBeans = merge.newBeans
         val newRoasters = merge.newRoasters
         val beanIdRemap: Map<String, String> = merge.beanIdRemap
@@ -2533,7 +2575,10 @@ class LibraryController(
                     grinders = rows.grinders.with(rows.grinders.replacingById(landed.updatedGrinders) { it.id } + landed.newGrinders),
                 )
             },
-            { it.copy(activeBeanId = it.activeBeanId ?: landed.newBeans.firstOrNull()?.id) },
+            // An import never selects a bag (REVIEW-FINAL-2 SF2, as web): "No
+            // bag" may be the user's choice, and a pick goes through the core's
+            // bag selection with its message.
+            { it },
         )
         persistLibrary()
         // The shots into the history store's rows as they stand (#310 A3b).
@@ -2727,7 +2772,7 @@ class LibraryController(
                 // the typed name (find-or-create) as before.
                 val (roasterId, roasters) = if (roasterPick != null) {
                     val row = coffee.crema.beans.pickedRoasterRow(roasterPick) { name -> newRoaster(name, now) }
-                    val held = rows.roasters.firstOrNull { it.id == row.id }
+                    val held = rows.roasters.firstOrNull { it.id == row.id && it.deletedAt == null }
                     if (held == null) {
                         // A seed is created; a matched row that vanished since → by name.
                         if (roasterPick.isNew) row.id to (rows.roasters + row) else resolveRoaster(roasterName, rows.roasters, now)
@@ -2743,8 +2788,16 @@ class LibraryController(
                     // The name it already files under: keep that roaster, rather than
                     // whichever row of that name comes first.
                     val filed = current?.roasterId?.let { rid -> rows.roasters.firstOrNull { it.id == rid } }
-                    if (filed != null && filed.name.equals(roasterName.trim(), ignoreCase = true)) filed.id to rows.roasters.toList()
-                    else resolveRoaster(roasterName, rows.roasters, now)
+                    when {
+                        // A bag a "this device only" delete left under a roaster
+                        // tombstone shows no roaster here; left blank, it keeps
+                        // that link, so the push never clears it on Visualizer
+                        // (#488 review SF1).
+                        filed != null && filed.deletedAt != null && roasterName.isBlank() -> filed.id to rows.roasters.toList()
+                        filed != null && filed.deletedAt == null && filed.name.equals(roasterName.trim(), ignoreCase = true) ->
+                            filed.id to rows.roasters.toList()
+                        else -> resolveRoaster(roasterName, rows.roasters, now)
+                    }
                 }
                 // The form holds what the bag was when it opened: only what the user
                 // changed lands, so a debit or a sync since then stands.
@@ -3079,8 +3132,19 @@ class LibraryController(
         persistLibrary()
     }
 
-    /** The one Undo of a bag selection's change (review F6): the selection as applied. */
-    private data class BagSelectUndo(val seq: Long, val selection: coffee.crema.core.BagSelection)
+    /**
+     * The one Undo of a bag selection's change (review F6): the selection as
+     * applied. [relayed] when this remote picked through the hub: the Undo
+     * then runs against the hub's state as mirrored here and goes to the hub
+     * as ordinary commands, the grinder with [grinderNameBefore], the name of
+     * the hub's grinder before the pick (the hub checks it is the same record).
+     */
+    private data class BagSelectUndo(
+        val seq: Long,
+        val selection: coffee.crema.core.BagSelection,
+        val relayed: Boolean = false,
+        val grinderNameBefore: String? = null,
+    )
 
     private var bagSelectUndo: BagSelectUndo? = null
     private var bagSelectSeq = 0L
@@ -3088,19 +3152,20 @@ class LibraryController(
     /**
      * A bag was selected on Brew (the commit of `SetActiveBean`, here or
      * relayed): the core resolves everything else the pick changes (the
-     * linked profile, the starred grinder, its grind) into one change, shown
-     * in one message with one Undo (review F6). No message when nothing
-     * besides the bag changed. Replaces the old linked-profile auto-load.
+     * linked profile, the starred grinder, its grind) into one change, with
+     * the one message and its Undo and any notices, worded by the core
+     * (review F6, REVIEW-FINAL-2 SF4). Mid-shot the core leaves the profile
+     * out and says so. Replaces the old linked-profile auto-load.
      * [activeBeanIdBefore] is the bag selected before this pick: picking the
      * one already selected changes nothing (FINAL N7), so an unsaved grind on
-     * Brew stays.
+     * Brew stays. A peer's pick ([relayed]) is applied here and returned, for
+     * the peer to show with its own Undo; this device shows nothing.
      */
-    fun onBagSelected(beanId: String, activeBeanIdBefore: String?) {
+    fun onBagSelected(beanId: String, activeBeanIdBefore: String?, relayed: Boolean = false): coffee.crema.core.BagSelection? {
         val s = uiState()
-        val bag = s.beans.firstOrNull { it.id == beanId } ?: return
+        val bag = s.beans.firstOrNull { it.id == beanId } ?: return null
         val linked = bag.linkedProfileId
         val missing = linked != null && s.profiles.none { it.id == linked }
-        if (missing && beanId != activeBeanIdBefore) notify("${bag.name}’s linked profile no longer exists")
         val resolved = runCatching {
             coffee.crema.beans.resolveBagSelection(
                 coffee.crema.core.BagSelectInput(
@@ -3108,9 +3173,7 @@ class LibraryController(
                     activeProfileId = s.activeProfileId,
                     linkedProfileMissing = missing,
                     linkedProfileName = linked?.let { id -> s.profiles.firstOrNull { it.id == id }?.name },
-                    // The mid-shot rule stays below until this shell shows the
-                    // core's message and notices (batch 6 Android).
-                    shotInProgress = false,
+                    shotInProgress = s.shotInProgress,
                     activeGrinderId = s.activeGrinderId,
                     grind = s.brewGrindView().value,
                     grinders = s.grinders,
@@ -3120,32 +3183,30 @@ class LibraryController(
             )
         }.getOrElse {
             appendLog("Bag selection failed: ${it.message}")
-            return
+            return null
         }
-        var change = resolved.change
-        var undo = resolved.undo
-        // Not mid-extraction: loading a profile reseeds the brew dials.
-        val profileName = change.profileId?.value?.let { id -> s.profiles.firstOrNull { it.id == id }?.name }
-        if (change.profileId != null && s.shotInProgress) {
-            notify("Shot in progress — “${profileName ?: "the linked profile"}” not loaded")
-            change = change.copy(profileId = null)
-            undo = undo.copy(profileId = null)
-        }
-        if (change.profileId == null && change.grinderId == null && change.grind == null) return
-        applySelectionChange(change)
-        val grinderAfter = uiState().activeGrinder()
-        val parts = buildList {
-            if (change.profileId != null) add("${profileName ?: "linked"} profile")
-            val grindLabel = change.grind?.value?.let { coffee.crema.beans.formatGrind(it, grinderAfter?.scale) }
-            when {
-                change.grinderId != null -> add(listOfNotNull(resolved.grinderName ?: grinderAfter?.name ?: "No grinder", grindLabel?.let { "at $it" }).joinToString(" "))
-                grindLabel != null -> add("grind $grindLabel")
-            }
-        }
-        val message = "${bag.name}: ${parts.joinToString(", ")}"
+        if (resolved.changed) applySelectionChange(resolved.change)
+        val worded = resolved.changed || !resolved.notices.isNullOrEmpty()
+        if (relayed) return resolved.takeIf { worded }
+        showBagSelection(resolved, relayed = false, grinderNameBefore = null)
+        return null
+    }
+
+    /**
+     * This remote's bag pick, as the hub answered it (F6): the core's message
+     * with this device's own Undo, and its notices. [grinderNameBefore] is
+     * the hub's grinder's name before the pick, for the Undo's grinder pick.
+     */
+    fun showRelayedBagSelection(selection: coffee.crema.core.BagSelection, grinderNameBefore: String?) =
+        showBagSelection(selection, relayed = true, grinderNameBefore = grinderNameBefore)
+
+    /** Show [selection]'s notices and its message with one Undo, verbatim as the core words them. */
+    private fun showBagSelection(selection: coffee.crema.core.BagSelection, relayed: Boolean, grinderNameBefore: String?) {
+        selection.notices.orEmpty().forEach { notify(it.text) }
+        val message = selection.message?.takeIf { selection.changed && it.isNotBlank() } ?: return
         appendLog(message)
         val seq = ++bagSelectSeq
-        bagSelectUndo = BagSelectUndo(seq, resolved.copy(change = change, undo = undo))
+        bagSelectUndo = BagSelectUndo(seq, selection, relayed, grinderNameBefore)
         updateUi { it.copy(bagSelectUndo = UndoNotice(message, seq)) }
     }
 
@@ -3170,12 +3231,14 @@ class LibraryController(
 
     /** Undo the bag selection [seq] (core `bag_selection_undo`, REVIEW-CORE H4):
      *  each part goes back only while it's still what the selection set, so a
-     *  change made since stands; mid-shot the profile stays (no upload). */
+     *  change made since stands; mid-shot the profile stays (no upload). A
+     *  remote's Undo of its relayed pick reads the hub's state as mirrored
+     *  here and sends what goes back to the hub ([relaySelectionUndo]). */
     fun undoBagSelection(seq: Long) {
         val u = bagSelectUndo?.takeIf { it.seq == seq } ?: return
         bagSelectUndo = null
         updateUi { st -> if (st.bagSelectUndo?.seq == seq) st.copy(bagSelectUndo = null) else st }
-        val s = uiState()
+        val s = if (u.relayed) effectiveState() else uiState()
         val now = coffee.crema.core.SelectionState(
             profileId = s.activeProfileId,
             grinderId = s.activeGrinderId,
@@ -3186,7 +3249,7 @@ class LibraryController(
             appendLog("Bag selection undo failed: ${it.message}")
             return
         }
-        applySelectionChange(still)
+        if (u.relayed) relaySelectionUndo(still, u.grinderNameBefore) else applySelectionChange(still)
     }
 
     /** The bag selection [seq]'s message went without Undo. */
@@ -3374,7 +3437,8 @@ class LibraryController(
         val now = System.currentTimeMillis()
         editRoasters { rows ->
             rows.mapped {
-                if (it.id == id) it.copy(
+                // A tombstone stays as the delete left it (#488 review SF1).
+                if (it.id == id && it.deletedAt == null) it.copy(
                     name = name.trim(),
                     website = website?.takeIf { w -> w.isNotBlank() },
                     city = city?.takeIf { c -> c.isNotBlank() },
@@ -3393,12 +3457,18 @@ class LibraryController(
      * bags (roaster cleared), true deletes them too. The core's
      * `plan_roaster_delete` decides which bags go and the Visualizer ids;
      * [alsoOnVisualizer] then deletes those remote copies (bags first, then the
-     * roaster). Persisted.
+     * roaster). A roaster on Visualizer stays as a tombstone, and "this device
+     * only" ([alsoOnVisualizer] off) leaves its bags filed under it, so the next
+     * pull doesn't add it back and Visualizer's bags keep their roaster (#488
+     * review SF1). Persisted.
      */
     fun deleteRoaster(id: String, alsoOnVisualizer: Boolean = false, cascade: Boolean = false) {
         val s = uiState()
         val plan = runCatching {
-            coffee.crema.beans.planRoasterDelete(json, s.roasters, s.beans, id, cascade, s.activeBeanId)
+            coffee.crema.beans.planRoasterDelete(
+                json, s.roasters.withTombstones(), s.beans.withTombstones(), id, cascade, s.activeBeanId,
+                localOnly = !alsoOnVisualizer,
+            )
         }.getOrNull() ?: return
         val name = s.roasters.firstOrNull { it.id == id }?.name.orEmpty()
         val now = System.currentTimeMillis()
@@ -3457,7 +3527,7 @@ class LibraryController(
     /** Un-merge a tagged duplicate: clear its duplicate-of pointer (its bags stay where they are). Persisted. */
     fun unmergeRoaster(id: String) {
         val now = System.currentTimeMillis()
-        editRoasters { rows -> rows.mapped { if (it.id == id) it.copy(canonicalRoasterId = null, updatedAt = now) else it } }
+        editRoasters { rows -> rows.mapped { if (it.id == id && it.deletedAt == null) it.copy(canonicalRoasterId = null, updatedAt = now) else it } }
         persistLibrary()
     }
 
@@ -3573,12 +3643,13 @@ class LibraryController(
         // Burn this shot's dose down from the bag it recorded (its frozen
         // `bean.beanId`), and record what it took on the row. The dose the core
         // recorded — the Quick Controls dial when the DE1 ran the dialled
-        // profile (review §2.3-6) — else the recorded profile's.
-        val bag = captured.bean?.beanId?.let { id -> s.beans.firstOrNull { it.id == id } }
+        // profile (review §2.3-6) — else the recorded profile's. A row with a
+        // bag this device didn't debit (a remote's mirror copy, a replay)
+        // records 0, never null (core `shot_debit`, review MF1).
         val dose = captured.doseG ?: captured.profileId?.let { id ->
             (s.mirroredProfile?.takeIf { it.id == id } ?: s.profiles.firstOrNull { it.id == id })?.dose
         }
-        val bagDebit = bag?.takeIf { effects.debit }?.let { debitBag(it, dose) }
+        val bagDebit = debitShot(captured.bean?.beanId, dose, effects.debit)
         val shot = captured.copy(bagDebitG = bagDebit)
         // Aborted-shot auto-discard (Decenza abortedshotclassifier.h:19-25,
         // validated over 882 shots): under 10 s of flow AND under 5 g in the
@@ -3624,33 +3695,31 @@ class LibraryController(
     }
 
     /**
-     * Debit [dose] from [bean] and return the grams actually taken. The core
-     * `debitRemaining` owns the rule + its no-ops: it returns null when there's
-     * nothing to debit (bag already empty / bad dose), so we persist — and
-     * touch updatedAt — ONLY on a real debit. If it just emptied the bag,
-     * surface it so the user can switch / archive / rate.
+     * A shot's debit on its bag [bagId] (core `shot_debit`, review MF1), read
+     * from what the bag holds now: the bag is persisted, and its `updatedAt`
+     * touched, only on a real debit, and a debit that empties it asks what to
+     * do. Returns the row's `bagDebit`: the grams taken, 0 for a bag that
+     * wasn't debited ([debit] false, empty, or not held here), null only when
+     * the row has no bag.
      */
-    private fun debitBag(bean: Bean, dose: Float?): Float {
-        val grams = dose ?: return 0f
+    private fun debitShot(bagId: String?, dose: Float?, debit: Boolean): Float? {
+        val id = bagId?.takeIf { it.isNotBlank() } ?: return null
         val now = System.currentTimeMillis()
-        var taken: Float? = null
-        var emptied = false
-        // From what the bag holds now: [bean] can be a read from before an edit.
+        var planned: ShotDebit? = null
+        var bag: Bean? = null
         editBeans { rows ->
-            rows.mapped { row ->
-                val remaining = row.remaining ?: 0f
-                val next = if (row.id == bean.id) debitRemaining(remaining, grams) else null
-                if (row.id == bean.id) {
-                    taken = next?.let { debitTaken(remaining, grams) }
-                    emptied = next == 0f
-                }
-                if (next == null) row else row.copy(remaining = next, updatedAt = now)
-            }
+            // A tombstone isn't a bag this device holds.
+            val row = rows.firstOrNull { it.id == id && it.deletedAt == null }
+            val plan = shotDebit(ShotDebitInput(hasBag = true, bag = row?.weight(), doseG = dose, debit = debit))
+            planned = plan
+            bag = row
+            val left = plan.remaining
+            if (row == null || left == null) rows else rows.mapped { if (it.id == id) it.copy(remaining = left, updatedAt = now) else it }
         }
-        val debit = taken ?: return 0f
-        persistLibrary()
-        if (emptied) onBagEmptied(bean)
-        return debit
+        val plan = planned ?: return 0f
+        if (plan.remaining != null) persistLibrary()
+        if (plan.emptied) bag?.let(::onBagEmptied)
+        return plan.bagDebit
     }
 
     /**
@@ -3725,7 +3794,7 @@ class LibraryController(
         // under it; the grind is text on its scale, 0 kept.
         val stamp = brewLogGrind(input.grinder, input.grind)
         // Burn the dose down from the bag — the whole point of the feature.
-        val bagDebit = bean?.let { debitBag(it, input.doseG) }
+        val bagDebit = debitShot(bean?.id, input.doseG, debit = true)
         val shot = StoredShot(
             id = coffee.crema.core.newShotId(),
             completedAtMs = input.completedAtMs,
@@ -3926,27 +3995,56 @@ class LibraryController(
         // The core's snapshot (REVIEW-FINAL S2, N6): the bag's notes, never
         // its legacy grind and grinder.
         val beanSnapshot = bean?.let { shotBeanSnapshot(it, roasterName) }
-        // Move the bag debit with the attribution: the grounds physically came
-        // from the bag the user now says they did, so the old bag gets back what
-        // the row took (core creditShotDebit: capped at bagSize, an untracked bag
-        // gains nothing, null = nothing changed) and the new bag is debited, with
-        // the row recording what it took this time. Web's moveShotBag is the same.
-        val dose = shot.doseG ?: 0f
-        // From what the old bag holds now.
-        if (oldBeanId != null) {
-            val now = System.currentTimeMillis()
-            var credited = false
-            editBeans { rows ->
-                credited = false
+        // Move the bag debit with the attribution (core `shot_bag_move`, review
+        // MF1): the old bag gets back only what the row took, and the new bag
+        // is debited only where a recorded shot would be (not on a remote, not
+        // for a replay), with the row recording what it took. Read from what
+        // the bags hold now. Web's moveShotBag is the same rule.
+        val toBagId = bean?.id
+        // The flags describe the row, not the device (REVIEW-521 M1): on a
+        // remote, only the hub's watched-shot copies are mirror rows, and they
+        // took nothing here (0, or null from an older build). A row this device
+        // recorded and debited itself (a logged brew, a shot from when it held
+        // the machine) moves as on any device: credit the old bag, debit the new.
+        val mirrorRow = s.mirror != null && !shot.isBrewLog && (shot.bagDebitG ?: 0f) <= 0f
+        val now = System.currentTimeMillis()
+        var planned: ShotBagMove? = null
+        editBeans { rows ->
+            fun held(bid: String?) = bid?.let { b -> rows.firstOrNull { it.id == b && it.deletedAt == null } }
+            val plan = shotBagMove(
+                ShotBagMoveInput(
+                    fromBagId = oldBeanId,
+                    fromBag = held(oldBeanId)?.weight(),
+                    toBagId = toBagId,
+                    toBag = held(toBagId)?.weight(),
+                    bagDebit = shot.bagDebitG,
+                    doseG = shot.doseG,
+                    remote = mirrorRow,
+                    replay = shot.replay,
+                    // Before `shot_debit` this shell wrote null on a remote's mirror
+                    // rows, and they took nothing (REVIEW-518 follow-up 1).
+                    mirrorRow = mirrorRow,
+                ),
+            )
+            planned = plan
+            if (plan == null || (plan.fromRemaining == null && plan.toRemaining == null)) {
+                rows
+            } else {
                 rows.mapped { row ->
-                    if (row.id != oldBeanId) return@mapped row
-                    creditShotDebit(row.remaining ?: 0f, row.bagSize ?: 0f, shot.bagDebitG, dose)
-                        ?.let { credited = true; row.copy(remaining = it, updatedAt = now) } ?: row
+                    val left = when (row.id) {
+                        oldBeanId -> plan.fromRemaining
+                        toBagId -> plan.toRemaining
+                        else -> null
+                    }
+                    if (left == null || row.deletedAt != null) row else row.copy(remaining = left, updatedAt = now)
                 }
             }
-            if (credited) persistLibrary()
         }
-        val bagDebit = bean?.let { debitBag(it, dose) }
+        val plan = planned ?: return appendLog("Moving the shot to another bag failed")
+        if (!plan.moves) return
+        if (plan.fromRemaining != null || plan.toRemaining != null) persistLibrary()
+        if (plan.toEmptied) bean?.let(::onBagEmptied)
+        val bagDebit = plan.bagDebit
         val marked = markForVisualizer(id, annotations = true)
         historyStore.update(id) { it.copy(bean = beanSnapshot, bagDebitG = bagDebit) }
         saveMarkedEdit(marked)
@@ -4108,6 +4206,32 @@ internal fun shotEffects(
         upload = false,
     )
 }
+
+/** [this] bag's weight as the core's debit rules read it. */
+internal fun coffee.crema.core.Bean.weight(): BagWeight = BagWeight(remaining = remaining ?: 0f, bagSize = bagSize ?: 0f)
+
+/**
+ * A completed shot's bag change and its row's `bagDebit` (core `shot_debit`,
+ * review MF1). Should the bridge refuse, the bag is left as it is and a row
+ * with a bag records 0: nothing a later move could credit back.
+ */
+internal fun shotDebit(
+    input: ShotDebitInput,
+    core: (String) -> String = ::shotDebitJson,
+): ShotDebit = runCatching {
+    coreJson.decodeFromString(ShotDebit.serializer(), core(coreJson.encodeToString(ShotDebitInput.serializer(), input)))
+}.getOrElse { ShotDebit(remaining = null, bagDebit = if (input.hasBag) 0f else null, emptied = false) }
+
+/**
+ * A logged shot moved to another bag or to none (core `shot_bag_move`,
+ * review MF1), or null when the bridge refuses: then nothing moves.
+ */
+internal fun shotBagMove(
+    input: ShotBagMoveInput,
+    core: (String) -> String = ::shotBagMoveJson,
+): ShotBagMove? = runCatching {
+    coreJson.decodeFromString(ShotBagMove.serializer(), core(coreJson.encodeToString(ShotBagMoveInput.serializer(), input)))
+}.getOrNull()
 
 /**
  * [bean]'s snapshot for a shot, a logged brew or a shot moved to it: the

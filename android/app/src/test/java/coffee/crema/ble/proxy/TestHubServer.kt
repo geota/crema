@@ -83,8 +83,8 @@ internal class TestHubServer private constructor(
             hubKeys: RelayKeys = RelayKeys.generate(),
             roster: () -> List<DeviceInfo> = { listOf(DeviceInfo("AA:BB", "DE1", "de1", "CONNECTED")) },
             configSource: () -> String = { "" },
-            controlHandler: suspend (method: String, args: String, originId: String?, originName: String?) -> Result<Unit> =
-                { _, _, _, _ -> Result.success(Unit) },
+            controlHandler: suspend (method: String, args: String, originId: String?, originName: String?) -> Result<String?> =
+                { _, _, _, _ -> Result.success(null) },
             canControl: Boolean = true,
             requestedPort: Int = 0,
         ): Pair<TestHubServer, RelayHub> {
