@@ -1210,6 +1210,19 @@ enum class GrinderKind(val string: String) {
 	Hand("hand"),
 }
 
+/// How sure the catalogue is of an entry's range.
+@Serializable
+enum class ScaleTier(val string: String) {
+	/// Checked against the maker's manual or page.
+	@SerialName("verified")
+	Verified("verified"),
+	/// Inferred from the printed dial, a maker drawing or consistent
+	/// community charts, where the maker states no single range: shown as
+	/// "Typical range — check your dial".
+	@SerialName("typical")
+	Typical("typical"),
+}
+
 /// A catalogue entry as the shells list it.
 @Serializable
 data class CatalogueGrinderInfo (
@@ -1225,11 +1238,14 @@ data class CatalogueGrinderInfo (
 	val aliases: List<String>,
 	/// Electric or hand.
 	val kind: GrinderKind,
-	/// Its verified scale; `None` = "Range not set: check your grinder's
-	/// dial".
+	/// Its scale. Every listed entry has one; it stays optional so the
+	/// shells' "Range not set" path keeps compiling and the JSON shape holds.
 	val scale: GrindScale? = null,
-	/// Where the scale was checked; `None` without one.
-	val source: String? = null
+	/// Where the scale comes from; set whenever `scale` is.
+	val source: String? = null,
+	/// Verified, or typical ("Typical range — check your dial" wherever a
+	/// verified entry says it comes with its scale).
+	val tier: ScaleTier
 )
 
 /// One page of catalogue search results.
