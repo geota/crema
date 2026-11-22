@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import { getBeanStore, type Bean } from '#lib/bean/index.js';
+import { LIBRARY_IMPORT_RULE, MERGE_RULE } from '#lib/bean/import-rules.js';
 import BeanImportDialog from './BeanImportDialog.svelte';
 
 /**
@@ -96,5 +97,23 @@ describe('BeanImportDialog: an Android bean export (F11b)', () => {
 		expect(getBeanStore().getBean('bean:android-1')?.name).toBe('Halo Hambela');
 		expect(getBeanStore().getBean('bean:android-2')?.name).toBe('House (edited here)');
 		expect(getBeanStore().beans).toHaveLength(2);
+	});
+});
+
+describe('the import menus say which rule applies (REVIEW-FINAL-2 N8)', () => {
+	let component: ReturnType<typeof mount> | null = null;
+	afterEach(() => {
+		if (component) unmount(component);
+		component = null;
+		document.body.innerHTML = '';
+	});
+
+	it('the library import says a newer copy replaces a bag; Merge says it only adds', () => {
+		const target = document.body.appendChild(document.createElement('div'));
+		component = mount(BeanImportDialog, { target, props: { onClose: () => {} } });
+		flushSync();
+		expect(target.querySelector('.bd-rule')?.textContent).toBe(LIBRARY_IMPORT_RULE);
+		expect(LIBRARY_IMPORT_RULE).toContain('replaced when the file\'s copy is newer');
+		expect(MERGE_RULE).toMatch(/^Adds only what you don't have yet; .*even when the backup's copy is newer\.$/);
 	});
 });

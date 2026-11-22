@@ -17,6 +17,7 @@ import type { CremaApp } from '#lib/state/index.js';
 import { getBrewGrind } from '#lib/brew/grind-session.svelte.js';
 import { blankBean, getBeanStore } from '#lib/bean/index.js';
 import { dismissConfirm, getActiveDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+import { dismissToast, getToasts } from '#lib/components/shared/toast.svelte.js';
 
 describe('BrewDashboard and the app-level dial', () => {
 	let component: ReturnType<typeof mount> | null = null;
@@ -312,5 +313,43 @@ describe('the Grinder block and the unsaved-grind marker', () => {
 		[...panel.querySelectorAll<HTMLButtonElement>('.hpick-item')].find((b) => b.textContent?.includes('DF64'))!.click();
 		await vi.waitFor(() => expect(getBeanStore().activeGrinder?.id).toBe(other.id));
 		expect(g.id).not.toBe(other.id);
+	});
+
+	/** Type `name` into the picker's Add box and take its "Create" row. */
+	async function createInPicker(root: HTMLElement, name: string): Promise<void> {
+		root.querySelector<HTMLElement>('.bh-block-grinder .bh-block-tap')!.click();
+		flushSync();
+		root.querySelector<HTMLButtonElement>('[aria-label="Add a grinder"]')!.click();
+		flushSync();
+		await tick();
+		const input = root.querySelector<HTMLInputElement>('[aria-label="Choose grinder"] input[role="combobox"]')!;
+		input.value = name;
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+		flushSync();
+		const create = [...root.querySelectorAll('[role="option"]')].find((o) => o.textContent?.includes(`Create “${name}”`));
+		if (!create) throw new Error('no Create row');
+		create.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+		flushSync();
+	}
+
+	it('adding a model already owned picks it and offers "Add another", as Android (#46)', async () => {
+		for (const t of getToasts()) dismissToast(t.id);
+		const g = setup('4.2', 'niche-zero');
+		const other = getBeanStore().addGrinder('DF64')!;
+		getBeanStore().setActiveGrinder(other.id);
+		const root = await render();
+		await createInPicker(root, g.name);
+		await vi.waitFor(() => expect(getBeanStore().activeGrinder?.id, 'the owned one is picked').toBe(g.id));
+		expect(getBeanStore().grinders, 'nothing added yet').toHaveLength(2);
+		const offer = getToasts().find((t) => t.action?.label === 'Add another');
+		expect(offer?.message).toBe(`${g.name} is already one of your grinders`);
+
+		offer!.action!.run();
+		const second = getBeanStore().grinders.find((x) => x.id !== g.id && x.id !== other.id);
+		expect(second?.name).toBe(`${g.name} 2`);
+		expect(second?.presetId).toBe(g.presetId);
+		expect(getBeanStore().activeGrinder?.id, 'Brew keeps the grinder it picked').toBe(g.id);
+		expect(getToasts().some((t) => t.message === `Added ${g.name} 2`)).toBe(true);
+		for (const t of getToasts()) dismissToast(t.id);
 	});
 });

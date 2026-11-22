@@ -11,6 +11,8 @@ import {
 	countsInThirds,
 	DEFAULT_GRIND_SCALE,
 	formatGrind,
+	grinderIdForName,
+	grinderNamed,
 	grindChips,
 	grindNumber,
 	grindScaleRefusal,
@@ -117,13 +119,41 @@ describe('thirds (Fellow Ode, step 1/3)', () => {
 });
 
 describe('shotGrindScale (history)', () => {
-	const ode = { id: 'grinder:ode', name: 'Fellow Ode', scale: { min: 1, max: 11, step: 1 / 3, unit: '' } } as Grinder;
+	const ode: Grinder = {
+		id: 'grinder:ode',
+		name: 'Fellow Ode',
+		scale: { min: 1, max: 11, step: 1 / 3, unit: '' },
+		updatedAt: 1
+	};
+	const nicheZero: Grinder = {
+		id: 'grinder:niche-zero',
+		name: 'Niche Zero',
+		presetId: 'niche-zero',
+		scale: { min: 0, max: 50, step: 1, unit: '' },
+		updatedAt: 1
+	};
 
 	it("reads the shot's grinder by id, else by name for an old shot, else the default", () => {
 		expect(shotGrindScale({ grinderId: 'grinder:ode' }, [ode])).toBe(ode.scale);
 		expect(shotGrindScale({ grinderId: null, grinderModel: ' fellow ode ' }, [ode])).toBe(ode.scale);
 		expect(shotGrindScale({ grinderId: 'grinder:gone', grinderModel: 'Fellow Ode' }, [ode])).toBe(DEFAULT_GRIND_SCALE);
 		expect(shotGrindScale({}, [ode])).toBe(DEFAULT_GRIND_SCALE);
+	});
+
+	it("an old shot's typed name finds its grinder through the catalogue, as the core's grinder_named (FINAL-2 N6)", () => {
+		expect(shotGrindScale({ grinderModel: 'Niche' }, [ode, nicheZero])).toBe(nicheZero.scale);
+		expect(grinderIdForName([ode, nicheZero], 'niche')).toBe(nicheZero.id);
+		expect(grinderNamed([ode, nicheZero], 'Niche'), 'the caller\'s own record').toBe(nicheZero);
+		expect(grinderIdForName([ode, nicheZero], 'EK43')).toBeNull();
+		expect(grinderIdForName([ode, nicheZero], '  ')).toBeNull();
+		const gone = { ...nicheZero, deletedAt: 2 };
+		expect(grinderIdForName([gone], 'Niche Zero'), 'tombstones never').toBeNull();
+	});
+
+	it('an exact name wins over the catalogue: "Niche Zero 2" is the second one', () => {
+		const second: Grinder = { ...nicheZero, id: 'grinder:niche-zero-2', name: 'Niche Zero 2' };
+		expect(grinderIdForName([nicheZero, second], 'Niche Zero 2')).toBe(second.id);
+		expect(grinderIdForName([nicheZero, second], 'Niche Zero')).toBe(nicheZero.id);
 	});
 });
 
