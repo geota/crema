@@ -2666,9 +2666,15 @@ class LibraryController(
         val held = editedBag?.takeIf { it.id == id } ?: return
         editedBag = null
         if (deletedHere == id || st.editingBeanGone != null) return
-        val name = held.name.trim().ifEmpty { "This bag" }
+        editedBagGone(id, held.name)
+    }
+
+    /** The bag [id] the editor is on is gone: the editor and a message say its changes weren't saved (PLAN follow-up 10). */
+    private fun editedBagGone(id: String, bagName: String) {
+        val name = bagName.trim().ifEmpty { "This bag" }
+        val told = uiState().editingBeanGone != null
         updateUi { if (it.editingBeanId == id) it.copy(editingBeanGone = name) else it }
-        notify("“$name” was deleted elsewhere; your changes weren’t saved")
+        if (!told) notify("“$name” was deleted elsewhere; your changes weren’t saved")
     }
 
     /** Start a brand-new bean in the full editor — stash a blank draft and point
@@ -2693,11 +2699,22 @@ class LibraryController(
     ) {
         val now = System.currentTimeMillis()
         var saved = false
+        var tombstoned = false
+        var tombName = ""
         editRows(
             { rows ->
                 // Resolve from the library, or from a new-bean draft (the "Add bean"
                 // → full-editor Save path — the bean isn't in [beans] yet).
                 val current = rows.beans.firstOrNull { it.id == id }
+                // A tombstone (a Visualizer-bound bag deleted while the editor was
+                // open, #512) stays as the delete left it: stripped, never edited
+                // (REVIEW-516 follow-up 1). The edits aren't saved, and the editor says so.
+                tombstoned = current?.deletedAt != null
+                if (tombstoned) {
+                    tombName = current?.name.orEmpty()
+                    saved = false
+                    return@editRows rows
+                }
                 val draft = uiState().draftBean?.takeIf { it.id == id }
                 val existing = current ?: draft
                 saved = existing != null
@@ -2750,6 +2767,7 @@ class LibraryController(
             { st -> if (saved) st.copy(draftBean = null) else st },
         )
         if (saved) persistLibrary()
+        if (tombstoned) editedBagGone(id, uiState().editingBeanGone ?: tombName)
     }
 
     // ── Bean bag photos (Phase C) ────────────────────────────────────────────

@@ -393,6 +393,26 @@ class SaveBoundariesVmTest {
 
     // ── #488 review S5: a bag deleted here stays deleted ────────────────────
 
+    /** REVIEW-516 follow-up 1: the editor's Save over a bag tombstoned while
+     *  it was open writes nothing to the tombstone, and says so. */
+    @Test
+    fun `a Save over a tombstoned bag leaves the tombstone as it is`() {
+        val vm = vmWith(listOf(bag("a").copy(visualizerId = "b1"), bag("b")), active = "b")
+        vm.startEditBean("a")
+        VmHarness.idle()
+        val opened = vm.bean("a")
+        vm.deleteBean("a")
+        VmHarness.idle()
+        val tomb = VmHarness.ownState(vm).beans.withTombstones().single { it.id == "a" }
+        assertNotNull(tomb.deletedAt)
+        vm.updateBean("a", "Some roaster", opened = opened) { it.copy(notes = "written after the delete", tags = listOf("late")) }
+        VmHarness.idle()
+        assertEquals(tomb, VmHarness.ownState(vm).beans.withTombstones().single { it.id == "a" }, "the tombstone stays stripped")
+        assertTrue(VmHarness.ownState(vm).roasters.none { it.name == "Some roaster" }, "no roaster made for it either")
+        assertEquals("Bag a", vm.ui.value.editingBeanGone)
+        assertTrue("“Bag a” was deleted elsewhere; your changes weren’t saved" in vm.messages(), "${vm.messages()}")
+    }
+
     @Test
     fun `a bag on Visualizer deleted here stays as a hidden tombstone`() {
         val vm = vmWith(
