@@ -4,11 +4,13 @@
 	 * WideDevicesAutoSave, PhoneDevicesGrinder).
 	 *
 	 * The owned grinders (the active one badged "In use"), "+ Add grinder"
-	 * through the shared type-or-pick box, and for the selected grinder: its
-	 * grind scale (Lowest / Highest / Step / Unit, saved on change through the
-	 * core's merge, a bad scale refused inline), Reset to preset, a preview of
-	 * a value as Brew shows it, the grind each bag saved for it, Rename,
-	 * Change preset and Remove (which archives it: bags and shots keep it).
+	 * through the shared type-or-pick box (a model already owned offers "Add
+	 * another": a second Niche Zero), and for the selected grinder: its grind
+	 * scale (Lowest / Highest / Step / Unit, a draft until "Save scale", with
+	 * Cancel, through the core's merge; a bad scale refused inline), Reset to
+	 * preset, a preview of a value as Brew shows it, the grind each bag saved
+	 * for it, Rename, Change preset and Remove (asked first; it archives the
+	 * grinder: bags and shots keep it). As on Android (FINAL N1).
 	 * The archived grinders are listed with Restore, and the per-device
 	 * "Save each shot's grind to its bag" setting sits under the list.
 	 *
@@ -19,8 +21,16 @@
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import StarIcon from 'phosphor-svelte/lib/StarIcon';
 	import { getBeanStore } from '#lib/bean/store.svelte.js';
-	import { formatGrind, grindStartFromBlank, grindText, stepText as scaleStepText, type GrinderChoice } from '#lib/bean/grinder.js';
+	import {
+		formatGrind,
+		grindStartFromBlank,
+		grindText,
+		stepText as scaleStepText,
+		type GrinderChoice,
+		type GrindScale
+	} from '#lib/bean/grinder.js';
 	import { getSettingsStore } from '#lib/settings/index.js';
+	import { choiceDialog, confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import GrinderTypeOrPick from './GrinderTypeOrPick.svelte';
 	import {
@@ -52,16 +62,18 @@
 		owned.find((g) => g.id === pickedId) ?? owned.find((g) => g.id === activeId) ?? owned[0] ?? null
 	);
 
-	// The scale fields: the selected grinder's stored scale, until typed over.
-	// A save (or another grinder) brings them back to what is stored.
+	// The scale fields: a draft of the selected grinder's stored scale, until
+	// typed over. "Save scale" stores it, Cancel (or another grinder, or a
+	// save) brings them back to what is stored.
 	let minText = $derived(selected ? String(selected.scale.min) : '');
 	let maxText = $derived(selected ? String(selected.scale.max) : '');
 	let stepText = $derived(selected ? stepFieldText(selected.scale) : '');
 	let unitText = $derived(selected ? selected.scale.unit : '');
-	let scaleError = $derived.by<string | null>(() => {
-		void selected?.id;
-		return null;
-	});
+	const draftScale = $derived(parseScaleDraft({ min: minText, max: maxText, step: stepText, unit: unitText }));
+	/** The typed scale differs from the stored one: Save and Cancel show. */
+	const scaleChanged = $derived(!!selected && scaleDiffers(draftScale.scale, selected.scale));
+	/** Why the typed scale is refused, while it differs from the stored one. */
+	const scaleError = $derived(scaleChanged ? draftScale.error : null);
 
 	const preset = $derived(selected ? presetOf(selected) : null);
 	const presetScale = $derived(selected ? presetScaleOf(selected) : null);
@@ -91,24 +103,70 @@
 		closeEditors();
 	}
 
-	function onAdd(choice: GrinderChoice): void {
-		const g = lib.takeGrinderChoice(choice);
+	/**
+	 * Take an Add box choice. A typed name or catalogue entry the user already
+	 * owns asks first: show that grinder, or add another of the model (#488
+	 * follow-up 18, the core's `add_another_grinder`: "Niche Zero 2").
+	 */
+	async function onAdd(choice: GrinderChoice): Promise<void> {
 		adding = false;
+		if (choice.kind === 'create' || choice.kind === 'catalogue') {
+			const name = choice.kind === 'create' ? choice.name : '';
+			const catalogueId = choice.kind === 'catalogue' ? choice.id : '';
+			if (lib.grinderAddKind(name, catalogueId) === 'existing') {
+				const owned = lib.addGrinder(name, catalogueId);
+				const answer = await choiceDialog({
+					title: `You already have ${owned?.name ?? choice.name}`,
+					message: 'Show it, or add another grinder of the same model?',
+					primaryLabel: 'Show it',
+					secondaryLabel: 'Add another'
+				});
+				if (answer === 'primary' && owned) pick(owned.id);
+				else if (answer === 'secondary') {
+					const g = lib.addAnotherGrinder(name, catalogueId);
+					if (g) pick(g.id);
+				}
+				return;
+			}
+		}
+		const g = lib.takeGrinderChoice(choice);
 		if (g) pick(g.id);
 	}
 
-	/** Save the typed scale, or say why it is refused. */
-	function commitScale(): void {
+	/** Two scales differ: a field changed (a thirds step compared as a number, not its digits). */
+	function scaleDiffers(a: GrindScale, b: GrindScale): boolean {
+		// A stored step can be an f32 (0.33333334): within a millionth is the same.
+		const num = (x: number, y: number) => !(Math.abs(x - y) <= 1e-6 * Math.max(1, Math.abs(x), Math.abs(y)));
+		return num(a.min, b.min) || num(a.max, b.max) || num(a.step, b.step) || a.unit !== b.unit;
+	}
+
+	/** Save the typed scale; a refused one stays, its reason shown. */
+	function saveScale(): void {
+		if (!selected || !scaleChanged || draftScale.error) return;
+		lib.saveGrinderEdit(selected, { ...selected, scale: draftScale.scale });
+	}
+
+	/** Drop the typed scale: the fields show the stored one again. */
+	function cancelScale(): void {
 		if (!selected) return;
-		const { scale, error } = parseScaleDraft({ min: minText, max: maxText, step: stepText, unit: unitText });
-		scaleError = error;
-		if (error || sameScale(scale, selected.scale)) return;
-		lib.saveGrinderEdit(selected, { ...selected, scale });
+		minText = String(selected.scale.min);
+		maxText = String(selected.scale.max);
+		stepText = stepFieldText(selected.scale);
+		unitText = selected.scale.unit;
+	}
+
+	function onScaleKey(e: KeyboardEvent): void {
+		if (e.key === 'Enter') {
+			e.preventDefault();
+			saveScale();
+		} else if (e.key === 'Escape' && scaleChanged) {
+			e.preventDefault();
+			cancelScale();
+		}
 	}
 
 	function resetToPreset(): void {
 		if (!selected || !presetScale) return;
-		scaleError = null;
 		lib.saveGrinderEdit(selected, { ...selected, scale: { ...presetScale } });
 	}
 
@@ -142,7 +200,6 @@
 		if (!selected) return;
 		const entry = presetChoices().find((c) => c.id === presetPick);
 		if (!entry) return;
-		scaleError = null;
 		lib.saveGrinderEdit(selected, {
 			...selected,
 			presetId: entry.id,
@@ -151,10 +208,18 @@
 		choosingPreset = false;
 	}
 
-	function remove(): void {
+	/** Remove asks first (as on Android), then archives: bags and shots keep the grinder. */
+	async function remove(): Promise<void> {
 		if (!selected) return;
-		const id = selected.id;
+		const { id, name } = selected;
 		closeEditors();
+		const ok = await confirmDialog({
+			title: `Remove ${name}?`,
+			message: 'It leaves Devices and the pickers. Shots and bags keep it, and you can restore it from Archived.',
+			confirmLabel: 'Remove',
+			danger: true
+		});
+		if (!ok) return;
 		lib.archiveGrinder(id);
 		if (pickedId === id) pickedId = null;
 	}
@@ -194,7 +259,7 @@
 					grinders={lib.allGrinders}
 					excludeIds={owned.map((g) => g.id)}
 					autofocus
-					onPick={onAdd}
+					onPick={(c) => void onAdd(c)}
 				/>
 			{/if}
 			{#each owned as g (g.id)}
@@ -285,7 +350,7 @@
 							type="text"
 							inputmode="decimal"
 							bind:value={minText}
-							onchange={commitScale}
+							onkeydown={onScaleKey}
 							aria-invalid={scaleError ? true : undefined}
 							aria-describedby={scaleError ? `${uid}-scale-err` : undefined}
 						/>
@@ -296,7 +361,7 @@
 							type="text"
 							inputmode="decimal"
 							bind:value={maxText}
-							onchange={commitScale}
+							onkeydown={onScaleKey}
 							aria-invalid={scaleError ? true : undefined}
 							aria-describedby={scaleError ? `${uid}-scale-err` : undefined}
 						/>
@@ -307,17 +372,31 @@
 							type="text"
 							inputmode="decimal"
 							bind:value={stepText}
-							onchange={commitScale}
+							onkeydown={onScaleKey}
 							aria-invalid={scaleError ? true : undefined}
 							aria-describedby={scaleError ? `${uid}-scale-err` : undefined}
 						/>
 					</label>
 					<label class="gdv-field">
 						<span>Unit</span>
-						<input type="text" placeholder="none" bind:value={unitText} onchange={commitScale} />
+						<input type="text" placeholder="none" bind:value={unitText} onkeydown={onScaleKey} />
 					</label>
 				</div>
 				<p class="gdv-error" id="{uid}-scale-err" role="alert">{scaleError ?? ''}</p>
+				{#if scaleChanged}
+					<div class="gdv-inline gdv-scale-save">
+						<span class="gdv-muted gdv-grow">{scaleError ? '' : 'Changes apply to Brew once saved.'}</span>
+						<button type="button" class="gdv-btn" onclick={cancelScale}>Cancel</button>
+						<button
+							type="button"
+							class="gdv-btn gdv-btn-primary"
+							disabled={!!scaleError}
+							onclick={saveScale}
+						>
+							Save scale
+						</button>
+					</div>
+				{/if}
 
 				<div class="gdv-panels">
 					<div class="gdv-panel">
@@ -391,7 +470,7 @@
 					<button type="button" class="gdv-btn" onclick={startRename}>Rename</button>
 					<button type="button" class="gdv-btn" onclick={startPreset}>Change preset</button>
 					<span class="gdv-grow"></span>
-					<button type="button" class="gdv-btn gdv-btn-quiet" onclick={remove}>Remove grinder</button>
+					<button type="button" class="gdv-btn gdv-btn-quiet" onclick={() => void remove()}>Remove grinder</button>
 				</div>
 			</section>
 		{/if}
@@ -717,6 +796,9 @@
 		align-items: flex-end;
 		flex-wrap: wrap;
 		gap: 10px;
+	}
+	.gdv-scale-save {
+		align-items: center;
 	}
 	.gdv-actions {
 		display: flex;

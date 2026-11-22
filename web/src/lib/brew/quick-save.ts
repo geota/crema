@@ -1,8 +1,8 @@
 /**
  * `#lib/brew/quick-save.js` — what Quick Controls' **Save** writes
- * (save-boundaries review F1, 2026-11-21; the rule Android's `QuickSave.kt`
- * follows): each changed part goes to its owner, and only once the user
- * confirms.
+ * (save-boundaries review F1, 2026-11-21). The rule is the core's
+ * (`de1_domain::quick_save`, REVIEW-CORE M2), so web and Android read one
+ * plan:
  *
  *  - Brew's grind differs from the active bag's saved grind for the active
  *    grinder (#488) → the grind goes to that (bag, grinder) row, through the
@@ -15,39 +15,41 @@
  *  - Nothing differs → Save is off. With no profile, Save still saves the
  *    grind.
  *
- * Pure apart from the stores it is handed, so the rule is tested without
- * the dashboard.
+ * The Undo of an in-place Save is the core's too (`quick_save_undo`): each
+ * part comes back only while it still holds what the Save wrote. The shell
+ * keeps the name prompt, the store writes, the baked profile and the
+ * message wording.
  */
 
 import type { Bean } from '#lib/bean/index.js';
 import {
-	brewGrindView,
-	formatGrind,
 	DEFAULT_GRIND_SCALE,
+	formatGrind,
+	NO_GRINDER_ID,
 	type BagGrind,
 	type Grinder,
 	type GrindSave
 } from '#lib/bean/grinder.js';
+import {
+	QuickSaveProfileKind,
+	QuickSaveProfileWrite,
+	QuickSaveUndoOutcome,
+	type QuickSavePlan as CorePlan,
+	type QuickSaveUndo as CoreUndo,
+	type QuickSaveUndoPlan
+} from '#lib/core/crema-core.js';
+import { quickSavePlanJson, quickSaveUndoJson } from '#lib/wasm/de1_wasm.js';
 import type { CremaProfile, ProfileFingerprintOverrides } from '#lib/profiles/index.js';
-import { sameRecord } from '#lib/utils/same-record.js';
 
-/** The kind of profile Save would write to. */
-export type QuickSaveProfileKind = 'none' | 'custom' | 'builtin';
+export { QuickSaveProfileKind, QuickSaveProfileWrite, QuickSaveUndoOutcome };
 
-/** What Save would write, for the state on screen. */
-export interface QuickSavePlan {
-	readonly beanId: string | null;
-	readonly beanName: string | null;
+/** What Save would write, for the state on screen: the core's plan, with the grinder it names. */
+export type QuickSavePlan = Omit<CorePlan, 'grind'> & {
 	/** Brew's grind as the bag stores it, when it differs from the bag's for the active grinder; else `null`. */
 	readonly grind: string | null;
 	/** The active grinder the grind is saved for (`null` = the "no grinder" slot). */
 	readonly grinder: Grinder | null;
-	readonly profileId: string | null;
-	readonly profileName: string | null;
-	readonly profileKind: QuickSaveProfileKind;
-	/** The recipe dials differ from the active profile's own. */
-	readonly recipeChanged: boolean;
-}
+};
 
 /**
  * The plan for the active `bean`, the active `grinder`, Brew's grind
@@ -63,53 +65,35 @@ export function quickSavePlan(input: {
 	profile: CremaProfile | null;
 	overrides: ProfileFingerprintOverrides;
 }): QuickSavePlan {
-	const { bean, brewGrind, profile, grinder } = input;
-	// Save's grind part is the core's (`brew_grind_view`): the marker's rule.
-	const grind = brewGrindView({ bag: bean, grinder, brewGrind }).saveGrind ?? null;
-	return {
-		beanId: bean?.id ?? null,
-		beanName: bean?.name ?? null,
-		grind,
-		grinder,
-		profileId: profile?.id ?? null,
-		profileName: profile?.name ?? null,
-		profileKind: profile == null ? 'none' : profile.source === 'custom' ? 'custom' : 'builtin',
-		recipeChanged: profile != null && Object.keys(input.overrides).length > 0
-	};
-}
-
-/** Save writes the recipe to a profile (there is one to write to). */
-export function writesRecipe(plan: QuickSavePlan): boolean {
-	return plan.recipeChanged && plan.profileKind !== 'none';
-}
-
-/** Save has something to write. */
-export function saveEnabled(plan: QuickSavePlan): boolean {
-	return plan.grind !== null || writesRecipe(plan);
-}
-
-/** Save asks for a name first: a built-in is read-only, so it's a copy. */
-export function needsName(plan: QuickSavePlan): boolean {
-	return saveEnabled(plan) && writesRecipe(plan) && plan.profileKind === 'builtin';
-}
-
-/** "Save as new…" is offered: a custom profile would otherwise be updated in place. */
-export function offersSaveAsNew(plan: QuickSavePlan): boolean {
-	return saveEnabled(plan) && writesRecipe(plan) && plan.profileKind === 'custom';
-}
-
-/** The name a copy's prompt starts from. */
-export function copyNameSeed(plan: QuickSavePlan): string {
-	return plan.profileName ? `${plan.profileName} (copy)` : '';
+	const { bean, grinder, brewGrind, profile } = input;
+	const core = JSON.parse(
+		quickSavePlanJson(
+			JSON.stringify({
+				bag: bean ?? undefined,
+				grinder: grinder ?? undefined,
+				brewGrind: brewGrind ?? undefined,
+				profile: profile
+					? {
+							id: profile.id,
+							name: profile.name,
+							kind: profile.source === 'custom' ? QuickSaveProfileKind.Custom : QuickSaveProfileKind.Builtin
+						}
+					: undefined,
+				recipeOverrides: profile ? input.overrides : {}
+			})
+		)
+	) as CorePlan;
+	return { ...core, grind: core.grind ?? null, grinder };
 }
 
 /** The stores and core rules a Save writes through. */
 export interface QuickSaveDeps {
 	readonly beans: {
 		getBean(id: string): Bean | null;
-		updateBean(id: string, patch: Partial<Bean>): void;
 		/** The core's grind save onto the (bag, grinder) row; stored only when it changed. */
 		saveBagGrind(beanId: string, grinder: Grinder | null, grind: string): GrindSave | null;
+		/** Store a bag the core produced (an Undo's row put back), as it set `updatedAt`. */
+		storeBagFromCore(bean: Bean): void;
 	};
 	readonly profiles: {
 		get(id: string): CremaProfile | undefined;
@@ -123,18 +107,16 @@ export interface QuickSaveDeps {
 
 /** What an in-place Save replaced, for its Undo. */
 export interface QuickSaveUndo {
-	readonly profileId: string;
-	readonly profileName: string;
-	/** The profile's body before the Save. */
+	/** What the core compares: the body and the grind row the Save wrote. */
+	readonly core: CoreUndo;
+	/** The profile's body before the Save: what Undo stores back. */
 	readonly previous: CremaProfile;
-	/** The body the Save wrote: Undo restores only over this (REVIEW-496 M1). */
-	readonly written: CremaProfile;
-	/** The bag's saved grinds before the same Save, and as it wrote them. */
-	readonly grind: {
-		readonly beanId: string;
-		readonly before: BagGrind[] | null;
-		readonly written: BagGrind[] | null;
-	} | null;
+	/**
+	 * The bag had no saved grinds at all before the Save (`grinds` null: not
+	 * migrated yet). Undo puts that back, not an empty list, so the migration
+	 * still runs for it (PLAN follow-up 13).
+	 */
+	readonly grindsWereNull: boolean;
 }
 
 export interface QuickSaveResult {
@@ -159,9 +141,10 @@ export function runQuickSave(
 		asNew?: boolean;
 	}
 ): QuickSaveResult | null {
-	if (!saveEnabled(plan)) return null;
-	const recipe = writesRecipe(plan);
-	const copying = recipe && (opts.asNew === true || plan.profileKind === 'builtin');
+	if (!plan.enabled) return null;
+	const recipe = plan.writesRecipe;
+	const copying =
+		recipe && (plan.profileWrite === QuickSaveProfileWrite.Copy || (opts.asNew === true && plan.offersSaveAsNew));
 	const name = opts.copyName?.trim() || null;
 	if (copying && name === null) return null;
 	const profile = opts.profile;
@@ -187,24 +170,41 @@ export function runQuickSave(
 		} else {
 			deps.profiles.save(baked);
 			undo = {
-				profileId: profile.id,
-				profileName: profile.name,
+				core: {
+					profileId: profile.id,
+					profileName: profile.name,
+					writtenProfile: plain(deps.profiles.get(profile.id) ?? baked)
+				},
 				previous: plain(profile),
-				written: plain(deps.profiles.get(profile.id) ?? baked),
-				grind: null
+				grindsWereNull: false
 			};
 			parts.push(`“${profile.name}” updated`);
 		}
 	}
-	if (plan.grind !== null && plan.beanId !== null) {
-		const before = plain(deps.beans.getBean(plan.beanId)?.grinds ?? null);
+	if (plan.grind !== null && plan.beanId != null) {
+		const before = deps.beans.getBean(plan.beanId);
+		const beforeRow = before ? plain(rowFor(before, plan.grinderId)) : undefined;
 		const saved = deps.beans.saveBagGrind(plan.beanId, plan.grinder, plan.grind);
 		// A message only when the saved value changed.
 		if (saved?.changed) {
 			const where = plan.grinder ? `${plan.beanName} · ${plan.grinder.name}` : plan.beanName;
 			const value = formatGrind(plan.grind, plan.grinder?.scale ?? DEFAULT_GRIND_SCALE);
 			parts.push(`${parts.length === 0 ? 'Grind' : 'grind'} ${value} saved to ${where}`);
-			if (undo) undo = { ...undo, grind: { beanId: plan.beanId, before, written: plain(saved.bean.grinds ?? null) } };
+			if (undo) {
+				undo = {
+					...undo,
+					core: {
+						...undo.core,
+						grind: {
+							beanId: plan.beanId,
+							grinderId: plan.grinderId ?? NO_GRINDER_ID,
+							before: beforeRow,
+							written: plain(rowFor(saved.bean, plan.grinderId))
+						}
+					},
+					grindsWereNull: before?.grinds == null
+				};
+			}
 		}
 	}
 	if (parts.length === 0) return null;
@@ -212,27 +212,59 @@ export function runQuickSave(
 }
 
 /**
- * Undo an in-place Save: the profile's body comes back only while it is
- * still the body the Save wrote (a later pin, rename or edit stands), and
- * the bag's grind only while it is still the one written.
+ * Undo an in-place Save through the core's `quick_save_undo`: the profile's
+ * body comes back only while it is still the body the Save wrote (a later
+ * pin, rename or edit stands), and the bag's grind only while that one
+ * (bag, grinder) row is still the one written.
  */
 export function undoQuickSave(
 	u: QuickSaveUndo,
-	deps: Pick<QuickSaveDeps, 'beans' | 'profiles'>
-): { profileRestored: boolean; message: string } {
-	const now = deps.profiles.get(u.profileId);
-	const profileRestored = now !== undefined && sameRecord(now, u.written);
-	if (profileRestored) deps.profiles.save(u.previous);
-	if (u.grind && sameRecord(deps.beans.getBean(u.grind.beanId)?.grinds ?? null, u.grind.written)) {
-		deps.beans.updateBean(u.grind.beanId, { grinds: u.grind.before });
+	deps: Pick<QuickSaveDeps, 'beans' | 'profiles'>,
+	nowMs = Date.now()
+): { profileRestored: boolean; outcome: QuickSaveUndoOutcome; message: string } {
+	const nowProfile = deps.profiles.get(u.core.profileId);
+	const nowBag = u.core.grind ? deps.beans.getBean(u.core.grind.beanId) : null;
+	const out = JSON.parse(
+		quickSaveUndoJson(
+			JSON.stringify({ undo: u.core, nowProfile: nowProfile ?? null, nowBag: nowBag ?? undefined }),
+			nowMs
+		)
+	) as QuickSaveUndoPlan;
+	if (out.restoreProfile) deps.profiles.save(u.previous);
+	if (out.restoreBean) {
+		const bean = out.restoreBean as Bean;
+		// The row the Save added is gone again: a bag that had no saved grinds goes back to none.
+		const back = u.grindsWereNull && (bean.grinds ?? []).length === 0 ? { ...bean, grinds: null } : bean;
+		deps.beans.storeBagFromCore(back);
 	}
 	return {
-		profileRestored,
-		message: profileRestored ? 'Save undone' : `“${u.profileName}” changed since; not undone`
+		profileRestored: out.restoreProfile,
+		outcome: out.outcome,
+		message: undoMessage(out.outcome, u.core.profileName)
 	};
+}
+
+/** The Undo's message for how it came out. */
+function undoMessage(outcome: QuickSaveUndoOutcome, name: string): string {
+	switch (outcome) {
+		case QuickSaveUndoOutcome.Undone:
+			return 'Save undone';
+		case QuickSaveUndoOutcome.ProfileOnly:
+			return `“${name}” put back; the grind changed since, not undone`;
+		case QuickSaveUndoOutcome.GrindOnly:
+			return `Grind put back; “${name}” changed since, not undone`;
+		case QuickSaveUndoOutcome.NotUndone:
+			return `“${name}” changed since; not undone`;
+	}
+}
+
+/** The bag's row for `grinderId` (`undefined` = the "no grinder" slot), or `undefined` (the core's absent). */
+function rowFor(bean: { grinds?: BagGrind[] | null }, grinderId: string | undefined): BagGrind | undefined {
+	const id = grinderId ?? NO_GRINDER_ID;
+	return bean.grinds?.find((g) => g.grinderId === id) ?? undefined;
 }
 
 /** A plain copy of a (possibly reactive) row, as stored. */
 function plain<T>(row: T): T {
-	return JSON.parse(JSON.stringify(row)) as T;
+	return row === undefined ? row : (JSON.parse(JSON.stringify(row)) as T);
 }

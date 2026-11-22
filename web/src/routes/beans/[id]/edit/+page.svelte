@@ -5,12 +5,13 @@
 	 * Reads `id` from the route, resolves it via the library store, and
 	 * passes the record to {@link BeanEditPage}, which edits a draft and
 	 * merges it onto the stored bag on Save. If the id is unknown the user is
-	 * bounced back to `/beans` (only on arrival, not after a delete here).
+	 * bounced back to `/beans` (only on arrival, not after a delete here). A
+	 * bag deleted elsewhere while it is open keeps the editor, which says so.
 	 */
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { getBeanStore } from '#lib/bean/index.js';
+	import { getBeanStore, type Bean } from '#lib/bean/index.js';
 	import { missingRecordRedirect } from '#lib/beans/missing-record-redirect.js';
 	import BeanEditPage from '#lib/components/beans/BeanEditPage.svelte';
 
@@ -21,6 +22,14 @@
 	// coerce so the lookup never throws.
 	const id = $derived(page.params.id ?? '');
 	const bean = $derived(id ? library.getBean(id) : null);
+	// The bag as last shown: when it is deleted elsewhere (another tab, a
+	// sync) while the editor is open, the editor stays with the draft and
+	// says so, instead of unmounting and dropping it (REVIEW-497 P4).
+	let lastShown = $state.raw<Bean | null>(null);
+	$effect.pre(() => {
+		if (bean) lastShown = bean;
+	});
+	const shown = $derived(bean ?? (lastShown?.id === id ? lastShown : null));
 
 	// Bounce an unknown id to the list, but not after the editor deletes the
 	// bean it was showing: the editor's own exit navigates then (review 03 P3-6).
@@ -43,8 +52,8 @@
 	<title>Crema — Edit bean</title>
 </svelte:head>
 
-{#if bean}
-	<BeanEditPage bean={bean} tagSuggestions={tagSuggestions} />
+{#if shown}
+	<BeanEditPage bean={shown} tagSuggestions={tagSuggestions} />
 {:else}
 	<div class="be-loading">Loading…</div>
 {/if}

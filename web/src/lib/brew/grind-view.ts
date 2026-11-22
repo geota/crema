@@ -12,7 +12,7 @@ import type { Bean } from '#lib/bean/model.js';
 import {
 	brewGrindView,
 	formatGrind,
-	savedGrindRow,
+	grinderPickRows,
 	type Grinder,
 	type GrindScale,
 	type LastGrind
@@ -66,20 +66,38 @@ export function grindView(input: { bag: Bean | null; grinder: Grinder | null; br
 	};
 }
 
+/** One grinder row in Brew's picker: its line and whether the bag stars it. */
+export interface GrinderRowView {
+	readonly id: string;
+	readonly name: string;
+	/** "Saved 480 μm", "Nothing saved · last shot 32", "Nothing saved"; the range with no bag. */
+	readonly line: string;
+	/** The selected bag's starred grinder ("This bag's grinder · …"). */
+	readonly starred: boolean;
+}
+
 /**
- * The picker row's line for `grinder` on the selected bag: "Saved 480 μm",
- * else "Nothing saved · last shot 32", else "Nothing saved"; with no bag,
- * the grinder's range. The starred grinder reads "This bag's grinder · …".
+ * The picker rows for `grinders` on the selected bag, from the core's
+ * `grinder_pick_rows` (REVIEW-CORE M1: the lookups selecting the bag uses,
+ * so an old shot stamped "Niche" counts for the Niche Zero). The shell only
+ * words them.
  */
-export function grinderRowLine(grinder: Grinder, bag: Bean | null, lastGrinds: readonly LastGrind[]): string {
-	const s = grinder.scale;
-	if (!bag) return `${s.min}–${s.max}${s.unit ? ' ' + s.unit : ''}`;
-	const row = savedGrindRow(bag, grinder.id);
-	const star = row?.starred ? "This bag's grinder · " : '';
-	if (row && row.grind.trim() !== '') return `${star}Saved ${formatGrind(row.grind, s)}`;
-	const key = grinder.name.trim().toLowerCase();
-	const last =
-		lastGrinds.find((l) => l.grinderId === grinder.id) ??
-		lastGrinds.find((l) => !l.grinderId && l.grinder.trim().toLowerCase() === key);
-	return `${star}Nothing saved${last ? ` · last shot ${formatGrind(last.grind, s)}` : ''}`;
+export function grinderRowViews(
+	grinders: readonly Grinder[],
+	bag: Bean | null,
+	lastGrinds: readonly LastGrind[]
+): GrinderRowView[] {
+	const rows = grinderPickRows(grinders, bag, lastGrinds);
+	return grinders.map((g, i) => {
+		const r = rows[i];
+		const s = g.scale;
+		let line: string;
+		if (!bag) line = `${s.min}–${s.max}${s.unit ? ' ' + s.unit : ''}`;
+		else {
+			const star = r?.starred ? "This bag's grinder · " : '';
+			if (r?.saved != null) line = `${star}Saved ${formatGrind(r.saved, s)}`;
+			else line = `${star}Nothing saved${r?.lastShot != null ? ` · last shot ${formatGrind(r.lastShot, s)}` : ''}`;
+		}
+		return { id: g.id, name: g.name, line, starred: !!r?.starred };
+	});
 }

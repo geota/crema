@@ -100,7 +100,7 @@
 		type Roaster, activateBean } from '#lib/bean/index.js';
 	import { scoreMap, searchBeans } from '#lib/bean/search.js';
 	import type { GrinderChoice, LastGrind } from '#lib/bean/grinder.js';
-	import { grinderRowLine, grindView } from '#lib/brew/grind-view.js';
+	import { grinderRowViews, grindView } from '#lib/brew/grind-view.js';
 	import { selectGrinder } from '#lib/bean/activate.js';
 	import { devicesHref } from '#lib/components/grinders/devices-link.js';
 	import type { GrinderPickRow } from '#lib/components/grinders/GrinderPicker.svelte';
@@ -109,12 +109,8 @@
 	import { getMaintenanceStore } from '#lib/maintenance/index.js';
 	import { dismissToast, toast } from '#lib/components/shared/toast.svelte.js';
 	import {
-		copyNameSeed,
-		needsName,
-		offersSaveAsNew,
 		quickSavePlan,
 		runQuickSave,
-		saveEnabled,
 		undoQuickSave,
 		type QuickSaveDeps,
 		type QuickSaveUndo
@@ -615,13 +611,13 @@
 
 	async function runSave(asNew: boolean): Promise<void> {
 		let copyName: string | null = null;
-		if (needsName(quickSave) || (asNew && offersSaveAsNew(quickSave))) {
+		if (quickSave.needsName || (asNew && quickSave.offersSaveAsNew)) {
 			copyName =
 				(
 					await promptDialog({
 						title: asNew ? 'Save as new profile' : 'Save a copy',
 						message: 'Profile name:',
-						initialValue: copyNameSeed(quickSave),
+						initialValue: quickSave.copyNameSeed,
 						confirmLabel: 'Save'
 					})
 				)?.trim() || null;
@@ -651,7 +647,7 @@
 	async function undoSave(u: QuickSaveUndo, dialled: Partial<BrewParamSeed>): Promise<void> {
 		quickSaveToast = null;
 		const r = undoQuickSave(u, quickSaveDeps);
-		if (r.profileRestored && profileStore.activeId === u.profileId) {
+		if (r.profileRestored && profileStore.activeId === u.core.profileId) {
 			await tick();
 			// The dial comes back only if it wasn't moved since the Save.
 			if (Object.keys(params.qcOverrides()).length === 0) {
@@ -1409,15 +1405,9 @@
 		() => (beanLibrary.activeBeanId ? lastGrinds(beanLibrary.activeBeanId) : null),
 		[] as LastGrind[]
 	);
-	const grinderRows = $derived.by<GrinderPickRow[]>(() => {
-		const bag = beanLibrary.activeBean;
-		return beanLibrary.grinders.map((g) => ({
-			id: g.id,
-			name: g.name,
-			line: grinderRowLine(g, bag, bagLastGrinds.value),
-			starred: !!bag?.grinds?.some((r) => r.grinderId === g.id && r.starred)
-		}));
-	});
+	const grinderRows = $derived<GrinderPickRow[]>(
+		grinderRowViews(beanLibrary.grinders, beanLibrary.activeBean, bagLastGrinds.value)
+	);
 	const activeGrinderStarred = $derived(grinderRows.some((r) => r.starred && r.id === beanLibrary.activeGrinder?.id));
 	function pickGrinder(id: string | null): void {
 		void selectGrinder(id);
@@ -2109,10 +2099,10 @@
 			onToggleAutoTare={toggleAutoTare}
 			onToggleSteamEco={toggleSteamEco}
 			onSave={() => void runSave(false)}
-			saveEnabled={saveEnabled(quickSave)}
-				saveIncludesGrind={quickSave.grind !== null}
+			saveEnabled={quickSave.enabled}
+				saveIncludesGrind={quickSave.includesGrind}
 				grindInfo={grindInfo}
-			onSaveAsNew={offersSaveAsNew(quickSave) ? () => void runSave(true) : undefined}
+			onSaveAsNew={quickSave.offersSaveAsNew ? () => void runSave(true) : undefined}
 		/>
 		<PhoneOverflowSheet
 			open={overflowOpen}
@@ -2366,10 +2356,10 @@
 				yieldTargetOn={yieldTargetOn}
 				onToggleYieldTarget={onToggleYieldTarget}
 				onSave={() => void runSave(false)}
-				saveEnabled={saveEnabled(quickSave)}
-				saveIncludesGrind={quickSave.grind !== null}
+				saveEnabled={quickSave.enabled}
+				saveIncludesGrind={quickSave.includesGrind}
 				grindInfo={grindInfo}
-				onSaveAsNew={offersSaveAsNew(quickSave) ? () => void runSave(true) : undefined}
+				onSaveAsNew={quickSave.offersSaveAsNew ? () => void runSave(true) : undefined}
 				onToggleSteamEco={toggleSteamEco}
 			/>
 		</div>

@@ -217,4 +217,13 @@ describe("Brew's grind session is text", () => {
 		localStorage.setItem(BREW_GRIND_KEY, '14');
 		expect(new BrewGrindSession().value).toBe('14');
 	});
+
+	it('reads an old numeric value through the core\'s grind text: no float noise (follow-up 27)', () => {
+		localStorage.setItem(BREW_GRIND_KEY, '0.30000000000000004');
+		expect(new BrewGrindSession().value).toBe('0.3');
+		localStorage.setItem(BREW_GRIND_KEY, '2.25');
+		expect(new BrewGrindSession().value, 'an off-step value keeps its decimals').toBe('2.25');
+		localStorage.setItem(BREW_GRIND_KEY, '15.0');
+		expect(new BrewGrindSession().value).toBe('15');
+	});
 });
