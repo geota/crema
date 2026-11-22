@@ -64,6 +64,8 @@ fun BagGrindsEditor(
     /** The grinder ids whose grind Save refuses ("Enter a grind or remove this row"). */
     toFix: Set<String> = emptySet(),
     compact: Boolean = false,
+    /** On a remote, that Brew reads the hub's saved grinds, not these (REVIEW-FINAL-2 N4). */
+    remoteNote: String? = null,
 ) {
     // The rows and the box read the stored grinders with the staged ones over them.
     val stagedNow = staged.toList()
@@ -75,6 +77,7 @@ fun BagGrindsEditor(
             Eyebrow("Grind per grinder", Modifier.weight(1f))
             Text("Saved when you tap Save", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        if (remoteNote != null) coffee.crema.ui.screens.RemoteNote(remoteNote)
         rows.toList().forEach { row ->
             val grinder = shown.firstOrNull { it.id == row.grinderId }
             val onDevices = row.grinderId.isEmpty() || grinder?.isLive == true

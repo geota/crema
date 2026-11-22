@@ -86,7 +86,7 @@ class GrinderStateTest {
         assertEquals("2.1.3", view.value)
         assertEquals("Grind 2.1.3", view.headerText(), "no unit after text")
         assertNull(view.marker, "same as the bag's, as text")
-        assertEquals(coffee.crema.ui.components.StepperBlank("2.1.3", 25.0), view.stepperBlank(), "no number: steps start mid-scale")
+        assertEquals(coffee.crema.ui.components.StepperBlank("2.1.3", 25.0, editText = "2.1.3"), view.stepperBlank(), "no number: steps start mid-scale, typing from the text")
         assertEquals("Bag 2.1.3", s.copy(qcGrind = "2.1.4").brewGrindView().marker?.label)
     }
 

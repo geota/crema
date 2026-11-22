@@ -3,6 +3,7 @@ package coffee.crema.machine
 import coffee.crema.core.HotWaterDose
 import coffee.crema.core.HotWaterMode
 import coffee.crema.core.MachineRequest
+import coffee.crema.ui.applyTo
 import kotlin.reflect.KClass
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -100,7 +101,33 @@ class MachineCommandCodecTest {
         for (text in listOf("14.5", "15", "0", "2.1.3", "4⅓", "1 turn + 3", "14,5")) {
             assertEquals(MachineCommand.SetGrind(text), ok("setQcGrind", text).command, text)
         }
-        for (bad in listOf("NaN", "Infinity", "-Infinity", "1e9", "-1", "", "  ", "a\nb", "x".repeat(65))) refused("setQcGrind", bad)
+        for (bad in listOf("-1", "-0.5", "20000", "", "  ", "a\nb", "x".repeat(65))) refused("setQcGrind", bad)
+    }
+
+    /** REVIEW-526 probe: a relayed grind is stored as checked (trimmed), no longer than 32, with no control or format characters. */
+    @Test
+    fun `a relayed grind padded or carrying control characters is refused or stored trimmed`() {
+        refused("setQcGrind", "12" + " ".repeat(60_000) + "\u0001")
+        refused("setQcGrind", "\n\u001F12\t\r")
+        refused("setQcGrind", "12\u202Eevil")
+        // Every bidi control (all Unicode format characters): embeddings and overrides, isolates, marks.
+        val bidi = (0x202A..0x202E) + (0x2066..0x2069) + listOf(0x200E, 0x200F)
+        for (c in bidi) refused("setQcGrind", "12${c.toChar()}3")
+        refused("setQcGrind", "x".repeat(33))
+        ok("setQcGrind", "x".repeat(32))
+        val padded = ok("setQcGrind", "12" + " ".repeat(60_000)).command as MachineCommand.SetGrind
+        assertEquals("12", padded.applyTo(coffee.crema.ui.MainUiState()).qcGrind, "stored trimmed")
+    }
+
+    /** REVIEW-513 follow-up 2: a number is what the core's grind_number reads, so an exponent is text, not a number to range-check. */
+    @Test
+    fun `the relayed grind reads numbers through the core, so an exponent is text`() {
+        for (text in listOf("1e3", "1e9", "2E1", "NaN", "Infinity")) {
+            assertEquals(MachineCommand.SetGrind(text), ok("setQcGrind", text).command, text)
+        }
+        // Thirds and a decimal comma are numbers, range-checked.
+        assertEquals(null, MachineCommand.SetGrind("4 1/3").refusal())
+        assertNotNull(MachineCommand.SetGrind("10000,5").refusal())
     }
 
     /** Follow-up 19: a grinder pick carries the record's name, and a bare id (no name) is refused. */

@@ -1072,6 +1072,16 @@ pub fn active_grinder_json(grinders_json: String, active_id: String) -> String {
     de1_domain::active_grinder_json(&grinders_json, &active_id)
 }
 
+/// The grinder a typed name names (a `Grinder` JSON, or `null`): an exact
+/// name first, then through the catalogue ("Niche" names an owned Niche
+/// Zero), tombstones never (REVIEW-FINAL-2 N6). Malformed grinders name
+/// nothing. See [`de1_domain::grinder_named_json`].
+#[uniffi::export]
+#[must_use]
+pub fn grinder_named_json(grinders_json: String, name: String) -> String {
+    de1_domain::grinder_named_json(&grinders_json, &name)
+}
+
 /// The library migration (#488), on every load and after every import:
 /// `{grinders, beans, grinderModel, gate}` in, a `GrinderLibraryMigration`
 /// JSON out. Runs nothing unless `gate` (a `MigrationGate`) says the library

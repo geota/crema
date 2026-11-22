@@ -9,6 +9,7 @@ import coffee.crema.beans.BeanImageStore
 import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.LibraryStore
 import coffee.crema.beans.beanLibraryJsonl
+import coffee.crema.beans.grinderNamed
 import coffee.crema.beans.isCremaLibraryJsonl
 import coffee.crema.beans.mergeBeanImport
 import coffee.crema.beans.newBean
@@ -896,8 +897,6 @@ class LibraryController(
         val previousJson: String,
         /** The Quick-Controls override the Save folded into the profile. */
         val previousBrew: BrewParams?,
-        /** The bag had no grind rows at all before the Save (null, not []): Undo leaves it so (#13). */
-        val bagHadNoGrinds: Boolean = false,
     )
 
     private var quickSaveUndo: QuickSaveUndo? = null
@@ -1003,7 +1002,6 @@ class LibraryController(
                                 grindsWereNone = was.grinds == null,
                             ),
                         ),
-                        bagHadNoGrinds = was.grinds == null,
                     )
                 }
             }
@@ -1054,9 +1052,9 @@ class LibraryController(
             val st = uiState()
             if (st.activeProfileId == profileId && st.brewParams == null) u.previousBrew?.let(restoreBrewParams)
         }
-        plan.restoreBean?.let { restored ->
-            // A bag that had no rows before the Save goes back to none, not [] (#13).
-            val back = if (u.bagHadNoGrinds && restored.grinds.isNullOrEmpty()) restored.copy(grinds = null) else restored
+        // A bag that had no rows before the Save goes back to none, not []: the
+        // core's restore carries it (`grindsWereNone`, #44), so no guard here.
+        plan.restoreBean?.let { back ->
             var put = false
             editBeans { rows ->
                 rows.mapped { b ->
@@ -3250,7 +3248,10 @@ class LibraryController(
             appendLog("Bag selection undo failed: ${it.message}")
             return
         }
-        if (u.relayed) relaySelectionUndo(still, u.grinderNameBefore) else applySelectionChange(still)
+        if (!u.relayed) return applySelectionChange(still)
+        relaySelectionUndo(still, u.grinderNameBefore)
+        // "No profile" and "no grind" don't relay: say what stays (#50).
+        relayedUndoLeftover(still, uiState().remoteHubLabel())?.let(notify)
     }
 
     /** The bag selection [seq]'s message went without Undo. */
@@ -3307,7 +3308,10 @@ class LibraryController(
      *
      * A bag that is on Visualizer leaves a tombstone, in either scope: the row
      * stays, hidden, with `deletedAt` set and no photo, so the next pull
-     * doesn't add it back (#488 review S5). Any other bag is removed outright.
+     * doesn't add it back (#488 review S5). So does one whose first upload is
+     * still running ([coffee.crema.visualizer.BagFirstUploads], #41): the
+     * core's pull matches the remote it creates to the tombstone. Any other
+     * bag is removed outright.
      */
     fun deleteBean(id: String, alsoOnVisualizer: Boolean = false) {
         val doomed = uiState().beans.firstOrNull { it.id == id } ?: return
@@ -3322,7 +3326,10 @@ class LibraryController(
                         rows.beans.mapNotNull { b ->
                             when {
                                 b.id != id -> b
-                                !b.visualizerId.isNullOrEmpty() && b.deletedAt == null -> coffee.crema.beans.beanTombstone(b, now)
+                                // On Visualizer, or on its way there: a first upload still
+                                // running may yet create it (#41).
+                                b.deletedAt == null && (!b.visualizerId.isNullOrEmpty() || coffee.crema.visualizer.BagFirstUploads.running(b.id)) ->
+                                    coffee.crema.beans.beanTombstone(b, now)
                                 b.deletedAt != null -> b
                                 else -> null
                             }
@@ -3542,24 +3549,8 @@ class LibraryController(
 
     // ── Shot history ──────────────────────────────────────────────────────────
 
-    /**
-     * What Brew has selected (REVIEW-CORE H3) in [s], the effective state (on
-     * a remote, the hub's): the core freezes it on its own shot start, the
-     * app's or the group head's, and the shot records that copy.
-     */
-    fun shotSelectionsOf(s: MainUiState): ShotSelections {
-        val bean = s.beans.firstOrNull { it.id == s.activeBeanId }
-        val grinder = s.activeGrinder()
-        val profile = s.activeProfile()
-        return ShotSelections(
-            bean = bean?.let { b -> shotBeanSnapshot(b, b.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }) },
-            profileId = profile?.id,
-            profileName = profile?.name,
-            grinderId = grinder?.id,
-            grinderName = grinder?.name?.trim()?.ifEmpty { null },
-            grind = s.brewGrindView().value,
-        )
-    }
+    /** What Brew has selected in [s], the effective state ([shotSelections]). */
+    fun shotSelectionsOf(s: MainUiState): ShotSelections = shotSelections(s)
 
     /** Hand [selections] to the core for the next shot's start. */
     fun pushShotSelections(selections: ShotSelections) {
@@ -3982,6 +3973,28 @@ class LibraryController(
     }
 
     /**
+     * Change (or with null / blank, clear) the grinder a stored shot names
+     * (REVIEW-FINAL-2 N7, web History's `setGrinderModel`). The id follows the
+     * name (REVIEW-499 M2): the grinder the core's `grinder_named` finds for
+     * it ("Niche" names an owned Niche Zero), else none, so lookups by id
+     * never keep pointing at the old grinder. The name is kept as typed,
+     * through the core's `clean_grinder_name`.
+     * Persisted; mirrors to the uploaded copy like [updateShot].
+     */
+    fun setShotGrinder(id: String, name: String?) {
+        // Cleaned as the core stores a grinder's name (REVIEW-513 1): no control characters.
+        val typed = name?.let { coffee.crema.core.cleanGrinderName(it) }?.takeIf { it.isNotEmpty() }
+        val shot = findShot(id) ?: return
+        if (shot.grinderModel == typed) return
+        val grinderId = uiState().grinders.grinderNamed(typed)?.id
+        val marked = markForVisualizer(id, annotations = true)
+        historyStore.update(id) { it.copy(grinderModel = typed, grinderId = grinderId) }
+        saveMarkedEdit(marked)
+        schedulePatchEdited(id)
+        onShotAnnotationsEdited(id)
+    }
+
+    /**
      * Re-attribute a stored shot to another library bean — or with null, to no
      * bean (issue #16 follow-up: the wrong bean was active when the shot was
      * pulled). Freezes a fresh snapshot from the CURRENT library bean, the
@@ -4241,6 +4254,28 @@ internal fun shotBagMove(
 ): ShotBagMove? = runCatching {
     coreJson.decodeFromString(ShotBagMove.serializer(), core(coreJson.encodeToString(ShotBagMoveInput.serializer(), input)))
 }.getOrNull()
+
+/**
+ * What Brew has selected (REVIEW-CORE H3) in [s], the effective state: the
+ * core freezes it on its own shot start, the app's or the group head's, and
+ * the shot records that copy. On a remote the bag is the hub's, as its
+ * snapshot names it ([grindBag], REVIEW-FINAL-2 N5): a remote's mirror copy
+ * of the hub's shot names the hub's bag, never this device's own copy of it
+ * (missing, or with an old name), so it has the hub's id and name only.
+ */
+internal fun shotSelections(s: MainUiState): ShotSelections {
+    val bean = s.grindBag()
+    val grinder = s.activeGrinder()
+    val profile = s.activeProfile()
+    return ShotSelections(
+        bean = bean?.let { b -> shotBeanSnapshot(b, b.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }) },
+        profileId = profile?.id,
+        profileName = profile?.name,
+        grinderId = grinder?.id,
+        grinderName = grinder?.name?.trim()?.ifEmpty { null },
+        grind = s.brewGrindView().value,
+    )
+}
 
 /**
  * [bean]'s snapshot for a shot, a logged brew or a shot moved to it: the

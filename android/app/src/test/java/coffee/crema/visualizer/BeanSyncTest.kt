@@ -110,7 +110,7 @@ class BeanSyncTest {
                     else -> HttpStatusCode.NotFound to "{}"
                 }
             }
-            method == "POST" -> writeStatus to (if (writeStatus.value < 300) """{"id":"vz-${nextId++}"}""" else """{"error":"premium"}""")
+            method == "POST" -> postHook(path).let { writeStatus } to (if (writeStatus.value < 300) """{"id":"vz-${nextId++}"}""" else """{"error":"premium"}""")
             method == "PATCH" -> writeStatus to "{}"
             method == "DELETE" -> HttpStatusCode.NoContent to ""
             else -> HttpStatusCode.OK to "{}"
@@ -135,6 +135,8 @@ class BeanSyncTest {
     private var afterBagPlan: () -> Unit = {}
     /** Runs as the bag list comes back. */
     private var pullHook: () -> Unit = {}
+    /** Runs as a create (POST) reaches the server, with its path. */
+    private var postHook: (String) -> Unit = {}
 
     private val fake = FakeCore(json)
     private val core = object : BeanSyncCore by fake {
@@ -753,6 +755,31 @@ class BeanSyncTest {
         )
         assertNull(runBlocking { store.load() }.log.firstOrNull { it.direction == "delete" }?.error)
     }
+    // ── #41: a bag deleted while its first upload runs ───────────────────────
+
+    /** The delete sees the create running (so it keeps a tombstone), and a bag deleted since the plan isn't created. */
+    @Test
+    fun `a create is marked running while it uploads, and a bag deleted since the plan isn't sent`() {
+        val a = bean("A")
+        val b = bean("B")
+        library = BeanLibrary(beans = listOf(a, b), roasters = emptyList())
+        val runningAtPost = mutableListOf<Boolean>()
+        postHook = { path ->
+            if (path == "/coffee_bags") {
+                runningAtPost += BagFirstUploads.running(a.id)
+                // B is deleted meanwhile, as the library's delete leaves it.
+                library = library.copy(beans = library.beans.map { if (it.id == b.id) coffee.crema.beans.beanTombstone(it, 9_000) else it })
+            }
+        }
+        val r = run(premium = true)
+        assertTrue(r.ok)
+        assertEquals("A's create was running as it reached the server", listOf(true), runningAtPost)
+        assertEquals("B, a tombstone now, isn't created", listOf("POST /coffee_bags"), writes().map { "${it.method} ${it.path}" })
+        assertFalse("done once it landed", BagFirstUploads.running(a.id))
+        assertFalse(BagFirstUploads.running(b.id))
+        assertEquals("vz-1", library.beans.single { it.id == a.id }.visualizerId)
+        assertNotNull(library.beans.single { it.id == b.id }.deletedAt)
+    }
 }
 
 /**
@@ -964,4 +991,5 @@ private class FakeCore(private val json: Json) : BeanSyncCore {
         }
         return json.encodeToString(ListSerializer(RoasterLinkPatch.serializer()), plan)
     }
+
 }

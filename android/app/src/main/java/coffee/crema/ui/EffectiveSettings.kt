@@ -143,7 +143,8 @@ fun MachineCommand.Config.applyTo(s: MainUiState): MainUiState = when (this) {
     // A remote's pending pick shows its own record until the hub's snapshot comes.
     is MachineCommand.SetActiveGrinder -> s.copy(activeGrinderId = id, mirroredGrinder = null)
     // As text, as sent (#488 round 2).
-    is MachineCommand.SetGrind -> s.copy(qcGrind = grind)
+    // The text its refusal checked: trimmed (REVIEW-526).
+    is MachineCommand.SetGrind -> s.copy(qcGrind = grind.trim())
     is MachineCommand.SetStopOnWeight -> s.copy(stopOnWeight = on)
     is MachineCommand.SetAutoTare -> s.copy(autoTare = on)
     is MachineCommand.SetQc -> when (field) {

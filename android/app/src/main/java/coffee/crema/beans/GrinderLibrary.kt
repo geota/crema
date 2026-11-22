@@ -24,7 +24,9 @@ import coffee.crema.core.SelectionState
 import coffee.crema.core.StagedGrinderPick
 import coffee.crema.core.StagedGrindersInput
 import coffee.crema.core.StagedGrindersSave
+import coffee.crema.core.activeGrinderJson
 import coffee.crema.core.addGrinderJson
+import coffee.crema.core.grinderNamedJson
 import coffee.crema.core.bagEditorGrindersJson
 import coffee.crema.core.bagSelectionUndoJson
 import coffee.crema.core.stageGrinderPickJson
@@ -76,9 +78,50 @@ val DEFAULT_GRIND_SCALE = GrindScale(min = 0f, max = 20f, step = 0.1f, unit = ""
 /** Owned: not archived, not deleted (core `Grinder::is_live`). */
 val Grinder.isLive: Boolean get() = archivedAt == null && deletedAt == null
 
-/** The grinder [activeId] names, when it's live (core `active_grinder`); else none. */
-fun List<Grinder>.activeGrinder(activeId: String?): Grinder? =
-    activeId?.takeIf { it.isNotEmpty() }?.let { id -> firstOrNull { it.id == id && it.isLive } }
+/**
+ * The grinder [activeId] names, when it's live, through the core's
+ * `active_grinder` (REVIEW-FINAL-2 N6); else none. This list's own record.
+ * Brew reads it on every frame, so the last answer is kept per list and id.
+ */
+fun List<Grinder>.activeGrinder(activeId: String?, core: (String, String) -> String = ::activeGrinderJson): Grinder? {
+    val id = activeId?.takeIf { it.isNotEmpty() } ?: return null
+    // Nothing with that id: nothing to ask.
+    if (none { it.id == id }) return null
+    activeMemo?.takeIf { it.rows === this && it.id == id }?.let { return it.grinder }
+    val found = recordOf(core(grinderJson.encodeToString(grinders, this), id))
+    activeMemo = GrinderMemo(this, id, found)
+    return found
+}
+
+/**
+ * The grinder a typed [name] names among [this] (core `grinder_named`,
+ * REVIEW-FINAL-2 N6): one with exactly that name first (trimmed, any case;
+ * live, then archived), then through the catalogue's aliases, so "Niche"
+ * names an owned Niche Zero; tombstones never. This list's own record, or
+ * null when none does.
+ */
+fun List<Grinder>.grinderNamed(name: String?, core: (String, String) -> String = ::grinderNamedJson): Grinder? {
+    val typed = name?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    if (isEmpty()) return null
+    namedMemo?.takeIf { it.rows === this && it.id == typed }?.let { return it.grinder }
+    val found = recordOf(core(grinderJson.encodeToString(grinders, this), typed))
+    namedMemo = GrinderMemo(this, typed, found)
+    return found
+}
+
+/** The core's answer (a `Grinder` JSON or `null`) as this list's own record, found by its id (and its state). */
+private fun List<Grinder>.recordOf(out: String): Grinder? {
+    if (out.trim() == "null") return null
+    val named = runCatching { grinderJson.decodeFromString(Grinder.serializer(), out) }.getOrNull() ?: return null
+    return firstOrNull { it == named } ?: firstOrNull { it.id == named.id } ?: named
+}
+
+/** One core answer about [rows] (by identity) for [id] (an id or a typed name). */
+private class GrinderMemo(val rows: List<Grinder>, val id: String, val grinder: Grinder?)
+
+@Volatile private var activeMemo: GrinderMemo? = null
+
+@Volatile private var namedMemo: GrinderMemo? = null
 
 /** The bag's saved grind for [grinderId] (null = the "no grinder" slot), core `saved_grind`. */
 fun Bean.savedGrind(grinderId: String?): BagGrind? = grinds?.firstOrNull { it.grinderId == (grinderId ?: NO_GRINDER_ID) }

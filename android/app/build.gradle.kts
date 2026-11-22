@@ -425,6 +425,12 @@ dependencies {
     // construct-and-clear smoke test (cohort review 2026-10-25, P3-2).
     testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("androidx.test:core:1.7.0")
+    // Compose UI tests under Robolectric (Devices' tab switch, #488 follow-up
+    // 23): the test rule, BOM-managed, and the empty activity it hosts
+    // content in, merged into the debug manifest only.
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
 // ---------------------------------------------------------------------------
