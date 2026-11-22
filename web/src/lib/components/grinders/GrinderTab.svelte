@@ -7,7 +7,8 @@
 	 * through the shared type-or-pick box (a model already owned offers "Add
 	 * another": a second Niche Zero), and for the selected grinder: its grind
 	 * scale (Lowest / Highest / Step / Unit, a draft until "Save scale", with
-	 * Cancel, through the core's merge; a bad scale refused inline), Reset to
+	 * Cancel, through the core's merge; a bad scale refused inline; leaving
+	 * with one asks first, as the bag and profile editors do), Reset to
 	 * preset, a preview of a value as Brew shows it, the grind each bag saved
 	 * for it, Rename, Change preset and Remove (asked first; it archives the
 	 * grinder: bags and shots keep it). As on Android (FINAL N1).
@@ -32,6 +33,7 @@
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { choiceDialog, confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
+	import { guardUnsavedChanges } from '#lib/beans/unsaved-guard.js';
 	import GrinderTypeOrPick from './GrinderTypeOrPick.svelte';
 	import {
 		parseScaleDraft,
@@ -74,6 +76,9 @@
 	const scaleChanged = $derived(!!selected && scaleDiffers(draftScale.scale, selected.scale));
 	/** Why the typed scale is refused, while it differs from the stored one. */
 	const scaleError = $derived(scaleChanged ? draftScale.error : null);
+	// Leaving Devices with a typed scale asks first, as the bag and profile
+	// editors do (REVIEW-515 follow-up 1, #45): nothing is stored until Save.
+	guardUnsavedChanges(() => scaleChanged);
 
 	const preset = $derived(selected ? presetOf(selected) : null);
 	const presetScale = $derived(selected ? presetScaleOf(selected) : null);

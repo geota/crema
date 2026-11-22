@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { MERGE_RULE } from '#lib/bean/import-rules.js';
 	import ArrowSquareOutIcon from 'phosphor-svelte/lib/ArrowSquareOutIcon';
 	import ChatsCircleIcon from 'phosphor-svelte/lib/ChatsCircleIcon';
 	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
@@ -806,8 +807,7 @@
 	</StRow>
 	<StRow
 		title="Restore — merge"
-		sub={restoreNote ??
-			"Add anything from a backup you don't already have; keeps your current data."}
+		sub={restoreNote ?? MERGE_RULE}
 	>
 		{#snippet control()}
 			<StButton label="Merge" icon="upload-simple" onClick={() => void pickRestore('merge')} />
