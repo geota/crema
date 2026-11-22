@@ -230,6 +230,16 @@ pub fn upload_refused_no_samples(is_brew_log: bool, sample_count: Option<u32>) -
     !is_brew_log && sample_count.unwrap_or(0) == 0
 }
 
+/// Whether an upload (Visualizer or Decent, automatic, manual or a bulk
+/// sweep) must refuse a stored row: one with no telemetry
+/// ([`upload_refused_no_samples`]), or a replay (owner decision, #488 batch 6:
+/// a replay is recorded in History but never uploaded, as it is a copy of a
+/// shot the user already has).
+#[must_use]
+pub fn upload_refused_shot(is_brew_log: bool, sample_count: Option<u32>, replay: bool) -> bool {
+    replay || upload_refused_no_samples(is_brew_log, sample_count)
+}
+
 /// The most attempts a queued Visualizer operation gets before it is dropped.
 pub const MAX_QUEUE_ATTEMPTS: u32 = 3;
 
@@ -378,6 +388,14 @@ mod tests {
         assert!(!upload_refused_no_samples(false, Some(1)));
         assert!(!upload_refused_no_samples(true, Some(0)));
         assert!(!upload_refused_no_samples(true, None));
+    }
+
+    #[test]
+    fn a_replay_is_never_uploaded() {
+        // Owner decision (#488 batch 6), whatever its telemetry.
+        assert!(upload_refused_shot(false, Some(180), true));
+        assert!(!upload_refused_shot(false, Some(180), false));
+        assert!(upload_refused_shot(false, Some(0), false), "no samples still refuses");
     }
 
     // Cases pinned by the TS `visualizer-call.vitest.ts` retry-policy table.

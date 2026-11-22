@@ -112,6 +112,10 @@ pub struct ShotCaptureContext {
     /// The DE1 the shot ran on, or `None` when it isn't known.
     #[serde(default)]
     pub machine: Option<ShotMachine>,
+    /// The shot is a replay of a capture: the row gets the replay mark
+    /// ([`StoredShot::replay`]). `false` (or absent) for a live pull.
+    #[serde(default)]
+    pub replay: bool,
 }
 
 /// The profile and Quick Controls the DE1 held when the shot started.
@@ -209,6 +213,7 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
         ..bean
     });
     s.machine = ctx.machine;
+    s.replay = ctx.replay;
     Some(s)
 }
 
@@ -495,6 +500,25 @@ mod tests {
         assert_eq!(bean.grinder, None);
         assert_eq!(shot.metadata.grinder_setting, None, "no grind on Brew");
         assert_eq!(shot.grinder_model, None);
+    }
+
+    #[test]
+    fn a_replay_carries_the_replay_mark() {
+        // Owner decision (#488 batch 6): kept in History, marked.
+        let ctx = ShotCaptureContext {
+            replay: true,
+            ..ShotCaptureContext::default()
+        };
+        let shot = assemble_stored_shot(completed(None), ctx).unwrap();
+        assert!(shot.replay);
+        let json = serde_json::to_value(&shot).unwrap();
+        assert_eq!(json["replay"], true);
+        let live = assemble_stored_shot(completed(None), ShotCaptureContext::default()).unwrap();
+        assert!(!live.replay);
+        let json = serde_json::to_value(&live).unwrap();
+        assert!(json.get("replay").is_none(), "omitted when false");
+        let back: StoredShot = serde_json::from_value(json).unwrap();
+        assert!(!back.replay, "an old row reads as live");
     }
 
     #[test]

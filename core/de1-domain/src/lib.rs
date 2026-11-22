@@ -390,7 +390,11 @@ pub use shot_capture::{
     AsRunShot, CompletedShot, ShotCaptureContext, ShotSelections, assemble_stored_shot,
     parse_shot_capture_context, parse_shot_selections,
 };
-pub use shot_effects::{ShotEffects, ShotEffectsInput, shot_effects, shot_effects_json};
+pub use shot_effects::{
+    BagWeight, ShotBagMove, ShotBagMoveInput, ShotDebit, ShotDebitInput, ShotEffects,
+    ShotEffectsInput, shot_bag_move, shot_bag_move_json, shot_debit, shot_debit_json, shot_effects,
+    shot_effects_json,
+};
 pub use shot_merge::{
     ShotMergeInput, ShotPatch, TagMarks, edited_during_fetch, mark_tag_edit, mark_tag_edit_json,
     merge_remote_shot, merge_remote_shot_json, normalize_tag, normalize_tags, normalize_tags_json,
@@ -442,7 +446,7 @@ pub use visualizer_catalogue::{
 pub use visualizer_error::{
     AUTH_PARK_MS, DELETE_PARK_MS, MAX_QUEUE_ATTEMPTS, QueueDecision, QueueOp, RefreshFailure,
     VISUALIZER_DEFAULT_DAILY_LIMIT, VisualizerCallError, classify_token_refresh_failure,
-    is_recoverable, retry_backoff_ms, upload_refused_no_samples, visualizer_queue_decision,
+    is_recoverable, retry_backoff_ms, upload_refused_no_samples, upload_refused_shot, visualizer_queue_decision,
     visualizer_queue_decision_json, visualizer_quota_limit,
 };
 pub use visualizer_sync::{
