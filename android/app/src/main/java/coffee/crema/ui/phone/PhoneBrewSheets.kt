@@ -44,10 +44,8 @@ import coffee.crema.ui.hotWaterSubLine
 import coffee.crema.ui.components.StepperExtraChip
 import coffee.crema.ui.YieldRatioMode
 import coffee.crema.ui.MainViewModel
-import coffee.crema.ui.activeGrindScale
-import coffee.crema.ui.grindSeed
-import coffee.crema.ui.savedGrindForBrew
-import coffee.crema.ui.unsavedGrind
+import coffee.crema.ui.brewGrindView
+import coffee.crema.ui.stepperBlank
 import coffee.crema.ui.unsavedGrindExplanation
 import coffee.crema.ui.effectiveBrew
 import coffee.crema.ui.quickSavePlan
@@ -88,16 +86,15 @@ fun PhoneQuickSheet(
     var tab by remember { mutableStateOf("dial") }
     // Split-stepper modes + local (no-VM-seam) values — tablet QC parity.
     var doseGrindMode by remember { mutableStateOf(DoseGrindMode.Dose) }
-    // Grind: the persisted QC dial (issue 15), shared with the tablet — the
-    // old local stub never reached the VM, so the dial reset every open and
-    // was never recorded onto shots.
-    // Seed from the active bean's saved grind when the dial is untouched
-    // (issue #16) — matches the tablet sheet's qcGrindSeed.
-    // The bag's saved grind for the active grinder (#488), on its scale.
-    val grind = ui.qcGrind?.toDouble() ?: ui.grindSeed()
-    val grindScale = ui.activeGrindScale()
-    val savedGrind = coffee.crema.beans.grindDouble(ui.savedGrindForBrew()?.grind)
-    val unsaved = ui.unsavedGrind()
+    // Grind: Brew's grind (issue 15), shared with the tablet, from the core
+    // (#488 round 2): blank when not set, the first + or − from blank goes to
+    // the middle of the scale on its step; chips only around a set number.
+    val grindView = ui.brewGrindView()
+    val grind = grindView.dial ?: grindView.startFromBlank
+    val grindScale = grindView.scale
+    val savedGrind = coffee.crema.beans.grindDouble(grindView.saved)
+    val grindChips = remember(grindScale, grindView.value) { coffee.crema.beans.grindChips(grindScale, grindView.value, count = 4).map { it.value } }
+    val unsaved = grindView.marker
     var yieldRatioMode by remember { mutableStateOf(YieldRatioMode.Yield) }
     var piFlushMode by remember { mutableStateOf(PiFlushMode.Preinf) }
     val preinf = preinfOverride ?: brewDial?.preinfS ?: 8.0
@@ -208,10 +205,11 @@ fun PhoneQuickSheet(
                                 step = if (doseGrindMode == DoseGrindMode.Dose) 0.1 else grindScale.step.toDouble().takeIf { it.isFinite() && it > 0 } ?: 0.1,
                                 min = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MIN_G else minOf(grindScale.min, grindScale.max).toDouble(),
                                 max = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MAX_G else maxOf(grindScale.min, grindScale.max).toDouble(),
-                                presets = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 18.0, 19.0, 20.0) else coffee.crema.ui.grindChips(savedGrind ?: grind, grindScale).take(4),
+                                presets = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 18.0, 19.0, 20.0) else grindChips,
                                 presetRing = if (doseGrindMode == DoseGrindMode.Grind && savedGrind != null) { p -> kotlin.math.abs(p - savedGrind) < 1e-6 } else null,
                                 clampTyped = doseGrindMode == DoseGrindMode.Dose,
-                                fmt = if (doseGrindMode == DoseGrindMode.Dose) ({ fmt("%.1f", it) }) else ({ v -> coffee.crema.ui.scaleNumber(v.toFloat()) }),
+                                blank = if (doseGrindMode == DoseGrindMode.Grind) grindView.stepperBlank() else null,
+                                fmt = if (doseGrindMode == DoseGrindMode.Dose) ({ fmt("%.1f", it) }) else ({ v -> coffee.crema.beans.grindText(v, grindScale) }),
                                 onChange = { if (doseGrindMode == DoseGrindMode.Dose) vm.quickAdjustBrew(it, yieldOut, brewTemp, preinfOverride) else vm.setQcGrind(it.toFloat()) },
                                 gate = if (doseGrindMode == DoseGrindMode.Dose) brewGate else ui.gate(Setting.QC_GRIND),
                             )
@@ -469,6 +467,9 @@ private fun QcCell(
     presetRing: ((Double) -> Boolean)? = null,
     /** False keeps a typed value outside [min]..[max] as typed (a grind, #488). */
     clampTyped: Boolean = true,
+    /** No number to show (a grind not set or not a plain number, #488 round 2):
+     *  its text in the value's place, no unit, and the first + or − goes to its start. */
+    blank: coffee.crema.ui.components.StepperBlank? = null,
 ) {
     val presetLabel = gate.fmt(presetFmt ?: fmt)
     val fmt = gate.fmt(fmt)
@@ -480,14 +481,14 @@ private fun QcCell(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                QcRoundBtn("minus") { onChange((value - step).coerceIn(min, max)) }
+                QcRoundBtn("minus") { onChange(blank?.start ?: (value - step).coerceIn(min, max)) }
                 Row(
                     if (sub != null) Modifier.weight(1f).padding(horizontal = 8.dp) else Modifier,
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.Bottom,
                 ) {
                     TapToEditValue(
-                        value = value,
+                        value = blank?.start ?: value,
                         min = min,
                         max = max,
                         onCommit = onChange,
@@ -496,11 +497,11 @@ private fun QcCell(
                         clampTyped = clampTyped,
                     ) {
                         Text(
-                            fmt(value),
+                            blank?.text ?: fmt(value),
                             style = TextStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Medium, fontSize = 23.sp, fontFeatureSettings = "tnum"),
                         )
                     }
-                    if (unit.isNotEmpty()) Text(
+                    if (unit.isNotEmpty() && blank == null) Text(
                         unit,
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -508,12 +509,12 @@ private fun QcCell(
                     )
                     if (sub != null) Box(Modifier.weight(1f, fill = false).padding(start = 8.dp, bottom = 4.dp)) { sub() }
                 }
-                QcRoundBtn("plus") { onChange((value + step).coerceIn(min, max)) }
+                QcRoundBtn("plus") { onChange(blank?.start ?: (value + step).coerceIn(min, max)) }
             }
             footer()
             Row(Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.4f).gated(gate), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 presets.forEach { p ->
-                    QcPreset(presetLabel(p), presetActive?.invoke(p) ?: (kotlin.math.abs(p - value) < 0.001), ringed = presetRing?.invoke(p) == true) { onChange(p) }
+                    QcPreset(presetLabel(p), presetActive?.invoke(p) ?: (blank == null && kotlin.math.abs(p - value) < 0.001), ringed = presetRing?.invoke(p) == true) { onChange(p) }
                 }
                 if (extra != null) {
                     QcPreset(extra.label, extra.active, Modifier.semantics { contentDescription = extra.description }, onClick = extra.onClick)

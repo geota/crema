@@ -79,7 +79,7 @@ class OwnStateReadsTest {
             // the session (a remote's picks are relayed there): its own
             // selection, grinder and grind, and one Undo of them (F6, F9).
             "onGrinderSelected" to setOf("activeBag()"),
-            "onBagSelected" to setOf("activeProfileId", "activeGrinderId", "qcGrind", "activeGrinder()"),
+            "onBagSelected" to setOf("activeProfileId", "activeGrinderId", "qcGrind", "activeGrinder()", "brewGrindView()"),
             "applySelectionChange" to setOf("withActiveProfileId()"),
             "undoBagSelection" to setOf("activeProfileId", "activeGrinderId", "qcGrind"),
             // The library's own selection: a reseed after a delete or hide is

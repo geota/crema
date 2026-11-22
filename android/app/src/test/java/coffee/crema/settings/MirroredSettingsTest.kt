@@ -15,8 +15,8 @@ import kotlin.test.assertTrue
 /** The mirror slice and the effective projection, pure (spec §7.2, AC-33). */
 class MirroredSettingsTest {
 
-    private val own = MainUiState(stopOnWeight = false, qcGrind = 10f, qcSteamTempC = 140f, weightUnit = "oz", themeMode = "light")
-    private val snap = v4Snapshot(own).copy(stopOnWeight = true, qcGrind = 15f, qcSteamTempC = 150f)
+    private val own = MainUiState(stopOnWeight = false, qcGrind = "10", qcSteamTempC = 140f, weightUnit = "oz", themeMode = "light")
+    private val snap = v4Snapshot(own).copy(stopOnWeight = true, qcGrind = "15", qcSteamTempC = 150f)
 
     @Test
     fun `effective is the identity without a slice`() {
@@ -28,7 +28,7 @@ class MirroredSettingsTest {
         val remote = own.copy(mirror = MirroredSettings(snapshot = snap))
         val first = remote.effective()
         assertSame(first, remote.effective(), "the same source projects to the same instance")
-        val other = remote.copy(qcGrind = 11f)
+        val other = remote.copy(qcGrind = "11")
         assertNotSame(first, other.effective())
     }
 
@@ -45,7 +45,7 @@ class MirroredSettingsTest {
     fun `a snapshot shows the hub's machine and session values and keeps personal ones`() {
         val shown = own.copy(mirror = MirroredSettings(snapshot = snap)).effective()
         assertEquals(true, shown.stopOnWeight)
-        assertEquals(15f, shown.qcGrind)
+        assertEquals("15", shown.qcGrind)
         assertEquals(150f, shown.qcSteamTempC)
         assertEquals("oz", shown.weightUnit, "units are personal now")
         assertEquals("light", shown.themeMode)
@@ -55,11 +55,11 @@ class MirroredSettingsTest {
     fun `a pending edit shows over the snapshot until it settles`() {
         val edit = MachineCommand.SetQc(QcField.GRIND, 18f)
         val (slice, gen) = MirroredSettings(snapshot = snap).withPending(edit)
-        assertEquals(18f, own.copy(mirror = slice).effective().qcGrind)
+        assertEquals("18", own.copy(mirror = slice).effective().qcGrind)
         val accepted = slice.settled(Setting.QC_GRIND, gen, CommandOutcome.Accepted)
-        assertEquals(15f, own.copy(mirror = accepted).effective().qcGrind, "accepted: the hub's value (pushed before its reply)")
+        assertEquals("15", own.copy(mirror = accepted).effective().qcGrind, "accepted: the hub's value (pushed before its reply)")
         val refused = slice.settled(Setting.QC_GRIND, gen, CommandOutcome.Refused("no"))
-        assertEquals(15f, own.copy(mirror = refused).effective().qcGrind)
+        assertEquals("15", own.copy(mirror = refused).effective().qcGrind)
     }
 
     @Test
@@ -67,8 +67,8 @@ class MirroredSettingsTest {
         val (one, gen1) = MirroredSettings(snapshot = snap).withPending(MachineCommand.SetQc(QcField.GRIND, 16f))
         val (two, gen2) = one.withPending(MachineCommand.SetQc(QcField.GRIND, 17f))
         val stale = two.settled(Setting.QC_GRIND, gen1, CommandOutcome.Accepted)
-        assertEquals(17f, own.copy(mirror = stale).effective().qcGrind, "an older answer doesn't drop the newer edit")
-        assertEquals(15f, own.copy(mirror = stale.settled(Setting.QC_GRIND, gen2, CommandOutcome.Accepted)).effective().qcGrind)
+        assertEquals("17", own.copy(mirror = stale).effective().qcGrind, "an older answer doesn't drop the newer edit")
+        assertEquals("15", own.copy(mirror = stale.settled(Setting.QC_GRIND, gen2, CommandOutcome.Accepted)).effective().qcGrind)
     }
 
     @Test
@@ -85,8 +85,8 @@ class MirroredSettingsTest {
     @Test
     fun `a snapshot doesn't override an edit still awaiting its answer`() {
         val (slice, _) = MirroredSettings(snapshot = snap).withPending(MachineCommand.SetQc(QcField.GRIND, 18f))
-        val next = slice.applied(snap.copy(qcGrind = 12f), null, null)
-        assertEquals(18f, own.copy(mirror = next).effective().qcGrind)
+        val next = slice.applied(snap.copy(qcGrind = "12"), null, null)
+        assertEquals("18", own.copy(mirror = next).effective().qcGrind)
     }
 
     @Test

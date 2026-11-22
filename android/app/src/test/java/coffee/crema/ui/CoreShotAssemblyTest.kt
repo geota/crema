@@ -11,6 +11,7 @@ import coffee.crema.visualizer.shotHistoryJsonl
 import coffee.crema.visualizer.shotsFromCremaJsonl
 import coffee.crema.visualizer.storedShotFromBackupJson
 import coffee.crema.visualizer.wireShotJson
+import kotlinx.serialization.json.jsonObject
 import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -138,6 +139,71 @@ class CoreShotAssemblyTest {
     }
 
     private fun MainViewModel.library() = VmHarness.library(this)
+
+    // ── Brew's grind on the shot (#488 round 2: one grind value) ─────────
+
+    private val fine = coffee.crema.core.Grinder(id = "grinder:fine", name = "Fine", scale = coffee.crema.core.GrindScale(0f, 10f, 0.05f, ""), updatedAt = 1L)
+    private val niche = coffee.crema.core.Grinder(id = "grinder:niche", name = "Niche Zero", scale = coffee.crema.core.GrindScale(0f, 50f, 1f, ""), updatedAt = 1L)
+
+    private fun writeLibrary(lib: coffee.crema.beans.BeanLibrary) =
+        File(VmHarness.app().filesDir, "beanLibrary.json").writeText(coreJson.encodeToString(coffee.crema.beans.BeanLibrary.serializer(), lib))
+
+    /** REVIEW-FINAL M2: a fine step records the dial as stepped, not rounded to one decimal. */
+    @Test
+    fun `a shot records Brew's grind on the scale's step`() {
+        writeLibrary(coffee.crema.beans.BeanLibrary(grinders = listOf(fine), activeGrinderId = fine.id))
+        val vm = VmHarness.build(store)
+        VmHarness.awaitStartupLoaded(vm)
+        vm.setQcGrind(2.25f)
+        VmHarness.idle()
+        assertEquals("2.25", vm.ui.value.qcGrind)
+        assertEquals("Grind 2.25", vm.ui.value.brewGrindView().headerText())
+        pour(vm, 48)
+        assertEquals("2.25", recorded(vm, 0).grindSetting, "the shot records what the header showed")
+    }
+
+    /** REVIEW-FINAL N2: a picked grind that isn't a plain number is Brew's grind, and the shot's. */
+    @Test
+    fun `a text grind picked from a bag is shown and recorded as typed`() {
+        val bag = coffee.crema.beans.newBean("Bag", null, null, null, 0L)
+            .copy(grinds = listOf(coffee.crema.core.BagGrind(niche.id, niche.name, "2.1.3", starred = true)))
+        writeLibrary(coffee.crema.beans.BeanLibrary(listOf(bag), grinders = listOf(niche)))
+        val vm = VmHarness.build(store)
+        VmHarness.awaitStartupLoaded(vm)
+        vm.setActiveBean(bag.id)
+        VmHarness.idleUntil("the pick") { vm.ui.value.qcGrind != null }
+        assertEquals("2.1.3", vm.ui.value.qcGrind, "a pick never clears a text grind")
+        assertEquals("Grind 2.1.3", vm.ui.value.brewGrindView().headerText())
+        pour(vm, 48)
+        assertEquals("2.1.3", recorded(vm, 0).grindSetting)
+    }
+
+    /** REVIEW-FINAL S1: with no grind set, the header doesn't show the bag's, and the shot records none. */
+    @Test
+    fun `an unset grind shows blank and records nothing, with a saved grind on the bag`() {
+        val bag = coffee.crema.beans.newBean("Bag", null, null, null, 0L)
+            .copy(grinds = listOf(coffee.crema.core.BagGrind(niche.id, niche.name, "14", starred = true)))
+        writeLibrary(coffee.crema.beans.BeanLibrary(listOf(bag), activeBeanId = bag.id, grinders = listOf(niche), activeGrinderId = niche.id))
+        val vm = VmHarness.build(store)
+        VmHarness.awaitStartupLoaded(vm)
+        assertEquals(null, vm.ui.value.qcGrind, "no pick fired")
+        assertEquals("Grind —", vm.ui.value.brewGrindView().headerText())
+        pour(vm, 48)
+        assertEquals(null, recorded(vm, 0).grindSetting, "the screen and the shot agree")
+    }
+
+    /** REVIEW-FINAL M1: an imported shot's grind is kept as typed. */
+    @Test
+    fun `an imported shot keeps its grind as typed`() {
+        val vm = VmHarness.build(store)
+        VmHarness.awaitStartupLoaded(vm)
+        for ((i, grind) in listOf("18 clicks", "2.1.3", "2,5", "15").withIndex()) {
+            val plan = coreJson.parseToJsonElement(
+                """{"shots":[{"beanName":"","storedShot":{"completedAt":${i + 1},"metadata":{"dose":18.0,"grinderSetting":"$grind"}}}]}""",
+            ).jsonObject
+            assertEquals(grind, vm.library().buildImportedShots(plan, emptyMap()).single().grindSetting)
+        }
+    }
 
     @Test
     fun `the grinder model is frozen at capture`() {

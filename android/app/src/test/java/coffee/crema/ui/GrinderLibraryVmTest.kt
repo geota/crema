@@ -244,12 +244,12 @@ class GrinderLibraryVmTest {
         val vm = vm()
         vm.setQcGrind(15f)
         VmHarness.idle()
-        assertEquals(UnsavedGrind("14"), vm.ui.value.unsavedGrind(), "A's dial differs from A's saved grind")
+        assertEquals("Bag 14", vm.ui.value.brewGrindView().marker?.label, "A's dial differs from A's saved grind")
 
         vm.setActiveBean("b")
         VmHarness.idle()
-        assertEquals(18f, vm.ui.value.qcGrind, "B's saved grind (the pick order)")
-        assertNull(vm.ui.value.unsavedGrind(), "the marker reflects B")
+        assertEquals("18", vm.ui.value.qcGrind, "B's saved grind (the pick order)")
+        assertNull(vm.ui.value.brewGrindView().marker, "the marker reflects B")
         assertFalse(vm.ui.value.quickSavePlan().enabled, "nothing of A's to save to B")
         vm.quickSave()
         VmHarness.idle()
@@ -259,7 +259,7 @@ class GrinderLibraryVmTest {
         assertEquals("Bag b: grind 18", undo.message)
         vm.undoBagSelection(undo.seq)
         VmHarness.idle()
-        assertEquals(15f, vm.ui.value.qcGrind, "Undo brings the dial back")
+        assertEquals("15", vm.ui.value.qcGrind, "Undo brings the dial back")
     }
 
     @Test
@@ -272,7 +272,7 @@ class GrinderLibraryVmTest {
         vm.setActiveBean("b")
         VmHarness.idle()
         assertEquals(c40.id, vm.own().activeGrinderId)
-        assertEquals(24f, vm.ui.value.qcGrind)
+        assertEquals("24", vm.ui.value.qcGrind)
         val undo = assertNotNull(vm.ui.value.bagSelectUndo)
         assertEquals("Bag b: Comandante C40 at 24 clicks", undo.message)
         vm.undoBagSelection(undo.seq)
@@ -293,7 +293,7 @@ class GrinderLibraryVmTest {
         assertEquals(BagGrind(niche.id, niche.name, "16", starred = false), vm.bean("a").savedGrind(niche.id))
         assertEquals("9", vm.bean("a").grinderSetting, "the old field is no longer written")
         assertTrue("Grind 16 saved to Bag a · Niche Zero" in vm.ui.value.userMessages, "${vm.ui.value.userMessages}")
-        assertNull(vm.ui.value.unsavedGrind())
+        assertNull(vm.ui.value.brewGrindView().marker)
     }
 
     @Test
@@ -306,7 +306,7 @@ class GrinderLibraryVmTest {
         VmHarness.idle()
         vm.setActiveGrinder(c40.id)
         VmHarness.idle()
-        assertEquals(22f, vm.ui.value.qcGrind)
+        assertEquals("22", vm.ui.value.qcGrind)
         assertEquals(40f, vm.ui.value.activeGrindScale().max)
         assertEquals(c40.name, vm.ui.value.configSnapshotGrinder())
     }
@@ -325,7 +325,7 @@ class GrinderLibraryVmTest {
         vm.setActiveGrinder(c40.id)
         VmHarness.idle()
         assertEquals(c40.id, vm.own().activeGrinderId)
-        assertEquals(15f, vm.ui.value.qcGrind, "nothing saved or shot with it: the grind stays as it is")
+        assertEquals("15", vm.ui.value.qcGrind, "nothing saved or shot with it: the grind stays as it is")
     }
 
     /** Review 499: adding a grinder while none is active makes it Brew's; with one active, it stays. */

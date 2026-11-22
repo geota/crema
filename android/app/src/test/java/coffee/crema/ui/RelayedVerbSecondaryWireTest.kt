@@ -68,7 +68,7 @@ class RelayedVerbSecondaryWireTest {
                 Result.failure(IllegalStateException("refused by the test primary"))
             } else {
                 if (method == "setQcGrind") {
-                    hubConfig = coffee.crema.settings.v4SnapshotJson(rev = ++hubRev) { it.copy(qcGrind = args.toFloat()) }
+                    hubConfig = coffee.crema.settings.v4SnapshotJson(rev = ++hubRev) { it.copy(qcGrind = coffee.crema.beans.grindText(args.toDouble())) }
                     pushHubConfig()
                 }
                 Result.success(Unit)
@@ -173,7 +173,7 @@ class RelayedVerbSecondaryWireTest {
         refused += "setQcGrind"
         val before = vm.ui.value.qcGrind
         vm.setQcGrind(14.5f)
-        assertEquals(14.5f, vm.ui.value.qcGrind, "applied optimistically, before the round trip")
+        assertEquals("14.5", vm.ui.value.qcGrind, "applied optimistically, before the round trip")
         VmHarness.idleUntil("the refusal to revert the edit") { vm.ui.value.qcGrind == before }
         assertEquals(listOf("setQcGrind" to "14.5"), handled.toList())
     }
@@ -191,7 +191,7 @@ class RelayedVerbSecondaryWireTest {
         vm.tareScale()
         VmHarness.idleUntil("the drain verb's refusal") { VmHarness.log(vm).any { "Relay tareScale failed" in it } }
         assertEquals(listOf("setQcGrind" to "14.5", "machineState" to "IDLE", "tareScale" to ""), handled.toList())
-        assertEquals(14.5f, vm.ui.value.qcGrind, "the hub's value, pushed before its reply")
+        assertEquals("14.5", vm.ui.value.qcGrind, "the hub's value, pushed before its reply")
         assertEquals(null, VmHarness.ownState(vm).qcGrind, "never written to this remote's own settings")
     }
 

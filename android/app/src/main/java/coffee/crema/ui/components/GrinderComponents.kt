@@ -45,7 +45,8 @@ import coffee.crema.core.GrinderMatchKind
 import coffee.crema.core.Grinder
 import coffee.crema.ui.GrinderPick
 import coffee.crema.ui.GrinderPickRow
-import coffee.crema.ui.UnsavedGrind
+import coffee.crema.core.UnsavedGrind
+import coffee.crema.history.effectiveGrindSetting
 
 /*
  * The grinder pieces Brew, Devices and the bag editor share (#488): the
@@ -247,4 +248,36 @@ fun GrinderAddBox(
             }
         }
     }
+}
+
+/**
+ * A stored shot's grind, editable in place (issue #16), on its grinder's
+ * scale (#488): a grind that isn't a plain number ("18 clicks") or none
+ * shows as text ("—"), and the first + or − goes to the middle of the scale
+ * on its step. Each step hands [onChange] the number and the scale, so the
+ * shot stores it as text on that scale (#488 round 2).
+ */
+@Composable
+fun ShotGrindStepper(
+    shot: coffee.crema.history.ShotMeta,
+    grinders: List<Grinder>,
+    onChange: (Double, coffee.crema.core.GrindScale) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val scale = remember(shot.grinderId, shot.grinderModel, grinders) { coffee.crema.ui.shotGrindScale(shot, grinders) }
+    val grind = shot.effectiveGrindSetting
+    val value = coffee.crema.beans.grindDouble(grind)
+    val start = remember(scale) { coffee.crema.beans.grindStartFromBlank(scale) }
+    CremaStepper(
+        modifier = modifier,
+        value = value ?: start,
+        unit = scale.unit.takeIf { it.isNotBlank() },
+        onChange = { onChange(it, scale) },
+        step = scale.step.toDouble().takeIf { it.isFinite() && it > 0 } ?: 0.1,
+        min = minOf(scale.min, scale.max).toDouble(),
+        max = maxOf(scale.min, scale.max).toDouble(),
+        fmt = { v -> coffee.crema.beans.grindText(v, scale) },
+        clampTyped = false,
+        blank = if (value == null) StepperBlank(grind ?: "—", start) else null,
+    )
 }

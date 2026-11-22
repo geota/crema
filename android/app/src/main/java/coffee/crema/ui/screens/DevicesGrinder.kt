@@ -38,9 +38,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coffee.crema.beans.grindLabel
 import coffee.crema.beans.grinderCatalogue
 import coffee.crema.beans.savedGrind
+import coffee.crema.beans.formatGrind
 import coffee.crema.beans.scaleRefusal
 import coffee.crema.core.Grinder
 import coffee.crema.ui.GrinderPick
@@ -48,7 +48,7 @@ import coffee.crema.ui.MainUiState
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.activeGrinder
 import coffee.crema.ui.archivedGrinders
-import coffee.crema.ui.brewGrind
+import coffee.crema.ui.brewGrindView
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaConfirmDialog
@@ -202,7 +202,7 @@ private fun GrinderSettings(vm: MainViewModel, ui: MainUiState, g: Grinder, wide
     var changingPreset by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf(false) }
     fun num(t: String) = t.trim().replace(',', '.').toFloatOrNull()
-    val refusal = scaleRefusal(num(lo), num(hi), num(step))
+    val refusal = scaleRefusal(num(lo), num(hi), num(step), unit.trim())
     val changed = num(lo) != g.scale.min || num(hi) != g.scale.max || num(step) != g.scale.step || unit.trim() != g.scale.unit
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -267,10 +267,15 @@ private fun GrinderSettings(vm: MainViewModel, ui: MainUiState, g: Grinder, wide
             Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainerLowest, modifier = Modifier.weight(1f)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Eyebrow("On the Brew screen")
-                    val shown = ui.brewGrind()?.takeIf { ui.activeGrinder()?.id == g.id } ?: scaleNumber(((g.scale.min + g.scale.max) / 2f).let { kotlin.math.round(it / g.scale.step.coerceAtLeast(0.01f)) * g.scale.step.coerceAtLeast(0.01f) })
+                    // Brew's grind on this grinder when it's the active one and set,
+                    // else where Brew's first step from blank goes (the core's rule).
+                    val view = ui.brewGrindView()
+                    val brewValue = view.value?.takeIf { ui.activeGrinder()?.id == g.id }
+                    val shown = brewValue ?: remember(g.scale) { coffee.crema.beans.grindText(coffee.crema.beans.grindStartFromBlank(g.scale), g.scale) }
+                    val number = brewValue == null || view.dial != null
                     Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(shown, style = MaterialTheme.typography.displaySmall.copy(fontFamily = coffee.crema.ui.theme.JetBrainsMono))
-                        if (g.scale.unit.isNotBlank()) Text(g.scale.unit, style = MaterialTheme.typography.bodyLarge.copy(fontFamily = coffee.crema.ui.theme.JetBrainsMono), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (number && g.scale.unit.isNotBlank()) Text(g.scale.unit, style = MaterialTheme.typography.bodyLarge.copy(fontFamily = coffee.crema.ui.theme.JetBrainsMono), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Text("Steps of ${scaleNumber(g.scale.step)} · tap the number to type it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -351,13 +356,13 @@ private fun SavedOnBags(vm: MainViewModel, ui: MainUiState, g: Grinder) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(b.name, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (row.starred) PhIcon("star-fill", sizeDp = 12, tint = MaterialTheme.colorScheme.primary, contentDescription = "this bag's grinder")
-                    Text(grindLabel(row.grind, g.scale), style = MaterialTheme.typography.bodyMedium.copy(fontFamily = coffee.crema.ui.theme.JetBrainsMono))
+                    Text(formatGrind(row.grind, g.scale), style = MaterialTheme.typography.bodyMedium.copy(fontFamily = coffee.crema.ui.theme.JetBrainsMono))
                 }
             }
             shotOnly.forEach { (b, last) ->
                 Row {
                     Text(b.name, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("last shot ${grindLabel(last.grind, g.scale)}", style = MaterialTheme.typography.bodyMedium.copy(fontFamily = coffee.crema.ui.theme.JetBrainsMono), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("last shot ${formatGrind(last.grind, g.scale)}", style = MaterialTheme.typography.bodyMedium.copy(fontFamily = coffee.crema.ui.theme.JetBrainsMono), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }

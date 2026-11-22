@@ -68,35 +68,6 @@ fun Bean.savedGrind(grinderId: String?): BagGrind? = grinds?.firstOrNull { it.gr
 /** The bag's starred row ("this bag's grinder"), if any. */
 val Bean.starredGrind: BagGrind? get() = grinds?.firstOrNull { it.starred }
 
-/** A grind as the bag and the shot store it: whole numbers without a decimal. */
-fun grindText(value: Float): String =
-    if (value % 1f == 0f) String.format(java.util.Locale.ROOT, "%.0f", value) else String.format(java.util.Locale.ROOT, "%.1f", value)
-
-/** A stored grind as a number for the stepper, or null when it isn't one ("2.5.3" stays text). */
-fun grindNumber(text: String?): Float? = text?.trim()?.replace(',', '.')?.toFloatOrNull()?.takeIf { it.isFinite() }
-
-/** Whether Brew's [grind] differs from the [saved] one: numerically when both are numbers, else as text. */
-fun grindDiffers(grind: String?, saved: String?): Boolean {
-    if (grind == null) return false
-    val a = grindNumber(grind)
-    val b = grindNumber(saved)
-    return if (a != null && b != null) a != b else grind.trim() != saved?.trim()
-}
-
-/** [value] shown on [scale]: "480 μm", or "4.2" with no unit. */
-fun grindLabel(value: String, scale: GrindScale?): String =
-    scale?.unit?.trim()?.takeIf { it.isNotEmpty() }?.let { "$value $it" } ?: value
-
-/** Why a typed scale can't be stored, or null: every value finite, the lowest
- *  below the highest, the step positive (issue 03, "Bound typed scale values"). */
-fun scaleRefusal(min: Float?, max: Float?, step: Float?): String? = when {
-    min == null || max == null || step == null || !min.isFinite() || !max.isFinite() || !step.isFinite() -> "Enter a number in each field"
-    min >= max -> "Lowest must be below Highest"
-    step <= 0f -> "Step must be more than 0"
-    step > max - min -> "Step must fit between Lowest and Highest"
-    else -> null
-}
-
 /**
  * The newest grind per grinder on bag [beanId] among [shots] (newest first or
  * not), the history's answer `last_grinds_for_bag` gives on web: one per
@@ -107,8 +78,7 @@ fun lastGrindsForBag(beanId: String, shots: List<ShotMeta>): List<LastGrind> {
     val newest = LinkedHashMap<String, ShotMeta>()
     for (s in shots) {
         if (s.bean?.beanId != beanId) continue
-        val grind = s.grindSetting ?: continue
-        if (!grind.isFinite()) continue
+        if (s.grindSetting.isNullOrBlank()) continue
         val key = s.grinderId?.takeIf { it.isNotEmpty() }?.let { "id:$it" } ?: "name:${s.grinderModel?.trim()?.lowercase().orEmpty()}"
         val held = newest[key]
         if (held == null || s.completedAtMs > held.completedAtMs) newest[key] = s
@@ -117,7 +87,7 @@ fun lastGrindsForBag(beanId: String, shots: List<ShotMeta>): List<LastGrind> {
         LastGrind(
             grinderId = s.grinderId?.takeIf { it.isNotEmpty() },
             grinder = s.grinderModel.orEmpty(),
-            grind = grindText(s.grindSetting!!),
+            grind = s.grindSetting!!.trim(),
             completedAt = s.completedAtMs,
         )
     }
@@ -277,6 +247,3 @@ fun mergeBagGrinds(
     val enc = { b: Bean -> grinderJson.encodeToString(Bean.serializer(), b) }
     return grinderJson.decodeFromString(Bean.serializer(), core(enc(opened), enc(edited), enc(current), nowMs)).grinds
 }
-
-/** [grindNumber] as a Double for a stepper, parsed from the text (4.2 stays 4.2). */
-fun grindDouble(text: String?): Double? = text?.trim()?.replace(',', '.')?.toDoubleOrNull()?.takeIf { it.isFinite() }

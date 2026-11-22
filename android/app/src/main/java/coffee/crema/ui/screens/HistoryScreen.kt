@@ -671,7 +671,8 @@ fun HistoryScreen(
                             // shots, and the wrong bean is sometimes active at pull time.
                             beans = ui.beans,
                             roasters = ui.roasters,
-                            onGrindChange = { g -> vm.setShotGrind(selected.id, g) },
+                            onGrindChange = { g, scale -> vm.setShotGrind(selected.id, g, scale) },
+                            grinders = ui.grinders,
                             onBeanChange = { bid -> vm.setShotBean(selected.id, bid) },
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
@@ -984,8 +985,10 @@ private fun ShotDetail(
     /** The library, for Change bean. */
     beans: List<coffee.crema.core.Bean> = emptyList(),
     roasters: List<coffee.crema.core.Roaster> = emptyList(),
-    /** Edit the grind recorded on this shot; null clears it (issue #16). */
-    onGrindChange: (Float?) -> Unit = {},
+    /** Edit the grind recorded on this shot (issue #16): a number on the shot's grinder's scale. */
+    onGrindChange: (Double, coffee.crema.core.GrindScale) -> Unit = { _, _ -> },
+    /** The grinders, for the shot's grind scale (#488). */
+    grinders: List<coffee.crema.core.Grinder> = emptyList(),
     /** Re-attribute this shot to another bean; null = no bean (issue #16). */
     onBeanChange: (String?) -> Unit = {},
     /** Edit the forward-looking "next time" plan (local-only). */
@@ -1401,14 +1404,7 @@ private fun ShotDetail(
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Eyebrow("Grind")
-                CremaStepper(
-                    value = shot.effectiveGrindSetting?.toDoubleOrNull() ?: 0.0,
-                    onChange = { onGrindChange(it.toFloat()) },
-                    step = 0.1,
-                    min = 0.0,
-                    max = 200.0,
-                    fmt = { v -> if (v % 1.0 == 0.0) fmt("%.0f", v) else fmt("%.1f", v) },
-                )
+                coffee.crema.ui.components.ShotGrindStepper(shot, grinders, onGrindChange)
             }
         }
         ShotPeopleFields(

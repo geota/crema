@@ -27,7 +27,7 @@ interface ShotMeta {
     val yieldG: Float?
     val doseG: Float?
     val bagDebitG: Float?
-    val grindSetting: Float?
+    val grindSetting: String?
     val yieldTargetG: Float?
     val peakPressure: Float?
     val peakTemp: Float?
@@ -71,7 +71,7 @@ data class ShotRow(
     override val yieldG: Float? = null,
     override val doseG: Float? = null,
     override val bagDebitG: Float? = null,
-    override val grindSetting: Float? = null,
+    override val grindSetting: String? = null,
     override val yieldTargetG: Float? = null,
     override val peakPressure: Float? = null,
     override val peakTemp: Float? = null,

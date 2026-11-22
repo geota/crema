@@ -31,6 +31,7 @@ import coffee.crema.brew.RecipeFileStore
 import coffee.crema.history.HistoryStore
 import coffee.crema.history.ShotRow
 import coffee.crema.history.StoredShot
+import coffee.crema.history.effectiveGrindSetting
 import coffee.crema.profiles.CustomProfileStore
 import coffee.crema.profiles.HiddenProfileStore
 import coffee.crema.profiles.PinnedProfileStore
@@ -2234,7 +2235,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setShotPrivacy(id: String, privacy: String?) = library.setShotPrivacy(id, privacy)
 
     /** Set (or clear) the grind recorded on a logged shot (issue #16). */
-    fun setShotGrind(id: String, grind: Float?) = library.setShotGrind(id, grind)
+    /** Set (null clears) a stored shot's grind: [grind] stepped or typed on [scale], as text. */
+    fun setShotGrind(id: String, grind: Double?, scale: coffee.crema.core.GrindScale = coffee.crema.beans.DEFAULT_GRIND_SCALE) =
+        library.setShotGrind(id, grind?.let { coffee.crema.beans.grindText(it, scale) })
 
     /** Re-attribute a logged shot to another bean, or none (issue #16). */
     fun setShotBean(id: String, beanId: String?) = library.setShotBean(id, beanId)
@@ -2296,11 +2299,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             st.profiles.firstOrNull { it.name.equals(n, ignoreCase = true) }
         }
         if (match != null) setActiveProfile(match.id)
-        // 3. The dial: the shot's own grind (falling back to its bag snapshot's
-        //    reference setting), then dose/yield over the loaded recipe.
-        val grind = shot.grindSetting
-            ?: shot.bean?.grinderSetting?.trim()?.replace(',', '.')?.toFloatOrNull()
-        grind?.let { setQcGrind(it) }
+        // 3. Brew's grind: the shot's own (falling back to its bag snapshot's
+        //    reference setting), as text (#488 round 2), then dose/yield over
+        //    the loaded recipe. A remote relays a number; a text grind is set
+        //    on the device that owns the session only.
+        shot.effectiveGrindSetting?.let { grind ->
+            when {
+                _ui.value.mirror == null -> setGrindDial(grind)
+                else -> coffee.crema.beans.grindDouble(grind)?.let { setQcGrind(it.toFloat()) }
+            }
+        }
         if (shot.doseG != null || shot.yieldTargetG != null) {
             val active = match ?: effectiveState().activeProfile()
             val dose = shot.doseG?.toDouble() ?: active?.dose?.toDouble() ?: 18.0
@@ -2835,10 +2843,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun setQcGrind(clicks: Float) = machine.execute(MachineCommand.SetQc(QcField.GRIND, clicks))
 
-    /** Brew's grind dial, set by a bag or grinder pick on the device that owns
-     *  the session (#488, review F9): persisted and pushed to remotes. Null =
-     *  no dial (the bag's saved grind shows). */
-    private fun setGrindDial(value: Float?) {
+    /** Brew's grind, set by a bag or grinder pick on the device that owns
+     *  the session (#488, review F9): persisted and pushed to remotes. Text
+     *  as picked ("2.1.3" included); null = not set (Brew shows it blank). */
+    private fun setGrindDial(value: String?) {
         _ui.update { it.copy(qcGrind = value) }
         persistPrefs()
         proxy.pushConfig()

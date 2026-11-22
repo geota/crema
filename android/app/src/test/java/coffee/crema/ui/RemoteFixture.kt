@@ -161,7 +161,7 @@ internal class RemoteFixture(private val store: ViewModelStore) {
         current = when (method) {
             "setStopOnWeight" -> current.copy(stopOnWeight = args.toBoolean())
             "setAutoTare" -> current.copy(autoTare = args.toBoolean())
-            "setQcGrind" -> current.copy(qcGrind = args.toFloat())
+            "setQcGrind" -> current.copy(qcGrind = coffee.crema.beans.grindText(args.toDouble()))
             "quickAdjustBrew" -> args.split(",").let { p ->
                 current.copy(brewDoseG = p[0].toDouble(), brewYieldG = p[1].toDouble(), brewTempC = p[2].toDouble(), brewPreinfuseS = p.getOrNull(3)?.toDoubleOrNull())
             }
@@ -193,7 +193,7 @@ internal class RemoteFixture(private val store: ViewModelStore) {
             requireScale = false, steamEco = false, steamTwoTap = false, fanThresholdC = 50f, preFlush = false,
             steamPurge = false, idleSleepMin = 30, grinderModel = "P grinder",
             qcSteamTimeS = 20f, qcSteamFlowMlS = 1.0f, qcSteamTempC = 140f, qcHotWaterTempC = 70f,
-            qcHotWaterVolumeMl = 100f, qcFlushTimeS = 3f, qcFlushTempC = 90f, qcGrind = 10f,
+            qcHotWaterVolumeMl = 100f, qcFlushTimeS = 3f, qcFlushTempC = 90f, qcGrind = "10",
             qcHotWaterMode = coffee.crema.core.HotWaterMode.Volume, qcHotWaterTimeS = 30f,
             qcHotWaterTimeNoLimit = false, qcHotWaterRatio = 3f,
             activeProfileId = PROFILE_P, waterRefillPointMm = 5f,
@@ -204,7 +204,7 @@ internal class RemoteFixture(private val store: ViewModelStore) {
             activeProfileId = PROFILE_S, activeBeanId = BEAN_S, activeBeanSummary = "S bag",
             stopOnWeight = true, autoTare = true, maxShotDurationS = 44f, grinderModel = "S grinder",
             qcSteamTimeS = 30f, qcSteamFlowMlS = 1.6f, qcSteamTempC = 150f, qcHotWaterTempC = 85f,
-            qcHotWaterVolumeMl = 200f, qcFlushTimeS = 6f, qcFlushTempC = 93f, qcGrind = 15f,
+            qcHotWaterVolumeMl = 200f, qcFlushTimeS = 6f, qcFlushTempC = 93f, qcGrind = "15",
             qcHotWaterMode = coffee.crema.core.HotWaterMode.Time, qcHotWaterTimeS = 45f,
             qcHotWaterTimeNoLimit = true, qcHotWaterRatio = 2.5f,
             brewDoseG = 20.0, brewYieldG = 40.0, brewTempC = 94.0, brewPreinfuseS = 6.0,

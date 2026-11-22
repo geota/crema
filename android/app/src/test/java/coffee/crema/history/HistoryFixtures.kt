@@ -67,7 +67,7 @@ internal object HistoryFixtures {
             yieldG = 36f + i % 5,
             doseG = 18f,
             bagDebitG = if (i % 3 == 0) 18f else null,
-            grindSetting = 2.5f + i % 4,
+            grindSetting = "${2.5 + i % 4}",
             yieldTargetG = 36f,
             peakPressure = 9.1f,
             peakTemp = 93.2f,

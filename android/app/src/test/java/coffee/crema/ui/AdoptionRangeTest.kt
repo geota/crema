@@ -14,7 +14,7 @@ import kotlin.test.assertEquals
 class AdoptionRangeTest {
 
     private val own = MainUiState(
-        qcSteamTempC = 140f, qcSteamTimeS = 20f, qcHotWaterVolumeMl = 200f, qcGrind = 10f,
+        qcSteamTempC = 140f, qcSteamTimeS = 20f, qcHotWaterVolumeMl = 200f, qcGrind = "10",
         fanThresholdC = 50f, waterRefillPointMm = 6f, idleSleepMin = 30, maxShotDurationS = 45f,
         brewParams = BrewParams(18.0, 36.0, 93.0, null),
     )
@@ -28,23 +28,23 @@ class AdoptionRangeTest {
             qcSteamTempC = 120f, // the band the firmware snaps to off: a local edit refuses it
             qcSteamTimeS = 999f,
             qcHotWaterVolumeMl = 501f,
-            qcGrind = -3f,
+            qcGrind = "-3",
         )
         val adopted = adoptAll(hub)
         assertEquals(140f, adopted.qcSteamTempC)
         assertEquals(20f, adopted.qcSteamTimeS)
         assertEquals(200f, adopted.qcHotWaterVolumeMl)
-        assertEquals(10f, adopted.qcGrind)
+        assertEquals("10", adopted.qcGrind)
     }
 
     @Test
     fun `in-range values are taken`() {
-        val hub = v4Snapshot(own).copy(qcSteamTempC = 150f, qcSteamTimeS = 30f, qcHotWaterVolumeMl = 250f, qcGrind = 14.5f)
+        val hub = v4Snapshot(own).copy(qcSteamTempC = 150f, qcSteamTimeS = 30f, qcHotWaterVolumeMl = 250f, qcGrind = "14.5")
         val adopted = adoptAll(hub)
         assertEquals(150f, adopted.qcSteamTempC)
         assertEquals(30f, adopted.qcSteamTimeS)
         assertEquals(250f, adopted.qcHotWaterVolumeMl)
-        assertEquals(14.5f, adopted.qcGrind)
+        assertEquals("14.5", adopted.qcGrind)
         assertEquals(0f, adoptAll(hub.copy(qcSteamTempC = 0f)).qcSteamTempC, "0 turns the steam heater off, as locally")
     }
 

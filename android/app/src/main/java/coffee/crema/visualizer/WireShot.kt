@@ -70,7 +70,7 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
                 // the v2 export emits the grinder block Visualizer shows
                 // (issue #16: grind edits must reach the uploaded copy).
                 if (forBackup) {
-                    put("grinderSetting", shot.grindSetting?.toString())
+                    put("grinderSetting", shot.grindSetting?.takeIf { it.isNotBlank() })
                 } else {
                     put("grinderSetting", shot.effectiveGrindSetting)
                 }
@@ -295,7 +295,8 @@ fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Jso
         durationMs = durationMs,
         yieldG = metaStr("yieldOut")?.toFloatOrNull(),
         doseG = metaStr("dose")?.toFloatOrNull(),
-        grindSetting = metaStr("grinderSetting")?.toFloatOrNull(),
+        // Text as stored (REVIEW-FINAL M1): "2.1.3" and "18 clicks" survive.
+        grindSetting = coffee.crema.beans.grindTextOf(meta?.get("grinderSetting") as? JsonPrimitive),
         peakPressure = samples.maxOfOrNull { it.pressure },
         peakTemp = samples.maxOfOrNull { it.headTemp },
         profileName = str("profileName"),

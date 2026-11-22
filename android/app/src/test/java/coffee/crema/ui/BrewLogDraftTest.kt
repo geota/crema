@@ -48,7 +48,7 @@ class BrewLogDraftTest {
         waterG = water,
         brewMethod = method,
         brewTempC = 94f,
-        grindSetting = grind,
+        grindSetting = grind?.let { if (it % 1f == 0f) it.toInt().toString() else it.toString() },
         bean = beanId?.let { ShotBean(beanId = it, name = it) },
     )
 
