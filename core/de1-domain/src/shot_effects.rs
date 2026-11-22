@@ -190,8 +190,10 @@ pub struct ShotBagMoveInput {
     /// ([`StoredShot::mirror_copy`](crate::StoredShot::mirror_copy)): a
     /// remote's copy of the hub's shot, recorded elsewhere and never debited
     /// here. It credits only what its `bag_debit` says it took (0 when
-    /// `None`), and the new bag isn't debited.
-    pub mirror_copy: bool,
+    /// `None`), and the new bag isn't debited. `None` (absent) = `false`;
+    /// optional so the generated shell types decode JSON without it
+    /// (closing check, PLAN 63).
+    pub mirror_copy: Option<bool>,
     /// Legacy only: the shell's guess that a row **without the mark** is a
     /// mirror copy (Android: the device is a remote and the row isn't a Brew
     /// Log). Honoured only for a row with no recorded `bag_debit` (`None`):
@@ -256,7 +258,7 @@ pub fn shot_bag_move(input: &ShotBagMoveInput) -> ShotBagMove {
     }
     let dose = input.dose_g.unwrap_or(0.0);
     let legacy_guess = (input.mirror_row || input.remote) && input.bag_debit.is_none();
-    let mirror = input.mirror_copy || legacy_guess;
+    let mirror = input.mirror_copy == Some(true) || legacy_guess;
     // A mirror copy took nothing here unless it says otherwise.
     let taken = if mirror {
         Some(input.bag_debit.unwrap_or(0.0))
@@ -488,7 +490,7 @@ mod tests {
             dose_g: Some(18.0),
             remote: false,
             replay,
-            mirror_copy,
+            mirror_copy: Some(mirror_copy),
             mirror_row: false,
         }
     }

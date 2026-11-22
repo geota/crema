@@ -115,7 +115,8 @@ fun confirmText(plan: RestorePlan): Pair<String, String> {
     return "Restore from ${sourceLine(plan)}?" to listOfNotNull(
         adds?.let { "Adds $it." } ?: "Adds nothing new.",
         plan.shots.fill.size.takeIf { it > 0 }?.let { "Fills in ${plural(it, "missing curve")}." },
-        keeps?.let { "Keeps $it and your settings as they are." },
+        // Merge only adds (PLAN 62): a bag here stays, even when the backup's is newer.
+        keeps?.let { "Keeps $it and your settings as they are, even where the backup's copy is newer." },
         *warningLines(plan).toTypedArray(),
         if (deleted > 0) "${plural(deleted, "shot")} in this backup ${if (deleted == 1) "was" else "were"} deleted here and stay${if (deleted == 1) "s" else ""} deleted." else null,
     ).joinToString(" ")

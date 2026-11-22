@@ -179,6 +179,18 @@ fun BeansScreen(
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importBeanconquerorUri(uri)
     }
+    // Beans → Import says its rule first (PLAN 62): a bag you have is replaced when the file's copy is newer.
+    var importOpen by remember { mutableStateOf(false) }
+    if (importOpen) {
+        coffee.crema.ui.components.CremaConfirmDialog(
+            title = "Import beans",
+            body = coffee.crema.ui.BEANS_IMPORT_BODY,
+            confirmLabel = "Choose file",
+            icon = "upload-simple",
+            onConfirm = { importOpen = false; importLauncher.launch(arrayOf("*/*")) },
+            onDismiss = { importOpen = false },
+        )
+    }
     var pendingExport by remember { mutableStateOf<String?>(null) }
     // octet-stream keeps the suggested name as given: with "application/json" the
     // storage provider appends ".json" to "crema-beans.crema.jsonl", and web's
@@ -261,14 +273,14 @@ fun BeansScreen(
                     // 7"/portrait: icon-only actions so the title + search keep their
                     // width. The Export menu's secondary format (Beanconqueror) is a
                     // landscape-only affordance; the icon runs the primary Crema backup.
-                    CremaIconButton("upload-simple", { importLauncher.launch(arrayOf("*/*")) }, tone = CremaIconTone.Tonal)
+                    CremaIconButton("upload-simple", { importOpen = true }, tone = CremaIconTone.Tonal)
                     Spacer(Modifier.width(4.dp))
                     CremaIconButton("download-simple", { launchSave("crema-beans.crema.jsonl", vm.beansLibraryJson()) }, tone = CremaIconTone.Tonal)
                     Spacer(Modifier.width(4.dp))
                     CremaIconButton("plus", { if (tab == "bags") { vm.startNewBean(); onNav("bean-edit") } else { roasterEditing = null; roasterDialogOpen = true } }, tone = CremaIconTone.Filled)
                 } else {
                     CremaButton(
-                        onClick = { importLauncher.launch(arrayOf("*/*")) },
+                        onClick = { importOpen = true },
                         variant = CremaButtonVariant.Outlined,
                         icon = "upload-simple",
                         label = "Import",

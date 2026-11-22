@@ -1037,7 +1037,7 @@ private fun SharingSection(
         CremaSettingsRow("Back up everything", "All custom profiles, beans, roasters, shots, settings and bag photos in one .crema.zip.") {
             coffee.crema.ui.screens.BackUpEverythingButton(vm, launchSaveFile)
         }
-        CremaSettingsRow("Restore — merge", "Add anything from a backup you don't already have; keeps your current data.") {
+        CremaSettingsRow("Restore — merge", coffee.crema.ui.MERGE_RULE) {
             CremaButton(onClick = { launchRestore(MainViewModel.RestoreMode.MERGE) }, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Merge")
         }
         CremaSettingsRow("Restore — replace", "Wipe this device, then restore fully from a backup. Can't be undone.", last = true) {

@@ -224,7 +224,7 @@ pub fn coerce_grinder(raw: &Value) -> Option<Grinder> {
         ..Grinder::default()
     };
     if let Some(v) = str_field(obj, "name") {
-        g.name = crate::grinder::clean_grinder_name(&v);
+        g.name = v;
     }
     if let Some(scale) = obj.get("scale").and_then(Value::as_object) {
         let num = |k: &str| scale.get(k).and_then(crate::coerce::as_f64);
@@ -249,6 +249,9 @@ pub fn coerce_grinder(raw: &Value) -> Option<Grinder> {
     }
     g.archived_at = obj.get("archivedAt").and_then(Value::as_i64);
     g.deleted_at = obj.get("deletedAt").and_then(Value::as_i64);
+    // Cleaned, and never empty: one with no usable name takes its catalogue
+    // entry's, else "Grinder" (#488 closing check, PLAN 64).
+    g.name = crate::grinder::imported_grinder_name(&g);
     Some(g)
 }
 
@@ -371,7 +374,14 @@ mod tests {
             "presetId": "niche-zero", "updatedAt": 5, "archivedAt": 6,
         }))
         .unwrap();
-        assert_eq!((g.id.as_str(), g.name.as_str()), ("grinder:a", ""));
+        // No usable name: its catalogue entry's (PLAN 64).
+        let niche = crate::grinder_catalogue::catalogue_entry("niche-zero")
+            .unwrap()
+            .name();
+        assert_eq!(
+            (g.id.as_str(), g.name.as_str()),
+            ("grinder:a", niche.as_str())
+        );
         assert_eq!(
             (
                 g.scale.min,
@@ -387,6 +397,35 @@ mod tests {
         );
         assert!(coerce_grinder(&serde_json::json!({ "name": "x" })).is_none());
         assert!(coerce_grinder_json("nope").is_none());
+    }
+
+    /// PLAN 64: a stored name that cleans to nothing takes the catalogue
+    /// entry's name, else "Grinder"; never an empty grinder name.
+    #[test]
+    fn a_grinder_row_whose_name_cleans_to_nothing_gets_a_name() {
+        let named = |raw: serde_json::Value| coerce_grinder(&raw).unwrap().name;
+        let niche = crate::grinder_catalogue::catalogue_entry("niche-zero")
+            .unwrap()
+            .name();
+        assert_eq!(
+            named(
+                serde_json::json!({ "id": "g:1", "name": "\n\t\u{7}", "presetId": "niche-zero" })
+            ),
+            niche
+        );
+        assert_eq!(
+            named(serde_json::json!({ "id": "g:2", "name": "  " })),
+            "Grinder"
+        );
+        assert_eq!(
+            named(serde_json::json!({ "id": "g:3", "presetId": "no-such-entry" })),
+            "Grinder"
+        );
+        assert_eq!(
+            named(serde_json::json!({ "id": "g:4", "name": "EK43\n" })),
+            "EK43",
+            "a usable name is only cleaned"
+        );
     }
 
     // ── coerce_bean (mirrors model.vitest.ts) ──────────────────────────

@@ -50,25 +50,29 @@ fun DriveBackupPicker(
         onDismissRequest = onDismiss,
         title = { Text("Restore from Drive") },
         text = {
-            LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                items(rows, key = { it.id }) { row ->
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(backupDate(row), style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                row.subtitle(),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+            Column {
+                // Merge's rule (PLAN 62): it only adds.
+                Text(coffee.crema.ui.MERGE_RULE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
+                LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                    items(rows, key = { it.id }) { row ->
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(backupDate(row), style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    row.subtitle(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(onClick = { onMerge(row) }) { Text("Merge") }
+                            TextButton(onClick = { onReplace(row) }) { Text("Replace") }
                         }
-                        TextButton(onClick = { onMerge(row) }) { Text("Merge") }
-                        TextButton(onClick = { onReplace(row) }) { Text("Replace") }
+                        HorizontalDivider()
                     }
-                    HorizontalDivider()
                 }
             }
         },

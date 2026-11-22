@@ -4757,8 +4757,10 @@ data class QuickSaveGrindUndo (
 	val written: BagGrind? = null,
 	/// The bag had no grinds list before the Save (`grinds: None`, not
 	/// migrated): an Undo that leaves no rows puts `None` back, not `[]`
-	/// (#488 follow-up 44). Absent on an older Undo record = `false`.
-	val grindsWereNone: Boolean
+	/// (#488 follow-up 44). `None` (absent on an older Undo record) =
+	/// `false`; optional so the generated shell types decode JSON without
+	/// it (closing check, PLAN 63).
+	val grindsWereNone: Boolean? = null
 )
 
 /// The kind of profile Save would write to.
@@ -5463,8 +5465,10 @@ data class ShotBagMoveInput (
 	/// ([`StoredShot::mirror_copy`](crate::StoredShot::mirror_copy)): a
 	/// remote's copy of the hub's shot, recorded elsewhere and never debited
 	/// here. It credits only what its `bag_debit` says it took (0 when
-	/// `None`), and the new bag isn't debited.
-	val mirrorCopy: Boolean,
+	/// `None`), and the new bag isn't debited. `None` (absent) = `false`;
+	/// optional so the generated shell types decode JSON without it
+	/// (closing check, PLAN 63).
+	val mirrorCopy: Boolean? = null,
 	/// Legacy only: the shell's guess that a row **without the mark** is a
 	/// mirror copy (Android: the device is a remote and the row isn't a Brew
 	/// Log). Honoured only for a row with no recorded `bag_debit` (`None`):
