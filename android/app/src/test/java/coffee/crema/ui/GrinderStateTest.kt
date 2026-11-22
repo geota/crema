@@ -149,10 +149,15 @@ class GrinderStateTest {
     /** Review 499: a catalogue entry with no verified range says where to set it. */
     @Test
     fun `catalogue offers say whether the range comes with it`() {
-        val withScale = coffee.crema.beans.grinderCatalogue.first { it.scale != null }
-        val without = coffee.crema.beans.grinderCatalogue.first { it.scale == null }
-        assertEquals("Adds it to your grinders, with its scale", catalogueOfferLine(withScale.id))
-        assertEquals("Adds it to your grinders · set its range on Devices", catalogueOfferLine(without.id))
+        // #501: every listed entry has a scale, verified or typical; hidden
+        // entries (names only) are never in the list.
+        val listed = coffee.crema.beans.grinderCatalogue
+        assertTrue(listed.all { it.scale != null })
+        listed.forEach { assertEquals("Adds it to your grinders, with its scale", catalogueOfferLine(it.id), it.id) }
+        val typical = listed.filter { it.tier == coffee.crema.core.ScaleTier.Typical }.map { it.id }
+        assertTrue("comandante-c40" in typical && "fellow-opus" in typical, "typical ranges are still offered: $typical")
+        assertTrue(listed.none { it.id == "df64" }, "a hidden entry is never offered")
+        assertEquals("Adds it to your grinders · set its range on Devices", catalogueOfferLine("df64"))
     }
 
     @Test
