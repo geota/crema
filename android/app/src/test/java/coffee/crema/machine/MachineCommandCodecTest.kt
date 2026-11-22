@@ -110,6 +110,9 @@ class MachineCommandCodecTest {
         refused("setQcGrind", "12" + " ".repeat(60_000) + "\u0001")
         refused("setQcGrind", "\n\u001F12\t\r")
         refused("setQcGrind", "12\u202Eevil")
+        // Every bidi control (all Unicode format characters): embeddings and overrides, isolates, marks.
+        val bidi = (0x202A..0x202E) + (0x2066..0x2069) + listOf(0x200E, 0x200F)
+        for (c in bidi) refused("setQcGrind", "12${c.toChar()}3")
         refused("setQcGrind", "x".repeat(33))
         ok("setQcGrind", "x".repeat(32))
         val padded = ok("setQcGrind", "12" + " ".repeat(60_000)).command as MachineCommand.SetGrind

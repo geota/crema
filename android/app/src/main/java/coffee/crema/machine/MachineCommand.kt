@@ -152,7 +152,8 @@ sealed interface MachineCommand {
             return when {
                 text.isEmpty() -> "a grind is required"
                 // The raw value, ends included (REVIEW-526): no control or format
-                // characters (bidi overrides) anywhere, and the trimmed text no
+                // characters (the bidi controls U+202A–202E, U+2066–2069, U+200E/F)
+                // anywhere, and the trimmed text no
                 // longer than a grind needs; [applyTo] stores it trimmed.
                 text.length > MAX_GRIND_LENGTH || grind.any { it.isISOControl() || Character.getType(it) == Character.FORMAT.toInt() } -> "malformed grind"
                 number != null && !number.within(0.0..MAX_GRIND) -> "grind out of range: $text"
