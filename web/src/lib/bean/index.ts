@@ -21,6 +21,7 @@ export {
 	duplicateBean,
 	setBeanFrozen,
 	mergeBeanEdit,
+	editedRemaining,
 	mergeRoasterEdit,
 	beanDaysOffRoast,
 	migrateLegacyCurrentBean,
@@ -42,7 +43,7 @@ export {
 	getBeanStore
 } from './store.svelte';
 
-export { activateBean } from './activate';
+export { activateBean, selectGrinder } from './activate';
 export {
 	bagStock,
 	emptyBagBannerText,

@@ -52,6 +52,7 @@
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { guardUnsavedChanges } from '#lib/beans/unsaved-guard.js';
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import { usePhoneBar } from '#lib/shell/phone-bar.svelte.js';
 	import PhoneOverflowSheet, { type OverflowItem } from '#lib/shell/PhoneOverflowSheet.svelte';
@@ -353,6 +354,12 @@
 		dirty = true;
 	}
 
+	/**
+	 * Leaving any other way than Save, Back or Discard (the rail, a tab, a
+	 * link, a reload) asks first too (FINAL S6), as the bag editor does.
+	 */
+	const guard = guardUnsavedChanges(() => dirty);
+
 	/** Back to wherever the user came from (Brew or Profiles per `returnPath`). */
 	async function back(): Promise<void> {
 		if (dirty && !await confirmDialog({
@@ -360,6 +367,7 @@
 			confirmLabel: 'Leave'
 		})) return;
 
+		guard.release();
 		void goto(returnPath);
 	}
 

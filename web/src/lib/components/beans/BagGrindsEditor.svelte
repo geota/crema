@@ -12,16 +12,21 @@
 	 *
 	 * The block edits the editor's draft only (`onChange`); the editor's Save
 	 * writes the rows through the core three-way merge, and Cancel drops them.
-	 * Picking a grinder in the Add box does create or restore its record on
-	 * Devices at once (`takeGrinderChoice`).
+	 * Picking a grinder in the Add box stages it in the draft too (FINAL S7,
+	 * the core's `stage_grinder_pick`): a new or archived grinder is written
+	 * to Devices, and made Brew's when none is, only on Save (`onStage` keeps
+	 * the staged records; the rows and the box read them over the stored ones).
 	 */
 	import MinusIcon from 'phosphor-svelte/lib/MinusIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import StarIcon from 'phosphor-svelte/lib/StarIcon';
 	import TrashIcon from 'phosphor-svelte/lib/TrashIcon';
 	import { getBeanStore } from '#lib/bean/index.js';
+	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import {
 		DEFAULT_GRIND_SCALE,
+		bagEditorGrinders,
+		stageGrinderPick,
 		NO_GRINDER_ID,
 		formatGrind,
 		grindNumber,
@@ -31,6 +36,7 @@
 		isLiveGrinder,
 		sameGrind,
 		type BagGrind,
+		type Grinder,
 		type GrinderChoice,
 		type GrindScale
 	} from '#lib/bean/grinder.js';
@@ -42,6 +48,8 @@
 		baseGrinds,
 		beanId,
 		toFix = [],
+		staged = [],
+		onStage = () => {},
 		onChange
 	}: {
 		/** The draft's rows. */
@@ -52,11 +60,21 @@
 		beanId: string;
 		/** The grinder ids Save refused (an empty grind), shown until filled. */
 		toFix?: readonly string[];
+		/** Grinders the Add box staged in this draft (not stored until Save). */
+		staged?: readonly Grinder[];
+		/** The staged list after a pick. */
+		onStage?: (next: Grinder[]) => void;
 		onChange: (next: BagGrind[]) => void;
 	} = $props();
 
 	const uid = $props.id();
 	const library = getBeanStore();
+
+	/** The grinders as this draft sees them: stored, with the staged ones over them. */
+	const grinders = $derived(bagEditorGrinders(library.allGrinders, staged));
+	function grinderById(id: string): Grinder | null {
+		return grinders.find((g) => g.id === id) ?? null;
+	}
 
 	type Row = {
 		row: BagGrind;
@@ -76,7 +94,7 @@
 	const rows = $derived.by<Row[]>(() =>
 		grinds.map((row) => {
 			const none = row.grinderId === NO_GRINDER_ID;
-			const grinder = none ? null : library.getGrinder(row.grinderId);
+			const grinder = none ? null : grinderById(row.grinderId);
 			const live = none || (grinder !== null && isLiveGrinder(grinder));
 			const scale = grinder && grindScaleRefusal(grinder.scale) === null ? grinder.scale : DEFAULT_GRIND_SCALE;
 			const base = baseGrinds.find((b) => b.grinderId === row.grinderId) ?? null;
@@ -111,7 +129,7 @@
 	/** A new grind on a row: the name copy is refreshed from Devices with it. */
 	function setGrind(r: Row, grind: string): void {
 		if (grind === r.row.grind) return;
-		const g = r.row.grinderId === NO_GRINDER_ID ? null : library.getGrinder(r.row.grinderId);
+		const g = r.row.grinderId === NO_GRINDER_ID ? null : grinderById(r.row.grinderId);
 		update(r.row.grinderId, { grind, grinderName: g?.name ?? r.row.grinderName });
 	}
 
@@ -183,8 +201,12 @@
 	const onBag = $derived(grinds.map((g) => g.grinderId));
 
 	function onPick(choice: GrinderChoice): void {
-		const g = library.takeGrinderChoice(choice);
-		if (!g || grinds.some((r) => r.grinderId === g.id)) return;
+		const pick = stageGrinderPick(library.allGrinders, staged, choice);
+		if (!pick) return;
+		onStage(pick.staged);
+		const g = pick.grinder;
+		if (grinds.some((r) => r.grinderId === g.id)) return;
+		if (pick.kind === 'revived') toast.info(`${g.name} is back: Save returns it to Devices, with its saved grinds.`);
 		onChange([...grinds, { grinderId: g.id, grinderName: g.name, grind: '', starred: false }]);
 		void seedFromLastShot(g.id, g.name);
 	}
@@ -324,7 +346,7 @@
 	{/each}
 
 	<div class="bgg-add">
-		<GrinderTypeOrPick grinders={library.allGrinders} excludeIds={onBag} {onPick} />
+		<GrinderTypeOrPick {grinders} excludeIds={onBag} {onPick} />
 	</div>
 </div>
 

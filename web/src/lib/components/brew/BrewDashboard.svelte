@@ -472,7 +472,7 @@
 	 * profiles, so picking a bag from the QC strip activates it for the brew.
 	 */
 	function selectBean(bean: Bean): void {
-		activateBean(bean.id, { shotInProgress: ui.shotInProgress });
+		activateBean(bean.id, { shotInProgress: () => ui.shotInProgress });
 	}
 
 	// ── Quick Sheet local control state ──────────────────────────────────
@@ -872,7 +872,7 @@
 		const liveBean = beanId ? beanLibrary.getBean(beanId) : null;
 		if (liveBean && liveBean.archivedAt == null && beanLibrary.activeBeanId !== liveBean.id) {
 			// Awaited: its grind lands before the shot's own grind below.
-			await activateBean(liveBean.id, { shotInProgress: ui.shotInProgress });
+			await activateBean(liveBean.id, { shotInProgress: () => ui.shotInProgress });
 		}
 		// The shot's grinder, by id (#488, F4), while it is still on Devices.
 		const shotGrinder = shot.grinderId ? beanLibrary.getGrinder(shot.grinderId) : null;
@@ -1344,7 +1344,7 @@
 
 	function switchBag(id: string | null): void {
 		bagPickerOpen = false;
-		if (id) activateBean(id, { shotInProgress: ui.shotInProgress });
+		if (id) activateBean(id, { shotInProgress: () => ui.shotInProgress });
 		else beanLibrary.setActiveBean(null);
 	}
 
@@ -1981,7 +1981,7 @@
 					profileStore.setActive(id);
 					shotStartError = null;
 				}}
-				onSelectBean={(id) => activateBean(id, { shotInProgress: ui.shotInProgress })}
+				onSelectBean={(id) => activateBean(id, { shotInProgress: () => ui.shotInProgress })}
 				onAllProfiles={() => void goto(resolve('profiles'))}
 				onAllBeans={() => void goto(resolve('beans'))}
 			/>
@@ -2164,7 +2164,7 @@
 				onAddProfile={() => void goto(resolve('profiles/new'))}
 				onProfileLibrary={() => void goto(resolve('profiles'))}
 				onEditBean={editActiveBean}
-				onSelectBean={(id) => activateBean(id, { shotInProgress: ui.shotInProgress })}
+				onSelectBean={(id) => activateBean(id, { shotInProgress: () => ui.shotInProgress })}
 				onAddBean={() => void goto(resolve('beans/new'))}
 				onBeanLibrary={() => void goto(resolve('beans'))}
 				onOpenQuick={() => quickSheetOpen = true}

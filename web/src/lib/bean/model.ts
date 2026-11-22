@@ -25,7 +25,8 @@ import {
 	duplicateBeanJson as wasmDuplicateBeanJson,
 	setBeanFrozenJson as wasmSetBeanFrozenJson,
 	mergeBeanEditJson as wasmMergeBeanEditJson,
-	mergeRoasterEditJson as wasmMergeRoasterEditJson
+	mergeRoasterEditJson as wasmMergeRoasterEditJson,
+	editedRemainingJson as wasmEditedRemainingJson
 } from '#lib/wasm/de1_wasm.js';
 
 // ── Wire types (mirrored from de1_domain::bean) ─────────────────────────
@@ -596,6 +597,25 @@ export function mergeBeanEdit(base: Bean, edited: Bean, current: Bean, nowMs = D
 	return JSON.parse(
 		wasmMergeBeanEditJson(JSON.stringify(base), JSON.stringify(edited), JSON.stringify(current), nowMs)
 	) as Bean;
+}
+
+/**
+ * The bag editor's Remaining — `de1_domain::edited_remaining`, the rule
+ * Android uses too (REVIEW-CORE H6), both shown while editing and saved:
+ * Remaining set here stands; a new bag, or one that had no size, starts full;
+ * a bag that had a size keeps its remaining, so resizing one that ran out
+ * leaves it empty (a resize is a correction, not a refill). `base` is the bag
+ * the editor opened on, `null` for a new bag.
+ */
+export function editedRemaining(
+	base: Bean | null,
+	bagSize: number,
+	remaining: number,
+	remainingTouched: boolean
+): number {
+	return JSON.parse(
+		wasmEditedRemainingJson(JSON.stringify({ base: base ?? undefined, bagSize, remaining, remainingTouched }))
+	) as number;
 }
 
 /** A roaster editor's Save — {@link mergeBeanEdit} for a roaster (`de1_domain::merge_roaster_edit`). */

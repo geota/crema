@@ -194,6 +194,50 @@ describe('the bag editor keeps a draft', () => {
 		expect(saved.bagSize).toBe(340);
 		expect(saved.remaining).toBe(200);
 	});
+
+	/** The Remaining stepper's shown value ("Remaining: 0 g, edit"). */
+	function shownRemaining(root: HTMLElement): string | null {
+		return root.querySelector('button[aria-label^="Remaining: "]')?.textContent?.trim() ?? null;
+	}
+
+	it('resizing a bag that ran out leaves it empty: a resize is not a refill (REVIEW-CORE H6)', async () => {
+		library.upsertBean({ ...bag(), remaining: 0 });
+		const root = mountEditor(BeanEditPage, { bean: library.getBean('bean:a')! });
+		button(root, '340g').click();
+		flushSync();
+		expect(shownRemaining(root), 'shown as it will be saved').toBe('0');
+		button(root, 'Save').click();
+		await tick();
+		await tick();
+		const saved = library.getBean('bean:a')!;
+		expect(saved.bagSize).toBe(340);
+		expect(saved.remaining, 'still empty, as on Android').toBe(0);
+	});
+
+	it('a bag with no size before starts full at its first size', async () => {
+		library.upsertBean({ ...bag(), bagSize: 0, remaining: 0 });
+		const root = mountEditor(BeanEditPage, { bean: library.getBean('bean:a')! });
+		button(root, '340g').click();
+		flushSync();
+		expect(shownRemaining(root)).toBe('340');
+		button(root, 'Save').click();
+		await tick();
+		await tick();
+		expect(library.getBean('bean:a')!.remaining).toBe(340);
+	});
+
+	it('Remaining set in the editor stands over a resize', async () => {
+		const root = mountEditor(BeanEditPage, { bean: bag() });
+		root.querySelector<HTMLButtonElement>('button[aria-label="Increase Remaining"]')!.click();
+		flushSync();
+		button(root, '340g').click();
+		flushSync();
+		expect(shownRemaining(root)).toBe('201');
+		button(root, 'Save').click();
+		await tick();
+		await tick();
+		expect(library.getBean('bean:a')!.remaining).toBe(201);
+	});
 });
 
 describe('the bag photo follows Save', () => {

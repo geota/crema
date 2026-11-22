@@ -48,17 +48,18 @@
 		getBeanImageStore,
 		beanImageDraftRefFor,
 		mergeBeanEdit,
+		editedRemaining,
 		daysOffRoast,
 		roastBand5,
 		roasterMarkTone,
 		blankBean,
 		setBeanFrozen,
 		type Bean,
-		type Roaster, activateBean } from '#lib/bean/index.js';
+		type Roaster, activateBean, selectGrinder } from '#lib/bean/index.js';
 	import BeanImage from './BeanImage.svelte';
 	import BeanDeleteSplit from './BeanDeleteSplit.svelte';
 	import BagGrindsEditor from './BagGrindsEditor.svelte';
-	import { bagGrindsToFix } from '#lib/bean/grinder.js';
+	import { bagGrindsToFix, type Grinder } from '#lib/bean/grinder.js';
 	import QuickStepper from '#lib/components/brew/QuickStepper.svelte';
 	import StToggle from '#lib/components/settings/StToggle.svelte';
 	import RoasterAutocomplete from './RoasterAutocomplete.svelte';
@@ -193,18 +194,40 @@
 
 	// ── Patch the draft ───────────────────────────────────────────────
 	function patch(p: Partial<Bean>): void {
-		// Bumping bag size re-seeds `remaining` — but ONLY for a brand-new bean
-		// or one that's already empty. On a bag with burn-down in progress,
-		// reseeding would silently discard the remaining-grams the user has
-		// been tracking (GEN2): editing the bag size of a half-finished bag
-		// must not reset it to full. Save then leaves `remaining` to the
-		// stored bag's (its debits) unless it was changed here.
-		if (Object.prototype.hasOwnProperty.call(p, 'bagSize') && p.bagSize != null) {
-			if (isNew || current.remaining === 0) {
-				(p as Partial<Bean>).remaining = p.bagSize;
-			}
-		}
 		draftRecord = { ...draftRecord, ...p };
+	}
+
+	// ── Remaining (REVIEW-CORE H6) ─────────────────────────────────────
+	/** The user set Remaining here: their value stands. */
+	let remainingTouched = $state(false);
+	/**
+	 * Remaining as shown and saved, by the core's rule (`edited_remaining`):
+	 * a new bag, or one with no size before, starts full at its size; a bag
+	 * that had a size keeps what it has left, so a resize never refills one
+	 * that ran out (GEN2: nor resets a half-used one). Save leaves it to the
+	 * stored bag's (its debits) unless it changed here.
+	 */
+	const shownRemaining = $derived(
+		editedRemaining(isNew ? null : base, current.bagSize, current.remaining, remainingTouched)
+	);
+
+	function setRemaining(n: number): void {
+		remainingTouched = true;
+		patch({ remaining: n });
+	}
+
+	// ── Grinders the Add box staged (FINAL S7) ─────────────────────────
+	/**
+	 * Grinders picked in "Add a grinder" that aren't stored yet (new, or
+	 * archived ones brought back). Save writes those the bag keeps a row
+	 * for; Cancel drops them, so Devices and Brew change only on Save.
+	 */
+	let stagedGrinders = $state.raw<Grinder[]>([]);
+
+	/** At Save, after the bag: the staged grinders, and the grinder pick when none was active. */
+	function saveStaged(bag: Bean): void {
+		const pick = library.saveStagedGrinders(stagedGrinders, bag);
+		if (pick !== null) void selectGrinder(pick);
 	}
 
 	function setOrigin(field: keyof Bean['origin'], value: string): void {
@@ -460,16 +483,15 @@
 				return;
 			}
 			const roaster = roasterForSave();
-			const remaining =
-				draftRecord.remaining > 0 ? draftRecord.remaining : draftRecord.bagSize;
 			const persisted: Bean = {
 				...draftRecord,
 				roasterId: roaster?.id ?? null,
 				name: draftRecord.name.trim(),
-				remaining,
+				remaining: shownRemaining,
 				updatedAt: Date.now()
 			};
 			library.upsertBean(persisted);
+			saveStaged(persisted);
 			saved = true;
 			dropUnusedPhotos(pickedPhotoRefs);
 			if (activate) activateBean(persisted.id);
@@ -482,6 +504,7 @@
 			if (stored) {
 				const edited: Bean = {
 					...draftRecord,
+					remaining: shownRemaining,
 					roasterId: roasterTouched ? (roasterForSave()?.id ?? null) : draftRecord.roasterId,
 					name: draftRecord.name === base.name ? base.name : draftRecord.name.trim()
 				};
@@ -493,6 +516,7 @@
 					return;
 				}
 				if (!sameRecord(merged, stored)) library.saveEditedBean(merged);
+				saveStaged(merged);
 				saved = true;
 				// The photos this Save replaced or removed, and those picked and dropped.
 				dropUnusedPhotos([...pickedPhotoRefs, base.imageRef, stored.imageRef]);
@@ -1161,12 +1185,12 @@
 								<QuickStepper
 									label=""
 									name="Remaining"
-									value={current.remaining}
+									value={shownRemaining}
 									unit="g"
 									min={0}
 									max={5000}
 									step={1}
-									onChange={(n) => patch({ remaining: n })}
+									onChange={setRemaining}
 								/>
 							</div>
 						</div>
@@ -1176,6 +1200,8 @@
 						baseGrinds={base.grinds ?? []}
 						beanId={current.id}
 						toFix={grindsToFix}
+						staged={stagedGrinders}
+						onStage={(next) => (stagedGrinders = next)}
 						onChange={(next) => patch({ grinds: next })}
 					/>
 				</div>

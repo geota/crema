@@ -60,3 +60,41 @@ describe('planRoasterDelete', () => {
 		expect(planRoasterDelete([r], [], 'roaster:none', true)).toBeNull();
 	});
 });
+
+describe('deleting a roaster with its bags (REVIEW-CORE M3)', () => {
+	it('clears the active bag when the cascade deletes it, and never makes another bag active', async () => {
+		const { getBeanStore } = await import('./store.svelte');
+		const library = getBeanStore();
+		localStorage.clear();
+		library.clearAll();
+		const r = { ...roaster('Sey', 1), visualizerId: 'vz-r' };
+		library.upsertRoaster(r);
+		library.upsertBean({ ...blankBean('bean:a'), roasterId: r.id, visualizerId: 'vz-a' });
+		library.upsertBean({ ...blankBean('bean:other') });
+		library.setActiveBean('bean:a');
+
+		const plan = library.deleteRoasterAndBeans(r.id);
+		expect(plan?.deletedBeanIds).toEqual(['bean:a']);
+		expect(plan?.remoteBeanIds, 'the remote DELETEs come from the same plan').toEqual(['vz-a']);
+		expect(plan?.remoteRoasterId).toBe('vz-r');
+		expect(plan?.activeBeanIdAfter ?? null).toBeNull();
+		expect(library.activeBeanId, 'Brew shows "No bag"').toBeNull();
+		expect(library.beans.map((b) => b.id)).toEqual(['bean:other']);
+	});
+
+	it('keeps the active bag when it is another roaster\'s', async () => {
+		const { getBeanStore } = await import('./store.svelte');
+		const library = getBeanStore();
+		localStorage.clear();
+		library.clearAll();
+		const r = roaster('Sey', 1);
+		library.upsertRoaster(r);
+		library.upsertBean({ ...blankBean('bean:a'), roasterId: r.id });
+		library.upsertBean({ ...blankBean('bean:other') });
+		library.setActiveBean('bean:other');
+
+		const plan = library.deleteRoasterAndBeans(r.id);
+		expect(plan?.activeBeanIdAfter).toBe('bean:other');
+		expect(library.activeBeanId).toBe('bean:other');
+	});
+});

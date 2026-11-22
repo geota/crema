@@ -25,6 +25,10 @@ import type {
 	GrinderLibraryMigration,
 	MigrationGate,
 	GrinderMatch,
+	SelectionChange,
+	SelectionState,
+	StagedGrinderPick,
+	StagedGrindersSave,
 	GrindSave,
 	GrindScale,
 	GrinderSwitchInput,
@@ -38,7 +42,9 @@ import {
 	addGrinderJson,
 	archiveGrinderJson,
 	autoSaveShotGrindJson,
+	bagEditorGrindersJson,
 	bagGrindsToFixJson,
+	bagSelectionUndoJson,
 	brewGrindViewJson,
 	coerceGrinder as wasmCoerceGrinder,
 	countsInThirdsJson,
@@ -57,7 +63,9 @@ import {
 	resolveGrinderSwitchJson,
 	restoreGrinderJson,
 	sameGrind as wasmSameGrind,
-	saveBagGrindJson
+	saveBagGrindJson,
+	stageGrinderPickJson,
+	stagedGrindersOnSaveJson
 } from '#lib/wasm/de1_wasm.js';
 import type { Bean } from './model';
 
@@ -179,6 +187,15 @@ type WithBag<T extends { bag?: unknown }> = Omit<T, 'bag'> & { bag?: Bean };
 /** A bag selection as one change, with its Undo. */
 export function resolveBagSelection(input: WithBag<BagSelectInput>): BagSelection {
 	return JSON.parse(resolveBagSelectionJson(JSON.stringify(input))) as BagSelection;
+}
+
+/**
+ * A bag selection's Undo (REVIEW-CORE H4, FINAL S9): only the parts that
+ * still hold what the selection set, so a dial, grinder or profile change
+ * made since stands; with a shot in progress the profile stays.
+ */
+export function bagSelectionUndo(selection: BagSelection, now: SelectionState): SelectionChange {
+	return JSON.parse(bagSelectionUndoJson(JSON.stringify({ selection, now }))) as SelectionChange;
 }
 
 /** The grind Brew takes on switching grinder, or `null` (it stays). */
@@ -358,4 +375,52 @@ export function lastGrindsOf(
 		out.push({ grinderId: id, grinder: name, grind, completedAt: s.completedAt });
 	}
 	return out;
+}
+
+// ── The bag editor's Add box (FINAL S7): staged in the draft until Save ──
+
+/** The grinders as the bag editor sees them: the stored records with its staged ones over them. */
+export function bagEditorGrinders(stored: readonly Grinder[], staged: readonly Grinder[]): Grinder[] {
+	return JSON.parse(bagEditorGrindersJson(JSON.stringify(stored), JSON.stringify(staged))) as Grinder[];
+}
+
+/**
+ * A type-or-pick choice in the bag editor, staged: the grinder for the new
+ * row and the draft's staged records afterwards. Nothing is stored and the
+ * active grinder stays. `null` when the choice names nothing.
+ */
+export function stageGrinderPick(
+	grinders: readonly Grinder[],
+	staged: readonly Grinder[],
+	choice: GrinderChoice,
+	nowMs = Date.now()
+): StagedGrinderPick | null {
+	const input = {
+		grinders,
+		staged,
+		kind: choice.kind === 'create' ? undefined : choice.kind,
+		id: choice.kind === 'create' ? '' : choice.id,
+		name: choice.name
+	};
+	return JSON.parse(stageGrinderPickJson(JSON.stringify(input), nowMs)) as StagedGrinderPick | null;
+}
+
+/**
+ * What the bag editor's Save writes for its staged grinders: the records to
+ * upsert (only those the saved bag has a row for) and, when no live grinder
+ * is active, the one to make active.
+ */
+export function stagedGrindersOnSave(
+	grinders: readonly Grinder[],
+	staged: readonly Grinder[],
+	bag: Bean,
+	activeGrinderId: string | null,
+	nowMs = Date.now()
+): StagedGrindersSave {
+	return JSON.parse(
+		stagedGrindersOnSaveJson(
+			JSON.stringify({ grinders, staged, bag, activeGrinderId: activeGrinderId ?? undefined }),
+			nowMs
+		)
+	) as StagedGrindersSave;
 }
