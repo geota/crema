@@ -206,17 +206,22 @@ export function savedGrindRow(bean: Bean | null, grinderId: string | null): BagG
 	return bean?.grinds?.find((g) => g.grinderId === id) ?? null;
 }
 
+/** The largest grind read as a number; past it a grind stays text. */
+export const MAX_GRIND_NUMBER = 1e6;
+
 /**
  * A typed grind as a number, or `null` when it isn't a plain number ("6 + a
  * tooth", "2.1.3"): the shell's parse of what the user types (REVIEW-CORE
- * H1). Plain decimals only ("0,5" reads as 0.5), like the core's
- * `grind_number`, so no hex, no `Infinity`.
+ * H1). Plain decimals only ("0,5" reads as 0.5): no hex, no `Infinity`,
+ * no exponent, and no more than {@link MAX_GRIND_NUMBER}.
  */
 export function grindNumber(grind: string | null | undefined): number | null {
 	const raw = (grind ?? '').trim().replace(',', '.');
-	if (!/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(raw)) return null;
+	// No exponent: an imported "1e999999999" stays text, never a number to
+	// expand. And a bound well past any grinder's scale.
+	if (raw.length > 32 || !/^[+-]?(\d+\.?\d*|\.\d+)$/.test(raw)) return null;
 	const n = Number(raw);
-	return Number.isFinite(n) ? n : null;
+	return Number.isFinite(n) && Math.abs(n) <= MAX_GRIND_NUMBER ? n : null;
 }
 
 /**

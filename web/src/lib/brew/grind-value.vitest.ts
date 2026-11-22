@@ -76,6 +76,16 @@ describe('the core grind text (H1, M2)', () => {
 		expect(grindNumber('Infinity')).toBeNull();
 		expect(grindNumber('')).toBeNull();
 	});
+
+	it('keeps an imported exponent or huge value as text, never a number to expand (security review)', () => {
+		expect(grindNumber('1e999999999')).toBeNull();
+		expect(grindNumber('1e5')).toBeNull();
+		expect(grindNumber('9'.repeat(400))).toBeNull();
+		expect(grindNumber('1000000')).toBe(1e6);
+		expect(grindNumber('1000001')).toBeNull();
+		expect(formatGrind('1e999999999', MOTTO), 'shown as typed').toBe('1e999999999');
+		expect(grindView({ bag: null, grinder: grinder(MOTTO), brewGrind: '1e999999999' }).dial, 'the core keeps it as text').toBeNull();
+	});
 });
 
 describe('scale refusal (Devices, the core rule Android uses)', () => {
