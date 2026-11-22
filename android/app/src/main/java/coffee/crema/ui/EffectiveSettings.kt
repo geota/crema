@@ -59,6 +59,7 @@ private fun MainUiState.withSnapshot(cfg: ConfigSnapshot, m: MirroredSettings): 
         mirroredBagEmpty = cfg.activeBagEmpty,
         brewParams = brew,
         activeBeanId = cfg.activeBeanId,
+        mirroredBag = mirroredBagOf(cfg),
         activeGrinderId = cfg.activeGrinderId,
         mirroredGrinder = cfg.activeGrinderId?.takeIf { it.isNotEmpty() }?.let { id ->
             coffee.crema.core.Grinder(
@@ -106,6 +107,25 @@ private fun MainUiState.withSnapshot(cfg: ConfigSnapshot, m: MirroredSettings): 
     )
 }
 
+/**
+ * The hub's active bag as far as Brew's grind needs it (#488 S8): its id and
+ * name, and only the hub's saved grind for the hub's grinder, so a remote's
+ * unsaved-grind marker and Save compare against the hub's bag, never this
+ * device's own copy. Null with no bag on the hub.
+ */
+private fun MainUiState.mirroredBagOf(cfg: ConfigSnapshot): coffee.crema.core.Bean? {
+    val id = cfg.activeBeanId?.takeIf { it.isNotEmpty() } ?: return null
+    val name = cfg.activeBagName ?: beans.firstOrNull { it.id == id }?.name.orEmpty()
+    return coffee.crema.core.Bean(
+        id = id,
+        name = name,
+        grinds = listOfNotNull(cfg.activeBagGrind),
+        metadata = kotlinx.serialization.json.JsonObject(emptyMap()),
+        createdAt = 0L,
+        updatedAt = 0L,
+    )
+}
+
 /** [id] as the active profile. A profile change clears the Quick-Controls
  *  override: it was dialled against the old profile (Decenza clears its
  *  temperature override on a profile load). Every path that changes the active
@@ -122,6 +142,8 @@ fun MachineCommand.Config.applyTo(s: MainUiState): MainUiState = when (this) {
     is MachineCommand.SetActiveBean -> s.copy(activeBeanId = id)
     // A remote's pending pick shows its own record until the hub's snapshot comes.
     is MachineCommand.SetActiveGrinder -> s.copy(activeGrinderId = id, mirroredGrinder = null)
+    // As text, as sent (#488 round 2).
+    is MachineCommand.SetGrind -> s.copy(qcGrind = grind)
     is MachineCommand.SetStopOnWeight -> s.copy(stopOnWeight = on)
     is MachineCommand.SetAutoTare -> s.copy(autoTare = on)
     is MachineCommand.SetQc -> when (field) {
@@ -134,9 +156,6 @@ fun MachineCommand.Config.applyTo(s: MainUiState): MainUiState = when (this) {
         QcField.HOT_WATER_VOLUME -> s.copy(qcHotWaterVolumeMl = value, qcHotWaterMode = coffee.crema.core.HotWaterMode.Volume)
         QcField.FLUSH_TIME -> s.copy(qcFlushTimeS = value)
         QcField.FLUSH_TEMP -> s.copy(qcFlushTempC = value)
-        // A stepped or typed number, as text on the active grinder's scale
-        // (the core's grind_text: no one-decimal rounding, #488 round 2).
-        QcField.GRIND -> s.copy(qcGrind = coffee.crema.beans.grindText(value.toDouble(), s.activeGrindScale()))
     }
     is MachineCommand.AdjustBrew -> s.copy(brewParams = BrewParams(dose, yieldOut, brewTemp, preinf))
     MachineCommand.ResetBrew -> s.copy(brewParams = null)

@@ -36,14 +36,45 @@ val MainUiState.archivedGrinders: List<Grinder> get() = grinders.filter { it.arc
 fun MainUiState.activeGrinder(): Grinder? =
     mirroredGrinder?.takeIf { it.id == activeGrinderId } ?: grinders.activeGrinder(activeGrinderId)
 
+/**
+ * Whether this record is the grinder [id] named [name] (#488 follow-ups 19,
+ * 39): the same id and the same name (trimmed, any case). Ids are slugs of
+ * the first name, so a grinder renamed since, or another device's grinder
+ * of that name, can share an id with a different record. A null [name]
+ * (not said) is never the same.
+ */
+fun Grinder.sameRecord(id: String, name: String?): Boolean =
+    this.id == id && name != null && this.name.trim().equals(name.trim(), ignoreCase = true)
+
+/**
+ * The grinder this device's own records may name for what Brew shows (#488
+ * follow-up 39): on a remote, the hub's active grinder only where this
+ * device's library has that same live record, else none (never a dangling
+ * hub id); elsewhere the active grinder.
+ */
+fun MainUiState.ownActiveGrinder(): Grinder? {
+    val shown = activeGrinder() ?: return null
+    if (mirror == null) return shown
+    return grinders.firstOrNull { it.isLive && it.sameRecord(shown.id, shown.name) }
+}
+
 /** The scale Brew's grind uses: the active grinder's, else the default 0–20 in 0.1. */
 fun MainUiState.activeGrindScale(): GrindScale = activeGrinder()?.scale ?: DEFAULT_GRIND_SCALE
 
 /** The bag on Brew. */
 fun MainUiState.activeBag(): Bean? = beans.firstOrNull { it.id == activeBeanId }
 
+/**
+ * The bag Brew's grind compares with (#488 S8): on a remote the hub's, from
+ * its snapshot ([MainUiState.mirroredBag]: the hub's saved grind for the
+ * hub's grinder), never this device's own copy, which isn't synced; none
+ * until the hub's snapshot names this bag. Elsewhere [activeBag].
+ */
+fun MainUiState.grindBag(): Bean? =
+    if (mirror != null) mirroredBag?.takeIf { it.id == activeBeanId } else activeBag()
+
 /** The bag's saved grind for the active grinder (the "no grinder" slot with none). */
-fun MainUiState.savedGrindForBrew(): BagGrind? = activeBag()?.savedGrind(activeGrinder()?.id)
+fun MainUiState.savedGrindForBrew(): BagGrind? = grindBag()?.savedGrind(activeGrinder()?.id)
 
 /** The last [brewGrindView] answer and what it was asked: the screens read it on every recomposition. */
 private class GrindViewMemo(val bag: Bean?, val grinder: Grinder?, val grind: String?, val view: BrewGrindView)
@@ -58,7 +89,7 @@ private class GrindViewMemo(val bag: Bean?, val grinder: Grinder?, val grind: St
  * Save's grind part come with it. On a remote, the hub's grinder and grind.
  */
 fun MainUiState.brewGrindView(): BrewGrindView {
-    val bag = activeBag()
+    val bag = grindBag()
     val grinder = activeGrinder()
     grindViewMemo?.takeIf { it.bag == bag && it.grinder == grinder && it.grind == qcGrind }?.let { return it.view }
     val view = runCatching { coffee.crema.beans.brewGrindView(bag, grinder, qcGrind) }.getOrElse {
@@ -137,7 +168,7 @@ fun grinderPickRows(grinders: List<Grinder>, bag: Bean?, lastGrinds: List<coffee
 fun MainUiState.unsavedGrindExplanation(): String? {
     val view = brewGrindView()
     val marker = view.marker ?: return null
-    val bag = activeBag() ?: return null
+    val bag = grindBag() ?: return null
     val grinder = activeGrinder()
     val forGrinder = grinder?.name?.let { " for $it" }.orEmpty()
     val has = marker.saved?.let { "${bag.name} has ${formatGrind(it, view.scale)} saved$forGrinder." } ?: "${bag.name} has no grind saved$forGrinder yet."

@@ -640,7 +640,7 @@ internal class GuidedBrewController(
             // The setup's bag, not the active one; still changeable in the form.
             guidedBeanId = guidedBeanId(s),
             bagOf = ::bagOf,
-            grinder = s.activeGrinder(),
+            grinder = s.ownActiveGrinder(),
         )
     }
 
@@ -809,7 +809,7 @@ internal class GuidedBrewController(
             prefillBeanId = beanId,
             lastUsedMethod = s.lastBrewLogMethod,
             bagOf = ::bagOf,
-            grinder = s.activeGrinder(),
+            grinder = s.ownActiveGrinder(),
         )
     }
 
@@ -824,7 +824,7 @@ internal class GuidedBrewController(
     /** A method chip: re-template the draft's seeds for [method]. */
     fun reseedLogBrew(method: String) {
         val history = historyRows()
-        _logBrew.update { it?.let { d -> coffee.crema.ui.brewlog.BrewLogSeeds.reseed(d, history, method, ::bagOf, effectiveState().activeGrinder()) } }
+        _logBrew.update { it?.let { d -> coffee.crema.ui.brewlog.BrewLogSeeds.reseed(d, history, method, ::bagOf, effectiveState().ownActiveGrinder()) } }
     }
 
     fun closeLogBrew() {
@@ -865,9 +865,12 @@ internal class GuidedBrewController(
                 waterG = if (!d.espresso) d.water.toFloat().takeIf { it > 0f } else null,
                 yieldG = if (d.espresso) d.water.toFloat().takeIf { it > 0f } else null,
                 // Stamped with the active grinder, the one the form's dial and
-                // seeds use (REVIEW-FINAL S4); 0 is a grind.
+                // seeds use (REVIEW-FINAL S4); 0 is a grind. On a remote, only
+                // a grinder this device's own library has, else none: the row
+                // is this device's, and the hub's id may name nothing here
+                // (follow-up 39).
                 grind = d.grind,
-                grinder = effectiveState().activeGrinder(),
+                grinder = effectiveState().ownActiveGrinder(),
                 brewTempC = d.temp.toFloat().takeIf { it > 0f },
                 durationMs = coffee.crema.ui.brewlog.parseBrewDurationMs(d.timeStr),
                 rating = d.rating.takeIf { it > 0 },

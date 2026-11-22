@@ -14,12 +14,8 @@ fun MachineCommand.Relayable.sentByRemotes(): Boolean = when (this) {
     is MachineCommand.QuickSave -> true
     is MachineCommand.SetActiveProfile, is MachineCommand.SetActiveBean, is MachineCommand.SetActiveGrinder, is MachineCommand.SetStopOnWeight,
     is MachineCommand.SetAutoTare, is MachineCommand.AdjustBrew, MachineCommand.ResetBrew -> true
-    is MachineCommand.SetQc -> field.sentByRemotes()
-}
-
-/** Grind is a shot dial; the steam, hot-water and flush values are machine settings. */
-fun QcField.sentByRemotes(): Boolean = when (this) {
-    QcField.GRIND -> true
-    QcField.STEAM_TIME, QcField.STEAM_FLOW, QcField.STEAM_TEMP, QcField.HOT_WATER_TEMP,
-    QcField.HOT_WATER_VOLUME, QcField.FLUSH_TIME, QcField.FLUSH_TEMP -> false
+    // Grind is a shot dial, sent as text (#488 round 2).
+    is MachineCommand.SetGrind -> true
+    // The steam, hot-water and flush values are machine settings.
+    is MachineCommand.SetQc -> false
 }

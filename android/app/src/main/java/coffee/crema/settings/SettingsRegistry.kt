@@ -292,6 +292,10 @@ val NOT_SETTINGS: Map<String, String> = mapOf(
 /** Snapshot fields that are not settings: identity and bookkeeping. */
 val SNAPSHOT_META: Set<String> = setOf(
     "activeProfileJson", "activeBeanSummary", "activeBagEmpty", "primaryName", "authority", "rev",
+    // The hub's active bag's name and its saved grind for the hub's grinder
+    // (#488 S8): what a remote's unsaved-grind marker and Save compare with.
+    // Library data on the hub, never adopted.
+    "activeBagName", "activeBagGrind",
     // The hub's resolved hot-water target: a readout of A5 and A22–A25, not a setting.
     "hotWaterTarget",
 )
@@ -305,6 +309,7 @@ fun MachineCommand.Config.setting(): Setting = when (this) {
     is MachineCommand.SetStopOnWeight -> Setting.STOP_ON_WEIGHT
     is MachineCommand.SetAutoTare -> Setting.AUTO_TARE
     is MachineCommand.SetQc -> field.setting()
+    is MachineCommand.SetGrind -> Setting.QC_GRIND
     is MachineCommand.AdjustBrew, MachineCommand.ResetBrew -> Setting.BREW_PARAMS
 }
 
@@ -317,5 +322,4 @@ fun QcField.setting(): Setting = when (this) {
     QcField.HOT_WATER_VOLUME -> Setting.QC_HOT_WATER_VOLUME
     QcField.FLUSH_TIME -> Setting.QC_FLUSH_TIME
     QcField.FLUSH_TEMP -> Setting.QC_FLUSH_TEMP
-    QcField.GRIND -> Setting.QC_GRIND
 }

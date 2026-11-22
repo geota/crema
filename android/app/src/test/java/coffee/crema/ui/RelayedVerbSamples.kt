@@ -5,7 +5,8 @@ package coffee.crema.ui
  * golden wire file `proxy-golden/v4/control/<fixture>.json`, which holds
  * `Frame.Control(id = 1, method, args)` as encoded; [send] is the
  * [MainViewModel] call that produces it on a secondary, or null for a form
- * only older builds send, which a primary must still accept.
+ * only older builds send, which a primary must still accept, or one whose
+ * call needs stored data (a shot's text grind, pinned by its own test).
  *
  * The list is the characterisation of every method in
  * [coffee.crema.machine.MachineCommandCodec.METHODS] (every machine state the
@@ -25,8 +26,10 @@ internal data class RelayedVerbSample(
  *  can actually select it. */
 internal const val SAMPLE_PROFILE_ID = "019e5fb5-63b5-7333-a2ac-34b9f4f0e604"
 
-/** A grinder the primary owns (its library has it), so it can select it. */
+/** A grinder the primary owns (its library has it), so it can select it;
+ *  the secondary owns a record of the same name. */
 internal const val SAMPLE_GRINDER_ID = "grinder:niche-zero"
+internal const val SAMPLE_GRINDER_NAME = "Niche Zero"
 
 internal val RELAYED_VERB_SAMPLES: List<RelayedVerbSample> = listOf(
     // Machine control (MachineCommand.Control): forwarded, nothing applied locally.
@@ -50,7 +53,8 @@ internal val RELAYED_VERB_SAMPLES: List<RelayedVerbSample> = listOf(
     RelayedVerbSample("setActiveBean", "setActiveBean", "bean-1") { it.setActiveBean("bean-1") },
     RelayedVerbSample("setActiveBean.none", "setActiveBean", "") { it.setActiveBean(null) },
     // #488: the grinder pick, relayed like the bag pick.
-    RelayedVerbSample("setActiveGrinder", "setActiveGrinder", SAMPLE_GRINDER_ID) { it.setActiveGrinder(SAMPLE_GRINDER_ID) },
+    // With the picked record's name, so the hub checks it is its same grinder (follow-up 19).
+    RelayedVerbSample("setActiveGrinder", "setActiveGrinder", "$SAMPLE_GRINDER_ID\n$SAMPLE_GRINDER_NAME") { it.setActiveGrinder(SAMPLE_GRINDER_ID) },
     RelayedVerbSample("setActiveGrinder.none", "setActiveGrinder", "") { it.setActiveGrinder(null) },
     // #488 (review F8): Quick Controls' Save, which the hub runs on its own bag and profile.
     RelayedVerbSample("quickSave", "quickSave", "") { it.quickSave() },
@@ -59,6 +63,9 @@ internal val RELAYED_VERB_SAMPLES: List<RelayedVerbSample> = listOf(
     RelayedVerbSample("setStopOnWeight", "setStopOnWeight", "true") { it.setStopOnWeight(true) },
     RelayedVerbSample("setAutoTare", "setAutoTare", "false") { it.setAutoTare(false) },
     RelayedVerbSample("setQcGrind", "setQcGrind", "14.5") { it.setQcGrind(14.5f) },
+    // #488 round 2: a text grind, as text end to end. A remote sends it from
+    // "Start from this shot", which needs a stored shot: RemoteBagGrindTest.
+    RelayedVerbSample("setQcGrind.text", "setQcGrind", "2.1.3", send = null),
     RelayedVerbSample("quickAdjustBrew", "quickAdjustBrew", "18.0,36.0,93.0,8.0") { it.quickAdjustBrew(18.0, 36.0, 93.0, 8.0) },
     RelayedVerbSample("quickAdjustBrew.noPreinf", "quickAdjustBrew", "18.0,36.0,93.0,") { it.quickAdjustBrew(18.0, 36.0, 93.0) },
     RelayedVerbSample("resetBrew", "resetBrew", "") { it.resetBrewParams() },
