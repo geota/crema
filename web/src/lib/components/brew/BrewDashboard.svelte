@@ -1412,9 +1412,27 @@
 	function pickGrinder(id: string | null): void {
 		void selectGrinder(id);
 	}
+	/**
+	 * The picker's Add: the grinder it names becomes Brew's. A model already
+	 * owned picks that one and offers "Add another" (a second Niche Zero), as
+	 * Devices does and as Android's Brew picker does (#46, the core's
+	 * `add_another_grinder`); the new one becomes Brew's only when none is.
+	 */
 	function addGrinderChoice(choice: GrinderChoice): void {
+		const name = choice.kind === 'create' ? choice.name : '';
+		const catalogueId = choice.kind === 'catalogue' ? choice.id : '';
+		const owned =
+			(choice.kind === 'create' || choice.kind === 'catalogue') &&
+			beanLibrary.grinderAddKind(name, catalogueId) === 'existing';
 		const g = beanLibrary.takeGrinderChoice(choice);
-		if (g) void selectGrinder(g.id);
+		if (!g) return;
+		void selectGrinder(g.id);
+		if (owned) {
+			toast.action(`${g.name} is already one of your grinders`, 'Add another', () => {
+				const another = beanLibrary.addAnotherGrinder(name, catalogueId);
+				if (another && another.id !== g.id) toast.success(`Added ${another.name}`);
+			});
+		}
 	}
 	function openDevicesGrinder(): void {
 		void goto(devicesHref('grinder'));

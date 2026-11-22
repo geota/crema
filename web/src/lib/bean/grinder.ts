@@ -53,6 +53,7 @@ import {
 	countsInThirdsJson,
 	formatGrindJson,
 	grinderCatalogueJson,
+	grinderNamedJson,
 	grindChipsJson,
 	grinderPickRowsJson,
 	grindersForNamesJson,
@@ -229,21 +230,33 @@ export function autoSaveShotGrind(input: WithBag<AutoSaveInput>, nowMs = Date.no
 }
 
 /**
- * The grinder record a typed shot grinder name names (#488, review M2): an
- * owned grinder of that name (trimmed, any case), else an archived one;
- * tombstones never. `null` when none does: the shot then has no grinder id.
+ * The grinder a typed name names, through the core's `grinder_named`
+ * (REVIEW-FINAL-2 N6): one with exactly that name first (trimmed, any case;
+ * live, then archived), then through the catalogue, so "Niche" names an owned
+ * "Niche Zero"; tombstones never. `null` when none does. The record returned
+ * is the caller's own (same object), found by the core's answer's id.
+ */
+export function grinderNamed(grinders: readonly Grinder[], name: string | null | undefined): Grinder | null {
+	if (!(name ?? '').trim()) return null;
+	const named = JSON.parse(grinderNamedJson(JSON.stringify(grinders), name ?? '')) as Grinder | null;
+	return named ? (grinders.find((g) => g.id === named.id) ?? named) : null;
+}
+
+/**
+ * The grinder record a typed shot grinder name names (#488, review M2;
+ * {@link grinderNamed}). `null` when none does: the shot then has no
+ * grinder id.
  */
 export function grinderIdForName(grinders: readonly Grinder[], name: string | null | undefined): string | null {
-	const key = (name ?? '').trim().toLowerCase();
-	if (!key) return null;
-	const named = grinders.filter((g) => g.deletedAt == null && g.name.trim().toLowerCase() === key);
-	return (named.find(isLiveGrinder) ?? named[0])?.id ?? null;
+	return grinderNamed(grinders, name)?.id ?? null;
 }
 
 /**
  * The scale a shot's grind is on (history's grind stepper, as Android's
- * `shotGrindScale`): its grinder record's, by id, else by the typed name for a
- * shot from before grinder ids; the default scale when none matches.
+ * `shotGrindScale`): its grinder record's, by id, else, for a shot from
+ * before grinder ids, the grinder its typed name names ({@link grinderNamed}:
+ * an old "Niche" shot is on the Niche Zero's scale); the default scale when
+ * none matches.
  */
 export function shotGrindScale(
 	shot: { grinderId?: string | null; grinderModel?: string | null },
@@ -254,8 +267,7 @@ export function shotGrindScale(
 		const byId = grinders.find((g) => g.id === id);
 		if (byId) return byId.scale;
 	} else {
-		const name = (shot.grinderModel ?? '').trim().toLowerCase();
-		const byName = name ? grinders.find((g) => g.name.trim().toLowerCase() === name) : undefined;
+		const byName = grinderNamed(grinders, shot.grinderModel);
 		if (byName) return byName.scale;
 	}
 	return DEFAULT_GRIND_SCALE;

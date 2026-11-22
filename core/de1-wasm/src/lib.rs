@@ -908,6 +908,14 @@ pub fn active_grinder_json(grinders_json: &str, active_id: &str) -> String {
     de1_domain::active_grinder_json(grinders_json, active_id)
 }
 
+/// The grinder a typed name names (`Grinder` JSON or `null`): an exact name
+/// first, then through the catalogue ("Niche" → an owned Niche Zero),
+/// tombstones never. See `de1_domain::grinder_named`.
+#[wasm_bindgen(js_name = grinderNamedJson)]
+pub fn grinder_named_json(grinders_json: &str, name: &str) -> String {
+    de1_domain::grinder_named_json(grinders_json, name)
+}
+
 /// The library migration (#488): `{grinders, beans, grinderModel, gate}` in,
 /// a `GrinderLibraryMigration` JSON out; nothing runs unless `gate` (a
 /// `MigrationGate`) says the library and settings read. See

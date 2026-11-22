@@ -314,7 +314,7 @@ pub use grinder::{
     GrinderMatch, GrinderMatchKind, MigrationGate, MigrationSkip, active_grind_scale,
     active_grinder, active_grinder_json, add_another_grinder, add_another_grinder_json,
     add_grinder, add_grinder_json, archive_grinder, archive_grinder_json, clean_grinder_name,
-    grinder_key, grinder_named, grinders_for_names, grinders_for_names_json, match_grinders,
+    grinder_key, grinder_named, grinder_named_json, grinders_for_names, grinders_for_names_json, match_grinders,
     match_grinders_json, merge_grinder_edit, merge_grinder_edit_json, migrate_grinder_library,
     migrate_grinder_library_json, names_grinder, restore_grinder, restore_grinder_json,
     same_grinder, shot_names_grinder,

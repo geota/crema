@@ -956,6 +956,16 @@ pub fn active_grinder_json(grinders_json: &str, active_id: &str) -> String {
     serde_json::to_string(&active).unwrap_or_else(|_| "null".to_owned())
 }
 
+/// JSON-bridged [`grinder_named`]: a `Grinder[]` JSON and a typed name in,
+/// the `Grinder` JSON it names or `null` out (catalogue aliases included:
+/// "Niche" names an owned Niche Zero; REVIEW-FINAL-2 N6). Malformed grinders
+/// name nothing.
+#[must_use]
+pub fn grinder_named_json(grinders_json: &str, name: &str) -> String {
+    let grinders: Vec<Grinder> = serde_json::from_str(grinders_json).unwrap_or_default();
+    serde_json::to_string(&grinder_named(&grinders, name)).unwrap_or_else(|_| "null".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1289,6 +1299,13 @@ mod tests {
         // Matching: the exact name finds each record, the model name the first.
         assert_eq!(grinder_named(&two, "Niche Zero 2").unwrap().id, g2.id);
         assert_eq!(grinder_named(&two, "niche zero").unwrap().id, first.id);
+        // The JSON bridge (REVIEW-FINAL-2 N6): a catalogue alias names the owned one.
+        let json = serde_json::to_string(&two).unwrap();
+        let named: Option<Grinder> =
+            serde_json::from_str(&grinder_named_json(&json, "Niche")).unwrap();
+        assert_eq!(named.map(|g| g.id), Some(first.id.clone()));
+        assert_eq!(grinder_named_json(&json, "EK43"), "null");
+        assert_eq!(grinder_named_json("not json", "Niche"), "null");
         assert_eq!(
             add_grinder(&two, "Niche Zero 2", None, NOW)
                 .unwrap()

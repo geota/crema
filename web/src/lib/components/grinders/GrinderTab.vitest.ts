@@ -4,11 +4,19 @@
  * Remove asks first, then archives (clearing the active pointer); a model
  * already owned offers "Add another" (FINAL N1, follow-up 18);
  * Restore brings the grinder back, the auto-save switch writes its setting,
- * and `?tab=grinder` opens the tab on the Devices page.
+ * and `?tab=grinder` opens the tab on the Devices page. Leaving with a
+ * typed scale asks first, as the bag and profile editors do (#45).
  */
 import '#lib/testing/dom-stubs.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
+
+const nav = vi.hoisted(() => ({ hooks: [] as ((n: unknown) => void)[], goto: vi.fn(async () => {}) }));
+vi.mock('$app/navigation', () => ({
+	goto: nav.goto,
+	afterNavigate: () => {},
+	beforeNavigate: (fn: (n: unknown) => void) => nav.hooks.push(fn)
+}));
 import { dismissConfirm, getActiveDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 import { page } from '$app/state';
 import { blankBean, getBeanStore } from '#lib/bean/index.js';
@@ -26,6 +34,8 @@ const settings = getSettingsStore();
 let component: ReturnType<typeof mount> | null = null;
 
 beforeEach(() => {
+	nav.hooks.length = 0;
+	nav.goto.mockClear();
 	lib.clearAll();
 	settings.reset();
 	localStorage.clear();
@@ -444,5 +454,58 @@ describe('the Devices page tabs', () => {
 		expect(root.querySelector('.dv-tab[aria-pressed="true"]')?.textContent).toContain('Scale');
 		expect(root.textContent).not.toContain('Your grinders');
 		expect(root.querySelector('.sc-hero')).not.toBeNull();
+	});
+});
+
+describe('leaving the Grinder tab with a typed scale (REVIEW-515 follow-up 1, #45)', () => {
+	function leave(over: Record<string, unknown> = {}) {
+		const n = { type: 'link', willUnload: false, to: { url: new URL('http://localhost/brew') }, cancel: vi.fn(), ...over };
+		for (const h of nav.hooks) h(n);
+		return n;
+	}
+
+	it('asks first, and Discard goes on without saving', async () => {
+		const g = typedGrinder();
+		const root = render();
+		expect(leave().cancel, 'nothing typed: no question').not.toHaveBeenCalled();
+
+		type(field(root, 'Highest'), '40');
+		const away = leave();
+		expect(away.cancel).toHaveBeenCalled();
+		await tick();
+		expect(getActiveDialog()?.options.message).toBe('Discard unsaved changes?');
+		await answer(true);
+		await tick();
+		expect(nav.goto).toHaveBeenCalledWith(away.to.url);
+		expect(lib.getGrinder(g.id)?.scale, 'nothing saved').toEqual(DEFAULT_GRIND_SCALE);
+	});
+
+	it('Keep editing stays with the draft', async () => {
+		typedGrinder();
+		const root = render();
+		type(field(root, 'Highest'), '40');
+		expect(leave().cancel).toHaveBeenCalled();
+		await answer(false);
+		expect(nav.goto).not.toHaveBeenCalled();
+		expect(field(root, 'Highest').value).toBe('40');
+	});
+
+	it("closing the tab with a typed scale gets the browser's prompt", () => {
+		typedGrinder();
+		const root = render();
+		type(field(root, 'Highest'), '40');
+		expect(leave({ willUnload: true, to: null }).cancel).toHaveBeenCalled();
+		expect(getActiveDialog()).toBeNull();
+	});
+
+	it('a saved or cancelled scale leaves without asking', () => {
+		typedGrinder();
+		const root = render();
+		type(field(root, 'Highest'), '40');
+		click(root, 'Save scale');
+		expect(leave().cancel).not.toHaveBeenCalled();
+		type(field(root, 'Highest'), '30');
+		click(root, 'Cancel');
+		expect(leave().cancel).not.toHaveBeenCalled();
 	});
 });
