@@ -51,6 +51,7 @@ import coffee.crema.core.newShotId
 import coffee.crema.history.HistoryStore
 import coffee.crema.machine.CommandOutcome
 import coffee.crema.beans.savedGrind
+import coffee.crema.beans.activeGrinder
 import coffee.crema.beans.grindNumber
 import coffee.crema.beans.grindText
 import coffee.crema.history.HistoryHealth
@@ -2799,6 +2800,14 @@ class LibraryController(
                 upsertGrinder(add.grinder)
                 notify("${add.grinder.name} is back, with its saved grinds")
             }
+        }
+        // With no grinder active, the one just added becomes Brew's (review 499):
+        // on the device that owns the session; a remote's pick goes to its hub.
+        val s = uiState()
+        if (add.kind != coffee.crema.core.GrinderAddKind.Existing && s.mirror == null && s.grinders.activeGrinder(s.activeGrinderId) == null) {
+            updateUi { it.copy(activeGrinderId = add.grinder.id) }
+            onGrinderSelected(add.grinder.id)
+            pushConfig()
         }
         return add.grinder
     }

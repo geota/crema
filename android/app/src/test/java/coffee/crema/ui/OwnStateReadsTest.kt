@@ -72,6 +72,8 @@ class OwnStateReadsTest {
             // active grinder clears it (F5); an edit of it is pushed to remotes.
             "migrateGrinderLibrary" to setOf("grinderModel", "activeGrinderId"),
             "archiveGrinder" to setOf("activeGrinderId"),
+            // The first grinder added becomes the own active one (review 499).
+            "addGrinder" to setOf("activeGrinderId"),
             "saveGrinderEdit" to setOf("activeGrinderId"),
             // The commits of a bag or grinder pick run on the device that owns
             // the session (a remote's picks are relayed there): its own

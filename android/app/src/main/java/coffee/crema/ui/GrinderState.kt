@@ -133,6 +133,12 @@ fun MainUiState.unsavedGrindExplanation(): String? {
     return "$has Brew is at $now for the next shot. Save in Quick Controls saves it."
 }
 
+/** What the type-or-pick box says under catalogue entry [id] (review 499): one
+ *  without a verified range gets the default scale, set on Devices. */
+fun catalogueOfferLine(id: String): String =
+    if (coffee.crema.beans.grinderCatalogue.firstOrNull { it.id == id }?.scale != null) "Adds it to your grinders, with its scale"
+    else "Adds it to your grinders · set its range on Devices"
+
 /** What the type-or-pick box picked (#488, "Add a grinder: type or pick"). */
 sealed interface GrinderPick {
     /** One of the user's grinders. */

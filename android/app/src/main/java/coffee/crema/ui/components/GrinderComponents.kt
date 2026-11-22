@@ -162,7 +162,7 @@ fun GrinderAddBox(
             }
             val sub = when (m.kind) {
                 GrinderMatchKind.Owned -> grinders.firstOrNull { it.id == m.id }?.let { coffee.crema.ui.scaleRangeText(it.scale) + if (excludeIds.isNotEmpty()) " · not on this bag yet" else "" }.orEmpty()
-                GrinderMatchKind.Catalogue -> "Adds it to your grinders, with its scale"
+                GrinderMatchKind.Catalogue -> coffee.crema.ui.catalogueOfferLine(m.id)
                 GrinderMatchKind.Archived -> "Removed earlier · brings it back with its saved grinds"
             }
             add(pick to (m.name to sub))

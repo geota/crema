@@ -313,6 +313,36 @@ class GrinderLibraryVmTest {
 
     private fun MainUiState.configSnapshotGrinder(): String? = activeGrinder()?.name
 
+    /** DESIGN.md pick rule: no saved grind and no shot with the new grinder → the grind stays. */
+    @Test
+    fun `a grinder switch that finds nothing keeps the grind`() {
+        val c40 = Grinder(id = "grinder:c40", name = "Comandante C40", scale = GrindScale(0f, 40f, 1f, "clicks"), updatedAt = 1L)
+        val a = bag("a", grinds = listOf(BagGrind(niche.id, niche.name, "14", false)))
+        writeLibrary(BeanLibrary(listOf(a), activeBeanId = "a", grinders = listOf(niche, c40), activeGrinderId = niche.id))
+        val vm = vm()
+        vm.setQcGrind(15f)
+        VmHarness.idle()
+        vm.setActiveGrinder(c40.id)
+        VmHarness.idle()
+        assertEquals(c40.id, vm.own().activeGrinderId)
+        assertEquals(15f, vm.ui.value.qcGrind, "nothing saved or shot with it: the grind stays as it is")
+    }
+
+    /** Review 499: adding a grinder while none is active makes it Brew's; with one active, it stays. */
+    @Test
+    fun `the first grinder added becomes the active one`() {
+        writeLibrary(BeanLibrary(listOf(bag("a", grinds = emptyList()))))
+        val vm = vm()
+        assertNull(vm.own().activeGrinderId)
+        val first = assertNotNull(vm.resolveGrinderPick(GrinderPick.Create("Dad's Zassenhaus")))
+        VmHarness.idle()
+        assertEquals(first.id, vm.own().activeGrinderId)
+        val second = assertNotNull(vm.addGrinder("Niche Zero"))
+        VmHarness.idle()
+        assertTrue(second.id != first.id)
+        assertEquals(first.id, vm.own().activeGrinderId, "one already active: it stays")
+    }
+
     @Test
     fun `the grinder stays bound by typed scale values`() {
         assertEquals("Lowest must be below Highest", coffee.crema.beans.scaleRefusal(10f, 10f, 1f))

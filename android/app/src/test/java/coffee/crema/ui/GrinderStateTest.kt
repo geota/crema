@@ -79,6 +79,15 @@ class GrinderStateTest {
         assertEquals(listOf("15" to niche.id, "30" to null), out.map { it.grind to it.grinderId })
     }
 
+    /** Review 499: a catalogue entry with no verified range says where to set it. */
+    @Test
+    fun `catalogue offers say whether the range comes with it`() {
+        val withScale = coffee.crema.beans.grinderCatalogue.first { it.scale != null }
+        val without = coffee.crema.beans.grinderCatalogue.first { it.scale == null }
+        assertEquals("Adds it to your grinders, with its scale", catalogueOfferLine(withScale.id))
+        assertEquals("Adds it to your grinders · set its range on Devices", catalogueOfferLine(without.id))
+    }
+
     @Test
     fun `a held stepper speeds up to a floor`() {
         var wait = REPEAT_FIRST_MS
