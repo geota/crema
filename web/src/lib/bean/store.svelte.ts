@@ -71,7 +71,8 @@ import {
 	blankRoaster,
 	coerceBean,
 	coerceRoaster,
-	migrateLegacyCurrentBean
+	migrateLegacyCurrentBean,
+	roasterTombstone
 } from './model';
 import { getBeanImageStore } from './image-storage';
 import { planRoasterDelete } from './roaster-delete';
@@ -248,8 +249,20 @@ export class BeanLibraryStore {
 		return this.envelope.beans;
 	}
 
-	/** The full roaster directory. */
+	/**
+	 * The roaster directory. Tombstones (a Visualizer roaster deleted here,
+	 * {@link deleteRoaster}) are left out.
+	 */
 	get roasters(): Roaster[] {
+		return this.envelope.roasters.filter((r) => r.deletedAt == null);
+	}
+
+	/**
+	 * Every roaster row, tombstones included (#488 review SF1): what the
+	 * Visualizer sync, backup, restore and import read, so a roaster deleted
+	 * here stays deleted.
+	 */
+	get allRoasters(): Roaster[] {
 		return this.envelope.roasters;
 	}
 
@@ -302,8 +315,17 @@ export class BeanLibraryStore {
 		return this.envelope.beans.find((b) => b.id === id && b.deletedAt == null) ?? null;
 	}
 
-	/** Look up a roaster by id. */
+	/** Look up a roaster by id; a tombstone is not one (a bag filed under it shows no roaster). */
 	getRoaster(id: string): Roaster | null {
+		return this.envelope.roasters.find((r) => r.id === id && r.deletedAt == null) ?? null;
+	}
+
+	/**
+	 * Look up a roaster row by id, tombstones included: what a bag push and
+	 * pull resolve a bag's roaster with, so a bag filed under a roaster
+	 * deleted here keeps its link on Visualizer (#488 review SF1).
+	 */
+	getRoasterRow(id: string): Roaster | null {
 		return this.envelope.roasters.find((r) => r.id === id) ?? null;
 	}
 
@@ -314,9 +336,7 @@ export class BeanLibraryStore {
 	findRoasterByName(name: string): Roaster | null {
 		const needle = name.trim().toLowerCase();
 		if (!needle) return null;
-		return (
-			this.envelope.roasters.find((r) => r.name.trim().toLowerCase() === needle) ?? null
-		);
+		return this.roasters.find((r) => r.name.trim().toLowerCase() === needle) ?? null;
 	}
 
 	// ── Persistence ──────────────────────────────────────────────────
@@ -662,20 +682,37 @@ export class BeanLibraryStore {
 	}
 
 	/**
-	 * Delete a roaster locally. Beans pointing at it have their `roasterId`
-	 * cleared rather than disappearing — losing a roastery's name is
-	 * less destructive than losing the bag. Local-only: the Visualizer-side
-	 * DELETE is owned by the caller (the delete-split component), same as
+	 * Delete a roaster on this device, keeping its bags. The core plans it
+	 * (`plan_roaster_delete`, as Android): the bags are detached (their
+	 * roaster cleared), and a roaster on Visualizer leaves a tombstone
+	 * (`roasterTombstone`) in either scope, so the next pull doesn't add it
+	 * back (#488 review SF1). With `localOnly` ("from this device only") a
+	 * Visualizer roaster's bags stay filed under its tombstone, so the push
+	 * never sends them with no roaster; they show "No roaster" here.
+	 *
+	 * Local-only by design: the Visualizer-side DELETE is owned by the caller
+	 * (the delete-split component), from the returned plan (`null`: the
+	 * roaster isn't in the directory, nothing deleted), same as
 	 * {@link deleteBean}.
 	 */
-	deleteRoaster(id: string): void {
-		const roasters = this.envelope.roasters.filter((r) => r.id !== id);
-		if (roasters.length === this.envelope.roasters.length) return;
-		const beans = this.envelope.beans.map((b) =>
-			b.roasterId === id ? { ...b, roasterId: null, updatedAt: Date.now() } : b
+	deleteRoaster(id: string, opts: { localOnly: boolean }): RoasterDeletePlan | null {
+		const plan = planRoasterDelete(
+			this.envelope.roasters,
+			this.envelope.beans,
+			id,
+			false,
+			this.activeId,
+			opts.localOnly
 		);
-		this.envelope = { ...this.envelope, beans, roasters };
+		if (!plan) return null;
+		const now = Date.now();
+		const detached = new Set(plan.detachedBeanIds);
+		const beans = this.envelope.beans.map((b) =>
+			detached.has(b.id) ? { ...b, roasterId: null, updatedAt: now } : b
+		);
+		this.envelope = { ...this.envelope, beans, roasters: this.roastersAfter(plan, now) };
 		this.persist();
+		return plan;
 	}
 
 	/**
@@ -687,11 +724,19 @@ export class BeanLibraryStore {
 	 * from the returned plan (`null`: the roaster isn't in the directory,
 	 * nothing deleted).
 	 */
-	deleteRoasterAndBeans(id: string): RoasterDeletePlan | null {
+	deleteRoasterAndBeans(id: string, opts: { localOnly: boolean }): RoasterDeletePlan | null {
 		// The core plans it (`plan_roaster_delete`): the bags it removes, their
-		// Visualizer ids, and the active-bag pointer afterwards, cleared when
-		// one of them was active and never moved to another bag (REVIEW-CORE M3).
-		const plan = planRoasterDelete(this.envelope.roasters, this.envelope.beans, id, true, this.activeId);
+		// Visualizer ids, the active-bag pointer afterwards, cleared when one of
+		// them was active and never moved to another bag (REVIEW-CORE M3), and
+		// whether the roaster leaves a tombstone (SF1).
+		const plan = planRoasterDelete(
+			this.envelope.roasters,
+			this.envelope.beans,
+			id,
+			true,
+			this.activeId,
+			opts.localOnly
+		);
 		if (!plan) return null;
 		// GEN6: the whole cascade as ONE envelope update + ONE persist.
 		// A bag on Visualizer stays as a tombstone, as `deleteBean` keeps one
@@ -703,8 +748,7 @@ export class BeanLibraryStore {
 		const beans = this.envelope.beans.flatMap((b) =>
 			!gone.has(b.id) ? [b] : kept.has(b.id) ? [beanTombstone(b, now)] : []
 		);
-		const roasters = this.envelope.roasters.filter((r) => r.id !== id);
-		this.envelope = { ...this.envelope, beans, roasters };
+		this.envelope = { ...this.envelope, beans, roasters: this.roastersAfter(plan, now) };
 		this.persist();
 		const next = plan.activeBeanIdAfter ?? null;
 		if (next !== this.activeId) {
@@ -713,6 +757,13 @@ export class BeanLibraryStore {
 		}
 		this.dropPhotos(doomed);
 		return plan;
+	}
+
+	/** The roaster rows after `plan`: its roaster a tombstone when the plan says so, else gone. */
+	private roastersAfter(plan: RoasterDeletePlan, now: number): Roaster[] {
+		return this.envelope.roasters.flatMap((r) =>
+			r.id !== plan.roasterId ? [r] : plan.tombstoneRoaster ? [roasterTombstone(r, now)] : []
+		);
 	}
 
 	/**

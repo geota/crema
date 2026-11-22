@@ -49,7 +49,7 @@ describe('deleting a bag deletes its photo', () => {
 		library.upsertRoaster({ ...blankRoaster('X'), id: 'roaster:x' });
 		const bean = await bagWithPhoto('bean:a', beanImageRefFor('bean:a'), 'roaster:x');
 		const other = await bagWithPhoto('bean:b');
-		library.deleteRoasterAndBeans('roaster:x');
+		library.deleteRoasterAndBeans('roaster:x', { localOnly: true });
 		await settled();
 		expect(await images.get(bean.imageRef!)).toBeNull();
 		expect(await images.get(other.imageRef!)).not.toBeNull();
@@ -69,7 +69,7 @@ describe('deleting a bag deletes its photo', () => {
 		const ref = beanImageRefFor('bean:a');
 		await bagWithPhoto('bean:a', ref, 'roaster:x');
 		await bagWithPhoto('bean:b', ref);
-		library.deleteRoasterAndBeans('roaster:x');
+		library.deleteRoasterAndBeans('roaster:x', { localOnly: true });
 		await settled();
 		expect(library.getBean('bean:a')).toBeNull();
 		expect(await images.get(ref)).not.toBeNull();

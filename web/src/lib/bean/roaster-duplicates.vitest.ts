@@ -73,7 +73,7 @@ describe('deleting a roaster with its bags (REVIEW-CORE M3)', () => {
 		library.upsertBean({ ...blankBean('bean:other') });
 		library.setActiveBean('bean:a');
 
-		const plan = library.deleteRoasterAndBeans(r.id);
+		const plan = library.deleteRoasterAndBeans(r.id, { localOnly: true });
 		expect(plan?.deletedBeanIds).toEqual(['bean:a']);
 		expect(plan?.remoteBeanIds, 'the remote DELETEs come from the same plan').toEqual(['vz-a']);
 		expect(plan?.remoteRoasterId).toBe('vz-r');
@@ -93,7 +93,7 @@ describe('deleting a roaster with its bags (REVIEW-CORE M3)', () => {
 		library.upsertBean({ ...blankBean('bean:other') });
 		library.setActiveBean('bean:other');
 
-		const plan = library.deleteRoasterAndBeans(r.id);
+		const plan = library.deleteRoasterAndBeans(r.id, { localOnly: true });
 		expect(plan?.activeBeanIdAfter).toBe('bean:other');
 		expect(library.activeBeanId).toBe('bean:other');
 	});

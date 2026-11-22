@@ -509,7 +509,9 @@ export const BeanSyncLive = Layer.effect(
 				// Remote → local roaster ids for the bag decode. Seeded from the
 				// already-bound roasters so a beans-only pull still files bags.
 				const remoteRoasterIdToLocal = new Map<string, string>();
-				for (const r of library.roasters) {
+				// Tombstones too (#488 review SF1): a bag filed under a roaster
+				// deleted here keeps that link on the pull.
+				for (const r of library.allRoasters) {
 					if (r.visualizerId) remoteRoasterIdToLocal.set(r.visualizerId, r.id);
 				}
 				// Bound roasters whose remote row has no catalogue link yet — the
@@ -527,12 +529,14 @@ export const BeanSyncLive = Layer.effect(
 					const { rows: remoteRoasters, failures } = yield* withDetails(
 						'/roasters',
 						summaries,
-						remoteIdsNeedingDetail(library.roasters, summaries)
+						remoteIdsNeedingDetail(library.allRoasters, summaries)
 					);
 					for (const f of failures) {
 						log.push({ direction: 'pull', kind: 'roaster', id: f.id, name: 'Roaster details', at: Date.now(), error: f.error });
 					}
-					for (const action of reconcileRoasters(library.roasters, remoteRoasters)) {
+					// Tombstones too (#488 review SF1): a remote that matches only a
+					// roaster deleted here gets no action, so it isn't added back.
+					for (const action of reconcileRoasters(library.allRoasters, remoteRoasters)) {
 						const wire = action.remote;
 						// The kernel only emits actions for remotes that carry an id.
 						const remoteId = wire.id as string;
@@ -591,7 +595,7 @@ export const BeanSyncLive = Layer.effect(
 				};
 				const pushedRoasterIds = new Set<string>();
 				if (scope.pushRoasters) {
-					for (const item of planRoasterPush(library.roasters, lastSyncAt, pulledRoasterIds)) {
+					for (const item of planRoasterPush(library.allRoasters, lastSyncAt, pulledRoasterIds)) {
 						const local = library.getRoaster(item.localId);
 						if (!local || keptOff(item.create, local)) continue;
 						if (premiumLocked) {
@@ -630,7 +634,7 @@ export const BeanSyncLive = Layer.effect(
 					// 2b) Link already-synced roasters to the catalogue: a bound roaster
 					//     whose remote row has no `canonical_roaster_id` but which Crema
 					//     knows a catalogue id for gets a roaster PATCH carrying the link.
-					for (const patch of planRoasterLinkPatches(library.roasters, library.beans, [
+					for (const patch of planRoasterLinkPatches(library.allRoasters, library.beans, [
 						...remoteUnlinked
 					])) {
 						if (premiumLocked) break;
@@ -682,7 +686,7 @@ export const BeanSyncLive = Layer.effect(
 						fallbackId: mintBeanId()
 					}));
 					const roasterNames: Record<string, string> = {};
-					for (const r of library.roasters) roasterNames[r.id] = r.name;
+					for (const r of library.allRoasters) roasterNames[r.id] = r.name;
 					// Tombstones too: a bag deleted here is never pulled back (#488 review S5).
 					for (const action of reconcileBeans(library.allBeans, pulledBags, roasterNames, lastSyncAt, pulledStamp)) {
 						const decoded = action.remote;
@@ -715,7 +719,9 @@ export const BeanSyncLive = Layer.effect(
 							continue;
 						}
 						const remoteRoasterId = local.roasterId
-							? (library.getRoaster(local.roasterId)?.visualizerId ?? null)
+							? // Tombstones too (#488 review SF1): a bag filed under a roaster
+								// deleted on this device only keeps its roaster on Visualizer.
+								(library.getRoasterRow(local.roasterId)?.visualizerId ?? null)
 							: null;
 						// EF2: `uploadBean` builds `coffeeBagWriteRequest(local, remoteRoasterId)`
 						// and PATCHes (id present) or POSTs (id absent).

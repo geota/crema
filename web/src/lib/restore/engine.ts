@@ -403,8 +403,8 @@ export async function buildLocalState(locks: LockManagerLike | undefined = defau
 		// Tombstones too, named, so Replace keeps them (#488 review S5).
 		beans: beans.allBeans.map((b) => b.id),
 		deletedBeans: beans.allBeans.filter((b) => b.deletedAt != null).map((b) => b.id),
-		roasters: beans.roasters.map((r) => r.id),
-		deletedRoasters: beans.roasters.filter((r) => r.deletedAt != null).map((r) => r.id),
+		roasters: beans.allRoasters.map((r) => r.id),
+		deletedRoasters: beans.allRoasters.filter((r) => r.deletedAt != null).map((r) => r.id),
 		grinders: beans.allGrinders.map((g) => g.id),
 		profiles: profiles.customProfiles.map((p) => p.id),
 		recipes: recipes.ownRecipes.map((r) => r.id),
@@ -936,7 +936,7 @@ async function applyPlan(
 			const beans = getBeanStore();
 			const ok = beans.restoreLibrary(
 				keepLocalGrinds(nextRows(beans.allBeans, records.beans, plan.beans), beans.allBeans, plan.beansKeepGrinds),
-				nextRows(beans.roasters, records.roasters, plan.roasters),
+				nextRows(beans.allRoasters, records.roasters, plan.roasters),
 				plan.clearActiveBean,
 				nextRows(beans.allGrinders, records.grinders, plan.grinders),
 				plan.clearActiveGrinder

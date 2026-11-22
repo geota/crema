@@ -99,6 +99,9 @@ function mkLibrary(init: { roasters?: Roaster[]; beans?: Bean[] } = {}) {
 	const beans = [...(init.beans ?? [])];
 	const lib = {
 		get roasters() {
+			return roasters.filter((r) => r.deletedAt == null);
+		},
+		get allRoasters() {
 			return roasters;
 		},
 		get beans() {
@@ -107,8 +110,10 @@ function mkLibrary(init: { roasters?: Roaster[]; beans?: Bean[] } = {}) {
 		get allBeans() {
 			return beans;
 		},
-		findRoasterByName: (n: string) => roasters.find((r) => r.name.toLowerCase() === n.toLowerCase()),
-		getRoaster: (id: string) => roasters.find((r) => r.id === id),
+		findRoasterByName: (n: string) =>
+			roasters.find((r) => r.deletedAt == null && r.name.toLowerCase() === n.toLowerCase()),
+		getRoaster: (id: string) => roasters.find((r) => r.id === id && r.deletedAt == null),
+		getRoasterRow: (id: string) => roasters.find((r) => r.id === id),
 		getBean: (id: string) => beans.find((b) => b.id === id) ?? null,
 		updateRoaster: (id: string, patch: Partial<Roaster>) => {
 			const r = roasters.find((x) => x.id === id);
@@ -200,6 +205,33 @@ describe('BeanSync.runSync — pull', () => {
 		expect(calls.some((c) => new URL(c.url).pathname === '/api/coffee_bags/b1')).toBe(false);
 	});
 
+	it('never pulls back a roaster deleted on this device (#488 review SF1)', async () => {
+		const gone: Roaster = { ...blankRoaster('Acme'), visualizerId: 'r1', deletedAt: 5 };
+		const lib = mkLibrary({ roasters: [gone] });
+		const { layer } = mkHttp((method, url) => {
+			if (method === 'GET' && isList(url, '/roasters'))
+				return { ok: true, json: { data: [{ id: 'r1', name: 'Acme' }], paging: { pages: 1 } } };
+			return { ok: true, json: { data: [], paging: { pages: 1 } } };
+		});
+		const result = await run(lib, layer);
+		expect(result.ok).toBe(true);
+		expect(result.pulled).toBe(0);
+		expect(lib.roasters).toEqual([]);
+		expect(lib.allRoasters).toEqual([gone]);
+	});
+
+	it('a bag pulled under a roaster deleted here stays filed under it (#488 review SF1)', async () => {
+		const gone: Roaster = { ...blankRoaster('Acme'), visualizerId: 'r1', deletedAt: 5 };
+		const lib = mkLibrary({ roasters: [gone] });
+		const { layer } = mkHttp((method, url) => {
+			if (method === 'GET' && isList(url, '/coffee_bags'))
+				return { ok: true, json: { data: [{ id: 'b1', name: 'Yirg', roaster_id: 'r1' }], paging: { pages: 1 } } };
+			return { ok: true, json: { data: [], paging: { pages: 1 } } };
+		});
+		await run(lib, layer);
+		expect(lib.beans.find((b) => b.visualizerId === 'b1')?.roasterId).toBe(gone.id);
+	});
+
 	it('binds a local roaster to the matching remote by name (no duplicate)', async () => {
 		const local = { ...blankRoaster('Acme'), visualizerId: null };
 		const lib = mkLibrary({ roasters: [local] });
@@ -227,6 +259,22 @@ describe('BeanSync.runSync — push + premium', () => {
 		expect(result.pushed).toBe(1);
 		expect(lib.roasters[0].visualizerId).toBe('r9');
 		expect(calls.some((c) => c.method === 'POST' && c.url.includes('/roasters'))).toBe(true);
+	});
+
+	it('a bag filed under a roaster deleted here keeps that roaster on Visualizer (#488 review SF1)', async () => {
+		localStorage.setItem('crema.beans.sync.v1', JSON.stringify({ lastSyncAt: 0, premium: true }));
+		const gone: Roaster = { ...blankRoaster('Acme'), visualizerId: 'r1', deletedAt: 5 };
+		const bean: Bean = { ...blankBean('bean:1'), name: 'Yirg', roasterId: gone.id, visualizerId: 'b1', updatedAt: 10 };
+		const lib = mkLibrary({ roasters: [gone], beans: [bean] });
+		const { layer, calls } = mkHttp((method, url) => {
+			if (method === 'PATCH' && url.includes('/coffee_bags')) return { ok: true, json: { id: 'b1' } };
+			return { ok: true, json: { data: [], paging: { pages: 1 } } };
+		});
+		await run(lib, layer);
+		// The tombstone itself is never pushed.
+		expect(calls.some((c) => c.method !== 'GET' && c.url.includes('/roasters'))).toBe(false);
+		const patch = calls.find((c) => c.method === 'PATCH' && c.url.includes('/coffee_bags'));
+		expect((patch?.body as { coffee_bag: Record<string, unknown> }).coffee_bag.roaster_id).toBe('r1');
 	});
 
 	it('downshifts to read-only on a 403 and caches premium=false', async () => {

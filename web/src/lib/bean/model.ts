@@ -23,6 +23,7 @@ import {
 	coerceBean as wasmCoerceBean,
 	coerceRoaster as wasmCoerceRoaster,
 	beanTombstoneJson as wasmBeanTombstoneJson,
+	roasterTombstoneJson as wasmRoasterTombstoneJson,
 	duplicateBeanJson as wasmDuplicateBeanJson,
 	setBeanFrozenJson as wasmSetBeanFrozenJson,
 	mergeBeanEditJson as wasmMergeBeanEditJson,
@@ -583,6 +584,16 @@ export function duplicateBean(src: Bean, newId: string = mintBeanId(), nowMs = D
  */
 export function beanTombstone(bean: Bean, nowMs = Date.now()): Bean {
 	return JSON.parse(wasmBeanTombstoneJson(JSON.stringify(bean), nowMs)) as Bean;
+}
+
+/**
+ * The row a roaster on Visualizer deleted on this device leaves (#488 review
+ * SF1, core `roaster_tombstone`): the id, name, Visualizer id, the two stamps
+ * and `deletedAt`, so the next pull doesn't add it back. Hidden from every
+ * live read.
+ */
+export function roasterTombstone(roaster: Roaster, nowMs = Date.now()): Roaster {
+	return JSON.parse(wasmRoasterTombstoneJson(JSON.stringify(roaster), nowMs)) as Roaster;
 }
 
 /**
