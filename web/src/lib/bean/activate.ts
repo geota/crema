@@ -2,9 +2,10 @@
  * `activateBean` — selecting a bag on Brew or Beans, as **one change** (#488,
  * review F6): the core resolves everything the selection changes besides the
  * bag (the linked profile, the starred grinder, its grind) and its inverse,
- * and the shell shows one message ("Ethiopia Guji: Blooming profile, Niche
- * Zero at 14") with one Undo that reverses all of it. Nothing besides the
- * bag changed: no message.
+ * and the words: one message ("Ethiopia Guji: Blooming profile, Niche Zero at
+ * 14") with one Undo that reverses all of it, and any notices. The shell
+ * shows them as the core wrote them. Nothing besides the bag changed: no
+ * message.
  *
  * Call sites are the EXPLICIT activations only (Beans page "Use", the Brew
  * strip / header picker, the editor's activate paths, re-buy); boot-time
@@ -21,9 +22,7 @@ import { toast } from '#lib/components/shared/toast.svelte.js';
 import { getBrewGrind } from '#lib/brew/grind-session.svelte.js';
 import { getHistoryReads, lastGrinds } from '#lib/history/reads.svelte.js';
 import {
-	DEFAULT_GRIND_SCALE,
 	bagSelectionUndo,
-	formatGrind,
 	resolveBagSelection,
 	resolveGrinderSwitch,
 	type LastGrind
@@ -58,8 +57,8 @@ function shotRunning(s: ShotInProgress | undefined): boolean {
 
 /**
  * Select bag `id`. Resolves once the change (if any) is applied. With a shot
- * in progress the linked profile is not loaded (`setActive` uploads to the
- * DE1), and a note says so. Picking the bag that is already selected changes
+ * in progress the core leaves the linked profile out (`setActive` uploads to
+ * the DE1), and its notice says so. Picking the bag that is already selected changes
  * nothing (FINAL N7): an unsaved grind on Brew stays.
  *
  * Undo puts back only the parts still as the pick set them (the core's
@@ -97,17 +96,12 @@ export async function activateBean(id: string, opts: { shotInProgress?: ShotInPr
 		lastGrinds: history
 	});
 
-	// A re-pick loads nothing (the core answers no change): nothing to note.
-	const notes: string[] = [];
-	if (before !== id) {
-		if (linkedMissing) notes.push(`${bean.name}'s linked profile no longer exists.`);
-		else if (shotInProgress && linked && profiles.activeId !== linkedId) {
-			notes.push(`Shot in progress — "${linked.name}" not loaded.`);
-		}
-	}
+	// The core's words, verbatim (REVIEW-FINAL-2 SF4): the one message with
+	// its Undo, then the passing notices (a missing linked profile, a profile
+	// not loaded mid-shot). A re-pick changes nothing and says nothing.
 	if (sel.changed) {
 		applyChange(sel.change);
-		toast.action(selectionMessage(bean.name, sel.change), 'Undo', () =>
+		toast.action(sel.message ?? bean.name, 'Undo', () =>
 			applyChange(
 				bagSelectionUndo(sel, {
 					profileId: profiles.activeId ?? undefined,
@@ -118,26 +112,7 @@ export async function activateBean(id: string, opts: { shotInProgress?: ShotInPr
 			)
 		);
 	}
-	for (const n of notes) toast.info(n);
-}
-
-/** "Ethiopia Guji: Blooming profile, Niche Zero at 14" — what the selection changed. */
-export function selectionMessage(bagName: string, change: SelectionChange): string {
-	const parts: string[] = [];
-	if (change.profileId?.value) {
-		const p = getProfileStore().get(change.profileId.value);
-		if (p) parts.push(`${p.name} profile`);
-	}
-	const grinder = getBeanStore().activeGrinder;
-	const scale = grinder?.scale ?? DEFAULT_GRIND_SCALE;
-	const grind = change.grind?.value ?? null;
-	if (change.grinderId) {
-		const name = grinder?.name ?? 'No grinder';
-		parts.push(grind !== null ? `${name} at ${formatGrind(grind, scale)}` : name);
-	} else if (grind !== null) {
-		parts.push(grinder ? `${grinder.name} at ${formatGrind(grind, scale)}` : `grind ${formatGrind(grind, scale)}`);
-	}
-	return `${bagName}: ${parts.join(', ')}`;
+	for (const n of sel.notices ?? []) toast.info(n.text);
 }
 
 /**

@@ -77,7 +77,16 @@ describe('activateBean with a hidden built-in linked profile', () => {
 		getBeanStore().upsertBean({ ...blankBean('bean-2'), name: 'Kenya', linkedProfileId: 'gone' });
 		await t.activateBean('bean-2');
 		expect(t.activated).toEqual([]);
-		expect(t.toasts()).toEqual(["Kenya's linked profile no longer exists."]);
+		// The core's notice, verbatim (REVIEW-FINAL-2 SF4).
+		expect(t.toasts()).toEqual(['Kenya\u2019s linked profile no longer exists']);
+	});
+
+	it('mid-shot: the profile is not loaded and the core\'s notice shows as written (SF4)', async () => {
+		const t = await setup();
+		await t.activateBean('bean-1', { shotInProgress: true });
+		expect(t.activated, 'nothing sent to the DE1').toEqual([]);
+		expect(t.profiles.activeId).not.toBe(t.builtin.id);
+		expect(t.toasts()).toEqual([`Shot in progress \u2014 \u201c${t.builtin.name}\u201d not loaded`]);
 	});
 });
 
