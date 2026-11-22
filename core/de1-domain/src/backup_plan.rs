@@ -509,6 +509,11 @@ pub struct BackupManifest {
     /// counted as bags.
     #[serde(default)]
     pub deleted_beans: Vec<String>,
+    /// Roaster ids whose row is a tombstone (a roaster on Visualizer deleted
+    /// on the device that wrote it, #488 review SF1). Restored as rows, not
+    /// counted as roasters.
+    #[serde(default)]
+    pub deleted_roasters: Vec<String>,
     /// Bean ids with a photo in the backup. The shell's, from the zip.
     pub photos: Vec<String>,
     /// The settings line's `_shell`, if there's a settings line.
@@ -724,6 +729,9 @@ impl BackupScan {
             }
             BackupLine::Roaster(r) => {
                 if self.row(RowStore::Roasters, &r.id) {
+                    if r.deleted_at.is_some() {
+                        self.manifest.deleted_roasters.push(r.id.clone());
+                    }
                     self.manifest.roasters.push(r.id);
                 }
             }
@@ -1058,7 +1066,11 @@ pub struct LocalState {
     /// keeps one the backup doesn't carry; a backup row with its id wins as
     /// any row does.
     pub deleted_beans: Vec<String>,
+    /// Tombstones included.
     pub roasters: Vec<String>,
+    /// Of [`Self::roasters`], the tombstones: roasters on Visualizer deleted
+    /// on this device (#488 review SF1), kept as [`Self::deleted_beans`] are.
+    pub deleted_roasters: Vec<String>,
     /// Grinder records (#488), archived and tombstones included.
     pub grinders: Vec<String>,
     /// Custom profiles only: built-ins aren't the backup's to change.
@@ -1325,8 +1337,8 @@ pub struct RecipeMetaPlan {
     pub hidden_builtins: Vec<String>,
 }
 
-/// The bags a report counts: the beans' [`StorePlan`] without tombstones
-/// (#488 review S5), the backup's or this device's.
+/// The rows a report counts: a [`StorePlan`] without tombstones, the
+/// backup's or this device's. Bags (#488 review S5) and roasters (SF1).
 #[typeshare]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1337,42 +1349,34 @@ pub struct BagCounts {
     pub remove: u32,
 }
 
-/// [`BagCounts`] for `beans`, the plan of `m` over `local`.
-fn bag_counts(
+/// [`BagCounts`] for `plan`, the plan of `m`'s `store` over `local`:
+/// `backup_dead` are the backup's tombstones in it, `here_dead` the device's.
+fn live_counts(
     m: &BackupManifest,
-    local: &LocalState,
     mode: RestoreMode,
-    beans: &StorePlan,
+    store: RowStore,
+    plan: &StorePlan,
+    backup_dead: &[String],
+    here_dead: &[String],
 ) -> BagCounts {
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
-    let live = |ids: &[String]| {
-        count(
-            ids.iter()
-                .filter(|id| !m.deleted_beans.contains(id))
-                .count(),
-        )
-    };
+    let live = |ids: &[String]| count(ids.iter().filter(|id| !backup_dead.contains(id)).count());
     // The tombstones here that `keep` counted: all of them when Replace keeps
-    // everything (no bean lines), those the backup has too on Merge.
+    // everything (no lines of this store), those the backup has too on Merge.
     let kept_here = if mode == RestoreMode::Replace {
-        if m.carries(RowStore::Beans) {
-            0
-        } else {
-            local.deleted_beans.len()
-        }
+        if m.carries(store) { 0 } else { here_dead.len() }
     } else {
-        let backup: HashSet<&str> = m.ids(RowStore::Beans).into_iter().collect();
-        local
-            .deleted_beans
+        let backup: HashSet<&str> = m.ids(store).into_iter().collect();
+        here_dead
             .iter()
             .filter(|id| backup.contains(id.as_str()))
             .count()
     };
     BagCounts {
-        add: live(&beans.add),
-        overwrite: live(&beans.overwrite),
-        keep: beans.keep.saturating_sub(count(kept_here)),
-        remove: count(beans.remove.len()),
+        add: live(&plan.add),
+        overwrite: live(&plan.overwrite),
+        keep: plan.keep.saturating_sub(count(kept_here)),
+        remove: count(plan.remove.len()),
     }
 }
 
@@ -1397,6 +1401,10 @@ pub struct RestorePlan {
     /// What a report counts of [`Self::beans`]: bags, not tombstones.
     #[serde(default)]
     pub bag_counts: BagCounts,
+    /// What a report counts of [`Self::roasters`]: roasters, not tombstones
+    /// (#488 review SF1).
+    #[serde(default)]
+    pub roaster_counts: BagCounts,
     pub profiles: StorePlan,
     pub recipes: StorePlan,
     pub custom_methods: StorePlan,
@@ -1601,8 +1609,28 @@ pub fn plan_restore(
     // ── Rows ──
     let mut beans = row_plan(m, local, mode, RowStore::Beans);
     beans.remove.retain(|id| !local.deleted_beans.contains(id));
-    let bag_counts = bag_counts(m, local, mode, &beans);
-    let roasters = row_plan(m, local, mode, RowStore::Roasters);
+    let bag_counts = live_counts(
+        m,
+        mode,
+        RowStore::Beans,
+        &beans,
+        &m.deleted_beans,
+        &local.deleted_beans,
+    );
+    // A roaster deleted here stays a tombstone through a Replace, as a bag
+    // does (#488 review SF1): the next pull would add it back otherwise.
+    let mut roasters = row_plan(m, local, mode, RowStore::Roasters);
+    roasters
+        .remove
+        .retain(|id| !local.deleted_roasters.contains(id));
+    let roaster_counts = live_counts(
+        m,
+        mode,
+        RowStore::Roasters,
+        &roasters,
+        &m.deleted_roasters,
+        &local.deleted_roasters,
+    );
     let grinders = row_plan(m, local, mode, RowStore::Grinders);
     let beans_keep_grinds: Vec<String> = beans
         .overwrite
@@ -1721,6 +1749,7 @@ pub fn plan_restore(
         grinders,
         beans_keep_grinds,
         bag_counts,
+        roaster_counts,
         profiles,
         recipes,
         custom_methods,

@@ -997,6 +997,33 @@ pub fn bean_tombstone_json(bean_json: &str, now_ms: i64) -> Result<String, Strin
     serde_json::to_string(&bean_tombstone(&bean, now_ms)).map_err(|e| e.to_string())
 }
 
+/// The row a roaster deleted on this device leaves when it is on Visualizer
+/// (#488 review SF1), as [`bean_tombstone`] for a bag: what a Visualizer pull,
+/// a restore and an import match it by, and nothing else. Kept: `id`, `name`
+/// (the pull's signature match), `visualizer_id`, `created_at`, `updated_at`
+/// and `deleted_at` (now, or the earlier stamp of a row already deleted).
+/// The website, image, place, notes, catalogue and duplicate links and the
+/// metadata go.
+#[must_use]
+pub fn roaster_tombstone(roaster: &Roaster, now_ms: i64) -> Roaster {
+    let mut t = Roaster::new(roaster.id.clone(), roaster.name.clone(), roaster.created_at);
+    t.visualizer_id.clone_from(&roaster.visualizer_id);
+    t.metadata = serde_json::json!({});
+    t.updated_at = roaster.updated_at;
+    t.deleted_at = Some(roaster.deleted_at.unwrap_or(now_ms));
+    t
+}
+
+/// JSON-bridged [`roaster_tombstone`]: a [`Roaster`] JSON in, its tombstone
+/// out.
+///
+/// # Errors
+/// The JSON parse error string on a malformed `roaster_json`.
+pub fn roaster_tombstone_json(roaster_json: &str, now_ms: i64) -> Result<String, String> {
+    let roaster: Roaster = serde_json::from_str(roaster_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&roaster_tombstone(&roaster, now_ms)).map_err(|e| e.to_string())
+}
+
 /// The UTC calendar date of `now_ms` as ISO `yyyy-mm-dd`.
 #[allow(clippy::cast_sign_loss)]
 fn iso_date_from_ms(now_ms: i64) -> String {
@@ -2484,5 +2511,35 @@ mod tests {
         // An older tombstone keeps its stamp.
         assert_eq!(bean_tombstone(&t, 500).deleted_at, Some(99));
         assert!(bean_tombstone_json("nope", 1).is_err());
+    }
+
+    #[test]
+    fn a_roaster_tombstone_keeps_only_what_matching_needs() {
+        let mut r = Roaster::new("roaster:1".into(), "Onyx".into(), 10);
+        r.website = Some("https://onyx".into());
+        r.image_url = Some("https://onyx/logo".into());
+        r.city = Some("Rogers".into());
+        r.country = Some("US".into());
+        r.notes = "private".into();
+        r.canonical_roaster_id = Some("roaster:0".into());
+        r.catalogue_roaster_id = Some("cat:1".into());
+        r.visualizer_id = Some("v1".into());
+        r.metadata = serde_json::json!({ "crema": { "city": "Rogers" } });
+        r.updated_at = 50;
+        let t = roaster_tombstone(&r, 99);
+        let mut want = Roaster::new("roaster:1".into(), "Onyx".into(), 10);
+        want.visualizer_id = Some("v1".into());
+        want.metadata = serde_json::json!({});
+        want.updated_at = 50;
+        want.deleted_at = Some(99);
+        assert_eq!(t, want);
+        assert_eq!(
+            roaster_tombstone(&t, 500).deleted_at,
+            Some(99),
+            "the first stamp stays"
+        );
+        let json = roaster_tombstone_json(&serde_json::to_string(&r).unwrap(), 99).unwrap();
+        assert_eq!(serde_json::from_str::<Roaster>(&json).unwrap(), want);
+        assert!(roaster_tombstone_json("{", 1).is_err());
     }
 }

@@ -362,8 +362,15 @@ pub struct BagSelectInput {
     /// The active profile id now.
     pub active_profile_id: Option<String>,
     /// The bag's linked profile isn't in this device's library (a dangling
-    /// id): it isn't loaded.
+    /// id): it isn't loaded, and a notice says so.
     pub linked_profile_missing: bool,
+    /// The name of the bag's linked profile in this library, for the message
+    /// and notices. `None` (or blank) reads as "the linked profile".
+    pub linked_profile_name: Option<String>,
+    /// A shot is in progress (REVIEW-FINAL-2 SF4): loading a profile would
+    /// upload it to the machine mid-extraction, so the linked profile isn't
+    /// loaded, and a notice says so. The grinder and grind still change.
+    pub shot_in_progress: bool,
     /// The active grinder pointer now.
     pub active_grinder_id: Option<String>,
     /// Brew's grind value now.
@@ -378,8 +385,39 @@ pub struct BagSelectInput {
     pub active_bean_id: Option<String>,
 }
 
+/// Why a bag pick left something out, for a passing notice.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SelectionNoticeKind {
+    /// The bag's linked profile isn't in this library: nothing was loaded.
+    LinkedProfileMissing,
+    /// A shot is in progress: the linked profile wasn't loaded.
+    ProfileNotLoaded,
+}
+
+/// A passing notice about a bag pick (no Undo), shown verbatim.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectionNotice {
+    /// What it's about.
+    pub kind: SelectionNoticeKind,
+    /// The text to show.
+    pub text: String,
+}
+
 /// One bag selection, resolved (review F6): the change, its inverse for the
-/// one Undo, and whether to show the message.
+/// one Undo, and the words to show (REVIEW-FINAL-2 SF4), so every shell
+/// shows the same thing verbatim.
+///
+/// It is self-contained, so a relayed pick can be answered with it: the hub
+/// resolves and applies the pick, and sends this back to the remote that
+/// picked, which shows [`Self::message`] (with its own Undo) and
+/// [`Self::notices`] as they are, with no lookups in its own library. The
+/// remote's Undo is [`bag_selection_undo`] of this against the hub's state as
+/// the remote mirrors it, relayed back as ordinary profile, grinder and grind
+/// commands.
 #[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -393,6 +431,14 @@ pub struct BagSelection {
     pub changed: bool,
     /// The grinder switched to, for the message; `None` when it stays.
     pub grinder_name: Option<String>,
+    /// The one message with the Undo ("Ethiopia Guji: Blooming profile, Niche
+    /// Zero at 14"), set exactly when [`Self::changed`].
+    #[serde(default)]
+    pub message: Option<String>,
+    /// Passing notices, no Undo, in order (a missing linked profile, a
+    /// profile not loaded mid-shot). They can come with no change.
+    #[serde(default)]
+    pub notices: Vec<SelectionNotice>,
 }
 
 fn non_blank(s: Option<&str>) -> Option<&str> {
@@ -401,14 +447,19 @@ fn non_blank(s: Option<&str>) -> Option<&str> {
 
 /// Resolve selecting a bag on Brew into one change (review F6):
 ///
-/// 1. **Profile:** the bag's linked profile, when set, here, and not active.
+/// 1. **Profile:** the bag's linked profile, when set, here, and not active,
+///    and no shot is in progress. A linked profile missing here, or one held
+///    back by a shot in progress, gives a notice instead (SF4).
 /// 2. **Grinder:** the bag's starred grinder, when it's still on Devices
 ///    (live) and not active. No star, or a starred grinder that was removed:
 ///    the active grinder stays.
 /// 3. **Grind:** [`pick_grind`] with the grinder active after step 2, when it
 ///    differs from Brew's grind now.
 ///
-/// The inverse restores the previous value of each part that changes.
+/// The inverse restores the previous value of each part that changes. The
+/// message reads "‹bag›: ‹profile› profile, ‹grinder› at ‹grind›", the grind
+/// formatted on the grinder's scale ([`crate::format_grind`]); a grind change
+/// with no grinder reads "grind ‹grind›".
 #[must_use]
 pub fn resolve_bag_selection(input: &BagSelectInput) -> BagSelection {
     let Some(bag) = input.bag.as_ref() else {
@@ -419,16 +470,33 @@ pub fn resolve_bag_selection(input: &BagSelectInput) -> BagSelection {
     }
     let mut change = SelectionChange::default();
     let mut undo = SelectionChange::default();
-    if !input.linked_profile_missing
-        && let Some(linked) = non_blank(bag.linked_profile_id.as_deref())
-        && input.active_profile_id.as_deref() != Some(linked)
-    {
-        change.profile_id = Some(SetTo {
-            value: Some(linked.to_owned()),
-        });
-        undo.profile_id = Some(SetTo {
-            value: input.active_profile_id.clone(),
-        });
+    let mut notices = Vec::new();
+    let profile_name = non_blank(input.linked_profile_name.as_deref()).map(str::trim);
+    if let Some(linked) = non_blank(bag.linked_profile_id.as_deref()) {
+        if input.linked_profile_missing {
+            notices.push(SelectionNotice {
+                kind: SelectionNoticeKind::LinkedProfileMissing,
+                text: format!("{}\u{2019}s linked profile no longer exists", bag.name),
+            });
+        } else if input.active_profile_id.as_deref() == Some(linked) {
+            // Already loaded: nothing to change, nothing to say.
+        } else if input.shot_in_progress {
+            let name = profile_name.map_or_else(
+                || "the linked profile".to_owned(),
+                |n| format!("\u{201c}{n}\u{201d}"),
+            );
+            notices.push(SelectionNotice {
+                kind: SelectionNoticeKind::ProfileNotLoaded,
+                text: format!("Shot in progress \u{2014} {name} not loaded"),
+            });
+        } else {
+            change.profile_id = Some(SetTo {
+                value: Some(linked.to_owned()),
+            });
+            undo.profile_id = Some(SetTo {
+                value: input.active_profile_id.clone(),
+            });
+        }
     }
     let active_now = active_grinder(&input.grinders, input.active_grinder_id.as_deref());
     let starred = bag
@@ -463,11 +531,41 @@ pub fn resolve_bag_selection(input: &BagSelectInput) -> BagSelection {
             value: input.grind.clone(),
         });
     }
+    let changed = !change.is_empty();
+    let message = changed.then(|| {
+        let mut parts = Vec::new();
+        if change.profile_id.is_some() {
+            parts.push(format!("{} profile", profile_name.unwrap_or("linked")));
+        }
+        let grind = change
+            .grind
+            .as_ref()
+            .and_then(|g| g.value.as_deref())
+            .map(|g| {
+                crate::format_grind(
+                    g,
+                    &active_after.map(|a| a.scale.clone()).unwrap_or_default(),
+                )
+            });
+        let grinder = grinder_name
+            .as_deref()
+            .or_else(|| active_after.map(|a| a.name.as_str()));
+        match (change.grinder_id.is_some(), grinder, grind) {
+            (true, g, Some(at)) => parts.push(format!("{} at {at}", g.unwrap_or("No grinder"))),
+            (true, g, None) => parts.push(g.unwrap_or("No grinder").to_owned()),
+            (false, Some(g), Some(at)) => parts.push(format!("{g} at {at}")),
+            (false, None, Some(at)) => parts.push(format!("grind {at}")),
+            (false, _, None) => {}
+        }
+        format!("{}: {}", bag.name, parts.join(", "))
+    });
     BagSelection {
-        changed: !change.is_empty(),
+        changed,
         change,
         undo,
         grinder_name,
+        message,
+        notices,
     }
 }
 
@@ -1691,7 +1789,7 @@ mod tests {
                 ..SelectionChange::default()
             },
             changed: true,
-            grinder_name: None,
+            ..BagSelection::default()
         };
         let blank = SelectionState {
             grind: Some("  ".into()),
@@ -1720,6 +1818,150 @@ mod tests {
         .unwrap();
         assert_eq!(out, bag_selection_undo(&sel, &now));
         assert!(bag_selection_undo_json("{}").is_err());
+    }
+
+    // ── The words a pick shows (REVIEW-FINAL-2 SF4) ──
+
+    #[test]
+    fn the_message_names_the_profile_the_grinder_and_the_grind() {
+        let mut bag = bag_with(vec![row("grinder:nz", "14", true)]);
+        bag.name = "Ethiopia Guji".into();
+        bag.linked_profile_id = Some("p:bloom".into());
+        let input = BagSelectInput {
+            bag: Some(bag),
+            active_profile_id: Some("p:default".into()),
+            linked_profile_name: Some("Blooming".into()),
+            active_grinder_id: Some("grinder:ek".into()),
+            grind: Some("9".into()),
+            grinders: vec![g("grinder:nz", "Niche Zero"), g("grinder:ek", "EK43")],
+            ..BagSelectInput::default()
+        };
+        let out = resolve_bag_selection(&input);
+        assert_eq!(
+            out.message.as_deref(),
+            Some("Ethiopia Guji: Blooming profile, Niche Zero at 14")
+        );
+        assert!(out.notices.is_empty());
+        // A grind-only change names the grinder it is on (web's wording).
+        let mut grind_only = input.clone();
+        grind_only.bag.as_mut().unwrap().linked_profile_id = None;
+        grind_only.active_grinder_id = Some("grinder:nz".into());
+        assert_eq!(
+            resolve_bag_selection(&grind_only).message.as_deref(),
+            Some("Ethiopia Guji: Niche Zero at 14")
+        );
+        // No message without a change.
+        let mut same = grind_only.clone();
+        same.grind = Some("14.0".into());
+        let out = resolve_bag_selection(&same);
+        assert!(!out.changed && out.message.is_none());
+    }
+
+    #[test]
+    fn a_grind_with_no_grinder_reads_grind_and_follows_the_scale() {
+        let mut bag = bag_with(vec![row("", "14.50", false)]);
+        bag.name = "Kenya".into();
+        let out = resolve_bag_selection(&BagSelectInput {
+            bag: Some(bag),
+            grind: Some("9".into()),
+            ..BagSelectInput::default()
+        });
+        let text = out.message.expect("a grind change");
+        assert!(text.starts_with("Kenya: grind "), "{text}");
+        assert_eq!(
+            text,
+            format!(
+                "Kenya: grind {}",
+                crate::format_grind("14.50", &crate::grinder::GrindScale::default())
+            )
+        );
+    }
+
+    #[test]
+    fn mid_shot_the_linked_profile_is_held_back_with_a_notice() {
+        let mut bag = bag_with(vec![row("grinder:nz", "14", true)]);
+        bag.name = "Kenya".into();
+        bag.linked_profile_id = Some("p:bloom".into());
+        let input = BagSelectInput {
+            bag: Some(bag),
+            active_profile_id: Some("p:default".into()),
+            linked_profile_name: Some("Blooming".into()),
+            shot_in_progress: true,
+            grinders: vec![g("grinder:nz", "Niche Zero")],
+            ..BagSelectInput::default()
+        };
+        let out = resolve_bag_selection(&input);
+        assert_eq!(out.change.profile_id, None, "no upload mid-shot");
+        assert_eq!(out.undo.profile_id, None);
+        assert_eq!(
+            out.change.grinder_id,
+            set(Some("grinder:nz")),
+            "the rest still changes"
+        );
+        assert_eq!(out.message.as_deref(), Some("Kenya: Niche Zero at 14"));
+        assert_eq!(
+            out.notices,
+            [SelectionNotice {
+                kind: SelectionNoticeKind::ProfileNotLoaded,
+                text: "Shot in progress \u{2014} \u{201c}Blooming\u{201d} not loaded".into(),
+            }]
+        );
+        // The linked profile already active: nothing held back, no notice.
+        let mut loaded = input.clone();
+        loaded.active_profile_id = Some("p:bloom".into());
+        assert!(resolve_bag_selection(&loaded).notices.is_empty());
+        // No name known: "the linked profile".
+        let mut nameless = input;
+        nameless.linked_profile_name = None;
+        assert_eq!(
+            resolve_bag_selection(&nameless).notices[0].text,
+            "Shot in progress \u{2014} the linked profile not loaded"
+        );
+    }
+
+    #[test]
+    fn a_missing_linked_profile_is_a_notice_even_with_no_change() {
+        let mut bag = bag_with(Vec::new());
+        bag.name = "Kenya".into();
+        bag.linked_profile_id = Some("p:gone".into());
+        let input = BagSelectInput {
+            bag: Some(bag.clone()),
+            linked_profile_missing: true,
+            ..BagSelectInput::default()
+        };
+        let out = resolve_bag_selection(&input);
+        assert!(!out.changed && out.message.is_none());
+        assert_eq!(
+            out.notices,
+            [SelectionNotice {
+                kind: SelectionNoticeKind::LinkedProfileMissing,
+                text: "Kenya\u{2019}s linked profile no longer exists".into(),
+            }]
+        );
+        // A re-pick says nothing at all.
+        let again = BagSelectInput {
+            active_bean_id: Some(bag.id.clone()),
+            ..input
+        };
+        assert_eq!(resolve_bag_selection(&again), BagSelection::default());
+    }
+
+    #[test]
+    fn a_relayed_pick_travels_back_whole_for_the_remotes_undo() {
+        // F6: the hub answers a remote's pick with the selection; the remote
+        // shows its words and works out its Undo against the hub's state.
+        let sel = starred_pick();
+        let wire = serde_json::to_string(&sel).unwrap();
+        let back: BagSelection = serde_json::from_str(&wire).unwrap();
+        assert_eq!(back, sel);
+        assert!(back.message.is_some());
+        let hub_now = state("p:bloom", "grinder:nz", Some("14"));
+        assert_eq!(bag_selection_undo(&back, &hub_now), sel.undo);
+        // An older reply (no message or notices) still reads.
+        let old: BagSelection =
+            serde_json::from_str(r#"{"change":{},"undo":{},"changed":false,"grinderName":null}"#)
+                .unwrap();
+        assert!(old.message.is_none() && old.notices.is_empty());
     }
 
     #[test]

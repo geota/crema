@@ -11,15 +11,15 @@
 //!   its manual or page, cited in [`CatalogueScale::source`].
 //! - **Typical** ([`ScaleTier::Typical`]): the maker states no single range;
 //!   it is inferred with high or medium confidence from the printed dial, a
-//!   maker drawing or consistent community charts, the evidence cited in
+//!   maker drawing, consistent community charts, or a sibling model with the
+//!   same dial (its evidence), the evidence cited in
 //!   [`CatalogueScale::source`]. The shells label it "Typical range — check
 //!   your dial".
 //! - **Hidden** (no scale): a grinder whose range couldn't be inferred (a
 //!   composite dial like 1Zpresso rotation.number.click, or no evidence).
 //!   It is never listed and never given a range; it only lets imports, the
-//!   upgrade and Create merge its spellings ("C40 MK3" and "Comandante C40
-//!   MK3"). A grinder created from it gets the default scale (0–20, step
-//!   0.1).
+//!   upgrade and Create merge its spellings ("P64" and "Lagom P64"). A
+//!   grinder created from it gets the default scale (0–20, step 0.1).
 //!
 //! Each entry's comment quotes what its source says.
 //!
@@ -711,16 +711,59 @@ pub const GRINDER_CATALOGUE: &[CatalogueGrinder] = &[
             "https://honestcoffeeguide.com/baratza-sette-270-grind-settings/",
         ),
     ),
-    // ── Hidden: names only, never listed, never given a range. Kept so
-    // imports, the upgrade and Create still merge their spellings ("C40 MK3",
-    // "Comandante C40 MK3"). The research for each is in the PR. ──
-    hidden(
+    // ── Typical on a sibling's evidence (owner decision, #488 batch 6): the
+    // same dial as the model above it, so the same range and source. ──
+    // The Sette 270Wi is the Sette 270 with weight-based dosing: the same
+    // macro ring, 1 to 31, so the Sette 270's charts.
+    entry(
         "baratza-sette-270wi",
         "Baratza",
         "Sette 270Wi",
         &["Sette 270Wi", "270Wi"],
         E,
+        typical(
+            1.0,
+            31.0,
+            1.0,
+            "",
+            "https://honestcoffeeguide.com/baratza-sette-270-grind-settings/",
+        ),
     ),
+    // The Gen 1 DF64 has the Gen 2's printed stepless dial, 0 to 90, so the
+    // Gen 2's charts.
+    entry(
+        "df64",
+        "Turin",
+        "DF64",
+        &["DF64", "DF64 Gen 1", "G-IOTA", "MiiCoffee DF64"],
+        E,
+        typical(
+            0.0,
+            90.0,
+            1.0,
+            "",
+            "https://honestcoffeeguide.com/turin-df64-gen-2-grind-settings/",
+        ),
+    ),
+    // The C40 MK3 counts clicks from burr contact like the MK4, so the MK4's
+    // 0 to 40 charts.
+    entry(
+        "comandante-c40-mk3",
+        "Comandante",
+        "C40 MK3",
+        &["C40 MK3"],
+        H,
+        typical(
+            0.0,
+            40.0,
+            1.0,
+            "clicks",
+            "https://honestcoffeeguide.com/comandante-c40-mk4-grind-settings",
+        ),
+    ),
+    // ── Hidden: names only, never listed, never given a range. Kept so
+    // imports, the upgrade and Create still merge their spellings ("P64",
+    // "Lagom P64"). The research for each is in the PR. ──
     hidden("baratza-vario", "Baratza", "Vario", &["Vario"], E),
     hidden(
         "baratza-vario-plus",
@@ -812,13 +855,6 @@ pub const GRINDER_CATALOGUE: &[CatalogueGrinder] = &[
         E,
     ),
     hidden("eureka-atom-75", "Eureka", "Atom 75", &["Atom 75"], E),
-    hidden(
-        "df64",
-        "Turin",
-        "DF64",
-        &["DF64", "G-IOTA", "MiiCoffee DF64"],
-        E,
-    ),
     hidden("df64v", "Turin", "DF64V", &["DF64V"], E),
     hidden("df83", "Turin", "DF83", &["DF83"], E),
     hidden("df83v", "Turin", "DF83V", &["DF83V"], E),
@@ -928,13 +964,6 @@ pub const GRINDER_CATALOGUE: &[CatalogueGrinder] = &[
     ),
     hidden("timemore-slim-plus", "Timemore", "Slim Plus", &[], H),
     hidden("timemore-nano", "Timemore", "Nano", &[], H),
-    hidden(
-        "comandante-c40-mk3",
-        "Comandante",
-        "C40 MK3",
-        &["C40 MK3"],
-        H,
-    ),
     hidden("kingrinder-k4", "Kingrinder", "K4", &[], H),
     hidden("1zpresso-j-max", "1Zpresso", "J-Max", &["J-Max"], H),
     hidden("1zpresso-j-ultra", "1Zpresso", "J-Ultra", &["J-Ultra"], H),
@@ -1094,7 +1123,7 @@ mod tests {
         };
         assert_eq!(
             (tier(ScaleTier::Verified), tier(ScaleTier::Typical)),
-            (16, 7)
+            (16, 10)
         );
         for g in GRINDER_CATALOGUE.iter().filter(|g| g.listed()) {
             let s = g.scale.unwrap();
@@ -1217,6 +1246,20 @@ mod tests {
             ("Varia VS3 Gen 2", "varia-vs3-gen-2", 0.0, 20.0, 0.1, ""),
             ("Philos", "mazzer-philos", 0.0, 145.0, 1.0, ""),
             ("Sette 270", "baratza-sette-270", 1.0, 31.0, 1.0, ""),
+            // On their siblings' evidence (#488 batch 6).
+            ("Sette 270Wi", "baratza-sette-270wi", 1.0, 31.0, 1.0, ""),
+            ("DF64", "df64", 0.0, 90.0, 1.0, ""),
+            ("G-IOTA", "df64", 0.0, 90.0, 1.0, ""),
+            ("DF64 Gen 1", "df64", 0.0, 90.0, 1.0, ""),
+            ("C40 MK3", "comandante-c40-mk3", 0.0, 40.0, 1.0, "clicks"),
+            (
+                "Comandante C40 MK3",
+                "comandante-c40-mk3",
+                0.0,
+                40.0,
+                1.0,
+                "clicks",
+            ),
         ] {
             let g = catalogue_entry_for_name(name).unwrap();
             let s = g.scale.unwrap();
@@ -1231,8 +1274,6 @@ mod tests {
     #[test]
     fn hidden_entries_merge_spellings_but_are_never_listed_or_ranged() {
         for (a, b, id) in [
-            ("DF64", "G-IOTA", "df64"),
-            ("C40 MK3", "Comandante C40 MK3", "comandante-c40-mk3"),
             (
                 "Specialita",
                 "Eureka Mignon Specialità",

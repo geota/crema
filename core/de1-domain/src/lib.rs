@@ -174,7 +174,8 @@ pub use bean::{
     bag_stock, bag_stock_json, bean_tombstone, bean_tombstone_json, brews_remaining_estimate,
     credit_shot_debit, days_off_roast, debit_remaining, debit_taken, duplicate_bean,
     duplicate_bean_json, resettle_remaining, resettled_bag_debit, roast_band, roast_band5,
-    roast_freshness, set_bean_frozen, set_bean_frozen_json, shot_bean_snapshot_json,
+    roast_freshness, roaster_tombstone, roaster_tombstone_json, set_bean_frozen,
+    set_bean_frozen_json, shot_bean_snapshot_json,
 };
 pub use bean_coerce::{
     coerce_bean, coerce_bean_json, coerce_grinder, coerce_grinder_json, coerce_roaster,
@@ -194,14 +195,14 @@ pub use bean_search::{
 };
 pub use bean_sync::{
     BeanPushItem, BeanSyncScope, RoasterDeletePlan, RoasterDuplicate, RoasterLinkPatch,
-    RoasterMergePlan, RoasterPushItem, bean_sync_scope, bean_sync_scope_json,
-    coffee_bag_write_request, coffee_bag_write_request_json, detect_roaster_duplicates,
-    detect_roaster_duplicates_json, merge_pulled_bag, merge_pulled_roaster,
-    merge_pulled_roaster_json, plan_bean_push, plan_bean_push_json, plan_roaster_delete,
-    plan_roaster_delete_json, plan_roaster_link_patches, plan_roaster_link_patches_json,
-    plan_roaster_merge, plan_roaster_merge_json, plan_roaster_push, plan_roaster_push_json,
-    remote_ids_needing_detail, remote_ids_needing_detail_json, remote_roaster_unlinked,
-    remote_roaster_unlinked_json, resolve_roaster_catalogue_link,
+    RoasterMergePlan, RoasterPushItem, bag_roaster_remote_id, bag_roaster_remote_id_json,
+    bean_sync_scope, bean_sync_scope_json, coffee_bag_write_request, coffee_bag_write_request_json,
+    detect_roaster_duplicates, detect_roaster_duplicates_json, merge_pulled_bag,
+    merge_pulled_roaster, merge_pulled_roaster_json, plan_bean_push, plan_bean_push_json,
+    plan_roaster_delete, plan_roaster_delete_json, plan_roaster_link_patches,
+    plan_roaster_link_patches_json, plan_roaster_merge, plan_roaster_merge_json, plan_roaster_push,
+    plan_roaster_push_json, remote_ids_needing_detail, remote_ids_needing_detail_json,
+    remote_roaster_unlinked, remote_roaster_unlinked_json, resolve_roaster_catalogue_link,
     resolve_roaster_catalogue_link_json, roaster_write_request, roaster_write_request_json,
     sync_direction_pulls, sync_direction_pushes,
 };
@@ -340,7 +341,7 @@ pub use hot_water::{
 pub use ids::{new_custom_method_id, new_profile_id, new_recipe_id, new_shot_id};
 pub use library_edit::{
     RemainingEdit, edited_remaining, edited_remaining_json, merge_bean_edit, merge_bean_edit_json,
-    merge_roaster_edit, merge_roaster_edit_json,
+    merge_profile_edit, merge_profile_edit_json, merge_roaster_edit, merge_roaster_edit_json,
 };
 pub use maintenance::{
     MAX_COUNTED_GAP_S, MaintenanceReadout, MaintenanceState, counts_toward_water,
@@ -390,7 +391,11 @@ pub use shot_capture::{
     AsRunShot, CompletedShot, ShotCaptureContext, ShotSelections, assemble_stored_shot,
     parse_shot_capture_context, parse_shot_selections,
 };
-pub use shot_effects::{ShotEffects, ShotEffectsInput, shot_effects, shot_effects_json};
+pub use shot_effects::{
+    BagWeight, ShotBagMove, ShotBagMoveInput, ShotDebit, ShotDebitInput, ShotEffects,
+    ShotEffectsInput, shot_bag_move, shot_bag_move_json, shot_debit, shot_debit_json, shot_effects,
+    shot_effects_json,
+};
 pub use shot_merge::{
     ShotMergeInput, ShotPatch, TagMarks, edited_during_fetch, mark_tag_edit, mark_tag_edit_json,
     merge_remote_shot, merge_remote_shot_json, normalize_tag, normalize_tags, normalize_tags_json,
@@ -442,8 +447,8 @@ pub use visualizer_catalogue::{
 pub use visualizer_error::{
     AUTH_PARK_MS, DELETE_PARK_MS, MAX_QUEUE_ATTEMPTS, QueueDecision, QueueOp, RefreshFailure,
     VISUALIZER_DEFAULT_DAILY_LIMIT, VisualizerCallError, classify_token_refresh_failure,
-    is_recoverable, retry_backoff_ms, upload_refused_no_samples, visualizer_queue_decision,
-    visualizer_queue_decision_json, visualizer_quota_limit,
+    is_recoverable, retry_backoff_ms, upload_refused_no_samples, upload_refused_shot,
+    visualizer_queue_decision, visualizer_queue_decision_json, visualizer_quota_limit,
 };
 pub use visualizer_sync::{
     BeanReconcileAction, GuardedVisualizerPrefs, LocalShotRef, PulledBag, ReconcileAction,

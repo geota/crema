@@ -302,8 +302,8 @@ data class BackupFileInfo (
 	val counts: BackupCounts? = null
 )
 
-/// The bags a report counts: the beans' [`StorePlan`] without tombstones
-/// (#488 review S5), the backup's or this device's.
+/// The rows a report counts: a [`StorePlan`] without tombstones, the
+/// backup's or this device's. Bags (#488 review S5) and roasters (SF1).
 @Serializable
 data class BagCounts (
 	val add: UInt,
@@ -371,8 +371,15 @@ data class BagSelectInput (
 	/// The active profile id now.
 	val activeProfileId: String? = null,
 	/// The bag's linked profile isn't in this device's library (a dangling
-	/// id): it isn't loaded.
+	/// id): it isn't loaded, and a notice says so.
 	val linkedProfileMissing: Boolean,
+	/// The name of the bag's linked profile in this library, for the message
+	/// and notices. `None` (or blank) reads as "the linked profile".
+	val linkedProfileName: String? = null,
+	/// A shot is in progress (REVIEW-FINAL-2 SF4): loading a profile would
+	/// upload it to the machine mid-extraction, so the linked profile isn't
+	/// loaded, and a notice says so. The grinder and grind still change.
+	val shotInProgress: Boolean,
 	/// The active grinder pointer now.
 	val activeGrinderId: String? = null,
 	/// Brew's grind value now.
@@ -406,8 +413,37 @@ data class SelectionChange (
 	val grind: SetTo? = null
 )
 
+/// Why a bag pick left something out, for a passing notice.
+@Serializable
+enum class SelectionNoticeKind(val string: String) {
+	/// The bag's linked profile isn't in this library: nothing was loaded.
+	@SerialName("linkedProfileMissing")
+	LinkedProfileMissing("linkedProfileMissing"),
+	/// A shot is in progress: the linked profile wasn't loaded.
+	@SerialName("profileNotLoaded")
+	ProfileNotLoaded("profileNotLoaded"),
+}
+
+/// A passing notice about a bag pick (no Undo), shown verbatim.
+@Serializable
+data class SelectionNotice (
+	/// What it's about.
+	val kind: SelectionNoticeKind,
+	/// The text to show.
+	val text: String
+)
+
 /// One bag selection, resolved (review F6): the change, its inverse for the
-/// one Undo, and whether to show the message.
+/// one Undo, and the words to show (REVIEW-FINAL-2 SF4), so every shell
+/// shows the same thing verbatim.
+/// 
+/// It is self-contained, so a relayed pick can be answered with it: the hub
+/// resolves and applies the pick, and sends this back to the remote that
+/// picked, which shows [`Self::message`] (with its own Undo) and
+/// [`Self::notices`] as they are, with no lookups in its own library. The
+/// remote's Undo is [`bag_selection_undo`] of this against the hub's state as
+/// the remote mirrors it, relayed back as ordinary profile, grinder and grind
+/// commands.
 @Serializable
 data class BagSelection (
 	/// What to apply, with the bag.
@@ -418,7 +454,23 @@ data class BagSelection (
 	/// Blooming profile, Niche Zero at 14") with one Undo.
 	val changed: Boolean,
 	/// The grinder switched to, for the message; `None` when it stays.
-	val grinderName: String? = null
+	val grinderName: String? = null,
+	/// The one message with the Undo ("Ethiopia Guji: Blooming profile, Niche
+	/// Zero at 14"), set exactly when [`Self::changed`].
+	val message: String? = null,
+	/// Passing notices, no Undo, in order (a missing linked profile, a
+	/// profile not loaded mid-shot). They can come with no change.
+	val notices: List<SelectionNotice>? = null
+)
+
+/// A bag's weight as stored on this device, for [`shot_debit`] and
+/// [`shot_bag_move`].
+@Serializable
+data class BagWeight (
+	/// Grams left (`Bean::remaining`).
+	val remaining: Float,
+	/// The declared size, 0 for none (`Bean::bag_size`).
+	val bagSize: Float
 )
 
 /// The lifecycle subset a library list shows — the Status chip group.
@@ -4120,7 +4172,11 @@ data class LocalState (
 	/// keeps one the backup doesn't carry; a backup row with its id wins as
 	/// any row does.
 	val deletedBeans: List<String>,
+	/// Tombstones included.
 	val roasters: List<String>,
+	/// Of [`Self::roasters`], the tombstones: roasters on Visualizer deleted
+	/// on this device (#488 review SF1), kept as [`Self::deleted_beans`] are.
+	val deletedRoasters: List<String>,
 	/// Grinder records (#488), archived and tombstones included.
 	val grinders: List<String>,
 	/// Custom profiles only: built-ins aren't the backup's to change.
@@ -5085,6 +5141,9 @@ data class RestorePlan (
 	val beansKeepGrinds: List<String>,
 	/// What a report counts of [`Self::beans`]: bags, not tombstones.
 	val bagCounts: BagCounts? = null,
+	/// What a report counts of [`Self::roasters`]: roasters, not tombstones
+	/// (#488 review SF1).
+	val roasterCounts: BagCounts? = null,
 	val profiles: StorePlan,
 	val recipes: StorePlan,
 	val customMethods: StorePlan,
@@ -5126,7 +5185,12 @@ data class RoasterDeletePlan (
 	/// Of [`Self::deleted_bean_ids`], the bags on Visualizer: the shell keeps
 	/// each as a tombstone (`deleted_at` set, photo dropped) rather than
 	/// removing it, so the next pull doesn't add it back (#488 review S5).
-	val tombstonedBeanIds: List<String>? = null
+	val tombstonedBeanIds: List<String>? = null,
+	/// The roaster is on Visualizer: the shell keeps it as a tombstone
+	/// ([`crate::roaster_tombstone`]) rather than removing it, in either
+	/// scope, so the next pull doesn't add it back (#488 review SF1). A
+	/// roaster never on Visualizer is removed outright.
+	val tombstoneRoaster: Boolean? = null
 )
 
 /// A probable duplicate pair in the roaster directory: `dupe_id` looks like
@@ -5349,6 +5413,53 @@ data class SettingsReset (
 	val lineFrequencyHz: Float
 )
 
+/// A logged shot's bag move, planned.
+@Serializable
+data class ShotBagMove (
+	/// The move changes the row: false when the bag is the same (nothing to
+	/// do, nothing to persist).
+	val moves: Boolean,
+	/// The old bag's new `remaining` (the grams the row took go back);
+	/// `None` = leave it.
+	val fromRemaining: Float? = null,
+	/// The new bag's new `remaining`; `None` = leave it.
+	val toRemaining: Float? = null,
+	/// The row's new `bag_debit`, written with the new bag.
+	val bagDebit: Float? = null,
+	/// The debit emptied the new bag (the shell's bag-empty prompt).
+	val toEmptied: Boolean
+)
+
+/// What [`shot_bag_move`] reads: a logged shot moved to another bag (or to
+/// none) in History.
+@Serializable
+data class ShotBagMoveInput (
+	/// The row's bag id now; `None` = no bag.
+	val fromBagId: String? = null,
+	/// That bag as stored here; `None` when this library doesn't hold it.
+	val fromBag: BagWeight? = null,
+	/// The bag the user names; `None` = no bag.
+	val toBagId: String? = null,
+	/// That bag as stored here; `None` when this library doesn't hold it.
+	val toBag: BagWeight? = null,
+	/// The row's `bag_debit` ([`StoredShot::bag_debit`](crate::StoredShot::bag_debit)).
+	val bagDebit: Float? = null,
+	/// The row's dose, grams; `None` or non-positive = no dose.
+	val doseG: Float? = null,
+	/// This device is a remote: it never debits its own copy of a bag
+	/// (owner decision, round 2), so the new bag isn't debited here either.
+	val remote: Boolean,
+	/// The row is a replay ([`StoredShot::replay`](crate::StoredShot::replay)):
+	/// it never debits.
+	val replay: Boolean,
+	/// The row is a remote's mirror copy of the hub's shot: recorded
+	/// elsewhere, never debited here. Its `bag_debit` of `None` (what Android
+	/// wrote for these rows from #506 until `shot_debit`) then means nothing
+	/// was taken, not "a row from before the field". `false` for a row this
+	/// device recorded, so a legacy local row keeps the dose rule.
+	val mirrorRow: Boolean
+)
+
 /// A snapshot of the active bean at the moment a shot was pulled.
 /// Frozen onto each [`crate::history::StoredShot`] (in the shell's
 /// extended record) so a later rename / archive / delete of the bag
@@ -5431,7 +5542,38 @@ data class ShotCaptureContext (
 	/// (or `null` on the wire) = no tags.
 	val tags: List<String>? = null,
 	/// The DE1 the shot ran on, or `None` when it isn't known.
-	val machine: ShotMachine? = null
+	val machine: ShotMachine? = null,
+	/// The shot is a replay of a capture: the row gets the replay mark
+	/// ([`StoredShot::replay`]). `false` (or absent) for a live pull.
+	val replay: Boolean? = null
+)
+
+/// What a completed shot does to its bag, and what its row records.
+@Serializable
+data class ShotDebit (
+	/// The bag's new `remaining`; `None` = leave the bag as it is (nothing
+	/// to persist, `updated_at` untouched).
+	val remaining: Float? = null,
+	/// The row's [`StoredShot::bag_debit`](crate::StoredShot::bag_debit):
+	/// the grams taken, `Some(0)` for a row with a bag that wasn't debited
+	/// (a remote's mirror shot, a replay, an empty or unheld bag), `None`
+	/// only for a row with no bag.
+	val bagDebit: Float? = null,
+	/// The debit emptied the bag (the shell's bag-empty prompt).
+	val emptied: Boolean
+)
+
+/// What [`shot_debit`] reads: a completed shot's bag, dose and effects.
+@Serializable
+data class ShotDebitInput (
+	/// The row names a bag (its frozen `bean.beanId`).
+	val hasBag: Boolean,
+	/// That bag as stored here; `None` when this library doesn't hold it.
+	val bag: BagWeight? = null,
+	/// The dose the row records, grams; `None` or non-positive = no dose.
+	val doseG: Float? = null,
+	/// [`ShotEffects::debit`] for this shot.
+	val debit: Boolean
 )
 
 /// What a completed shot does. "When kept": at once for a recorded shot, on

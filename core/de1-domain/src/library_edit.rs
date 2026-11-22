@@ -1,6 +1,6 @@
 //! # library_edit
 //!
-//! The Save of a bag or roaster editor, onto the row as it stands now
+//! The Save of a bag, roaster or profile editor, onto the row as it stands now
 //! (save-boundaries review F2, 2026-11-21). The port of Android's
 //! `BeanDraft.kt` (geota/crema#324), moved here so both shells share it.
 //!
@@ -30,6 +30,7 @@ use serde_json::{Map, Value};
 use typeshare::typeshare;
 
 use crate::bean::{Bean, Roaster};
+use crate::crema_profile::CremaProfile;
 
 /// `current` with the keys that differ between `base` and `edited` taken
 /// from `edited`, recursing into objects all three hold.
@@ -189,6 +190,97 @@ pub fn merge_roaster_edit(
         out.updated_at = now_unix_ms.max(current.updated_at);
     }
     out
+}
+
+/// The keys of a profile's body: its segments and how many lead as
+/// preinfusion. They move together (a count is only right for its own
+/// segments), so a Save that changed either takes both from the editor.
+const PROFILE_BODY: [&str; 2] = ["segments", "preinfuseStepCount"];
+
+/// [`merge_profile_edit`] over the rows as JSON trees, so keys a shell keeps
+/// that the core doesn't model ride along untouched.
+fn merge_profile_tree(
+    base: &Map<String, Value>,
+    edited: &Map<String, Value>,
+    current: &Map<String, Value>,
+) -> Option<Value> {
+    let mut out = changes_over(current, edited, base);
+    if PROFILE_BODY.iter().any(|k| edited.get(*k) != base.get(*k)) {
+        for key in PROFILE_BODY {
+            match edited.get(key) {
+                Some(v) => out.insert(key.to_owned(), v.clone()),
+                None => out.remove(key),
+            };
+        }
+    }
+    // The row's identity is the stored one's.
+    for key in ["id", "source"] {
+        if let Some(v) = current.get(key) {
+            out.insert(key.to_owned(), v.clone());
+        }
+    }
+    let typed: CremaProfile = serde_json::from_value(Value::Object(out.clone())).ok()?;
+    let brew_temp = crate::with_derived_brew_temp(typed).brew_temp;
+    out.insert("brewTemp".to_owned(), serde_json::json!(brew_temp));
+    Some(Value::Object(out))
+}
+
+/// A profile editor's Save (REVIEW-FINAL S6, REVIEW-FINAL-2 N2), field by
+/// field like [`merge_bean_edit`]: the fields the user changed (`edited`
+/// against `base`, the profile the editor opened on) applied onto `current`,
+/// the profile as stored now. So a pin, a Quick Save in place or a rename
+/// written meanwhile (another tab, a remote's Save on the hub) stays unless
+/// the user changed that field too.
+///
+/// - The body (the segments and the preinfusion count) is one field: an
+///   edit to it takes the editor's whole body, since a step list merged step
+///   by step could leave a recipe nobody wrote.
+/// - `brew_temp` is derived again from the result
+///   ([`crate::with_derived_brew_temp`]).
+/// - `id` and `source` are `current`'s.
+///
+/// A profile has no edit stamp, so unlike the bag merge there is no
+/// `updated_at` to bump.
+#[must_use]
+pub fn merge_profile_edit(
+    base: &CremaProfile,
+    edited: &CremaProfile,
+    current: &CremaProfile,
+) -> CremaProfile {
+    let tree = |p: &CremaProfile| match serde_json::to_value(p) {
+        Ok(Value::Object(m)) => Some(m),
+        _ => None,
+    };
+    let (Some(b), Some(e), Some(c)) = (tree(base), tree(edited), tree(current)) else {
+        return edited.clone();
+    };
+    merge_profile_tree(&b, &e, &c)
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_else(|| edited.clone())
+}
+
+/// [`merge_profile_edit`] over profile JSON (the FFI / wasm boundary). Keys
+/// the core doesn't model are merged too and kept.
+///
+/// # Errors
+///
+/// The JSON error string when a row is malformed (not an object, or not a
+/// profile).
+pub fn merge_profile_edit_json(
+    base_json: &str,
+    edited_json: &str,
+    current_json: &str,
+) -> Result<String, String> {
+    let parse = |s: &str| -> Result<Map<String, Value>, String> {
+        serde_json::from_str::<CremaProfile>(s).map_err(|e| e.to_string())?;
+        match serde_json::from_str(s).map_err(|e| e.to_string())? {
+            Value::Object(m) => Ok(m),
+            _ => Err("a profile is a JSON object".to_owned()),
+        }
+    };
+    let (b, e, c) = (parse(base_json)?, parse(edited_json)?, parse(current_json)?);
+    let out = merge_profile_tree(&b, &e, &c).unwrap_or(Value::Object(e));
+    serde_json::to_string(&out).map_err(|e| e.to_string())
 }
 
 /// [`merge_bean_edit`] over `Bean` JSON (the FFI / wasm boundary).
@@ -464,5 +556,104 @@ mod tests {
             r
         );
         assert!(merge_roaster_edit_json(&rj, "{}", &rj, NOW).is_err());
+    }
+
+    // ── Profile editor Save (REVIEW-FINAL S6) ──
+
+    fn profile() -> CremaProfile {
+        let mut p = crate::blank_profile(&crate::crema_profile::BrewDefaults::default());
+        p.id = "p:1".into();
+        p.source = crate::crema_profile::ProfileSource::Custom;
+        p.name = "Bloom".into();
+        p
+    }
+
+    #[test]
+    fn a_profile_save_keeps_a_pin_and_a_quick_save_made_meanwhile() {
+        let base = profile();
+        let mut edited = base.clone();
+        edited.name = "Bloom 2".into();
+        edited.notes = "slower".into();
+        // Meanwhile another tab pinned it and Quick Saved a dose in place.
+        let mut current = base.clone();
+        current.pinned = true;
+        current.dose = 20.0;
+        let out = merge_profile_edit(&base, &edited, &current);
+        assert_eq!(
+            (out.name.as_str(), out.notes.as_str()),
+            ("Bloom 2", "slower")
+        );
+        assert!(out.pinned);
+        assert_eq!(out.dose, 20.0);
+        // Both changed the dose: the editor's wins.
+        edited.dose = 19.0;
+        assert_eq!(merge_profile_edit(&base, &edited, &current).dose, 19.0);
+        // Nothing edited: the stored profile as it is.
+        assert_eq!(merge_profile_edit(&base, &base, &current), current);
+    }
+
+    #[test]
+    fn a_profile_body_moves_whole_and_the_brew_temp_follows_it() {
+        let base = profile();
+        assert!(!base.segments.is_empty());
+        let mut edited = base.clone();
+        edited.segments[0].temp = 88.0;
+        // Meanwhile the stored body changed too (another tab's Save).
+        let mut current = base.clone();
+        current.segments.push(current.segments[0].clone());
+        current.preinfuse_step_count = 2;
+        current.name = "Renamed".into();
+        let out = merge_profile_edit(&base, &edited, &current);
+        assert_eq!(out.segments, edited.segments, "the editor's whole body");
+        assert_eq!(out.preinfuse_step_count, edited.preinfuse_step_count);
+        assert_eq!(out.brew_temp, 88.0, "derived from the first step");
+        assert_eq!(out.name, "Renamed");
+        // Only the count edited: the editor's segments come with it.
+        let mut count_only = base.clone();
+        count_only.preinfuse_step_count = 0;
+        let out = merge_profile_edit(&base, &count_only, &current);
+        assert_eq!(
+            (out.segments.len(), out.preinfuse_step_count),
+            (base.segments.len(), 0)
+        );
+        // An untouched body is the stored one's.
+        let mut rename = base.clone();
+        rename.name = "Mine".into();
+        let out = merge_profile_edit(&base, &rename, &current);
+        assert_eq!(out.segments, current.segments);
+        assert_eq!(out.preinfuse_step_count, 2);
+    }
+
+    #[test]
+    fn a_profile_keeps_its_stored_identity_and_unknown_keys() {
+        let base = profile();
+        let mut edited = base.clone();
+        edited.id = "p:other".into();
+        edited.source = crate::crema_profile::ProfileSource::Builtin;
+        let out = merge_profile_edit(&base, &edited, &base);
+        assert_eq!(out.id, "p:1");
+        assert_eq!(out.source, crate::crema_profile::ProfileSource::Custom);
+        // Over JSON, a key the core doesn't model is merged and kept.
+        let with = |p: &CremaProfile, extra: serde_json::Value| {
+            let mut v = serde_json::to_value(p).unwrap();
+            v["shellOnly"] = extra;
+            v.to_string()
+        };
+        let mut renamed = base.clone();
+        renamed.name = "New".into();
+        let out = merge_profile_edit_json(
+            &with(&base, serde_json::json!(1)),
+            &with(&renamed, serde_json::json!(1)),
+            &with(&base, serde_json::json!(2)),
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(
+            (v["name"].as_str(), v["shellOnly"].as_i64()),
+            (Some("New"), Some(2))
+        );
+        let pj = serde_json::to_string(&base).unwrap();
+        assert!(merge_profile_edit_json(&pj, "{}", &pj).is_err());
+        assert!(merge_profile_edit_json(&pj, "[1]", &pj).is_err());
     }
 }

@@ -50,6 +50,7 @@ class RestoreEngineTest {
         beans = beans,
         deletedBeans = emptyList(),
         roasters = emptyList(),
+        deletedRoasters = emptyList(),
         grinders = emptyList(),
         profiles = emptyList(),
         recipes = emptyList(),

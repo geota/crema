@@ -238,6 +238,79 @@ fn a_restore_report_counts_no_tombstones() {
     );
 }
 
+fn roaster_backup(roasters: &[Value]) -> Vec<u8> {
+    let header = json!({
+        "kind": "crema-backup/v1", "createdAt": 1, "profileCount": 0,
+        "beanCount": 0, "roasterCount": roasters.len(), "shotCount": 0,
+    });
+    let mut lines = vec![header];
+    for r in roasters {
+        let mut r = r.clone();
+        r["kind"] = json!("roaster");
+        lines.push(r);
+    }
+    to_bytes(&lines)
+}
+
+fn roaster_row(id: &str) -> Value {
+    json!({ "id": id, "name": id, "notes": "", "createdAt": 1, "updatedAt": 1, "metadata": {} })
+}
+
+fn local_roasters(roasters: &[&str], deleted: &[&str]) -> LocalState {
+    serde_json::from_value(json!({
+        "shell": "web", "roasters": roasters, "deletedRoasters": deleted,
+    }))
+    .unwrap()
+}
+
+/// Review SF1: a roaster deleted here stays a tombstone through a restore,
+/// and a report counts roasters, not tombstones.
+#[test]
+fn a_restore_keeps_the_tombstone_of_a_roaster_deleted_here() {
+    let m = scan_backup_bytes(&roaster_backup(&[roaster_row("roaster:kept")]));
+    assert!(
+        m.problems.is_empty() && m.count_mismatches.is_empty(),
+        "{m:?}"
+    );
+    let local = local_roasters(
+        &["roaster:kept", "roaster:gone", "roaster:other"],
+        &["roaster:gone"],
+    );
+    let replace = plan_restore(&m, &local, RestoreMode::Replace, RestoreOpts::default());
+    assert_eq!(
+        replace.roasters.remove,
+        ["roaster:other"],
+        "the tombstone stays"
+    );
+    assert_eq!(replace.roasters.overwrite, ["roaster:kept"]);
+    assert_eq!(
+        (
+            replace.roaster_counts.overwrite,
+            replace.roaster_counts.remove
+        ),
+        (1, 1)
+    );
+
+    let mut dead = roaster_row("roaster:dead");
+    dead["deletedAt"] = json!(5);
+    let m = scan_backup_bytes(&roaster_backup(&[
+        roaster_row("roaster:live"),
+        dead,
+        roaster_row("roaster:gone"),
+    ]));
+    assert_eq!(m.deleted_roasters, ["roaster:dead"]);
+    let merge = plan_restore(&m, &local, RestoreMode::Merge, RestoreOpts::default());
+    assert_eq!(
+        merge.roasters.add,
+        ["roaster:live", "roaster:dead"],
+        "both rows are written"
+    );
+    // Merge keeps the device's row of each id the backup has too: here only
+    // the tombstone, which the report doesn't count as a roaster.
+    assert_eq!((merge.roasters.keep, merge.roaster_counts.keep), (1, 0));
+    assert_eq!(merge.roaster_counts.add, 1);
+}
+
 #[test]
 fn import_reads_what_the_old_parser_read() {
     for bytes in [WEB, ANDROID] {

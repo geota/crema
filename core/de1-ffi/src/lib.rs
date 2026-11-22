@@ -415,6 +415,21 @@ pub fn bean_tombstone_json(bean_json: String, now_unix_ms: i64) -> Result<String
     de1_domain::bean_tombstone_json(&bean_json, now_unix_ms).map_err(CremaError::from)
 }
 
+/// The row a roaster on Visualizer deleted on this device leaves (`Roaster`
+/// JSON in and out): only what matching needs. See
+/// [`de1_domain::roaster_tombstone`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the roaster JSON is malformed.
+#[uniffi::export]
+pub fn roaster_tombstone_json(
+    roaster_json: String,
+    now_unix_ms: i64,
+) -> Result<String, CremaError> {
+    de1_domain::roaster_tombstone_json(&roaster_json, now_unix_ms).map_err(CremaError::from)
+}
+
 /// A new bag copied from a bean (`Bean` JSON in and out): `new_id`,
 /// "<name> (copy)", `now_unix_ms` stamps, and no Visualizer id,
 /// Beanconqueror id, photo ref, tombstone, archive or pin. See
@@ -499,6 +514,23 @@ pub fn merge_roaster_edit_json(
     now_unix_ms: i64,
 ) -> Result<String, CremaError> {
     de1_domain::merge_roaster_edit_json(&base_json, &edited_json, &current_json, now_unix_ms)
+        .map_err(CremaError::from)
+}
+
+/// A profile editor's Save (profile JSON in and out), field by field: the
+/// fields the user changed onto the stored profile, the body (segments and
+/// preinfusion count) whole. See [`de1_domain::merge_profile_edit`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when a profile JSON is malformed.
+#[uniffi::export]
+pub fn merge_profile_edit_json(
+    base_json: String,
+    edited_json: String,
+    current_json: String,
+) -> Result<String, CremaError> {
+    de1_domain::merge_profile_edit_json(&base_json, &edited_json, &current_json)
         .map_err(CremaError::from)
 }
 
@@ -1165,6 +1197,28 @@ pub fn staged_grinders_on_save_json(
 #[uniffi::export]
 pub fn shot_effects_json(input_json: String) -> Result<String, CremaError> {
     de1_domain::shot_effects_json(&input_json).map_err(crema_err)
+}
+
+/// A completed shot's bag change and its row's `bagDebit` (review MF1): a
+/// `ShotDebitInput` JSON in, a `ShotDebit` JSON out. See
+/// [`de1_domain::shot_debit`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn shot_debit_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::shot_debit_json(&input_json).map_err(crema_err)
+}
+
+/// A logged shot moved to another bag or to none (review MF1): a
+/// `ShotBagMoveInput` JSON in, a `ShotBagMove` JSON out. See
+/// [`de1_domain::shot_bag_move`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn shot_bag_move_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::shot_bag_move_json(&input_json).map_err(crema_err)
 }
 
 /// A bag's snapshot for a shot, a logged brew or a shot moved to another
@@ -1906,6 +1960,14 @@ pub fn upload_refused_no_samples(is_brew_log: bool, sample_count: Option<u32>) -
     de1_domain::upload_refused_no_samples(is_brew_log, sample_count)
 }
 
+/// Whether an upload must refuse a stored row: no telemetry, or a replay
+/// (#488 batch 6: a replay is never uploaded). See
+/// [`de1_domain::upload_refused_shot`].
+#[uniffi::export]
+pub fn upload_refused_shot(is_brew_log: bool, sample_count: Option<u32>, replay: bool) -> bool {
+    de1_domain::upload_refused_shot(is_brew_log, sample_count, replay)
+}
+
 /// What an OAuth redirect means for a sign-in in progress — mirrors
 /// [`de1_domain::CallbackOutcome`] across the FFI boundary.
 #[derive(uniffi::Enum)]
@@ -2254,6 +2316,18 @@ pub fn coffee_bag_write_request(
 #[uniffi::export]
 pub fn roaster_write_request(roaster_json: String) -> Result<String, CremaError> {
     de1_domain::roaster_write_request_json(&roaster_json).map_err(crema_err)
+}
+
+/// The Visualizer id to push as a bag's `roaster_id` (`{"bean", "roasters"}`
+/// JSON in, every roaster, tombstones included). See
+/// [`de1_domain::bag_roaster_remote_id`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] on malformed input.
+#[uniffi::export]
+pub fn bag_roaster_remote_id(payload: String) -> Result<Option<String>, CremaError> {
+    de1_domain::bag_roaster_remote_id_json(&payload).map_err(crema_err)
 }
 
 /// A roaster's catalogue link for a write (`{"roaster", "beans"}` JSON in).

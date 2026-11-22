@@ -542,9 +542,18 @@ pub struct StoredShot {
     /// when the bag ran out and 0 when the bag was empty, untracked, or never
     /// debited (a replay, an import). What moving the shot off the bag credits
     /// back ([`credit_shot_debit`](crate::credit_shot_debit)). `None` on a row
-    /// from before the field, and on a row with no bag.
+    /// from before the field, and on a row with no bag. The shells write what
+    /// [`shot_debit`](crate::shot_debit) and
+    /// [`shot_bag_move`](crate::shot_bag_move) return (review MF1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bag_debit: Option<f32>,
+    /// A replay of a capture, not a live pull (owner decision, #488 batch
+    /// 6): kept in History with a replay mark, and never uploaded
+    /// ([`upload_refused_shot`](crate::upload_refused_shot)) or debited
+    /// ([`shot_effects`](crate::shot_effects)). Omitted when false, so
+    /// existing bytes don't change.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replay: bool,
 }
 
 /// A shot's Visualizer privacy override — the `privacy` the upload sends.
@@ -620,6 +629,7 @@ impl StoredShot {
             recipe_name: None,
             brew_series: None,
             bag_debit: None,
+            replay: false,
         }
     }
 

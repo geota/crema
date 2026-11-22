@@ -441,9 +441,10 @@ pub fn plan_roaster_link_patches(
     roasters
         .iter()
         .filter(|r| {
-            r.visualizer_id
-                .as_deref()
-                .is_some_and(|id| unlinked.contains(id))
+            r.deleted_at.is_none()
+                && r.visualizer_id
+                    .as_deref()
+                    .is_some_and(|id| unlinked.contains(id))
         })
         .filter_map(|r| {
             resolve_roaster_catalogue_link(r, beans).map(|link| RoasterLinkPatch {
@@ -541,8 +542,13 @@ pub fn plan_roaster_merge(
     if canonical_id == dupe_id {
         return None;
     }
-    let canonical = roasters.iter().find(|r| r.id == canonical_id)?;
-    roasters.iter().find(|r| r.id == dupe_id)?;
+    // A tombstone (#488 review SF1) is deleted: no merge into or from it.
+    let canonical = roasters
+        .iter()
+        .find(|r| r.id == canonical_id && r.deleted_at.is_none())?;
+    roasters
+        .iter()
+        .find(|r| r.id == dupe_id && r.deleted_at.is_none())?;
     if canonical.canonical_roaster_id.is_some() {
         return None;
     }
@@ -587,11 +593,25 @@ pub struct RoasterDeletePlan {
     /// removing it, so the next pull doesn't add it back (#488 review S5).
     #[serde(default)]
     pub tombstoned_bean_ids: Vec<String>,
+    /// The roaster is on Visualizer: the shell keeps it as a tombstone
+    /// ([`crate::roaster_tombstone`]) rather than removing it, in either
+    /// scope, so the next pull doesn't add it back (#488 review SF1). A
+    /// roaster never on Visualizer is removed outright.
+    #[serde(default)]
+    pub tombstone_roaster: bool,
 }
 
-/// Plan a roaster delete, or `None` when the roaster isn't in `roasters`.
-/// `cascade` = also delete every bag filed under it. `active_bean_id` is the
-/// active-bag pointer now; the plan says what it becomes.
+/// Plan a roaster delete, or `None` when the roaster isn't in `roasters`
+/// (or is already a tombstone). `cascade` = also delete every bag filed under
+/// it. `active_bean_id` is the active-bag pointer now; the plan says what it
+/// becomes.
+///
+/// `local_only` = "delete from this device only" (#488 review SF1): a
+/// detach of a roaster on Visualizer then leaves its bags as they are,
+/// still filed under the roaster's tombstone, so the push never sends them
+/// with no roaster (Visualizer's bags keep theirs) and the pull keeps the
+/// link. The shells show a bag filed under a tombstone with no roaster. With
+/// "also delete on Visualizer" (`false`), the bags detach as before.
 #[must_use]
 pub fn plan_roaster_delete(
     roasters: &[Roaster],
@@ -599,8 +619,12 @@ pub fn plan_roaster_delete(
     roaster_id: &str,
     cascade: bool,
     active_bean_id: Option<&str>,
+    local_only: bool,
 ) -> Option<RoasterDeletePlan> {
-    let roaster = roasters.iter().find(|r| r.id == roaster_id)?;
+    let roaster = roasters
+        .iter()
+        .find(|r| r.id == roaster_id && r.deleted_at.is_none())?;
+    let tombstone_roaster = non_empty(roaster.visualizer_id.as_ref()).is_some();
     // A tombstone is already deleted: the plan leaves it as it is.
     let linked: Vec<&Bean> = beans
         .iter()
@@ -609,6 +633,8 @@ pub fn plan_roaster_delete(
     let ids = |v: &[&Bean]| v.iter().map(|b| b.id.clone()).collect::<Vec<_>>();
     let (deleted, detached) = if cascade {
         (ids(&linked), Vec::new())
+    } else if local_only && tombstone_roaster {
+        (Vec::new(), Vec::new())
     } else {
         (Vec::new(), ids(&linked))
     };
@@ -639,6 +665,7 @@ pub fn plan_roaster_delete(
         tombstoned_bean_ids,
         remote_bean_ids,
         remote_roaster_id: non_empty(roaster.visualizer_id.as_ref()).cloned(),
+        tombstone_roaster,
     })
 }
 
@@ -650,6 +677,37 @@ fn parse<T: for<'de> Deserialize<'de>>(s: &str) -> Result<T, String> {
 
 fn emit<T: Serialize>(v: &T) -> Result<String, String> {
     serde_json::to_string(v).map_err(|e| e.to_string())
+}
+
+/// The Visualizer id to send as a bag's `roaster_id` on a push: its roaster's,
+/// **tombstones included** (#488 review SF1). A bag a "this device only"
+/// roaster delete left filed under the roaster's tombstone keeps that roaster
+/// on Visualizer; a lookup over live roasters only would send `null` and
+/// unfile it there. `None` when the bag has no roaster, or it isn't bound.
+#[must_use]
+pub fn bag_roaster_remote_id(bean: &Bean, roasters: &[Roaster]) -> Option<String> {
+    let id = bean.roaster_id.as_deref()?;
+    roasters
+        .iter()
+        .find(|r| r.id == id)
+        .and_then(|r| non_empty(r.visualizer_id.as_ref()).cloned())
+}
+
+/// JSON-bridged [`bag_roaster_remote_id`]. Input: `{"bean": Bean,
+/// "roasters": Roaster[]}` (every roaster, tombstones included). Output: the
+/// id, or `None`.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+pub fn bag_roaster_remote_id_json(payload: &str) -> Result<Option<String>, String> {
+    #[derive(Deserialize)]
+    struct In {
+        bean: Bean,
+        #[serde(default)]
+        roasters: Vec<Roaster>,
+    }
+    let inp: In = parse(payload)?;
+    Ok(bag_roaster_remote_id(&inp.bean, &inp.roasters))
 }
 
 /// JSON-bridged [`coffee_bag_write_request`]. Input: a `Bean` JSON + the
@@ -865,7 +923,7 @@ pub fn plan_roaster_merge_json(payload: &str) -> Result<String, String> {
 
 /// JSON-bridged [`plan_roaster_delete`]. Input:
 /// `{"roasters": Roaster[], "beans": Bean[], "roasterId", "cascade",
-/// "activeBeanId"?}`.
+/// "activeBeanId"?, "localOnly"?}`.
 /// Output: a `RoasterDeletePlan` JSON, or `null` when the roaster is unknown.
 ///
 /// # Errors
@@ -882,6 +940,8 @@ pub fn plan_roaster_delete_json(payload: &str) -> Result<String, String> {
         cascade: bool,
         #[serde(default)]
         active_bean_id: Option<String>,
+        #[serde(default)]
+        local_only: bool,
     }
     let inp: In = parse(payload)?;
     emit(&plan_roaster_delete(
@@ -890,6 +950,7 @@ pub fn plan_roaster_delete_json(payload: &str) -> Result<String, String> {
         &inp.roaster_id,
         inp.cascade,
         inp.active_bean_id.as_deref(),
+        inp.local_only,
     ))
 }
 
@@ -1241,7 +1302,8 @@ mod tests {
         let library = vec![original, gone];
         assert!(plan_bean_push(&library, Some(last_sync), &[]).is_empty());
         let roasters = vec![roaster("roaster:1", "Onyx", 0)];
-        let plan = plan_roaster_delete(&roasters, &library, "roaster:1", true, None).unwrap();
+        let plan =
+            plan_roaster_delete(&roasters, &library, "roaster:1", true, None, false).unwrap();
         assert_eq!(plan.remote_bean_ids, vec!["vb-orig".to_owned()]);
     }
 
@@ -1421,6 +1483,12 @@ mod tests {
         let mut chained = roasters.clone();
         chained[0].canonical_roaster_id = Some("roaster:0".into());
         assert!(plan_roaster_merge(&chained, &beans, "roaster:1", "roaster:2").is_none());
+        // A tombstone is neither side of a merge (#488 review SF1).
+        for i in 0..2 {
+            let mut gone = roasters.clone();
+            gone[i] = crate::roaster_tombstone(&gone[i], 9);
+            assert!(plan_roaster_merge(&gone, &beans, "roaster:1", "roaster:2").is_none());
+        }
     }
 
     // ── roaster delete ────────────────────────────────────────────────
@@ -1436,20 +1504,23 @@ mod tests {
         let roasters = vec![r, roaster("roaster:2", "Onyx", 1)];
         let beans = vec![synced, local_only, other];
 
-        let detach = plan_roaster_delete(&roasters, &beans, "roaster:1", false, None).unwrap();
+        let detach =
+            plan_roaster_delete(&roasters, &beans, "roaster:1", false, None, false).unwrap();
         assert_eq!(detach.detached_bean_ids, vec!["bean:a", "bean:b"]);
         assert!(detach.deleted_bean_ids.is_empty());
         assert!(detach.remote_bean_ids.is_empty());
         assert_eq!(detach.remote_roaster_id.as_deref(), Some("vz-r"));
 
-        let cascade = plan_roaster_delete(&roasters, &beans, "roaster:1", true, None).unwrap();
+        let cascade =
+            plan_roaster_delete(&roasters, &beans, "roaster:1", true, None, false).unwrap();
         assert_eq!(cascade.deleted_bean_ids, vec!["bean:a", "bean:b"]);
         assert!(cascade.detached_bean_ids.is_empty());
         assert_eq!(cascade.remote_bean_ids, vec!["vz-a"]);
 
-        let unsynced = plan_roaster_delete(&roasters, &beans, "roaster:2", true, None).unwrap();
+        let unsynced =
+            plan_roaster_delete(&roasters, &beans, "roaster:2", true, None, false).unwrap();
         assert_eq!(unsynced.remote_roaster_id, None);
-        assert!(plan_roaster_delete(&roasters, &beans, "roaster:9", true, None).is_none());
+        assert!(plan_roaster_delete(&roasters, &beans, "roaster:9", true, None, false).is_none());
         let none = json!({"roasters": [], "roasterId": "x", "cascade": true}).to_string();
         assert_eq!(plan_roaster_delete_json(&none).unwrap(), "null");
     }
@@ -1467,7 +1538,8 @@ mod tests {
         gone.deleted_at = Some(5);
         let beans = vec![synced, local_only, gone];
 
-        let cascade = plan_roaster_delete(&roasters, &beans, "roaster:1", true, None).unwrap();
+        let cascade =
+            plan_roaster_delete(&roasters, &beans, "roaster:1", true, None, false).unwrap();
         assert_eq!(cascade.deleted_bean_ids, vec!["bean:a", "bean:b"]);
         assert_eq!(cascade.tombstoned_bean_ids, vec!["bean:a"]);
         assert_eq!(
@@ -1475,9 +1547,90 @@ mod tests {
             vec!["vz-a"],
             "an old tombstone isn't deleted again"
         );
-        let detach = plan_roaster_delete(&roasters, &beans, "roaster:1", false, None).unwrap();
+        let detach =
+            plan_roaster_delete(&roasters, &beans, "roaster:1", false, None, false).unwrap();
         assert!(detach.tombstoned_bean_ids.is_empty());
         assert_eq!(detach.detached_bean_ids, vec!["bean:a", "bean:b"]);
+    }
+
+    /// #488 review SF1 / REVIEW-518: a bag filed under a roaster tombstone
+    /// still pushes that roaster's Visualizer id.
+    #[test]
+    fn a_bag_under_a_roaster_tombstone_pushes_its_roaster() {
+        let mut bound = roaster("roaster:1", "Sey", 1);
+        bound.visualizer_id = Some("vz-r".into());
+        let gone = crate::roaster_tombstone(&bound, 9);
+        let b = bean("bean:a", Some("roaster:1"));
+        let rid = bag_roaster_remote_id(&b, std::slice::from_ref(&gone));
+        assert_eq!(rid.as_deref(), Some("vz-r"));
+        let req = coffee_bag_write_request(&b, rid.as_deref());
+        assert_eq!(req["coffee_bag"]["roaster_id"], "vz-r");
+        assert_eq!(
+            bag_roaster_remote_id(&bean("bean:b", None), std::slice::from_ref(&gone)),
+            None
+        );
+        assert_eq!(
+            bag_roaster_remote_id(&b, &[roaster("roaster:1", "Sey", 1)]),
+            None,
+            "unbound"
+        );
+        let payload = json!({ "bean": b, "roasters": [gone] }).to_string();
+        assert_eq!(
+            bag_roaster_remote_id_json(&payload).unwrap().as_deref(),
+            Some("vz-r")
+        );
+        assert!(bag_roaster_remote_id_json("{").is_err());
+    }
+
+    /// #488 review SF1: a roaster on Visualizer leaves a tombstone, and a
+    /// "this device only" detach leaves its bags filed under it.
+    #[test]
+    fn a_roaster_on_visualizer_is_tombstoned_and_a_local_detach_keeps_the_link() {
+        let mut bound = roaster("roaster:1", "Sey", 1);
+        bound.visualizer_id = Some("vz-r".into());
+        let mut synced = bean("bean:a", Some("roaster:1"));
+        synced.visualizer_id = Some("vz-a".into());
+        let beans = vec![
+            synced,
+            bean("bean:b", Some("roaster:1")),
+            bean("bean:c", Some("roaster:2")),
+        ];
+        let roasters = vec![bound, roaster("roaster:2", "Onyx", 1)];
+        let plan = |id, cascade, local_only| {
+            plan_roaster_delete(&roasters, &beans, id, cascade, None, local_only).unwrap()
+        };
+        // This device only: the roaster is tombstoned, its bags untouched.
+        let local = plan("roaster:1", false, true);
+        assert!(local.tombstone_roaster);
+        assert!(local.detached_bean_ids.is_empty() && local.deleted_bean_ids.is_empty());
+        assert_eq!(local.remote_roaster_id.as_deref(), Some("vz-r"));
+        // Also on Visualizer: still a tombstone (the DELETE is best-effort),
+        // and the bags detach as before.
+        let everywhere = plan("roaster:1", false, false);
+        assert!(everywhere.tombstone_roaster);
+        assert_eq!(everywhere.detached_bean_ids, vec!["bean:a", "bean:b"]);
+        // A cascade deletes the bags in either scope.
+        let cascade = plan("roaster:1", true, true);
+        assert_eq!(cascade.deleted_bean_ids, vec!["bean:a", "bean:b"]);
+        assert_eq!(cascade.tombstoned_bean_ids, vec!["bean:a"]);
+        // A roaster never on Visualizer goes outright, its bags detached.
+        let unbound = plan("roaster:2", false, true);
+        assert!(!unbound.tombstone_roaster);
+        assert_eq!(unbound.detached_bean_ids, vec!["bean:c"]);
+        // A tombstone is already deleted: nothing to plan.
+        let mut gone = roasters.clone();
+        gone[0] = crate::roaster_tombstone(&gone[0], 9);
+        assert!(plan_roaster_delete(&gone, &beans, "roaster:1", false, None, true).is_none());
+        let payload = json!({
+            "roasters": roasters,
+            "beans": beans,
+            "roasterId": "roaster:1",
+            "cascade": false,
+            "localOnly": true,
+        });
+        let out: RoasterDeletePlan =
+            serde_json::from_str(&plan_roaster_delete_json(&payload.to_string()).unwrap()).unwrap();
+        assert!(out.tombstone_roaster && out.detached_bean_ids.is_empty());
     }
 
     #[test]
@@ -1492,7 +1645,7 @@ mod tests {
             bean("bean:b", Some("roaster:2")),
         ];
         let plan = |cascade, active| {
-            plan_roaster_delete(&roasters, &beans, "roaster:1", cascade, active).unwrap()
+            plan_roaster_delete(&roasters, &beans, "roaster:1", cascade, active, false).unwrap()
         };
         assert_eq!(plan(true, Some("bean:a")).active_bean_id_after, None);
         // Another bag active, or a detach: the pointer stays.

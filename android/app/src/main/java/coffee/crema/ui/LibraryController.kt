@@ -1889,6 +1889,8 @@ class LibraryController(
                 beans = s.beans.withTombstones().map { it.id },
                 deletedBeans = s.beans.withTombstones().filter { it.deletedAt != null }.map { it.id },
                 roasters = s.roasters.map { it.id },
+                // Roaster tombstones too (#488 review SF1).
+                deletedRoasters = s.roasters.filter { it.deletedAt != null }.map { it.id },
                 // #488: grinder records, archived and tombstones included, and the device's pointer.
                 grinders = s.grinders.map { it.id },
                 activeGrinderId = s.activeGrinderId,
@@ -3105,6 +3107,10 @@ class LibraryController(
                     bag = bag,
                     activeProfileId = s.activeProfileId,
                     linkedProfileMissing = missing,
+                    linkedProfileName = linked?.let { id -> s.profiles.firstOrNull { it.id == id }?.name },
+                    // The mid-shot rule stays below until this shell shows the
+                    // core's message and notices (batch 6 Android).
+                    shotInProgress = false,
                     activeGrinderId = s.activeGrinderId,
                     grind = s.brewGrindView().value,
                     grinders = s.grinders,
@@ -3521,7 +3527,7 @@ class LibraryController(
         if (!effects.record && !effects.offerUndo) {
             // Take the core's pending shot anyway, so it never outlives its
             // completion (web takes it whatever the disposition too).
-            runCatching { bridge.takeStoredShot(json.encodeToString(ShotCaptureContext.serializer(), ShotCaptureContext(completedAt = now))) }
+            runCatching { bridge.takeStoredShot(json.encodeToString(ShotCaptureContext.serializer(), ShotCaptureContext(completedAt = now, replay = s.replayPrimary))) }
             appendLog("Cleaning run finished — not recorded as a shot")
             return
         }
@@ -3540,6 +3546,8 @@ class LibraryController(
             // The DE1 this ran on — frozen here so a later Decent upload (#84)
             // carries the serial the server verifies.
             machine = liveMachine(),
+            // A replay's row carries the replay mark (#488 batch 6).
+            replay = s.replayPrimary,
         )
         assembling()
         val assembled = runCatching {

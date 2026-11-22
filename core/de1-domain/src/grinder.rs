@@ -1036,10 +1036,10 @@ mod tests {
         );
         // A hidden entry links the record (its spellings merge) but gives no
         // range: the default scale.
-        let df = add_grinder(&[], "DF64", None, NOW).unwrap().grinder;
+        let df = add_grinder(&[], "P64", None, NOW).unwrap().grinder;
         assert_eq!(
             (df.preset_id.as_deref(), df.scale),
-            (Some("df64"), GrindScale::default())
+            (Some("lagom-p64"), GrindScale::default())
         );
         assert_eq!(add_grinder(&[], "", Some("retired-grinder"), NOW), None);
         // A typed name the catalogue knows strictly takes that entry.

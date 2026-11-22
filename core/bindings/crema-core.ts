@@ -343,8 +343,8 @@ export interface BackupFileInfo {
 }
 
 /**
- * The bags a report counts: the beans' [`StorePlan`] without tombstones
- * (#488 review S5), the backup's or this device's.
+ * The rows a report counts: a [`StorePlan`] without tombstones, the
+ * backup's or this device's. Bags (#488 review S5) and roasters (SF1).
  */
 export interface BagCounts {
 	add: number;
@@ -419,9 +419,20 @@ export interface BagSelectInput {
 	activeProfileId?: string;
 	/**
 	 * The bag's linked profile isn't in this device's library (a dangling
-	 * id): it isn't loaded.
+	 * id): it isn't loaded, and a notice says so.
 	 */
 	linkedProfileMissing: boolean;
+	/**
+	 * The name of the bag's linked profile in this library, for the message
+	 * and notices. `None` (or blank) reads as "the linked profile".
+	 */
+	linkedProfileName?: string;
+	/**
+	 * A shot is in progress (REVIEW-FINAL-2 SF4): loading a profile would
+	 * upload it to the machine mid-extraction, so the linked profile isn't
+	 * loaded, and a notice says so. The grinder and grind still change.
+	 */
+	shotInProgress: boolean;
 	/** The active grinder pointer now. */
 	activeGrinderId?: string;
 	/** Brew's grind value now. */
@@ -457,9 +468,34 @@ export interface SelectionChange {
 	grind?: SetTo;
 }
 
+/** Why a bag pick left something out, for a passing notice. */
+export enum SelectionNoticeKind {
+	/** The bag's linked profile isn't in this library: nothing was loaded. */
+	LinkedProfileMissing = "linkedProfileMissing",
+	/** A shot is in progress: the linked profile wasn't loaded. */
+	ProfileNotLoaded = "profileNotLoaded",
+}
+
+/** A passing notice about a bag pick (no Undo), shown verbatim. */
+export interface SelectionNotice {
+	/** What it's about. */
+	kind: SelectionNoticeKind;
+	/** The text to show. */
+	text: string;
+}
+
 /**
  * One bag selection, resolved (review F6): the change, its inverse for the
- * one Undo, and whether to show the message.
+ * one Undo, and the words to show (REVIEW-FINAL-2 SF4), so every shell
+ * shows the same thing verbatim.
+ * 
+ * It is self-contained, so a relayed pick can be answered with it: the hub
+ * resolves and applies the pick, and sends this back to the remote that
+ * picked, which shows [`Self::message`] (with its own Undo) and
+ * [`Self::notices`] as they are, with no lookups in its own library. The
+ * remote's Undo is [`bag_selection_undo`] of this against the hub's state as
+ * the remote mirrors it, relayed back as ordinary profile, grinder and grind
+ * commands.
  */
 export interface BagSelection {
 	/** What to apply, with the bag. */
@@ -473,6 +509,27 @@ export interface BagSelection {
 	changed: boolean;
 	/** The grinder switched to, for the message; `None` when it stays. */
 	grinderName?: string;
+	/**
+	 * The one message with the Undo ("Ethiopia Guji: Blooming profile, Niche
+	 * Zero at 14"), set exactly when [`Self::changed`].
+	 */
+	message?: string;
+	/**
+	 * Passing notices, no Undo, in order (a missing linked profile, a
+	 * profile not loaded mid-shot). They can come with no change.
+	 */
+	notices?: SelectionNotice[];
+}
+
+/**
+ * A bag's weight as stored on this device, for [`shot_debit`] and
+ * [`shot_bag_move`].
+ */
+export interface BagWeight {
+	/** Grams left (`Bean::remaining`). */
+	remaining: number;
+	/** The declared size, 0 for none (`Bean::bag_size`). */
+	bagSize: number;
 }
 
 /** The lifecycle subset a library list shows — the Status chip group. */
@@ -4081,7 +4138,13 @@ export interface LocalState {
 	 * any row does.
 	 */
 	deletedBeans: string[];
+	/** Tombstones included. */
 	roasters: string[];
+	/**
+	 * Of [`Self::roasters`], the tombstones: roasters on Visualizer deleted
+	 * on this device (#488 review SF1), kept as [`Self::deleted_beans`] are.
+	 */
+	deletedRoasters: string[];
 	/** Grinder records (#488), archived and tombstones included. */
 	grinders: string[];
 	/** Custom profiles only: built-ins aren't the backup's to change. */
@@ -5043,6 +5106,11 @@ export interface RestorePlan {
 	beansKeepGrinds: string[];
 	/** What a report counts of [`Self::beans`]: bags, not tombstones. */
 	bagCounts?: BagCounts;
+	/**
+	 * What a report counts of [`Self::roasters`]: roasters, not tombstones
+	 * (#488 review SF1).
+	 */
+	roasterCounts?: BagCounts;
 	profiles: StorePlan;
 	recipes: StorePlan;
 	customMethods: StorePlan;
@@ -5090,6 +5158,13 @@ export interface RoasterDeletePlan {
 	 * removing it, so the next pull doesn't add it back (#488 review S5).
 	 */
 	tombstonedBeanIds?: string[];
+	/**
+	 * The roaster is on Visualizer: the shell keeps it as a tombstone
+	 * ([`crate::roaster_tombstone`]) rather than removing it, in either
+	 * scope, so the next pull doesn't add it back (#488 review SF1). A
+	 * roaster never on Visualizer is removed outright.
+	 */
+	tombstoneRoaster?: boolean;
 }
 
 /**
@@ -5358,6 +5433,63 @@ export interface SettingsReset {
 	lineFrequencyHz: number;
 }
 
+/** A logged shot's bag move, planned. */
+export interface ShotBagMove {
+	/**
+	 * The move changes the row: false when the bag is the same (nothing to
+	 * do, nothing to persist).
+	 */
+	moves: boolean;
+	/**
+	 * The old bag's new `remaining` (the grams the row took go back);
+	 * `None` = leave it.
+	 */
+	fromRemaining?: number;
+	/** The new bag's new `remaining`; `None` = leave it. */
+	toRemaining?: number;
+	/** The row's new `bag_debit`, written with the new bag. */
+	bagDebit?: number;
+	/** The debit emptied the new bag (the shell's bag-empty prompt). */
+	toEmptied: boolean;
+}
+
+/**
+ * What [`shot_bag_move`] reads: a logged shot moved to another bag (or to
+ * none) in History.
+ */
+export interface ShotBagMoveInput {
+	/** The row's bag id now; `None` = no bag. */
+	fromBagId?: string;
+	/** That bag as stored here; `None` when this library doesn't hold it. */
+	fromBag?: BagWeight;
+	/** The bag the user names; `None` = no bag. */
+	toBagId?: string;
+	/** That bag as stored here; `None` when this library doesn't hold it. */
+	toBag?: BagWeight;
+	/** The row's `bag_debit` ([`StoredShot::bag_debit`](crate::StoredShot::bag_debit)). */
+	bagDebit?: number;
+	/** The row's dose, grams; `None` or non-positive = no dose. */
+	doseG?: number;
+	/**
+	 * This device is a remote: it never debits its own copy of a bag
+	 * (owner decision, round 2), so the new bag isn't debited here either.
+	 */
+	remote: boolean;
+	/**
+	 * The row is a replay ([`StoredShot::replay`](crate::StoredShot::replay)):
+	 * it never debits.
+	 */
+	replay: boolean;
+	/**
+	 * The row is a remote's mirror copy of the hub's shot: recorded
+	 * elsewhere, never debited here. Its `bag_debit` of `None` (what Android
+	 * wrote for these rows from #506 until `shot_debit`) then means nothing
+	 * was taken, not "a row from before the field". `false` for a row this
+	 * device recorded, so a legacy local row keeps the dose rule.
+	 */
+	mirrorRow: boolean;
+}
+
 /**
  * A snapshot of the active bean at the moment a shot was pulled.
  * Frozen onto each [`crate::history::StoredShot`] (in the shell's
@@ -5460,6 +5592,41 @@ export interface ShotCaptureContext {
 	tags?: string[];
 	/** The DE1 the shot ran on, or `None` when it isn't known. */
 	machine?: ShotMachine;
+	/**
+	 * The shot is a replay of a capture: the row gets the replay mark
+	 * ([`StoredShot::replay`]). `false` (or absent) for a live pull.
+	 */
+	replay?: boolean;
+}
+
+/** What a completed shot does to its bag, and what its row records. */
+export interface ShotDebit {
+	/**
+	 * The bag's new `remaining`; `None` = leave the bag as it is (nothing
+	 * to persist, `updated_at` untouched).
+	 */
+	remaining?: number;
+	/**
+	 * The row's [`StoredShot::bag_debit`](crate::StoredShot::bag_debit):
+	 * the grams taken, `Some(0)` for a row with a bag that wasn't debited
+	 * (a remote's mirror shot, a replay, an empty or unheld bag), `None`
+	 * only for a row with no bag.
+	 */
+	bagDebit?: number;
+	/** The debit emptied the bag (the shell's bag-empty prompt). */
+	emptied: boolean;
+}
+
+/** What [`shot_debit`] reads: a completed shot's bag, dose and effects. */
+export interface ShotDebitInput {
+	/** The row names a bag (its frozen `bean.beanId`). */
+	hasBag: boolean;
+	/** That bag as stored here; `None` when this library doesn't hold it. */
+	bag?: BagWeight;
+	/** The dose the row records, grams; `None` or non-positive = no dose. */
+	doseG?: number;
+	/** [`ShotEffects::debit`] for this shot. */
+	debit: boolean;
 }
 
 /**

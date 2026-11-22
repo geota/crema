@@ -711,52 +711,58 @@ pub enum BeanReconcileAction {
 
 /// Reconcile a remote roaster pull against the local directory. Mirrors
 /// `runSync` step 1: bound-by-id → [`RoasterReconcileAction::Update`];
-/// else unbound-non-deleted-by-signature OR any-by-name →
-/// [`RoasterReconcileAction::Bind`]; else [`RoasterReconcileAction::Add`].
-/// Remotes with no `id` are skipped (mirrors the TS `if (!wire.id) continue`).
+/// else unbound-by-signature OR by-name → [`RoasterReconcileAction::Bind`];
+/// else [`RoasterReconcileAction::Add`]. Remotes with no `id` are skipped
+/// (mirrors the TS `if (!wire.id) continue`).
+///
+/// A roaster deleted on this device is a tombstone (`deleted_at` set, the row
+/// kept with its `visualizer_id`; #488 review SF1, as bags in
+/// [`reconcile_beans`]). Live rows match first; a remote that then matches
+/// only a tombstone (by Visualizer id, or an unbound one by signature or name)
+/// gets no action: never added again, never written over, never bound.
 #[must_use]
 pub fn reconcile_roasters(
     local: &[Roaster],
     remote: &[RoasterWire],
 ) -> Vec<RoasterReconcileAction> {
+    let live = || local.iter().filter(|r| r.deleted_at.is_none());
+    let tombstones = || local.iter().filter(|r| r.deleted_at.is_some());
     let mut actions = Vec::with_capacity(remote.len());
     for wire in remote {
         let Some(remote_id) = wire.id.as_deref() else {
             continue;
         };
-        if let Some(by_id) = local
-            .iter()
-            .find(|r| r.visualizer_id.as_deref() == Some(remote_id))
-        {
+        let wire_sig = signature_for_roaster(&wire.name);
+        let needle = wire.name.trim().to_lowercase();
+        let named = |r: &&Roaster| !needle.is_empty() && r.name.trim().to_lowercase() == needle;
+        let deleted_here = tombstones().any(|r| {
+            r.visualizer_id.as_deref() == Some(remote_id)
+                || (r.visualizer_id.is_none()
+                    && (signature_for_roaster(&r.name) == wire_sig || named(&r)))
+        });
+        if let Some(by_id) = live().find(|r| r.visualizer_id.as_deref() == Some(remote_id)) {
             actions.push(RoasterReconcileAction::Update {
                 local_id: by_id.id.clone(),
                 remote: wire.clone(),
             });
             continue;
         }
-        let wire_sig = signature_for_roaster(&wire.name);
-        let by_sig = local.iter().find(|r| {
-            r.visualizer_id.is_none()
-                && r.deleted_at.is_none()
-                && signature_for_roaster(&r.name) == wire_sig
-        });
-        // `findRoasterByName`: case-insensitive exact match, any row (NOT
-        // filtered on bound / deleted), first hit. Empty name → no match.
+        let by_sig = live()
+            .find(|r| r.visualizer_id.is_none() && signature_for_roaster(&r.name) == wire_sig);
+        // `findRoasterByName`: case-insensitive exact match, any live row
+        // (bound or not), first hit. Empty name → no match.
         let by_name = by_sig.or_else(|| {
-            let needle = wire.name.trim().to_lowercase();
-            if needle.is_empty() {
+            if deleted_here {
                 return None;
             }
-            local
-                .iter()
-                .find(|r| r.name.trim().to_lowercase() == needle)
+            live().find(named)
         });
         if let Some(m) = by_name {
             actions.push(RoasterReconcileAction::Bind {
                 local_id: m.id.clone(),
                 remote: wire.clone(),
             });
-        } else {
+        } else if !deleted_here {
             actions.push(RoasterReconcileAction::Add {
                 remote: wire.clone(),
             });
@@ -1719,6 +1725,39 @@ mod tests {
             ..RoasterWire::default()
         };
         assert!(reconcile_roasters(&[], &[wire]).is_empty());
+    }
+
+    /// #488 review SF1: a roaster deleted here stays deleted after a pull.
+    #[test]
+    fn reconcile_roasters_never_adds_back_a_roaster_deleted_here() {
+        let gone = crate::roaster_tombstone(&roaster("roaster:l1", "Sey", Some("r1")), 5);
+        let other = roaster("roaster:l2", "Onyx", Some("r2"));
+        let actions = reconcile_roasters(
+            &[gone.clone(), other],
+            &[
+                roaster_wire("r1", "Sey Renamed"),
+                roaster_wire("r2", "Onyx"),
+            ],
+        );
+        assert!(
+            matches!(actions.as_slice(), [RoasterReconcileAction::Update { local_id, .. }] if local_id == "roaster:l2"),
+            "the tombstone gets no action: {actions:?}"
+        );
+        // An unbound tombstone (imported deleted) matches by name too.
+        let mut unbound = gone;
+        unbound.visualizer_id = None;
+        assert!(reconcile_roasters(&[unbound], &[roaster_wire("r9", "sey")]).is_empty());
+    }
+
+    #[test]
+    fn a_roaster_added_again_binds_past_its_tombstone() {
+        let gone = crate::roaster_tombstone(&roaster("roaster:old", "Sey", Some("r1")), 5);
+        let again = roaster("roaster:new", "Sey", None);
+        let actions = reconcile_roasters(&[gone, again], &[roaster_wire("r1", "Sey")]);
+        assert!(matches!(
+            actions.as_slice(),
+            [RoasterReconcileAction::Bind { local_id, .. }] if local_id == "roaster:new"
+        ));
     }
 
     // ── reconcile_beans (CORE4) ────────────────────────────────────────
