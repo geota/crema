@@ -9,7 +9,7 @@
 
 import 'fake-indexeddb/auto';
 import '#lib/testing/dom-stubs.js';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { flushSync, mount, tick, unmount, type Component } from 'svelte';
 
 type Nav = {
@@ -221,6 +221,30 @@ describe('the bag photo follows Save', () => {
 		await settled();
 		expect(library.getBean('bean:a')!.imageRef).toBe(ref);
 		expect(await images.get(ref)).not.toBeNull();
+	});
+
+	it('Save is off while a picked photo is still being stored (REVIEW-497 follow-up 3)', async () => {
+		let release: () => void = () => {};
+		const put = vi.spyOn(images, 'put').mockImplementation(
+			(ref: string) => new Promise<string>((resolve) => (release = () => resolve(ref)))
+		);
+		onTestFinished(() => put.mockRestore());
+		const root = mountEditor(BeanEditPage, { bean: bag() });
+		const input = root.querySelector<HTMLInputElement>('input[type=file]')!;
+		Object.defineProperty(input, 'files', { value: [new File(['jpeg'], 'bag.jpg')] });
+		input.dispatchEvent(new Event('change', { bubbles: true }));
+		flushSync();
+		const saves = [...root.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Save');
+		expect(saves.length).toBeGreaterThan(0);
+		expect(saves.every((b) => b.disabled), 'Save waits for the photo').toBe(true);
+
+		release();
+		await settled();
+		flushSync();
+		expect(button(root, 'Save').disabled).toBe(false);
+		button(root, 'Save').click();
+		await settled();
+		expect(library.getBean('bean:a')!.imageRef, 'the picked photo is saved').toMatch(/^idb:bean-image:bean:a#/);
 	});
 
 	it('Remove photo then Save deletes it', async () => {

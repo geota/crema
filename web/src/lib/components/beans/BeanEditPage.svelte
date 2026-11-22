@@ -420,6 +420,9 @@
 	const urlErrorId = 'be-url-error';
 
 	async function save(activate: boolean): Promise<void> {
+		// A photo still being stored: saving now would drop it and orphan its
+		// blob (REVIEW-497 follow-up 3). Save is off until it lands.
+		if (photoUploading) return;
 		attempted = true;
 		urlTouched = true;
 		await tick();
@@ -520,7 +523,14 @@
 					back: { label: 'Back to Beans', onBack: back, breadcrumb: isNew ? 'New bean' : 'Edit bean' },
 					actions: [
 						{ id: 'cancel', label: 'Cancel', text: 'Cancel', onclick: () => void discard() },
-						{ id: 'save', label: 'Save', text: 'Save', primary: true, onclick: () => void save(false) }
+						{
+							id: 'save',
+							label: 'Save',
+							text: 'Save',
+							primary: true,
+							disabled: photoUploading,
+							onclick: () => void save(false)
+						}
 					]
 				}
 			: {}
@@ -609,7 +619,7 @@
 		</div>
 		<div class="be-bar-actions">
 			<button class="be-btn be-btn-ghost" onclick={discard}>Cancel</button>
-			<button class="be-btn be-btn-primary" onclick={() => save(false)}>
+			<button class="be-btn be-btn-primary" onclick={() => save(false)} disabled={photoUploading}>
 				<CheckIcon aria-hidden="true" />
 				Save
 			</button>
@@ -1559,7 +1569,7 @@
 					</div>
 				{/if}
 				<button class="be-btn be-btn-ghost" onclick={discard}>Cancel</button>
-				<button class="be-btn be-btn-primary be-btn-lg" onclick={() => save(false)}>
+				<button class="be-btn be-btn-primary be-btn-lg" onclick={() => save(false)} disabled={photoUploading}>
 					<CheckIcon aria-hidden="true" />
 					Save
 				</button>
@@ -1655,7 +1665,11 @@
 		color: var(--fg-on-accent);
 		font-weight: 600;
 	}
-	.be-btn-primary:hover {
+	.be-btn-primary:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+	.be-btn-primary:hover:not(:disabled) {
 		background: var(--copper-600);
 	}
 	.be-btn-lg {
