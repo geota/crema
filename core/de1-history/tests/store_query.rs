@@ -432,6 +432,43 @@ fn last_grinds_for_bag_are_the_newest_per_grinder() {
     assert!(store.last_grinds_for_bag("none").expect("reads").is_empty());
 }
 
+/// Round 2 H1 / FINAL M2: an Android number grind reads as the core's
+/// `grind_text` writes it: a fine step's 2.25 isn't rounded to one decimal,
+/// and a widened `f32` 4.2 reads `4.2`, not `4.199999809265137`.
+#[test]
+fn last_grinds_for_bag_numbers_read_as_grind_text() {
+    let d = dir();
+    let mut store = create(&file(&d, "history.db"));
+    let bag = json!({ "beanId": "bag" });
+    store
+        .upsert(&rows_in(&[
+            row(
+                "a1",
+                10,
+                json!({ "bean": bag, "grinderModel": "Fine", "grindSetting": 2.25 }),
+            ),
+            row(
+                "a2",
+                20,
+                json!({ "bean": bag, "grinderModel": "Niche", "grindSetting": f64::from(4.2_f32) }),
+            ),
+        ]))
+        .expect("writes");
+    let got: Vec<(String, String)> = store
+        .last_grinds_for_bag("bag")
+        .expect("reads")
+        .into_iter()
+        .map(|l| (l.grinder, l.grind))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("Niche".to_owned(), "4.2".to_owned()),
+            ("Fine".to_owned(), "2.25".to_owned())
+        ]
+    );
+}
+
 /// #488 F4: rows stamped with a grinder id count per id (a rename doesn't
 /// split them, and a same-named grinder with another id doesn't merge);
 /// rows from before ids count per name, for the core to match by name.

@@ -649,6 +649,58 @@ data class BrewDefaultsBounds (
 	val maxShotDurationS: StepRange
 )
 
+/// What [`brew_grind_view`] reads.
+@Serializable
+data class BrewGrindInput (
+	/// The bag on Brew, if any.
+	val bag: Bean? = null,
+	/// The active grinder ([`crate::grinder::active_grinder`]); `None` = no
+	/// grinder (the default scale, the "no grinder" slot).
+	val grinder: Grinder? = null,
+	/// Brew's grind (the per-device session value); `None` = not set.
+	val brewGrind: String? = null
+)
+
+/// The unsaved-grind marker.
+@Serializable
+data class UnsavedGrind (
+	/// The bag's saved grind for the active grinder; `None` = nothing saved.
+	val saved: String? = null,
+	/// The marker: "Bag 14", or "Bag —" when nothing is saved.
+	val label: String
+)
+
+/// What Brew's grind is, for both shells (DESIGN "No grind set is its own
+/// state").
+@Serializable
+data class BrewGrindView (
+	/// The active grinder's scale, else the default.
+	val scale: GrindScale,
+	/// Brew's grind, trimmed: what the header shows and what the shot
+	/// records. `None` when not set (or blank): the shot records no grind.
+	val value: String? = null,
+	/// The value with its unit for the header and strip ("480 μm",
+	/// "2.1.3"), "—" when not set ([`format_grind`]).
+	val display: String,
+	/// The value as the stepper's number; `None` when not set or not a plain
+	/// number.
+	val dial: Double? = null,
+	/// Where the stepper's first + or − goes when `dial` is `None`
+	/// ([`grind_start_from_blank`]). Not a grind: nothing shows or records
+	/// it until the user steps.
+	val startFromBlank: Double,
+	/// The bag's saved grind for the active grinder (the "no grinder" slot
+	/// with none), when there is one: the ringed chip, the tooltip.
+	val saved: String? = null,
+	/// The unsaved-grind marker: a bag is selected, the grind is set, and it
+	/// differs from the saved one ([`same_grind`]) or nothing is saved. No
+	/// bag, or no grind: none.
+	val marker: UnsavedGrind? = null,
+	/// The grind part of Quick Controls' Save: the value to save for the bag
+	/// and the active grinder; `None` when the marker doesn't show.
+	val saveGrind: String? = null
+)
+
 /// Summary metrics over a (filter/range-scoped) set of brews — the
 /// History stat strip once non-espresso rows exist. `None` = "no data"
 /// (render as "—").
@@ -3522,6 +3574,15 @@ data class GateStatus (
 	val pending: Boolean
 )
 
+/// One Quick Controls grind chip.
+@Serializable
+data class GrindChip (
+	/// The chip's value, for the stepper.
+	val value: Double,
+	/// The value as Brew's grind takes it on a tap ([`grind_text`]).
+	val text: String
+)
+
 /// What a save did to the bag.
 @Serializable
 data class GrindSave (
@@ -5005,7 +5066,13 @@ data class ShotCaptureContext (
 	/// [`StoredShot::grinder_id`]. `None` or blank = no grinder.
 	val grinderId: String? = null,
 	/// The grind dial at shot start, or `None` when it carried no value.
+	/// Recorded through [`crate::grind_value::grind_text`] (no one-decimal
+	/// rounding); [`Self::grind`] wins when set.
 	val grindDial: Float? = null,
+	/// Brew's grind at shot start as text ([`crate::BrewGrindView::value`]),
+	/// recorded as is (trimmed), a grind that isn't a plain number included.
+	/// `None` or blank = fall back to [`Self::grind_dial`].
+	val grind: String? = null,
 	/// The barista, or `None`.
 	val barista: String? = null,
 	/// The shot's tags at capture (a copy of the bean's tags today). `None`
@@ -7071,6 +7138,24 @@ enum class ScaleLinkDeadReason(val string: String) {
 	/// Three scale writes in a row failed with no reading in between.
 	@SerialName("WritesFailing")
 	WritesFailing("WritesFailing"),
+}
+
+/// Why a typed scale can't be stored (Devices' grinder fields), first
+/// failing rule first.
+@Serializable
+enum class ScaleRefusal(val string: String) {
+	/// A field isn't a number: "Enter a number in each field".
+	@SerialName("notANumber")
+	NotANumber("notANumber"),
+	/// "Lowest must be below Highest".
+	@SerialName("lowestNotBelowHighest")
+	LowestNotBelowHighest("lowestNotBelowHighest"),
+	/// "Step must be more than 0".
+	@SerialName("stepNotPositive")
+	StepNotPositive("stepNotPositive"),
+	/// "Step must fit between Lowest and Highest".
+	@SerialName("stepTooLarge")
+	StepTooLarge("stepTooLarge"),
 }
 
 /// What the shell should do with a just-completed shot — decided at the

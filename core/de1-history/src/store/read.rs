@@ -189,8 +189,10 @@ pub(crate) fn rows<T>(
     run().map_err(|e| Fail::Sql(e, source))
 }
 
-/// A row's grind as text: a non-blank string as stored, a finite number in
-/// its shortest form (`15`, `15.5`, `480`); anything else is none.
+/// A row's grind as text: a non-blank string as stored; a finite number (an
+/// Android row's `grindSetting`) as [`de1_domain::grind_text`] writes it on
+/// the default scale (`15`, `15.5`, `2.25`, an `f32`'s `4.2` without its
+/// float noise); anything else is none.
 fn grind_text(v: ValueRef<'_>) -> Option<String> {
     match v {
         ValueRef::Text(t) => std::str::from_utf8(t)
@@ -198,7 +200,11 @@ fn grind_text(v: ValueRef<'_>) -> Option<String> {
             .filter(|t| !t.trim().is_empty())
             .map(str::to_owned),
         ValueRef::Integer(i) => Some(i.to_string()),
-        ValueRef::Real(f) if f.is_finite() => Some(format!("{f}")),
+        ValueRef::Real(f) => Some(de1_domain::grind_text(
+            f,
+            &de1_domain::GrindScale::default(),
+        ))
+        .filter(|t| !t.is_empty()),
         _ => None,
     }
 }
