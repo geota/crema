@@ -93,11 +93,13 @@ fun lastGrindsForBag(beanId: String, shots: List<ShotMeta>): List<LastGrind> {
     }
 }
 
-/** The library migration (core `migrate_grinder_library`), run once the library and the settings have loaded. */
+/** The library migration (core `migrate_grinder_library`), run once the library and the settings have loaded.
+ *  The core runs nothing unless [gate] says both read (REVIEW-CORE H5). */
 fun migrateGrinderLibrary(
     grinderRows: List<Grinder>,
     beans: List<Bean>,
     grinderModel: String,
+    gate: coffee.crema.core.MigrationGate,
     nowMs: Long,
     core: (payload: String, nowMs: Long) -> String = ::migrateGrinderLibraryJson,
 ): GrinderLibraryMigration {
@@ -105,6 +107,7 @@ fun migrateGrinderLibrary(
         put("grinders", grinderJson.encodeToJsonElement(grinders, grinderRows))
         put("beans", grinderJson.encodeToJsonElement(ListSerializer(Bean.serializer()), beans))
         put("grinderModel", JsonPrimitive(grinderModel))
+        put("gate", grinderJson.encodeToJsonElement(coffee.crema.core.MigrationGate.serializer(), gate))
     }
     return grinderJson.decodeFromString(GrinderLibraryMigration.serializer(), core(payload.toString(), nowMs))
 }

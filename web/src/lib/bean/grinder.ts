@@ -23,6 +23,7 @@ import type {
 	GrinderAdd,
 	GrinderArchive,
 	GrinderLibraryMigration,
+	MigrationGate,
 	GrinderMatch,
 	GrindSave,
 	GrindScale,
@@ -150,10 +151,11 @@ export function migrateGrinderLibrary(
 	grinders: readonly Grinder[],
 	beans: readonly Bean[],
 	grinderModel: string,
+	gate: MigrationGate,
 	nowMs = Date.now()
 ): GrinderLibraryMigration {
 	return JSON.parse(
-		migrateGrinderLibraryJson(JSON.stringify({ grinders, beans, grinderModel }), nowMs)
+		migrateGrinderLibraryJson(JSON.stringify({ grinders, beans, grinderModel, gate }), nowMs)
 	) as GrinderLibraryMigration;
 }
 

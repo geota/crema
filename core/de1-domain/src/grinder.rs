@@ -25,7 +25,8 @@
 //! stepper's range.
 //!
 //! **The migration** ([`migrate_grinder_library`]) runs on every load and
-//! import and is idempotent: grinder records for the old names
+//! import, only once both the library and the settings read
+//! ([`MigrationGate`]), and is idempotent: grinder records for the old names
 //! (`CommonSettings::grinder_model`, `Bean::grinder`) when there are none,
 //! then each bag's old `grinder_setting` as a saved grind
 //! ([`crate::bag_grind`]). It reads the old fields and never writes them.
@@ -433,6 +434,43 @@ pub struct GrinderLibraryMigration {
     pub active_grinder_id: Option<String>,
     /// Whether the grinders step ran (there were no grinder records).
     pub grinders_migrated: bool,
+    /// Why nothing ran: an input wasn't read ([`MigrationGate`]). `None` when
+    /// the migration ran (even with nothing to do).
+    pub skipped: Option<MigrationSkip>,
+}
+
+/// Whether the migration's inputs were read (REVIEW-CORE H5). A shell
+/// passes what it knows; the core runs nothing unless both read.
+#[typeshare]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationGate {
+    /// The library file read, or there was none (a first run). `false` when
+    /// it exists but couldn't be read: its rows would look absent.
+    pub library: bool,
+    /// The settings read, or there were none. `false` when they exist but
+    /// couldn't be read: `grinder_model` would look blank and every bag's
+    /// old grind would land under "no grinder" for good.
+    pub settings: bool,
+}
+
+impl MigrationGate {
+    /// Both inputs read.
+    pub const READ: Self = Self {
+        library: true,
+        settings: true,
+    };
+}
+
+/// Why [`migrate_grinder_library`] ran nothing.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MigrationSkip {
+    /// The library couldn't be read.
+    LibraryUnreadable,
+    /// The settings couldn't be read.
+    SettingsUnreadable,
 }
 
 /// The library migration (#488): run on every load and after every import.
@@ -449,14 +487,28 @@ pub struct GrinderLibraryMigration {
 /// 2. **Bags** with `grinds` = `None` (not deleted): see
 ///    [`crate::bag_grind::migrate_bag_grinds`]. A grinder name with no record
 ///    yet (a bag imported later) gets one.
+///
+/// **The gate** (REVIEW-CORE H5): nothing runs unless `gate` says both the
+/// library and the settings were read; the answer is then empty with
+/// [`GrinderLibraryMigration::skipped`] set (the library first). A later
+/// load that reads both runs it.
 #[must_use]
 pub fn migrate_grinder_library(
     grinders: &[Grinder],
     beans: &[Bean],
     grinder_model: &str,
+    gate: MigrationGate,
     now_ms: i64,
 ) -> GrinderLibraryMigration {
     let mut out = GrinderLibraryMigration::default();
+    if !gate.library {
+        out.skipped = Some(MigrationSkip::LibraryUnreadable);
+        return out;
+    }
+    if !gate.settings {
+        out.skipped = Some(MigrationSkip::SettingsUnreadable);
+        return out;
+    }
     let live_beans = || beans.iter().filter(|b| b.deleted_at.is_none());
     let mut all: Vec<Grinder> = grinders.to_vec();
     if grinders.is_empty() {
@@ -482,7 +534,9 @@ pub fn migrate_grinder_library(
 }
 
 /// JSON-bridged [`migrate_grinder_library`]: `{"grinders": Grinder[],
-/// "beans": Bean[], "grinderModel": string}` in (each defaults to empty), a
+/// "beans": Bean[], "grinderModel": string, "gate": MigrationGate}` in
+/// (`grinders` and `grinderModel` default to empty; `beans` and `gate` are
+/// required, so a shell can't forget the gate), a
 /// [`GrinderLibraryMigration`] out.
 ///
 /// # Errors
@@ -497,9 +551,16 @@ pub fn migrate_grinder_library_json(payload: &str, now_ms: i64) -> Result<String
         beans: Vec<Bean>,
         #[serde(default)]
         grinder_model: String,
+        gate: MigrationGate,
     }
     let inp: In = serde_json::from_str(payload).map_err(|e| e.to_string())?;
-    let out = migrate_grinder_library(&inp.grinders, &inp.beans, &inp.grinder_model, now_ms);
+    let out = migrate_grinder_library(
+        &inp.grinders,
+        &inp.beans,
+        &inp.grinder_model,
+        inp.gate,
+        now_ms,
+    );
     serde_json::to_string(&out).map_err(|e| e.to_string())
 }
 
@@ -908,7 +969,13 @@ mod tests {
             (again.kind, &again.grinder),
             (GrinderAddKind::Existing, &before)
         );
-        let m = migrate_grinder_library(&gs, &[bag("b1", "Turin DF64", "")], "Turin DF64", NOW);
+        let m = migrate_grinder_library(
+            &gs,
+            &[bag("b1", "Turin DF64", "")],
+            "Turin DF64",
+            MigrationGate::READ,
+            NOW,
+        );
         assert!(m.new_grinders.is_empty());
         assert_eq!(
             active_grind_scale(&gs, Some("grinder:turin-df64")),
@@ -1033,6 +1100,7 @@ mod tests {
             &[],
             &[bag("b1", "Niche Zero", ""), bag("b2", "Comandante", "")],
             "EK43",
+            MigrationGate::READ,
             NOW,
         );
         assert!(m.grinders_migrated);
@@ -1049,6 +1117,7 @@ mod tests {
                 bag("b3", "\t", ""),
             ],
             "  ",
+            MigrationGate::READ,
             NOW,
         );
         assert_eq!(names(&m.new_grinders), ["Niche Zero"]);
@@ -1066,6 +1135,7 @@ mod tests {
                 bag("b4", "EK43", ""),
             ],
             "niche zero",
+            MigrationGate::READ,
             NOW,
         );
         assert_eq!(names(&m.new_grinders), ["niche zero", "EK43"]);
@@ -1073,7 +1143,13 @@ mod tests {
 
     #[test]
     fn migration_takes_a_verified_scale_else_the_default() {
-        let m = migrate_grinder_library(&[], &[bag("b1", "My Hand Grinder", "")], "motto 80", NOW);
+        let m = migrate_grinder_library(
+            &[],
+            &[bag("b1", "My Hand Grinder", "")],
+            "motto 80",
+            MigrationGate::READ,
+            NOW,
+        );
         let gs = &m.new_grinders;
         assert_eq!(gs[0].preset_id.as_deref(), Some("bookoo-motto-80"));
         assert_eq!(gs[0].scale.max, 999.0);
@@ -1089,13 +1165,76 @@ mod tests {
             &[],
             &[bag("b1", "Niche Zero", ""), bag("b2", "EK43", "")],
             " ek43 ",
+            MigrationGate::READ,
             NOW,
         );
         assert_eq!(names(&m.new_grinders), ["ek43", "Niche Zero"]);
         assert_eq!(m.active_grinder_id.as_deref(), Some("grinder:ek43"));
         // No settings grinder: none is active (not the first bag's).
-        let m = migrate_grinder_library(&[], &[bag("b1", "Niche Zero", "")], "", NOW);
+        let m = migrate_grinder_library(
+            &[],
+            &[bag("b1", "Niche Zero", "")],
+            "",
+            MigrationGate::READ,
+            NOW,
+        );
         assert_eq!(m.active_grinder_id, None);
+    }
+
+    #[test]
+    fn migration_runs_nothing_unless_library_and_settings_read() {
+        // REVIEW-CORE H5 repro: the settings file is unreadable, so the
+        // grinder name reads blank. Run anyway, the bag's old grind would be
+        // filed under "no grinder" and `grinds` set, so it never re-runs.
+        let bags = [bag("b1", "", "14")];
+        let skipped = |gate| migrate_grinder_library(&[], &bags, "", gate, NOW);
+        let no_settings = skipped(MigrationGate {
+            library: true,
+            settings: false,
+        });
+        assert_eq!(
+            no_settings,
+            GrinderLibraryMigration {
+                skipped: Some(MigrationSkip::SettingsUnreadable),
+                ..GrinderLibraryMigration::default()
+            }
+        );
+        let no_library = skipped(MigrationGate {
+            library: false,
+            settings: true,
+        });
+        assert_eq!(no_library.skipped, Some(MigrationSkip::LibraryUnreadable));
+        assert!(no_library.new_grinders.is_empty() && no_library.updated_beans.is_empty());
+        assert_eq!(
+            skipped(MigrationGate::default()).skipped,
+            Some(MigrationSkip::LibraryUnreadable),
+            "the default gate is closed"
+        );
+        // The next load reads both: the bag migrates under the settings grinder.
+        let ran = migrate_grinder_library(&[], &bags, "Niche Zero", MigrationGate::READ, NOW);
+        assert_eq!(ran.skipped, None);
+        let rows = ran.updated_beans[0].grinds.as_deref().unwrap();
+        assert_eq!(rows[0].grinder_id, "grinder:niche-zero");
+        assert_eq!(rows[0].grind, "14");
+    }
+
+    #[test]
+    fn migration_json_requires_the_gate() {
+        let beans = serde_json::to_value([bag("b1", "", "14")]).unwrap();
+        let no_gate = serde_json::json!({ "beans": beans, "grinderModel": "EK43" });
+        assert!(migrate_grinder_library_json(&no_gate.to_string(), NOW).is_err());
+        let closed = serde_json::json!({
+            "beans": beans,
+            "grinderModel": "EK43",
+            "gate": { "library": true, "settings": false },
+        });
+        let out: GrinderLibraryMigration =
+            serde_json::from_str(&migrate_grinder_library_json(&closed.to_string(), NOW).unwrap())
+                .unwrap();
+        assert_eq!(out.skipped, Some(MigrationSkip::SettingsUnreadable));
+        assert!(out.updated_beans.is_empty());
+        let s = serde_json::to_string(&out).unwrap();
+        assert!(s.contains(r#""skipped":"settingsUnreadable""#), "{s}");
     }
 
     #[test]
@@ -1105,6 +1244,7 @@ mod tests {
                 &[],
                 &[bag("b1", "Niche-Zero 2", ""), bag("b2", "EK43", "")],
                 "Niche Zero",
+                MigrationGate::READ,
                 NOW,
             )
         };
@@ -1120,7 +1260,13 @@ mod tests {
     fn the_grinders_step_runs_only_with_no_grinder_records() {
         let mut archived = grinder("grinder:ek43", "EK43");
         archived.archived_at = Some(5);
-        let m = migrate_grinder_library(&[archived], &[bag("b1", "Niche Zero", "")], "EK43", NOW);
+        let m = migrate_grinder_library(
+            &[archived],
+            &[bag("b1", "Niche Zero", "")],
+            "EK43",
+            MigrationGate::READ,
+            NOW,
+        );
         assert!(!m.grinders_migrated);
         assert_eq!(m.active_grinder_id, None, "the pointer is left alone");
         // Only the bag step ran: the bag has no setting, so no grinder is
@@ -1132,7 +1278,7 @@ mod tests {
     fn migration_skips_deleted_bags() {
         let mut gone = bag("b1", "Niche Zero", "14");
         gone.deleted_at = Some(5);
-        let m = migrate_grinder_library(&[], &[gone], "", NOW);
+        let m = migrate_grinder_library(&[], &[gone], "", MigrationGate::READ, NOW);
         assert!(m.new_grinders.is_empty() && m.updated_beans.is_empty());
     }
 
@@ -1143,21 +1289,26 @@ mod tests {
             bag("b2", "", "3"),
             bag("b3", "EK43", ""),
         ];
-        let once = migrate_grinder_library(&[], &beans, "Comandante", NOW);
+        let once = migrate_grinder_library(&[], &beans, "Comandante", MigrationGate::READ, NOW);
         let mut beans_after = beans.clone();
         for b in &once.updated_beans {
             let slot = beans_after.iter_mut().find(|x| x.id == b.id).unwrap();
             *slot = b.clone();
         }
-        let twice =
-            migrate_grinder_library(&once.new_grinders, &beans_after, "Comandante", NOW + 1);
+        let twice = migrate_grinder_library(
+            &once.new_grinders,
+            &beans_after,
+            "Comandante",
+            MigrationGate::READ,
+            NOW + 1,
+        );
         assert_eq!(twice, GrinderLibraryMigration::default());
     }
 
     #[test]
     fn migration_never_changes_the_old_fields() {
         let beans = vec![bag("b1", " Niche Zero ", " 14 "), bag("b2", "", "3")];
-        let m = migrate_grinder_library(&[], &beans, "EK43", NOW);
+        let m = migrate_grinder_library(&[], &beans, "EK43", MigrationGate::READ, NOW);
         for (before, after) in beans.iter().zip(&m.updated_beans) {
             assert_eq!(after.grinder, before.grinder);
             assert_eq!(after.grinder_setting, before.grinder_setting);
@@ -1177,6 +1328,7 @@ mod tests {
         let payload = serde_json::json!({
             "beans": [bag("b1", "Niche Zero", "14")],
             "grinderModel": "EK43",
+            "gate": MigrationGate::READ,
         });
         let out: GrinderLibraryMigration =
             serde_json::from_str(&migrate_grinder_library_json(&payload.to_string(), NOW).unwrap())

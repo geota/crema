@@ -2740,7 +2740,9 @@ class LibraryController(
      */
     fun migrateGrinderLibrary(now: Long = System.currentTimeMillis()) {
         val s = uiState()
-        val out = runCatching { coffee.crema.beans.migrateGrinderLibrary(s.grinders, s.beans, s.grinderModel, now) }.getOrElse {
+        // Not yet wired to the read status (Android shell PR, REVIEW-CORE H5): runs as before.
+        val gate = coffee.crema.core.MigrationGate(library = true, settings = true)
+        val out = runCatching { coffee.crema.beans.migrateGrinderLibrary(s.grinders, s.beans, s.grinderModel, gate, now) }.getOrElse {
             appendLog("Grinder migration failed (runs again next load): ${it.message}")
             return
         }

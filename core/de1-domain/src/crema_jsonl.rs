@@ -1093,7 +1093,13 @@ mod tests {
         let mut bean = sample_bean("bean:b1", "Yirg", None);
         bean.grinder = " Niche Zero ".into();
         bean.grinder_setting = "6 + a tooth".into();
-        let m = crate::migrate_grinder_library(&[], std::slice::from_ref(&bean), "EK43", 7);
+        let m = crate::migrate_grinder_library(
+            &[],
+            std::slice::from_ref(&bean),
+            "EK43",
+            crate::MigrationGate::READ,
+            7,
+        );
         let migrated = m.updated_beans[0].clone();
         assert!(migrated.grinds.is_some());
         let settings = crate::app_settings::CommonSettings {
@@ -1126,7 +1132,13 @@ mod tests {
         assert_eq!(restored.grinder_model, "EK43");
         // Restoring runs the migration again: already migrated, so a no-op.
         assert_eq!(
-            crate::migrate_grinder_library(&plan.grinders, &plan.beans, &restored.grinder_model, 9),
+            crate::migrate_grinder_library(
+                &plan.grinders,
+                &plan.beans,
+                &restored.grinder_model,
+                crate::MigrationGate::READ,
+                9
+            ),
             crate::GrinderLibraryMigration::default()
         );
         // An envelope without grinders doesn't carry the store.

@@ -842,8 +842,13 @@ pub fn bag_stock_json(remaining_g: f32, bag_size_g: f32, recent_doses: &[f32]) -
 /// A new bag copied from `source` — the bean library's "Duplicate" action.
 /// The copy gets `new_id`, the name "`<name>` (copy)" ("Untitled bag (copy)"
 /// for a blank name) and `now_ms` timestamps, and keeps the bag's details
-/// (roaster, dates, origin, sizes, notes, grinder, tags, linked profile,
-/// metadata).
+/// (roaster, roast date, origin, size, notes, grinder, saved grinds, tags,
+/// linked profile, metadata).
+///
+/// It is a fresh bag of the same coffee (FINAL N4): it starts **full**
+/// (`remaining` = `bag_size`) and unopened and not frozen (`opened_on`,
+/// `frozen_on`, `defrosted_on` cleared). A copy of a nearly empty bag would
+/// otherwise prompt "bag empty" after one shot.
 ///
 /// It is a new bag in every outside system, so it drops the links that tie a
 /// row to the original's records:
@@ -871,16 +876,16 @@ pub fn duplicate_bean(source: &Bean, new_id: &str, now_ms: i64) -> Bean {
         name,
         roaster_id,
         roasted_on,
-        opened_on,
-        frozen_on,
-        defrosted_on,
+        opened_on: _,
+        frozen_on: _,
+        defrosted_on: _,
         roast_level,
         mix,
         roast_type,
         decaf,
         origin,
         bag_size,
-        remaining,
+        remaining: _,
         quality_score,
         tasting_notes,
         rating,
@@ -916,16 +921,16 @@ pub fn duplicate_bean(source: &Bean, new_id: &str, now_ms: i64) -> Bean {
         name: format!("{name} (copy)"),
         roaster_id,
         roasted_on,
-        opened_on,
-        frozen_on,
-        defrosted_on,
+        opened_on: None,
+        frozen_on: None,
+        defrosted_on: None,
         roast_level,
         mix,
         roast_type,
         decaf,
         origin,
         bag_size,
-        remaining,
+        remaining: bag_size,
         quality_score,
         tasting_notes,
         rating,
@@ -1760,6 +1765,15 @@ mod tests {
         bean.tags = vec!["daily".to_owned()];
         bean.linked_profile_id = Some("profile:x".to_owned());
         bean.frozen_on = Some("2026-05-10".to_owned());
+        bean.opened_on = Some("2026-05-01".to_owned());
+        bean.defrosted_on = Some("2026-05-12".to_owned());
+        bean.remaining = 12.0;
+        bean.grinds = Some(vec![crate::bag_grind::BagGrind {
+            grinder_id: "grinder:nz".to_owned(),
+            grinder_name: "Niche Zero".to_owned(),
+            grind: "14".to_owned(),
+            starred: true,
+        }]);
         bean
     }
 
@@ -1778,12 +1792,25 @@ mod tests {
         assert_eq!(copy.deleted_at, None);
         assert_eq!(copy.archived_at, None);
         assert!(!copy.favourite);
-        // Everything else is the original's, catalogue links included.
+        // A fresh bag: full, unopened, not frozen (FINAL N4).
+        assert_eq!(copy.remaining, src.bag_size);
+        assert_eq!(
+            (&copy.opened_on, &copy.frozen_on, &copy.defrosted_on),
+            (&None, &None, &None)
+        );
+        // Everything else is the original's, saved grinds and catalogue
+        // links included.
+        assert_eq!(copy.grinds, src.grinds);
+        assert_eq!(copy.linked_profile_id, src.linked_profile_id);
         let expected = Bean {
             id: copy.id.clone(),
             name: copy.name.clone(),
             created_at: copy.created_at,
             updated_at: copy.updated_at,
+            remaining: src.bag_size,
+            opened_on: None,
+            frozen_on: None,
+            defrosted_on: None,
             visualizer_id: None,
             beanconqueror_id: None,
             image_ref: None,

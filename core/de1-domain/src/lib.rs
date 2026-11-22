@@ -155,11 +155,15 @@ pub use backup_retention::{
     parse_auto_backup_name,
 };
 pub use bag_grind::{
-    AutoSaveInput, BagGrind, BagSelectInput, BagSelection, GrindSave, GrinderSwitchInput,
-    LastGrind, NO_GRINDER_ID, SelectionChange, SetTo, auto_save_shot_grind,
-    auto_save_shot_grind_json, bag_grinds_to_fix, bag_grinds_to_fix_json, migrate_bag_grinds,
+    AutoSaveInput, BagGrind, BagSelectInput, BagSelection, GrindSave, GrinderPickInput,
+    GrinderSwitchInput, LastGrind, NO_GRINDER_ID, SelectionChange, SelectionState, SetTo,
+    StagedGrinderPick, StagedGrindersInput, StagedGrindersSave, auto_save_shot_grind,
+    auto_save_shot_grind_json, bag_editor_grinders, bag_editor_grinders_json, bag_grinds_to_fix,
+    bag_grinds_to_fix_json, bag_selection_undo, bag_selection_undo_json, migrate_bag_grinds,
     newest_shot_grind, pick_grind, resolve_bag_selection, resolve_bag_selection_json,
     resolve_grinder_switch, resolve_grinder_switch_json, save_bag_grind, save_bag_grind_json,
+    stage_grinder_pick, stage_grinder_pick_json, staged_grinders_on_save,
+    staged_grinders_on_save_json,
 };
 pub use bean::{
     BREWS_REMAINING_WINDOW, BagStock, Bean, BeanMix, BeanOrigin, BeanRoastType,
@@ -302,12 +306,12 @@ pub use grind_value::{
 };
 pub use grinder::{
     GrindScale, Grinder, GrinderAdd, GrinderAddKind, GrinderArchive, GrinderLibraryMigration,
-    GrinderMatch, GrinderMatchKind, active_grind_scale, active_grinder, active_grinder_json,
-    add_grinder, add_grinder_json, archive_grinder, archive_grinder_json, grinder_key,
-    grinder_named, grinders_for_names, grinders_for_names_json, match_grinders,
-    match_grinders_json, merge_grinder_edit, merge_grinder_edit_json, migrate_grinder_library,
-    migrate_grinder_library_json, names_grinder, restore_grinder, restore_grinder_json,
-    same_grinder,
+    GrinderMatch, GrinderMatchKind, MigrationGate, MigrationSkip, active_grind_scale,
+    active_grinder, active_grinder_json, add_grinder, add_grinder_json, archive_grinder,
+    archive_grinder_json, grinder_key, grinder_named, grinders_for_names, grinders_for_names_json,
+    match_grinders, match_grinders_json, merge_grinder_edit, merge_grinder_edit_json,
+    migrate_grinder_library, migrate_grinder_library_json, names_grinder, restore_grinder,
+    restore_grinder_json, same_grinder,
 };
 pub use grinder_catalogue::{
     CatalogueGrinder, CatalogueGrinderInfo, CatalogueScale, GRINDER_CATALOGUE, GrinderKind,
@@ -330,7 +334,8 @@ pub use hot_water::{
 };
 pub use ids::{new_custom_method_id, new_profile_id, new_recipe_id, new_shot_id};
 pub use library_edit::{
-    merge_bean_edit, merge_bean_edit_json, merge_roaster_edit, merge_roaster_edit_json,
+    RemainingEdit, edited_remaining, edited_remaining_json, merge_bean_edit, merge_bean_edit_json,
+    merge_roaster_edit, merge_roaster_edit_json,
 };
 pub use maintenance::{
     MAX_COUNTED_GAP_S, MaintenanceReadout, MaintenanceState, counts_toward_water,

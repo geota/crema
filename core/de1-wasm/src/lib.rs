@@ -824,8 +824,9 @@ pub fn active_grinder_json(grinders_json: &str, active_id: &str) -> String {
     de1_domain::active_grinder_json(grinders_json, active_id)
 }
 
-/// The library migration (#488): `{grinders, beans, grinderModel}` in, a
-/// `GrinderLibraryMigration` JSON out. See
+/// The library migration (#488): `{grinders, beans, grinderModel, gate}` in,
+/// a `GrinderLibraryMigration` JSON out; nothing runs unless `gate` (a
+/// `MigrationGate`) says the library and settings read. See
 /// `de1_domain::migrate_grinder_library`.
 ///
 /// # Errors
@@ -878,6 +879,56 @@ pub fn resolve_bag_selection_json(input_json: &str) -> Result<String, String> {
 #[wasm_bindgen(js_name = resolveGrinderSwitchJson)]
 pub fn resolve_grinder_switch_json(input_json: &str) -> Result<String, String> {
     de1_domain::resolve_grinder_switch_json(input_json)
+}
+
+/// The Undo of a bag selection (REVIEW-CORE H4): `{selection, now}` in,
+/// the `SelectionChange` to apply out. See `de1_domain::bag_selection_undo`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = bagSelectionUndoJson)]
+pub fn bag_selection_undo_json(input_json: &str) -> Result<String, String> {
+    de1_domain::bag_selection_undo_json(input_json)
+}
+
+/// The bag's remaining after a bag-editor edit (REVIEW-CORE H6): a
+/// `RemainingEdit` JSON in, the grams out. See `de1_domain::edited_remaining`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = editedRemainingJson)]
+pub fn edited_remaining_json(input_json: &str) -> Result<String, String> {
+    de1_domain::edited_remaining_json(input_json)
+}
+
+/// The grinders as the bag editor sees them (FINAL S7). See
+/// `de1_domain::bag_editor_grinders`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = bagEditorGrindersJson)]
+pub fn bag_editor_grinders_json(stored_json: &str, staged_json: &str) -> Result<String, String> {
+    de1_domain::bag_editor_grinders_json(stored_json, staged_json)
+}
+
+/// A grinder picked in the bag editor, staged in its draft (FINAL S7): a
+/// `StagedGrinderPick` JSON or `null`. See `de1_domain::stage_grinder_pick`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = stageGrinderPickJson)]
+pub fn stage_grinder_pick_json(input_json: &str, now_ms: f64) -> Result<String, String> {
+    de1_domain::stage_grinder_pick_json(input_json, f64_to_ms(now_ms))
+}
+
+/// What the bag editor's Save writes for its staged grinders (FINAL S7). See
+/// `de1_domain::staged_grinders_on_save`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = stagedGrindersOnSaveJson)]
+pub fn staged_grinders_on_save_json(input_json: &str, now_ms: f64) -> Result<String, String> {
+    de1_domain::staged_grinders_on_save_json(input_json, f64_to_ms(now_ms))
 }
 
 /// What a completed shot does (REVIEW-CORE M4): a `ShotEffectsInput` JSON
@@ -1850,7 +1901,8 @@ pub fn detect_roaster_duplicates(roasters_json: &str) -> Result<String, String> 
 }
 
 /// Plan a roaster delete (`RoasterDeletePlan` JSON, or `null`). `payload` is
-/// `{"roasters", "beans", "roasterId", "cascade"}`. See
+/// `{"roasters", "beans", "roasterId", "cascade", "activeBeanId"?}`; the plan
+/// says what the active-bag pointer becomes. See
 /// `de1_domain::plan_roaster_delete`.
 ///
 /// # Errors

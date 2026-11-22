@@ -20,10 +20,14 @@
 //! A bag's saved grinds (`Bean::grinds`, #488) merge row by row, by grinder
 //! id ([`crate::bag_grind`]): the editor's edits, adds, removals and star move
 //! onto the stored rows in one Save, and a row auto-saved meanwhile stays.
+//!
+//! A bag's size and remaining ([`edited_remaining`], REVIEW-CORE H6): a
+//! first size fills the bag; a bag that had a size keeps its remaining.
 
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use typeshare::typeshare;
 
 use crate::bean::{Bean, Roaster};
 
@@ -115,6 +119,60 @@ pub fn merge_bean_edit(base: &Bean, edited: &Bean, current: &Bean, now_unix_ms: 
     out
 }
 
+/// What [`edited_remaining`] reads: the bag editor's size and remaining.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RemainingEdit {
+    /// The bag the editor opened on; `None` for a new bag.
+    pub base: Option<Bean>,
+    /// The size in the editor now (g).
+    pub bag_size: f32,
+    /// The remaining in the editor now (g).
+    pub remaining: f32,
+    /// The user set Remaining in this editor: their value stands.
+    pub remaining_touched: bool,
+}
+
+fn grams(v: f32) -> f32 {
+    if v.is_finite() { v.max(0.0) } else { 0.0 }
+}
+
+/// The bag's remaining after a bag-editor edit (REVIEW-CORE H6), one rule
+/// for both shells, both while editing (to show it) and on Save (into
+/// [`merge_bean_edit`]):
+///
+/// 1. Remaining set by the user in this editor: it stands.
+/// 2. A new bag, or one that had no size before: the size (a first size
+///    fills the bag; a remaining of 0 would read as empty).
+/// 3. A bag that had a size: its remaining as it was. A half-used bag keeps
+///    what it has left, and a bag that **ran out stays empty** when its size
+///    is corrected: a resize is a correction, not a refill. A refill is set
+///    on Remaining (or a Duplicate, which starts full).
+///
+/// Negative or non-finite grams read as 0.
+#[must_use]
+pub fn edited_remaining(edit: &RemainingEdit) -> f32 {
+    if edit.remaining_touched {
+        return grams(edit.remaining);
+    }
+    match edit.base.as_ref() {
+        Some(b) if grams(b.bag_size) > 0.0 => grams(b.remaining),
+        _ => grams(edit.bag_size),
+    }
+}
+
+/// [`edited_remaining`] over JSON: a [`RemainingEdit`] JSON in, the grams
+/// (a JSON number) out.
+///
+/// # Errors
+///
+/// The JSON error string on malformed input.
+pub fn edited_remaining_json(input_json: &str) -> Result<String, String> {
+    let edit: RemainingEdit = serde_json::from_str(input_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&edited_remaining(&edit)).map_err(|e| e.to_string())
+}
+
 /// A roaster editor's Save — [`merge_bean_edit`] for a [`Roaster`].
 #[must_use]
 pub fn merge_roaster_edit(
@@ -189,6 +247,87 @@ mod tests {
         b.notes = "fruity".into();
         b.origin.country = Some("Ethiopia".into());
         b
+    }
+
+    // ── Size and remaining (REVIEW-CORE H6) ──
+
+    fn sized(size: f32, remaining: f32) -> Bean {
+        let mut b = bag();
+        b.bag_size = size;
+        b.remaining = remaining;
+        b
+    }
+
+    fn remaining_after(base: Option<Bean>, size: f32, remaining: f32, touched: bool) -> f32 {
+        edited_remaining(&RemainingEdit {
+            base,
+            bag_size: size,
+            remaining,
+            remaining_touched: touched,
+        })
+    }
+
+    #[test]
+    fn a_new_bag_starts_full() {
+        assert_eq!(remaining_after(None, 340.0, 0.0, false), 340.0);
+        // A remaining the user typed stands, even on a new bag.
+        assert_eq!(remaining_after(None, 340.0, 120.0, true), 120.0);
+    }
+
+    #[test]
+    fn a_first_size_fills_a_bag_that_had_none() {
+        assert_eq!(
+            remaining_after(Some(sized(0.0, 0.0)), 250.0, 0.0, false),
+            250.0
+        );
+    }
+
+    #[test]
+    fn a_half_used_bag_keeps_its_remaining_on_a_resize() {
+        assert_eq!(
+            remaining_after(Some(sized(250.0, 90.0)), 340.0, 90.0, false),
+            90.0
+        );
+    }
+
+    #[test]
+    fn a_bag_that_ran_out_stays_empty_on_a_resize() {
+        // REVIEW-CORE divergence 8: 250 g bag, remaining 0, size corrected to
+        // 340 g. The rule picked: it stays empty (web refilled it).
+        assert_eq!(
+            remaining_after(Some(sized(250.0, 0.0)), 340.0, 0.0, false),
+            0.0
+        );
+        // A refill is the user's, on Remaining.
+        assert_eq!(
+            remaining_after(Some(sized(250.0, 0.0)), 340.0, 340.0, true),
+            340.0
+        );
+    }
+
+    #[test]
+    fn bad_grams_read_as_zero() {
+        assert_eq!(remaining_after(None, f32::NAN, 0.0, false), 0.0);
+        assert_eq!(remaining_after(None, 250.0, -5.0, true), 0.0);
+        assert_eq!(
+            remaining_after(Some(sized(250.0, f32::INFINITY)), 250.0, 0.0, false),
+            0.0
+        );
+    }
+
+    #[test]
+    fn edited_remaining_json_round_trips() {
+        let input = serde_json::json!({
+            "base": sized(250.0, 0.0),
+            "bagSize": 340.0,
+            "remaining": 0.0,
+        });
+        assert_eq!(edited_remaining_json(&input.to_string()).unwrap(), "0.0");
+        assert_eq!(
+            edited_remaining_json(r#"{"bagSize": 340}"#).unwrap(),
+            "340.0"
+        );
+        assert!(edited_remaining_json("nope").is_err());
     }
 
     #[test]

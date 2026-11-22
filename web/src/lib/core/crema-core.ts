@@ -419,6 +419,12 @@ export interface BagSelectInput {
 	grinders: Grinder[];
 	/** The bag's newest grind per grinder, from the history. */
 	lastGrinds: LastGrind[];
+	/**
+	 * The bag that was selected before this pick. Picking the bag that is
+	 * already selected changes nothing (FINAL N7): an unsaved grind on Brew
+	 * stays, with no message.
+	 */
+	activeBeanId?: string;
 }
 
 /** Set a pointer or value to `value` (`None` clears it). */
@@ -3617,6 +3623,14 @@ export interface GrinderArchive {
 	activeGrinderId?: string;
 }
 
+/** Why [`migrate_grinder_library`] ran nothing. */
+export enum MigrationSkip {
+	/** The library couldn't be read. */
+	LibraryUnreadable = "libraryUnreadable",
+	/** The settings couldn't be read. */
+	SettingsUnreadable = "settingsUnreadable",
+}
+
 /**
  * What [`migrate_grinder_library`] changes. Empty lists when there is
  * nothing to do.
@@ -3637,6 +3651,11 @@ export interface GrinderLibraryMigration {
 	activeGrinderId?: string;
 	/** Whether the grinders step ran (there were no grinder records). */
 	grindersMigrated: boolean;
+	/**
+	 * Why nothing ran: an input wasn't read ([`MigrationGate`]). `None` when
+	 * the migration ran (even with nothing to do).
+	 */
+	skipped?: MigrationSkip;
 }
 
 /** Which list a [`GrinderMatch`] comes from, in the order they are listed. */
@@ -3659,6 +3678,20 @@ export interface GrinderMatch {
 	name: string;
 	/** How well it matched, `0..=1`; `0` for a blank query. */
 	score: number;
+}
+
+/** A pick in the bag editor's type-or-pick box, for [`stage_grinder_pick`]. */
+export interface GrinderPickInput {
+	/** The grinder records as stored. */
+	grinders: Grinder[];
+	/** The records this editor staged so far (from earlier picks). */
+	staged: Grinder[];
+	/** Which list the pick came from; `None` = "+ Create" with `name`. */
+	kind?: GrinderMatchKind;
+	/** The grinder id (owned, archived) or the catalogue entry id. */
+	id: string;
+	/** The typed name ("+ Create"). */
+	name: string;
 }
 
 /** What [`resolve_grinder_switch`] reads. */
@@ -4071,6 +4104,24 @@ export interface MaintenanceState {
 	descaleEnabled?: boolean;
 	/** Whether the clean-cycle reminder is armed. `None` means enabled. */
 	cleanEnabled?: boolean;
+}
+
+/**
+ * Whether the migration's inputs were read (REVIEW-CORE H5). A shell
+ * passes what it knows; the core runs nothing unless both read.
+ */
+export interface MigrationGate {
+	/**
+	 * The library file read, or there was none (a first run). `false` when
+	 * it exists but couldn't be read: its rows would look absent.
+	 */
+	library: boolean;
+	/**
+	 * The settings read, or there were none. `false` when they exist but
+	 * couldn't be read: `grinder_model` would look blank and every bag's
+	 * old grind would land under "no grinder" for good.
+	 */
+	settings: boolean;
 }
 
 /**
@@ -4568,6 +4619,18 @@ export interface RecipeTimeEstimate {
 	openEnded: boolean;
 }
 
+/** What [`edited_remaining`] reads: the bag editor's size and remaining. */
+export interface RemainingEdit {
+	/** The bag the editor opened on; `None` for a new bag. */
+	base?: Bean;
+	/** The size in the editor now (g). */
+	bagSize: number;
+	/** The remaining in the editor now (g). */
+	remaining: number;
+	/** The user set Remaining in this editor: their value stands. */
+	remainingTouched: boolean;
+}
+
 /**
  * Bean snapshot at shot start; nested under [`ReplayMeta::bean`].
  * 
@@ -4757,6 +4820,12 @@ export interface RoasterDeletePlan {
 	remoteBeanIds: string[];
 	/** The roaster's own Visualizer id, if it was synced. */
 	remoteRoasterId?: string;
+	/**
+	 * The active-bag pointer afterwards (REVIEW-CORE M3): cleared when the
+	 * cascade deletes the active bag (review F5: Brew shows "No bag"; no
+	 * other bag is made active), else as it was.
+	 */
+	activeBeanIdAfter?: string;
 }
 
 /**
@@ -4976,6 +5045,21 @@ export interface SearchHit {
 	 * [`MAX_FIELD_HITS`].
 	 */
 	fields: FieldHit[];
+}
+
+/** What Brew holds now, for [`bag_selection_undo`]. */
+export interface SelectionState {
+	/** The active profile id now. */
+	profileId?: string;
+	/** The active grinder pointer now. */
+	grinderId?: string;
+	/** Brew's grind now. */
+	grind?: string;
+	/**
+	 * A shot is in progress: loading a profile would upload it to the
+	 * machine mid-extraction, so Undo leaves the profile as it is.
+	 */
+	shotInProgress: boolean;
 }
 
 /**
@@ -5517,6 +5601,42 @@ export interface ShotSummary {
 	peakTemp: number;
 	/** The row chart, as described in the module docs; `None` with no series. */
 	spark?: string;
+}
+
+/** What [`stage_grinder_pick`] answers. */
+export interface StagedGrinderPick {
+	/** The grinder for the new bag row, as it will be stored on Save. */
+	grinder: Grinder;
+	/**
+	 * Already owned (or staged earlier), a new record, or an archived one
+	 * brought back.
+	 */
+	kind: GrinderAddKind;
+	/**
+	 * The draft's staged records afterwards; the editor keeps it until Save
+	 * or Cancel.
+	 */
+	staged: Grinder[];
+}
+
+/** What [`staged_grinders_on_save`] reads. */
+export interface StagedGrindersInput {
+	/** The grinder records as stored now (at Save). */
+	grinders: Grinder[];
+	/** The editor's staged records. */
+	staged: Grinder[];
+	/** The bag as the Save stores it (after [`crate::merge_bean_edit`]). */
+	bag?: Bean;
+	/** The active grinder pointer now. */
+	activeGrinderId?: string;
+}
+
+/** What the bag editor's Save writes besides the bag. */
+export interface StagedGrindersSave {
+	/** Grinder records to upsert, in pick order. */
+	grinders: Grinder[];
+	/** The active grinder pointer to set; `None` = it stays. */
+	activeGrinderId?: SetTo;
 }
 
 /**

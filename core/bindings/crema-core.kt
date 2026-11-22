@@ -370,7 +370,11 @@ data class BagSelectInput (
 	/// The grinder records.
 	val grinders: List<Grinder>,
 	/// The bag's newest grind per grinder, from the history.
-	val lastGrinds: List<LastGrind>
+	val lastGrinds: List<LastGrind>,
+	/// The bag that was selected before this pick. Picking the bag that is
+	/// already selected changes nothing (FINAL N7): an unsaved grind on Brew
+	/// stays, with no message.
+	val activeBeanId: String? = null
 )
 
 /// Set a pointer or value to `value` (`None` clears it).
@@ -3673,6 +3677,17 @@ data class GrinderArchive (
 	val activeGrinderId: String? = null
 )
 
+/// Why [`migrate_grinder_library`] ran nothing.
+@Serializable
+enum class MigrationSkip(val string: String) {
+	/// The library couldn't be read.
+	@SerialName("libraryUnreadable")
+	LibraryUnreadable("libraryUnreadable"),
+	/// The settings couldn't be read.
+	@SerialName("settingsUnreadable")
+	SettingsUnreadable("settingsUnreadable"),
+}
+
 /// What [`migrate_grinder_library`] changes. Empty lists when there is
 /// nothing to do.
 @Serializable
@@ -3687,7 +3702,10 @@ data class GrinderLibraryMigration (
 	/// run: keep the pointer as it is.
 	val activeGrinderId: String? = null,
 	/// Whether the grinders step ran (there were no grinder records).
-	val grindersMigrated: Boolean
+	val grindersMigrated: Boolean,
+	/// Why nothing ran: an input wasn't read ([`MigrationGate`]). `None` when
+	/// the migration ran (even with nothing to do).
+	val skipped: MigrationSkip? = null
 )
 
 /// Which list a [`GrinderMatch`] comes from, in the order they are listed.
@@ -3715,6 +3733,21 @@ data class GrinderMatch (
 	val name: String,
 	/// How well it matched, `0..=1`; `0` for a blank query.
 	val score: Float
+)
+
+/// A pick in the bag editor's type-or-pick box, for [`stage_grinder_pick`].
+@Serializable
+data class GrinderPickInput (
+	/// The grinder records as stored.
+	val grinders: List<Grinder>,
+	/// The records this editor staged so far (from earlier picks).
+	val staged: List<Grinder>,
+	/// Which list the pick came from; `None` = "+ Create" with `name`.
+	val kind: GrinderMatchKind? = null,
+	/// The grinder id (owned, archived) or the catalogue entry id.
+	val id: String,
+	/// The typed name ("+ Create").
+	val name: String
 )
 
 /// What [`resolve_grinder_switch`] reads.
@@ -4115,6 +4148,19 @@ data class MaintenanceState (
 	val descaleEnabled: Boolean? = null,
 	/// Whether the clean-cycle reminder is armed. `None` means enabled.
 	val cleanEnabled: Boolean? = null
+)
+
+/// Whether the migration's inputs were read (REVIEW-CORE H5). A shell
+/// passes what it knows; the core runs nothing unless both read.
+@Serializable
+data class MigrationGate (
+	/// The library file read, or there was none (a first run). `false` when
+	/// it exists but couldn't be read: its rows would look absent.
+	val library: Boolean,
+	/// The settings read, or there were none. `false` when they exist but
+	/// couldn't be read: `grinder_model` would look blank and every bag's
+	/// old grind would land under "no grinder" for good.
+	val settings: Boolean
 )
 
 /// One selectable display/behaviour mode a scale exposes.
@@ -4628,6 +4674,19 @@ data class RecipeTimeEstimate (
 	val openEnded: Boolean
 )
 
+/// What [`edited_remaining`] reads: the bag editor's size and remaining.
+@Serializable
+data class RemainingEdit (
+	/// The bag the editor opened on; `None` for a new bag.
+	val base: Bean? = null,
+	/// The size in the editor now (g).
+	val bagSize: Float,
+	/// The remaining in the editor now (g).
+	val remaining: Float,
+	/// The user set Remaining in this editor: their value stands.
+	val remainingTouched: Boolean
+)
+
 /// Bean snapshot at shot start; nested under [`ReplayMeta::bean`].
 /// 
 /// All fields optional; absent on the connect-phase prelude, present
@@ -4818,7 +4877,11 @@ data class RoasterDeletePlan (
 	/// Visualizer ids of the deleted bags that were synced.
 	val remoteBeanIds: List<String>,
 	/// The roaster's own Visualizer id, if it was synced.
-	val remoteRoasterId: String? = null
+	val remoteRoasterId: String? = null,
+	/// The active-bag pointer afterwards (REVIEW-CORE M3): cleared when the
+	/// cascade deletes the active bag (review F5: Brew shows "No bag"; no
+	/// other bag is made active), else as it was.
+	val activeBeanIdAfter: String? = null
 )
 
 /// A probable duplicate pair in the roaster directory: `dupe_id` looks like
@@ -4997,6 +5060,20 @@ data class SearchHit (
 	/// The fields that carried the match, best-contribution first, capped at
 	/// [`MAX_FIELD_HITS`].
 	val fields: List<FieldHit>
+)
+
+/// What Brew holds now, for [`bag_selection_undo`].
+@Serializable
+data class SelectionState (
+	/// The active profile id now.
+	val profileId: String? = null,
+	/// The active grinder pointer now.
+	val grinderId: String? = null,
+	/// Brew's grind now.
+	val grind: String? = null,
+	/// A shot is in progress: loading a profile would upload it to the
+	/// machine mid-extraction, so Undo leaves the profile as it is.
+	val shotInProgress: Boolean
 )
 
 /// One sample of a time series: `t` seconds from extraction start, `v` the
@@ -5455,6 +5532,41 @@ data class ShotSummary (
 	val peakTemp: Float,
 	/// The row chart, as described in the module docs; `None` with no series.
 	val spark: String? = null
+)
+
+/// What [`stage_grinder_pick`] answers.
+@Serializable
+data class StagedGrinderPick (
+	/// The grinder for the new bag row, as it will be stored on Save.
+	val grinder: Grinder,
+	/// Already owned (or staged earlier), a new record, or an archived one
+	/// brought back.
+	val kind: GrinderAddKind,
+	/// The draft's staged records afterwards; the editor keeps it until Save
+	/// or Cancel.
+	val staged: List<Grinder>
+)
+
+/// What [`staged_grinders_on_save`] reads.
+@Serializable
+data class StagedGrindersInput (
+	/// The grinder records as stored now (at Save).
+	val grinders: List<Grinder>,
+	/// The editor's staged records.
+	val staged: List<Grinder>,
+	/// The bag as the Save stores it (after [`crate::merge_bean_edit`]).
+	val bag: Bean? = null,
+	/// The active grinder pointer now.
+	val activeGrinderId: String? = null
+)
+
+/// What the bag editor's Save writes besides the bag.
+@Serializable
+data class StagedGrindersSave (
+	/// Grinder records to upsert, in pick order.
+	val grinders: List<Grinder>,
+	/// The active grinder pointer to set; `None` = it stays.
+	val activeGrinderId: SetTo? = null
 )
 
 /// One horizontal run of the planned-water staircase: level `target_g`
