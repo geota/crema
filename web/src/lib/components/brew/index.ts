@@ -16,7 +16,6 @@ export { default as PhaseIndicatorCard } from './PhaseIndicatorCard.svelte';
 export { default as MaxStopConditionsCard, type StopConditionRow } from './MaxStopConditionsCard.svelte';
 export { default as BrewHeader } from './BrewHeader.svelte';
 export { default as HeaderPicker, type PickerItem } from './HeaderPicker.svelte';
-export { default as BeanContextCard } from './BeanContextCard.svelte';
 export { default as LastShotCard } from './LastShotCard.svelte';
 export { default as LiveChart } from './LiveChart.svelte';
 export { default as FavoritesStrip } from './FavoritesStrip.svelte';

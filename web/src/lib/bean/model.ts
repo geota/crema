@@ -423,8 +423,8 @@ export function roastFreshness(
 
 /**
  * The bean's freshness verdict for the status pip — band-aware + frozen-gated.
- * The single source for all three consumers (BeanTile / BeanDrawer /
- * BeanContextCard, previously each re-derived it). Mirrors Android's
+ * The single source for its consumers (BeanTile, BeanDrawer; previously
+ * each re-derived it). Mirrors Android's
  * `freshnessVerdict` (BeanFormat.kt) step-for-step:
  *  1. a frozen bag (`frozenOn` set, not yet defrosted) pauses the window → `'frozen'`;
  *  2. no roast date → unknown (`null`);

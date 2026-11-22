@@ -35,7 +35,7 @@ import { getCremaUiState, type CremaUiState } from './ui-state.svelte';
  *
  * `source` carries the underlying library `Bean` only when this view was
  * derived from a live library row — components that need write access
- * (BeanContextCard's inline edit, quick-add) gate on it being non-null.
+ * gate on it being non-null.
  * Replay snapshots and live shots whose library row has since been
  * archived/deleted return `null` there.
  */
@@ -92,9 +92,8 @@ export class BrewContext {
 	 * truth, no library row exists).
 	 *
 	 * Returns `null` when no shot is in flight AND no library bean is
-	 * active. Callers needing write access to the underlying record
-	 * (BeanContextCard's inline edit / quick-add) read the optional
-	 * `source` field — it's `null` for replay snapshots so edit affordances
+	 * active. Callers needing write access to the underlying record read
+	 * the optional `source` field — it's `null` for replay snapshots so edit affordances
 	 * naturally hide.
 	 */
 	get activeBean(): DisplayBean | null {
