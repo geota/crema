@@ -194,8 +194,13 @@ class GrinderStateTest {
             val line = if (it.id in typical) "Adds it to your grinders · Typical range — check your dial" else "Adds it to your grinders, with its scale"
             assertEquals(line, catalogueOfferLine(it.id), it.id)
         }
-        assertTrue(listed.none { it.id == "df64" }, "a hidden entry is never offered")
-        assertEquals("Adds it to your grinders · set its range on Devices", catalogueOfferLine("df64"))
+        assertTrue(listed.none { it.id == "1zpresso-j-ultra" }, "a hidden entry is never offered")
+        assertEquals("Adds it to your grinders · set its range on Devices", catalogueOfferLine("1zpresso-j-ultra"))
+        // #488 batch 6: DF64 Gen 1, C40 MK3 and Sette 270Wi are typical now, on their siblings' evidence.
+        for (id in listOf("df64", "comandante-c40-mk3", "baratza-sette-270wi")) {
+            assertTrue(id in typical, "$id is offered as typical: $typical")
+            assertEquals("Adds it to your grinders · Typical range — check your dial", catalogueOfferLine(id), id)
+        }
     }
 
     @Test

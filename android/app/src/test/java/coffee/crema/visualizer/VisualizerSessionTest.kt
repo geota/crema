@@ -19,6 +19,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -146,6 +147,27 @@ class VisualizerSessionTest {
 
     private lateinit var lastSync: VisualizerSync
 
+    /**
+     * Wait, on the test thread, for a step another coroutine takes. The races
+     * below need each step to have happened before the next one starts, however
+     * slow the machine: a fixed sleep let a slow CI runner open the gate before
+     * the sign-in had stored its tokens, and the test then saw a different order.
+     */
+    private fun waitFor(what: String, done: () -> Boolean) {
+        val deadline = System.nanoTime() + 10_000_000_000L
+        while (!done()) {
+            if (System.nanoTime() > deadline) throw AssertionError("timed out waiting for $what")
+            Thread.sleep(2)
+        }
+    }
+
+    private fun CompletableDeferred<Unit>.waitFor(what: String) {
+        runBlocking { withTimeoutOrNull(10_000) { await() } } ?: throw AssertionError("timed out waiting for $what")
+    }
+
+    /** The sign-in's notice comes once its tokens are stored. */
+    private fun signedInNotice() = notices.any { it.startsWith("Signed in to Visualizer") }
+
     // ── Single flight ────────────────────────────────────────────────────────
 
     @Test
@@ -179,16 +201,18 @@ class VisualizerSessionTest {
 
     @Test
     fun `refresh_after_sign_out_stores_nothing`() {
+        val asked = CompletableDeferred<Unit>()
         val gate = CompletableDeferred<Unit>()
         refresh = {
+            asked.complete(Unit)
             gate.await()
             TokenSet("fresh", "rt-2", expiresAt = Long.MAX_VALUE)
         }
         val s = sync(VisualizerState(tokens = expired))
         s.uploadShot(shot("a").row(), silent = true)
-        Thread.sleep(100)
+        asked.waitFor("the refresh to start")
         s.signOut(quiet = true)
-        Thread.sleep(100)
+        waitFor("the sign-out to land") { !s.state.value.signedIn }
         gate.complete(Unit)
         settle()
         assertNull("the sign-out stands", stored().tokens)
@@ -197,16 +221,18 @@ class VisualizerSessionTest {
 
     @Test
     fun `refresh_after_sign_out_stores_nothing - a sign-in as Y during it`() {
+        val asked = CompletableDeferred<Unit>()
         val gate = CompletableDeferred<Unit>()
         refresh = {
+            asked.complete(Unit)
             gate.await()
             TokenSet("x-fresh", "x-2", expiresAt = Long.MAX_VALUE)
         }
         val s = sync(VisualizerState(tokens = expired, pendingVerifier = "v", pendingState = "st"))
         s.uploadShot(shot("a").row(), silent = true)
-        Thread.sleep(100)
+        asked.waitFor("the refresh to start")
         s.handleCallback("code", "st", null)
-        Thread.sleep(100)
+        waitFor("the sign-in as Y to land", ::signedInNotice)
         gate.complete(Unit)
         settle()
         assertEquals("Y's tokens stay", "y-refresh", stored().tokens?.refreshToken)
@@ -214,16 +240,20 @@ class VisualizerSessionTest {
 
     @Test
     fun `invalid_grant for a replaced token leaves the new session alone`() {
+        val asked = CompletableDeferred<Unit>()
         val gate = CompletableDeferred<Unit>()
         refresh = {
+            asked.complete(Unit)
             gate.await()
             throw TokenEndpointError(400, """{"error":"invalid_grant"}""", "invalid_grant")
         }
         val s = sync(VisualizerState(tokens = expired, pendingVerifier = "v", pendingState = "st"))
         s.uploadShot(shot("a").row(), silent = true)
-        Thread.sleep(100)
+        // The refresh spends X's token, then Y signs in, and only then does the
+        // server's invalid_grant for X's token come back.
+        asked.waitFor("the refresh to start")
         s.handleCallback("code", "st", null)
-        Thread.sleep(100)
+        waitFor("the sign-in as Y to land", ::signedInNotice)
         gate.complete(Unit)
         settle()
         assertEquals("y-refresh", stored().tokens?.refreshToken)

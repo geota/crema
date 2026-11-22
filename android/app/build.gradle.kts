@@ -3,6 +3,7 @@ import java.util.Properties
 import javax.inject.Inject
 import net.mullvad.androidrust.CargoBuildTask
 import org.gradle.process.ExecOperations
+import org.gradle.process.ExecOutput
 
 plugins {
     id("com.android.application")
@@ -18,32 +19,34 @@ plugins {
 
 // local.properties (gitignored): sdk.dir plus optional dev overrides
 // (visualizerClientId, rust.cargoCommand) and release signing (release.*). Read once.
-val localProps = Properties().apply {
+val localProps: Properties = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
 
 // Short git SHA stamped into BuildConfig.GIT_SHA so a crash report names the
-// exact build that failed (debug builds all share versionName "0.1"). Best-effort.
+// exact build that failed (debug builds all share versionName "0.1"). Best-effort:
+// "unknown" when git is missing or this is not a git checkout (a source tarball).
+// Run through providers.exec, which Gradle tracks for the configuration cache.
+val gitShaExec: ExecOutput = providers.exec {
+    workingDir = rootProject.projectDir
+    commandLine("git", "rev-parse", "--short", "HEAD")
+    isIgnoreExitValue = true
+}
 val gitSha: String = runCatching {
-    ProcessBuilder("git", "rev-parse", "--short", "HEAD")
-        .directory(rootProject.projectDir)
-        .redirectErrorStream(true)
-        .start()
-        .inputStream.bufferedReader().use { it.readText().trim() }
-        .ifEmpty { "unknown" }
-}.getOrDefault("unknown")
+    if (gitShaExec.result.get().exitValue == 0) gitShaExec.standardOutput.asText.get().trim() else ""
+}.getOrDefault("").ifEmpty { "unknown" }
 
 // Release signing — from CI env (the release workflow base64-decodes the keystore to
 // a file and exports KEYSTORE_FILE / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD) or
 // from local.properties (release.keystoreFile / .storePassword / .keyAlias /
 // .keyPassword). When none are present the `release` build stays UNSIGNED — CI still
 // publishes an installable debug-signed APK alongside it.
-val releaseKeystoreFile = (System.getenv("KEYSTORE_FILE") ?: localProps.getProperty("release.keystoreFile"))
+val releaseKeystoreFile: File? = (System.getenv("KEYSTORE_FILE") ?: localProps.getProperty("release.keystoreFile"))
     ?.let { rootProject.file(it) }?.takeIf { it.exists() }
-val releaseStorePassword = System.getenv("KEYSTORE_PASSWORD") ?: localProps.getProperty("release.storePassword")
-val releaseKeyAlias = System.getenv("KEY_ALIAS") ?: localProps.getProperty("release.keyAlias")
-val releaseKeyPassword = System.getenv("KEY_PASSWORD") ?: localProps.getProperty("release.keyPassword")
+val releaseStorePassword: String? = System.getenv("KEYSTORE_PASSWORD") ?: localProps.getProperty("release.storePassword")
+val releaseKeyAlias: String? = System.getenv("KEY_ALIAS") ?: localProps.getProperty("release.keyAlias")
+val releaseKeyPassword: String? = System.getenv("KEY_PASSWORD") ?: localProps.getProperty("release.keyPassword")
 val hasReleaseSigning = releaseKeystoreFile != null &&
     releaseStorePassword != null && releaseKeyAlias != null && releaseKeyPassword != null
 
@@ -489,7 +492,7 @@ cargo {
 // Depend AGP's per-variant `merge*JniLibFolders` tasks on `cargoBuild` and
 // register the plugin's output dir as an input so the freshly built `.so` is
 // packaged into the APK.
-val rustJniLibsDir = layout.buildDirectory.dir("rustJniLibs/android").get()
+val rustJniLibsDir: Directory = layout.buildDirectory.dir("rustJniLibs/android").get()
 tasks.matching { it.name.matches(Regex("merge.*JniLibFolders")) }.configureEach {
     inputs.dir(rustJniLibsDir)
     dependsOn("cargoBuild")
@@ -564,7 +567,7 @@ abstract class GenerateUniffiBindings : DefaultTask() {
 // in local.properties (an absolute path, so IDE-launched builds without
 // ~/.cargo/bin on PATH still work). The bindgen task below is a hand-written
 // task, not part of the plugin, so it must read the same value itself.
-val localProperties = Properties().apply {
+val localProperties: Properties = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) {
         file.inputStream().use { load(it) }
@@ -572,7 +575,7 @@ val localProperties = Properties().apply {
 }
 val cargoExecutable: String = localProperties.getProperty("rust.cargoCommand") ?: "cargo"
 
-val generateUniffiBindings =
+val generateUniffiBindings: TaskProvider<GenerateUniffiBindings> =
     tasks.register<GenerateUniffiBindings>("generateUniffiBindings") {
         description = "Generate UniFFI Kotlin bindings for de1-ffi."
         group = "rust"
@@ -614,7 +617,7 @@ androidComponents {
 // or served from the build cache (final cohort review 2026-10-28, 04 P3-2).
 // Its directory comes from `cargo metadata`, which honours CARGO_TARGET_DIR
 // and a cargo `build.target-dir`, instead of a hard-coded core/target/debug.
-val coreDir = layout.projectDirectory.dir("../../core")
+val coreDir: Directory = layout.projectDirectory.dir("../../core")
 val hostCoreLibrary: Provider<RegularFile> =
     providers.exec {
         workingDir = coreDir.asFile
@@ -628,7 +631,7 @@ val hostCoreLibrary: Provider<RegularFile> =
 // (RelayFfiRoundTripTest). Only this host library has it: `cargoBuild` (the
 // APK's arm64 library, and so the APK's bindings) never does, and CI's
 // release-symbols check proves the release artifacts carry none.
-val cargoBuildHostCore =
+val cargoBuildHostCore: TaskProvider<Exec> =
     tasks.register<Exec>("cargoBuildHostCore") {
         description = "Build de1-ffi for the host (with test-seeds), for JVM unit tests."
         group = "rust"
@@ -658,6 +661,14 @@ tasks.withType<Test>().configureEach {
     // A hang fails the run instead of holding CI for hours (#310 A5: a store-lock
     // deadlock hung the android job for over two; the suite takes about 21 minutes).
     timeout.set(Duration.ofMinutes(40))
+    // Every class shares one test JVM, and Gradle's default heap is 512 MB.
+    // ShotHistorySizeTest alone fills that (the 1000-shot single file and the
+    // 5,000-row design size: 480 MB live after a full GC), so after the rest of
+    // the suite it ran out, and a CI job hung until the timeout. A bounded heap
+    // with room for it, and an out-of-memory error ends the worker at once
+    // (the task fails naming the executor) instead of leaving threads stuck.
+    maxHeapSize = "2g"
+    jvmArgs("-XX:+ExitOnOutOfMemoryError")
 }
 
 // ---------------------------------------------------------------------------
@@ -670,7 +681,7 @@ tasks.withType<Test>().configureEach {
 // (uniffi-test-bindings.toml), and adds it to the UNIT-TEST sources only. Both
 // sets load the same host library; de1-ffi has no callback interfaces, so
 // they don't contend for registrations.
-val generateUniffiTestBindings =
+val generateUniffiTestBindings: TaskProvider<GenerateUniffiBindings> =
     tasks.register<GenerateUniffiBindings>("generateUniffiTestBindings") {
         description = "Generate test-seeds UniFFI Kotlin bindings (unit tests only)."
         group = "rust"
