@@ -469,6 +469,52 @@ pub const GRINDER_CATALOGUE: &[CatalogueGrinder] = &[
             "https://wilfa.com/pages/uniform-wsfb-use",
         ),
     ),
+    // "(1= fine, 11= coarse)"; the quick start's dial runs 1 to 11 with two
+    // ticks between numbers, 31 settings: a step of a third, stored as the
+    // nearest f32 to 1/3 (30 steps from 1 to 11).
+    entry(
+        "fellow-ode",
+        "Fellow",
+        "Ode",
+        &[
+            "Ode",
+            "Ode Brew Grinder",
+            "Fellow Ode Brew Grinder",
+            "Fellow Ode Gen 1",
+            "Ode Gen 1",
+        ],
+        E,
+        scale(
+            1.0,
+            11.0,
+            1.0 / 3.0,
+            "",
+            "https://cdn.shopify.com/s/files/1/0057/6235/1219/files/Ode-BrewGrinder_QuickStartGuide_ae5a2762-cc34-4f50-9f4d-62b11d28cf1a.pdf",
+        ),
+    ),
+    // The manual: "(1 = fine, 11 = coarse)", its Grind Guide dial 1 to 11
+    // with two ticks between numbers; Fellow: "Ode Gen 2's 31 grind
+    // settings" (fellowproducts.com/pages/compare-grinders). Thirds, as Gen 1.
+    entry(
+        "fellow-ode-gen-2",
+        "Fellow",
+        "Ode Gen 2",
+        &[
+            "Ode Gen 2",
+            "Ode 2",
+            "Fellow Ode 2",
+            "Ode Brew Grinder Gen 2",
+            "Fellow Ode Brew Grinder Gen 2",
+        ],
+        E,
+        scale(
+            1.0,
+            11.0,
+            1.0 / 3.0,
+            "",
+            "https://www.seattlecoffeegear.com/cdn/shop/files/fellow-ode-2-user-manual.pdf",
+        ),
+    ),
 ];
 
 #[cfg(test)]
@@ -540,6 +586,16 @@ mod tests {
     }
 
     #[test]
+    fn the_odes_have_31_settings_from_1_to_11_in_thirds() {
+        for id in ["fellow-ode", "fellow-ode-gen-2"] {
+            let s = catalogue_entry(id).unwrap().scale;
+            assert_eq!((s.min, s.max), (1.0, 11.0), "{id}");
+            let steps = (s.max - s.min) / s.step;
+            assert!((steps - 30.0).abs() < 1e-4, "{id}: {steps}");
+        }
+    }
+
+    #[test]
     fn the_motto_80_is_0_to_999_microns_in_steps_of_1() {
         let g = catalogue_entry_for_name("bookoo motto 80").unwrap();
         assert_eq!(
@@ -581,6 +637,10 @@ mod tests {
             ("Sculptor 064S Gen II", "timemore-sculptor-064s"),
             ("Wilfa Uniform", "wilfa-uniform"),
             ("WSFBS-200B", "wilfa-uniform"),
+            ("Fellow Ode", "fellow-ode"),
+            ("Ode Brew Grinder", "fellow-ode"),
+            ("Fellow Ode Gen 2", "fellow-ode-gen-2"),
+            ("ode2", "fellow-ode-gen-2"),
         ] {
             assert_eq!(
                 catalogue_entry_for_name(name).map(|g| g.id),
@@ -616,7 +676,7 @@ mod tests {
             "Fellow Opus",
             "Baratza Sette 270",
             "Lagom P64",
-            "Fellow Ode Gen 2",
+            "Fellow Opus",
         ] {
             assert_eq!(catalogue_entry_for_name(name), None, "{name}");
         }
