@@ -4001,6 +4001,12 @@ class LibraryController(
         // for a replay), with the row recording what it took. Read from what
         // the bags hold now. Web's moveShotBag is the same rule.
         val toBagId = bean?.id
+        // The flags describe the row, not the device (REVIEW-521 M1): on a
+        // remote, only the hub's watched-shot copies are mirror rows, and they
+        // took nothing here (0, or null from an older build). A row this device
+        // recorded and debited itself (a logged brew, a shot from when it held
+        // the machine) moves as on any device: credit the old bag, debit the new.
+        val mirrorRow = s.mirror != null && !shot.isBrewLog && (shot.bagDebitG ?: 0f) <= 0f
         val now = System.currentTimeMillis()
         var planned: ShotBagMove? = null
         editBeans { rows ->
@@ -4013,12 +4019,11 @@ class LibraryController(
                     toBag = held(toBagId)?.weight(),
                     bagDebit = shot.bagDebitG,
                     doseG = shot.doseG,
-                    remote = s.mirror != null,
+                    remote = mirrorRow,
                     replay = shot.replay,
-                    // On a remote a row with no recorded debit is its mirror copy
-                    // of the hub's shot: before `shot_debit` this shell wrote null
-                    // for those, and they took nothing (REVIEW-518 follow-up 1).
-                    mirrorRow = s.mirror != null,
+                    // Before `shot_debit` this shell wrote null on a remote's mirror
+                    // rows, and they took nothing (REVIEW-518 follow-up 1).
+                    mirrorRow = mirrorRow,
                 ),
             )
             planned = plan
