@@ -21,7 +21,7 @@ import coffee.crema.core.Grinder
 
 /** The library file this device keeps, from this state: every row, grinders included, and both pointers. */
 /** The library as saved and synced: bag tombstones included (#488 review S5). */
-internal fun MainUiState.libraryFile(): BeanLibrary = BeanLibrary(beans.withTombstones(), roasters, activeBeanId, grinders, activeGrinderId)
+internal fun MainUiState.libraryFile(): BeanLibrary = BeanLibrary(beans.withTombstones(), roasters.withTombstones(), activeBeanId, grinders, activeGrinderId)
 
 /** The grinders the pickers list: owned, not archived. */
 val MainUiState.liveGrinders: List<Grinder> get() = grinders.filter { it.isLive }

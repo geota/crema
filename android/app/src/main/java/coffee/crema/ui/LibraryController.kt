@@ -285,6 +285,11 @@ class LibraryController(
      */
     private var draftProfileJson: String? = null
 
+    /** The profile the editor opened on (REVIEW-FINAL-2 N2): a Save merges what the
+     *  user changed against it onto the stored row, so a pin or a Quick Save written
+     *  meanwhile stays. Set when the editor opens, and to what a Save wrote. */
+    private var editorBaseJson: String? = null
+
     /** The aborted shot held for the undo window (not yet in history), and
      *  what it does when the Undo keeps it. */
     private var discardedShot: Pair<StoredShot, ShotEffects>? = null
@@ -1085,6 +1090,7 @@ class LibraryController(
     /** Open an existing saved (custom) profile in the editor. */
     fun startEditProfile(id: String) {
         draftProfileJson = null
+        editorBaseJson = customProfilesJson.firstOrNull { profileIdOf(it, json) == id }
         updateUi { it.copy(editingProfileId = id, draftProfile = null) }
     }
 
@@ -1140,16 +1146,20 @@ class LibraryController(
             return
         }
         draftProfileJson = fullJson
+        editorBaseJson = fullJson
         updateUi { it.copy(editingProfileId = thin.id, draftProfile = thin) }
     }
 
     /**
      * Save the editor's non-curve edits. Patches only the edited fields into the
      * profile's complete JSON base (the draft for a new / duplicated profile, else
-     * the stored custom), so every wire-relevant field — per-segment temp / mode /
-     * ramp, notes, beverage type — round-trips untouched to the DE1. Upserts into
-     * the custom store (newest first for a new profile; in place for an edit),
-     * refreshes the merged list, and persists.
+     * the custom the editor opened on), so every wire-relevant field — per-segment
+     * temp / mode / ramp, notes, beverage type — round-trips untouched to the DE1.
+     * An edit of a stored custom then goes through the core's `merge_profile_edit`
+     * (REVIEW-FINAL-2 N2): only the fields the user changed land on the row as it
+     * is stored now, so a pin or an in-place Quick Save made meanwhile stays.
+     * Upserts into the custom store (newest first for a new profile; in place for
+     * an edit), refreshes the merged list, and persists.
      *
      * @param segments (target, time) per existing segment, in order — the non-curve
      *   editor never adds / removes segments, so this matches the base length.
@@ -1171,10 +1181,11 @@ class LibraryController(
         tankTemperatureC: Float,
         segments: List<SegmentEdit>,
     ) {
-        val isExisting = customProfilesJson.any { profileIdOf(it, json) == id }
+        val current = customProfilesJson.firstOrNull { profileIdOf(it, json) == id }
+        val isExisting = current != null
         val base = when {
             draftProfileJson != null && uiState().editingProfileId == id -> draftProfileJson
-            isExisting -> customProfilesJson.firstOrNull { profileIdOf(it, json) == id }
+            isExisting -> editorBaseJson?.takeIf { uiState().editingProfileId == id && profileIdOf(it, json) == id } ?: current
             else -> null
         }
         if (base == null) {
@@ -1206,7 +1217,16 @@ class LibraryController(
         }
         // The saved brew temp is the first step's (the editor's field shifted
         // every step as it moved; a direct segment 0 edit moves it too).
-        val saved = derivedBrewTemp(patched)
+        val edited = derivedBrewTemp(patched)
+        // A stored custom: what the user changed, onto the row as it is now.
+        val saved = if (current == null) edited else runCatching {
+            val opened = derivedBrewTemp(coffee.crema.profiles.profileEditorSeedJson(base, json))
+            coffee.crema.profiles.mergeProfileSave(opened, edited, current)
+        }.getOrElse {
+            appendLog("Save profile failed: ${it.message}")
+            return
+        }
+        editorBaseJson = saved
         customProfilesJson = if (isExisting) {
             customProfilesJson.map { if (profileIdOf(it, json) == id) saved else it }
         } else {
@@ -1231,6 +1251,7 @@ class LibraryController(
     /** Close the editor without saving (discards any new / duplicated draft). */
     fun cancelProfileEdit() {
         draftProfileJson = null
+        editorBaseJson = null
         updateUi { it.copy(editingProfileId = null, draftProfile = null) }
     }
 
@@ -1896,9 +1917,9 @@ class LibraryController(
                 // Bag tombstones too, named, so Replace keeps them (#488 review S5).
                 beans = s.beans.withTombstones().map { it.id },
                 deletedBeans = s.beans.withTombstones().filter { it.deletedAt != null }.map { it.id },
-                roasters = s.roasters.map { it.id },
-                // Roaster tombstones too (#488 review SF1).
-                deletedRoasters = s.roasters.filter { it.deletedAt != null }.map { it.id },
+                // Roaster tombstones too, named, so Replace keeps them (#488 review SF1).
+                roasters = s.roasters.withTombstones().map { it.id },
+                deletedRoasters = s.roasters.withTombstones().filter { it.deletedAt != null }.map { it.id },
                 // #488: grinder records, archived and tombstones included, and the device's pointer.
                 grinders = s.grinders.map { it.id },
                 activeGrinderId = s.activeGrinderId,
@@ -2381,7 +2402,8 @@ class LibraryController(
     ): Pair<String?, List<Roaster>> {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return null to roasters
-        val existing = roasters.firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
+        // A tombstone (#488 review SF1) is deleted: a bag is never filed under it by name.
+        val existing = roasters.firstOrNull { it.deletedAt == null && it.name.equals(trimmed, ignoreCase = true) }
         return if (existing != null) {
             existing.id to roasters
         } else {
@@ -2738,7 +2760,7 @@ class LibraryController(
                 // the typed name (find-or-create) as before.
                 val (roasterId, roasters) = if (roasterPick != null) {
                     val row = coffee.crema.beans.pickedRoasterRow(roasterPick) { name -> newRoaster(name, now) }
-                    val held = rows.roasters.firstOrNull { it.id == row.id }
+                    val held = rows.roasters.firstOrNull { it.id == row.id && it.deletedAt == null }
                     if (held == null) {
                         // A seed is created; a matched row that vanished since → by name.
                         if (roasterPick.isNew) row.id to (rows.roasters + row) else resolveRoaster(roasterName, rows.roasters, now)
@@ -2754,8 +2776,16 @@ class LibraryController(
                     // The name it already files under: keep that roaster, rather than
                     // whichever row of that name comes first.
                     val filed = current?.roasterId?.let { rid -> rows.roasters.firstOrNull { it.id == rid } }
-                    if (filed != null && filed.name.equals(roasterName.trim(), ignoreCase = true)) filed.id to rows.roasters.toList()
-                    else resolveRoaster(roasterName, rows.roasters, now)
+                    when {
+                        // A bag a "this device only" delete left under a roaster
+                        // tombstone shows no roaster here; left blank, it keeps
+                        // that link, so the push never clears it on Visualizer
+                        // (#488 review SF1).
+                        filed != null && filed.deletedAt != null && roasterName.isBlank() -> filed.id to rows.roasters.toList()
+                        filed != null && filed.deletedAt == null && filed.name.equals(roasterName.trim(), ignoreCase = true) ->
+                            filed.id to rows.roasters.toList()
+                        else -> resolveRoaster(roasterName, rows.roasters, now)
+                    }
                 }
                 // The form holds what the bag was when it opened: only what the user
                 // changed lands, so a debit or a sync since then stands.
@@ -3395,7 +3425,8 @@ class LibraryController(
         val now = System.currentTimeMillis()
         editRoasters { rows ->
             rows.mapped {
-                if (it.id == id) it.copy(
+                // A tombstone stays as the delete left it (#488 review SF1).
+                if (it.id == id && it.deletedAt == null) it.copy(
                     name = name.trim(),
                     website = website?.takeIf { w -> w.isNotBlank() },
                     city = city?.takeIf { c -> c.isNotBlank() },
@@ -3414,12 +3445,18 @@ class LibraryController(
      * bags (roaster cleared), true deletes them too. The core's
      * `plan_roaster_delete` decides which bags go and the Visualizer ids;
      * [alsoOnVisualizer] then deletes those remote copies (bags first, then the
-     * roaster). Persisted.
+     * roaster). A roaster on Visualizer stays as a tombstone, and "this device
+     * only" ([alsoOnVisualizer] off) leaves its bags filed under it, so the next
+     * pull doesn't add it back and Visualizer's bags keep their roaster (#488
+     * review SF1). Persisted.
      */
     fun deleteRoaster(id: String, alsoOnVisualizer: Boolean = false, cascade: Boolean = false) {
         val s = uiState()
         val plan = runCatching {
-            coffee.crema.beans.planRoasterDelete(json, s.roasters, s.beans, id, cascade, s.activeBeanId)
+            coffee.crema.beans.planRoasterDelete(
+                json, s.roasters.withTombstones(), s.beans.withTombstones(), id, cascade, s.activeBeanId,
+                localOnly = !alsoOnVisualizer,
+            )
         }.getOrNull() ?: return
         val name = s.roasters.firstOrNull { it.id == id }?.name.orEmpty()
         val now = System.currentTimeMillis()
@@ -3478,7 +3515,7 @@ class LibraryController(
     /** Un-merge a tagged duplicate: clear its duplicate-of pointer (its bags stay where they are). Persisted. */
     fun unmergeRoaster(id: String) {
         val now = System.currentTimeMillis()
-        editRoasters { rows -> rows.mapped { if (it.id == id) it.copy(canonicalRoasterId = null, updatedAt = now) else it } }
+        editRoasters { rows -> rows.mapped { if (it.id == id && it.deletedAt == null) it.copy(canonicalRoasterId = null, updatedAt = now) else it } }
         persistLibrary()
     }
 
