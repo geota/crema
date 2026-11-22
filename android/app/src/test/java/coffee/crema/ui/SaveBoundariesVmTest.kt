@@ -393,6 +393,28 @@ class SaveBoundariesVmTest {
 
     // ── #488 review S5: a bag deleted here stays deleted ────────────────────
 
+    /** #41: a bag deleted while its first upload runs keeps a tombstone (the
+     *  core matches the remote it creates to it), and one whose upload isn't
+     *  running goes outright. */
+    @Test
+    fun `a bag deleted while its first upload runs keeps a tombstone`() {
+        val vm = vmWith(listOf(bag("a"), bag("b")), active = "b")
+        coffee.crema.visualizer.BagFirstUploads.start("a")
+        try {
+            vm.deleteBean("a")
+            VmHarness.idle()
+        } finally {
+            coffee.crema.visualizer.BagFirstUploads.done("a")
+        }
+        val rows = VmHarness.ownState(vm).beans.withTombstones()
+        assertNotNull(rows.single { it.id == "a" }.deletedAt, "kept, as a tombstone")
+        assertEquals(listOf("b"), VmHarness.ownState(vm).beans.map { it.id }, "hidden from the library")
+        vm.deleteBean("b")
+        VmHarness.idle()
+        assertTrue(VmHarness.ownState(vm).beans.withTombstones().none { it.id == "b" }, "no upload: removed outright")
+    }
+
+
     /** REVIEW-516 follow-up 1: the editor's Save over a bag tombstoned while
      *  it was open writes nothing to the tombstone, and says so. */
     @Test

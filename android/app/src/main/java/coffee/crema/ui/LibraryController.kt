@@ -897,8 +897,6 @@ class LibraryController(
         val previousJson: String,
         /** The Quick-Controls override the Save folded into the profile. */
         val previousBrew: BrewParams?,
-        /** The bag had no grind rows at all before the Save (null, not []): Undo leaves it so (#13). */
-        val bagHadNoGrinds: Boolean = false,
     )
 
     private var quickSaveUndo: QuickSaveUndo? = null
@@ -1004,7 +1002,6 @@ class LibraryController(
                                 grindsWereNone = was.grinds == null,
                             ),
                         ),
-                        bagHadNoGrinds = was.grinds == null,
                     )
                 }
             }
@@ -1055,9 +1052,9 @@ class LibraryController(
             val st = uiState()
             if (st.activeProfileId == profileId && st.brewParams == null) u.previousBrew?.let(restoreBrewParams)
         }
-        plan.restoreBean?.let { restored ->
-            // A bag that had no rows before the Save goes back to none, not [] (#13).
-            val back = if (u.bagHadNoGrinds && restored.grinds.isNullOrEmpty()) restored.copy(grinds = null) else restored
+        // A bag that had no rows before the Save goes back to none, not []: the
+        // core's restore carries it (`grindsWereNone`, #44), so no guard here.
+        plan.restoreBean?.let { back ->
             var put = false
             editBeans { rows ->
                 rows.mapped { b ->
@@ -3311,7 +3308,10 @@ class LibraryController(
      *
      * A bag that is on Visualizer leaves a tombstone, in either scope: the row
      * stays, hidden, with `deletedAt` set and no photo, so the next pull
-     * doesn't add it back (#488 review S5). Any other bag is removed outright.
+     * doesn't add it back (#488 review S5). So does one whose first upload is
+     * still running ([coffee.crema.visualizer.BagFirstUploads], #41): the
+     * core's pull matches the remote it creates to the tombstone. Any other
+     * bag is removed outright.
      */
     fun deleteBean(id: String, alsoOnVisualizer: Boolean = false) {
         val doomed = uiState().beans.firstOrNull { it.id == id } ?: return
@@ -3326,7 +3326,10 @@ class LibraryController(
                         rows.beans.mapNotNull { b ->
                             when {
                                 b.id != id -> b
-                                !b.visualizerId.isNullOrEmpty() && b.deletedAt == null -> coffee.crema.beans.beanTombstone(b, now)
+                                // On Visualizer, or on its way there: a first upload still
+                                // running may yet create it (#41).
+                                b.deletedAt == null && (!b.visualizerId.isNullOrEmpty() || coffee.crema.visualizer.BagFirstUploads.running(b.id)) ->
+                                    coffee.crema.beans.beanTombstone(b, now)
                                 b.deletedAt != null -> b
                                 else -> null
                             }
@@ -3974,11 +3977,13 @@ class LibraryController(
      * (REVIEW-FINAL-2 N7, web History's `setGrinderModel`). The id follows the
      * name (REVIEW-499 M2): the grinder the core's `grinder_named` finds for
      * it ("Niche" names an owned Niche Zero), else none, so lookups by id
-     * never keep pointing at the old grinder. The name is kept as typed.
+     * never keep pointing at the old grinder. The name is kept as typed,
+     * through the core's `clean_grinder_name`.
      * Persisted; mirrors to the uploaded copy like [updateShot].
      */
     fun setShotGrinder(id: String, name: String?) {
-        val typed = name?.trim()?.takeIf { it.isNotEmpty() }
+        // Cleaned as the core stores a grinder's name (REVIEW-513 1): no control characters.
+        val typed = name?.let { coffee.crema.core.cleanGrinderName(it) }?.takeIf { it.isNotEmpty() }
         val shot = findShot(id) ?: return
         if (shot.grinderModel == typed) return
         val grinderId = uiState().grinders.grinderNamed(typed)?.id

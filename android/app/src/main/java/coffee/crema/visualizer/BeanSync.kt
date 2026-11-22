@@ -506,38 +506,51 @@ class BeanSyncRunner(
                     ),
                 )
                 for (item in plan) {
-                    val local = bean(item.localId) ?: continue
-                    if (keptOff(item.create, local.createdAt)) continue
-                    if (premiumLocked) {
-                        if (item.create) {
-                            skipped++
-                            entry("skip", "bean", local.id, local.name, "premium required")
-                        }
-                        continue
-                    }
-                    // Tombstones included (REVIEW-518 follow-up 2): a bag a "this
-                    // device only" roaster delete left filed under the tombstone
-                    // keeps its roaster on Visualizer.
-                    val remoteRoasterId = core.bagRoasterRemoteId(
-                        buildJsonObject {
-                            put("bean", json.encodeToJsonElement(Bean.serializer(), local))
-                            put("roasters", json.encodeToJsonElement(ListSerializer(Roaster.serializer()), roasters))
-                        }.toString(),
-                    )
+                    // A create is marked running before the row is read, so a delete
+                    // from now on keeps a tombstone (#41).
+                    if (item.create) BagFirstUploads.start(item.localId)
                     try {
-                        val vid = uploadBean(local, remoteRoasterId)
-                        // Not a local edit: the row matches the remote now.
-                        if (item.create) onBean(local.id) { it.copy(visualizerId = vid) }
-                        pushed++
-                        entry("push", "bean", local.id, local.name)
-                    } catch (e: VisualizerError.PremiumGated) {
-                        lockPremium()
-                        entry("skip", "bean", local.id, local.name, if (item.create) "premium required" else describe(e))
-                    } catch (e: VisualizerError) {
-                        writeFailed(e)
-                        entry("skip", "bean", local.id, local.name, describe(e))
+                        pushBag(item)
+                    } finally {
+                        if (item.create) BagFirstUploads.done(item.localId)
                     }
                 }
+            }
+        }
+
+        /** Push one bag per the core plan [item]: a create (POST) or an update (PATCH). */
+        suspend fun pushBag(item: BeanPushItem) {
+            // A bag deleted since the plan (a tombstone now, #41) isn't sent.
+            val local = bean(item.localId)?.takeIf { it.deletedAt == null } ?: return
+            if (keptOff(item.create, local.createdAt)) return
+            if (premiumLocked) {
+                if (item.create) {
+                    skipped++
+                    entry("skip", "bean", local.id, local.name, "premium required")
+                }
+                return
+            }
+            // Tombstones included (REVIEW-518 follow-up 2): a bag a "this
+            // device only" roaster delete left filed under the tombstone
+            // keeps its roaster on Visualizer.
+            val remoteRoasterId = core.bagRoasterRemoteId(
+                buildJsonObject {
+                    put("bean", json.encodeToJsonElement(Bean.serializer(), local))
+                    put("roasters", json.encodeToJsonElement(ListSerializer(Roaster.serializer()), roasters))
+                }.toString(),
+            )
+            try {
+                val vid = uploadBean(local, remoteRoasterId)
+                // Not a local edit: the row matches the remote now.
+                if (item.create) onBean(local.id) { it.copy(visualizerId = vid) }
+                pushed++
+                entry("push", "bean", local.id, local.name)
+            } catch (e: VisualizerError.PremiumGated) {
+                lockPremium()
+                entry("skip", "bean", local.id, local.name, if (item.create) "premium required" else describe(e))
+            } catch (e: VisualizerError) {
+                writeFailed(e)
+                entry("skip", "bean", local.id, local.name, describe(e))
             }
         }
 
