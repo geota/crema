@@ -189,7 +189,8 @@ class MultiDeviceCopyTest {
     }
 
     /** Validation D4: no user-facing string says "mirror" any more (hub and
-     *  remote wording). Log lines and the wire's `"mirror"` scope are exempt. */
+     *  remote wording). Log lines, the wire's `"mirror"` scope and the shot
+     *  row's `"mirrorCopy"` key (core `StoredShot::mirror_copy`) are exempt. */
     @Test
     fun `no user-facing string says mirror`() {
         val literal = Regex("\"[^\"\\n]*[Mm]irror[^\"\\n]*\"")
@@ -200,7 +201,7 @@ class MultiDeviceCopyTest {
                     val code = line.trim()
                     if (code.startsWith("*") || code.startsWith("//") || code.startsWith("/*")) return@flatMap emptyList()
                     if (listOf("appendLog(", "Log.", "log(").any { it in line }) return@flatMap emptyList()
-                    literal.findAll(line).map { it.value }.filter { it != "\"mirror\"" }.map { "$path:${i + 1}: $it" }.toList()
+                    literal.findAll(line).map { it.value }.filter { it != "\"mirror\"" && it != "\"mirrorCopy\"" }.map { "$path:${i + 1}: $it" }.toList()
                 }
             }
         assertEquals(emptyList(), hits)

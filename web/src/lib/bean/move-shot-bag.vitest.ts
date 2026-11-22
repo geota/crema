@@ -145,6 +145,16 @@ describe('moveShotBag', () => {
 		expect(getHistoryStore().get(shot.id)?.bagDebit).toBe(0);
 	});
 
+	it('moves nothing for an Android remote\'s mirror copy from a backup (#488 follow-up 51)', () => {
+		bag('a', 250, 100);
+		bag('b', 250, 200);
+		const shot = { ...row('a'), mirrorCopy: true };
+		moveShotBag(shot, 'b');
+		expect(remaining('a')).toBe(100);
+		expect(remaining('b')).toBe(200);
+		expect(getHistoryStore().get(shot.id)?.bagDebit).toBe(0);
+	});
+
 	it('records 0 moving to a bag this library doesn\'t hold', () => {
 		bag('a', 250, 100);
 		const shot = row('a', 18);

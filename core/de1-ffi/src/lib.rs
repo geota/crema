@@ -933,8 +933,18 @@ pub fn add_another_grinder_json(
         .map_err(crema_err)
 }
 
+/// A grinder name as stored (REVIEW-513 follow-up 1): control characters,
+/// newlines included, become one space, and the ends are trimmed. See
+/// [`de1_domain::clean_grinder_name`].
+#[uniffi::export]
+#[must_use]
+pub fn clean_grinder_name(name: String) -> String {
+    de1_domain::clean_grinder_name(&name)
+}
+
 /// The newest shot grind for a grinder among a bag's last grinds, by id or
-/// through the catalogue's aliases (REVIEW-CORE M1): `{lastGrinds,
+/// by its own name or a catalogue alias of that model, never a numbered
+/// second unit's (REVIEW-CORE M1, #488 follow-up 43): `{lastGrinds,
 /// grinder}` in, a `LastGrind` JSON or `null` out. See
 /// [`de1_domain::newest_shot_grind`].
 ///
@@ -1587,8 +1597,9 @@ pub fn fl_oz_to_ml(fl_oz: f32) -> f32 {
 // re-port. Each mirrors the wasm export of the same name.
 
 /// Reconcile a remote bean pull against the local library → a JSON array of
-/// `BeanReconcileAction`. `payload` is the sync-input JSON. Mirrors the wasm
-/// `reconcileBeans`; see [`de1_domain::reconcile_beans_json`].
+/// `BeanReconcileAction`. `payload` is the sync-input JSON (raw pulled bags).
+/// Mirrors the wasm `reconcileBeans`; see [`de1_domain::reconcile_beans_json`]
+/// and [`de1_domain::reconcile_pulled_bags`].
 ///
 /// # Errors
 ///

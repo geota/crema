@@ -54,6 +54,7 @@ interface ShotMeta {
     val visualizerUpdatedAt: Long?
     val pinned: Boolean
     val replay: Boolean
+    val mirrorCopy: Boolean
     val machineSerial: String?
     val machineFirmware: String?
     val machineModel: String?
@@ -99,6 +100,7 @@ data class ShotRow(
     override val visualizerUpdatedAt: Long? = null,
     override val pinned: Boolean = false,
     override val replay: Boolean = false,
+    override val mirrorCopy: Boolean = false,
     override val machineSerial: String? = null,
     override val machineFirmware: String? = null,
     override val machineModel: String? = null,
@@ -119,7 +121,7 @@ fun StoredShot.toRow(summary: ShotSummary): ShotRow = ShotRow(
     notes = notes, nextPlan = nextPlan, barista = barista, drinker = drinker, grinderModel = grinderModel, grinderId = grinderId,
     tags = tags, preinfuseTargetS = preinfuseTargetS, stopOnWeight = stopOnWeight, autoTare = autoTare,
     stopReason = stopReason, stopEstimated = stopEstimated, privacy = privacy, visualizerId = visualizerId,
-    decentId = decentId, visualizerUpdatedAt = visualizerUpdatedAt, pinned = pinned, replay = replay, machineSerial = machineSerial,
+    decentId = decentId, visualizerUpdatedAt = visualizerUpdatedAt, pinned = pinned, replay = replay, mirrorCopy = mirrorCopy, machineSerial = machineSerial,
     machineFirmware = machineFirmware, machineModel = machineModel, brewMethod = brewMethod,
     brewMethodLabel = brewMethodLabel, recipeName = recipeName, waterG = waterG, brewTempC = brewTempC,
     summary = summary,
@@ -142,7 +144,7 @@ fun ShotRow.withHeavy(
     grinderModel = grinderModel, grinderId = grinderId, samples = samples, tags = tags, preinfuseTargetS = preinfuseTargetS,
     stopOnWeight = stopOnWeight, autoTare = autoTare, stopReason = stopReason, stopEstimated = stopEstimated,
     privacy = privacy, visualizerId = visualizerId, decentId = decentId, visualizerUpdatedAt = visualizerUpdatedAt,
-    pinned = pinned, replay = replay, machineSerial = machineSerial, machineFirmware = machineFirmware, machineModel = machineModel,
+    pinned = pinned, replay = replay, mirrorCopy = mirrorCopy, machineSerial = machineSerial, machineFirmware = machineFirmware, machineModel = machineModel,
     brewMethod = brewMethod, brewMethodLabel = brewMethodLabel, recipeName = recipeName, waterG = waterG,
     brewTempC = brewTempC, brewSeries = brewSeries,
 )

@@ -199,7 +199,8 @@ export function runQuickSave(
 							beanId: plan.beanId,
 							grinderId: plan.grinderId ?? NO_GRINDER_ID,
 							before: beforeRow,
-							written: plain(rowFor(saved.bean, plan.grinderId))
+							written: plain(rowFor(saved.bean, plan.grinderId)),
+							grindsWereNone: before?.grinds == null
 						}
 					},
 					grindsWereNull: before?.grinds == null

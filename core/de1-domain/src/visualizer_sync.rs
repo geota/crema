@@ -717,7 +717,7 @@ pub enum BeanReconcileAction {
 ///
 /// A roaster deleted on this device is a tombstone (`deleted_at` set, the row
 /// kept with its `visualizer_id`; #488 review SF1, as bags in
-/// [`reconcile_beans`]). Live rows match first; a remote that then matches
+/// [`reconcile_pulled_bags`]). Live rows match first; a remote that then matches
 /// only a tombstone (by Visualizer id, or an unbound one by signature or name)
 /// gets no action: never added again, never written over, never bound.
 #[must_use]
@@ -771,77 +771,10 @@ pub fn reconcile_roasters(
     actions
 }
 
-/// Reconcile a remote bean pull against the local library. Mirrors `runSync`
-/// step 3: match by (`visualizer_id` both-set-and-equal) OR (same `id`);
-/// else by signature over an unbound, non-deleted local →
-/// [`BeanReconcileAction::Replace`]; else [`BeanReconcileAction::Add`].
-///
-/// A bag deleted on this device is a tombstone (`deleted_at` set, the row kept
-/// with its `visualizer_id`; geota/crema#488 review S5). A remote that only
-/// matches a tombstone gets no action: never added again, never written over
-/// the tombstone. Live rows match first, so a bag the user adds again (same
-/// signature, unbound) binds to the remote as a new bag would.
-///
-/// Last-write-wins against the sync baseline `last_sync_at` (the previous
-/// completed sync, unix ms; `None` = never synced):
-///
-/// - A local already **bound** to this remote and edited since the baseline
-///   (`updated_at > last_sync_at`) is kept — no action — so the push leg sends
-///   the local edit. Visualizer's list rows carry no edit time, so a local edit
-///   can't be weighed against a remote one; the edit made here wins.
-/// - Otherwise a matched local is replaced by the remote, but the replacement
-///   keeps the local `id`, `created_at` and **`updated_at`** (the pull is not a
-///   local edit, so it must not look like one to the next push leg), plus the
-///   Crema-only fields the wire never carries (`tags`, `image_ref`,
-///   `linked_profile_id`, `cost`, `roast_type`, `deleted_at`, and the saved
-///   `grinds` and their star, #488 review F7).
-/// - A replacement identical to the local row is skipped (no churn).
-///
-/// `roaster_names` maps a local roaster id → its display name, so the
-/// signature can fold in the roaster name for both the remote and each local
-/// bean (the TS resolves this via `library.getRoaster(id)?.name`).
-#[must_use]
-pub fn reconcile_beans(
-    local: &[Bean],
-    remote: &[Bean],
-    roaster_names: &HashMap<String, String>,
-    last_sync_at: Option<i64>,
-) -> Vec<BeanReconcileAction> {
-    let name_of = |roaster_id: &Option<String>| -> Option<String> {
-        roaster_id
-            .as_ref()
-            .and_then(|id| roaster_names.get(id).cloned())
-    };
-    let mut actions = Vec::with_capacity(remote.len());
-    for decoded in remote {
-        if let Some(m) = match_local_bean(local, decoded, &name_of) {
-            if m.deleted_at.is_some() {
-                continue;
-            }
-            let bound = m.visualizer_id.is_some() && m.visualizer_id == decoded.visualizer_id;
-            let edited_here = last_sync_at.is_some_and(|ls| m.updated_at > ls);
-            if bound && edited_here {
-                continue;
-            }
-            let merged = pulled_over_local(m, decoded);
-            if merged != *m {
-                actions.push(BeanReconcileAction::Replace {
-                    local_id: m.id.clone(),
-                    remote: merged,
-                });
-            }
-        } else {
-            actions.push(BeanReconcileAction::Add {
-                remote: decoded.clone(),
-            });
-        }
-    }
-    actions
-}
-
 /// The local bean a decoded remote matches, live rows first: a live row by
 /// (`visualizer_id` both-set-and-equal) OR (same `id`); else a live unbound
-/// row by signature; else a tombstone by id (the caller skips it).
+/// row by signature; else a tombstone by id, or an unbound tombstone by
+/// signature (the caller skips either).
 fn match_local_bean<'a>(
     local: &'a [Bean],
     decoded: &Bean,
@@ -851,25 +784,26 @@ fn match_local_bean<'a>(
         (decoded.visualizer_id.is_some() && b.visualizer_id == decoded.visualizer_id)
             || b.id == decoded.id
     };
+    let decoded_sig = signature_for_bean(
+        &decoded.name,
+        name_of(&decoded.roaster_id).as_deref(),
+        decoded.roasted_on.as_deref(),
+    );
+    let unbound_same_sig = |b: &&Bean| {
+        b.visualizer_id.is_none()
+            && signature_for_bean(
+                &b.name,
+                name_of(&b.roaster_id).as_deref(),
+                b.roasted_on.as_deref(),
+            ) == decoded_sig
+    };
     let live = || local.iter().filter(|b| b.deleted_at.is_none());
+    let tombstones = || local.iter().filter(|b| b.deleted_at.is_some());
     live()
         .find(same_id)
-        .or_else(|| {
-            let decoded_sig = signature_for_bean(
-                &decoded.name,
-                name_of(&decoded.roaster_id).as_deref(),
-                decoded.roasted_on.as_deref(),
-            );
-            live().find(|b| {
-                b.visualizer_id.is_none()
-                    && signature_for_bean(
-                        &b.name,
-                        name_of(&b.roaster_id).as_deref(),
-                        b.roasted_on.as_deref(),
-                    ) == decoded_sig
-            })
-        })
-        .or_else(|| local.iter().find(same_id))
+        .or_else(|| live().find(unbound_same_sig))
+        .or_else(|| tombstones().find(same_id))
+        .or_else(|| tombstones().find(unbound_same_sig))
 }
 
 /// One pulled bag as the shell hands it to [`reconcile_pulled_bags`]: the RAW
@@ -888,14 +822,43 @@ pub struct PulledBag {
     pub fallback_id: String,
 }
 
-/// Reconcile a pull of RAW remote bags against the local library — the
-/// kernel both shells run. Matching and the last-sync rule are
-/// [`reconcile_beans`]'s; the difference is the merge: a matched local takes
-/// only the keys the remote row carries
+/// Reconcile a pull of RAW remote bags against the local library: the
+/// kernel both shells run (`runSync` step 3). Each remote is decoded
+/// ([`crate::visualizer_wire::bean_from_wire`], from the detail when the shell
+/// fetched it) and matched: by (`visualizer_id` both-set-and-equal) OR (same
+/// `id`); else by signature over an unbound live local →
+/// [`BeanReconcileAction::Replace`]; else [`BeanReconcileAction::Add`] of the
+/// decoded bag, in full.
+///
+/// A matched local takes only the keys the remote row carries
 /// ([`crate::bean_sync::merge_pulled_bag`]), so a thin list row can never
-/// blank its details, and Crema-only fields are never touched. A new bag is
-/// decoded in full ([`crate::visualizer_wire::bean_from_wire`]) — from the
-/// detail when the shell fetched it.
+/// blank its details, and Crema-only fields (tags, photo, links, cost, the
+/// saved grinds and their star, #488 review F7) are never touched. The
+/// replacement keeps the local `id`, `created_at` and `updated_at` (the pull
+/// is not a local edit, so it must not look like one to the next push leg).
+/// A replacement identical to the local row is skipped (no churn).
+///
+/// **Bags deleted here stay deleted** (geota/crema#488 review S5). A bag
+/// deleted on this device is a tombstone (`deleted_at` set). A remote that
+/// matches only a tombstone gets no action: never added again, never written
+/// over the tombstone. It matches one by Visualizer id or `id`, or, for a
+/// tombstone that was never bound (deleted before its first upload bound it,
+/// #488 follow-up 41), by signature. Live rows match first, so a bag the user
+/// adds again here (same signature, unbound) binds to the remote as a new bag
+/// would. The trade-off: while an unbound tombstone stays, an identical bag
+/// added on purpose on another device (same name, roaster and roast date)
+/// isn't pulled here; adding it again here binds it.
+///
+/// Last-write-wins against the sync baseline `last_sync_at` (the previous
+/// completed sync, unix ms; `None` = never synced): a local already **bound**
+/// to this remote and edited since the baseline (`updated_at >
+/// last_sync_at`) is kept, no action, so the push leg sends the local edit.
+/// Visualizer's list rows carry no edit time, so a local edit can't be
+/// weighed against a remote one; the edit made here wins.
+///
+/// `roaster_names` maps a local roaster id → its display name, so the
+/// signature can fold in the roaster name for both the remote and each local
+/// bean (the TS resolves this via `library.getRoaster(id)?.name`).
 #[must_use]
 pub fn reconcile_pulled_bags(
     local: &[Bean],
@@ -946,23 +909,6 @@ pub fn reconcile_pulled_bags(
     actions
 }
 
-/// The decoded remote laid over its local match: the remote's Visualizer
-/// fields, the local's identity, timestamps and Crema-only fields.
-fn pulled_over_local(local: &Bean, remote: &Bean) -> Bean {
-    let mut out = remote.clone();
-    out.id.clone_from(&local.id);
-    out.created_at = local.created_at;
-    out.updated_at = local.updated_at;
-    out.tags.clone_from(&local.tags);
-    out.image_ref.clone_from(&local.image_ref);
-    out.linked_profile_id.clone_from(&local.linked_profile_id);
-    out.cost = local.cost;
-    out.roast_type = local.roast_type;
-    out.deleted_at = local.deleted_at;
-    out.grinds.clone_from(&local.grinds);
-    out
-}
-
 /// JSON-bridged [`reconcile_roasters`]. Input:
 /// `{"local": Roaster[], "remote": RoasterWire[]}`. Output:
 /// `RoasterReconcileAction[]`.
@@ -1007,7 +953,7 @@ pub fn reconcile_roasters_json(payload: &str) -> Result<String, String> {
     serde_json::to_string(&out).map_err(|e| e.to_string())
 }
 
-/// JSON-bridged [`reconcile_beans`]. Input:
+/// JSON-bridged [`reconcile_pulled_bags`] (the shells' `reconcileBeans`). Input:
 /// `{"local": Bean[], "remote": PulledBag[] ({wire, localRoasterId?,
 /// fallbackId}), "roasterNames": {id: name}, "lastSyncAt"?: number,
 /// "nowMs": number}` — see [`reconcile_pulled_bags`]. Output:
@@ -1041,7 +987,7 @@ pub fn reconcile_beans_json(payload: &str) -> Result<String, String> {
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     // ── guard_restored_visualizer_prefs (review 05 P3-1) ─────────────
@@ -1760,7 +1706,7 @@ mod tests {
         ));
     }
 
-    // ── reconcile_beans (CORE4) ────────────────────────────────────────
+    // ── reconcile_pulled_bags (CORE4) ──────────────────────────────────
 
     fn bean(id: &str, name: &str, visualizer_id: Option<&str>) -> Bean {
         let mut b = Bean::new(id.to_owned(), name.to_owned(), 0);
@@ -1768,18 +1714,57 @@ mod tests {
         b
     }
 
-    #[test]
-    fn reconcile_beans_adds_a_new_remote() {
-        let decoded = bean("bean:remote", "Yirg", Some("b1"));
-        let actions = reconcile_beans(&[], std::slice::from_ref(&decoded), &HashMap::new(), None);
-        assert_eq!(actions, vec![BeanReconcileAction::Add { remote: decoded }]);
+    /// A thin list row for `remote` (its Visualizer id, name and roast date),
+    /// its roaster resolved to `remote.roaster_id` and its `id` as the
+    /// fallback, as the shells hand it to [`reconcile_pulled_bags`].
+    pub(crate) fn pulled_row(remote: &Bean) -> PulledBag {
+        let mut wire = serde_json::json!({ "name": remote.name });
+        if let Some(id) = &remote.visualizer_id {
+            wire["id"] = serde_json::json!(id);
+        }
+        if let Some(on) = &remote.roasted_on {
+            wire["roast_date"] = serde_json::json!(on);
+        }
+        PulledBag {
+            wire,
+            local_roaster_id: remote.roaster_id.clone(),
+            fallback_id: remote.id.clone(),
+        }
+    }
+
+    /// [`reconcile_pulled_bags`] over thin rows for `remote` ([`pulled_row`]).
+    pub(crate) fn pull(
+        local: &[Bean],
+        remote: &[Bean],
+        roaster_names: &HashMap<String, String>,
+        last_sync_at: Option<i64>,
+    ) -> Vec<BeanReconcileAction> {
+        let rows: Vec<PulledBag> = remote.iter().map(pulled_row).collect();
+        reconcile_pulled_bags(local, &rows, roaster_names, last_sync_at, 9_999)
     }
 
     #[test]
-    fn reconcile_beans_replaces_a_local_bound_by_visualizer_id() {
+    fn reconcile_pulled_bags_adds_a_new_remote() {
+        let decoded = bean("bean:remote", "Yirg", Some("b1"));
+        let actions = pull(&[], std::slice::from_ref(&decoded), &HashMap::new(), None);
+        let [BeanReconcileAction::Add { remote }] = actions.as_slice() else {
+            panic!("expected one add: {actions:?}");
+        };
+        assert_eq!(
+            (
+                remote.id.as_str(),
+                remote.name.as_str(),
+                remote.visualizer_id.as_deref()
+            ),
+            ("bean:remote", "Yirg", Some("b1"))
+        );
+    }
+
+    #[test]
+    fn reconcile_pulled_bags_replaces_a_local_bound_by_visualizer_id() {
         let local = bean("bean:l1", "Yirg", Some("b1"));
         let decoded = bean("bean:remote", "Yirgacheffe", Some("b1"));
-        let actions = reconcile_beans(&[local], &[decoded], &HashMap::new(), None);
+        let actions = pull(&[local], &[decoded], &HashMap::new(), None);
         assert!(matches!(
             actions.as_slice(),
             [BeanReconcileAction::Replace { local_id, .. }] if local_id == "bean:l1"
@@ -1787,12 +1772,12 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_beans_replaces_a_local_with_the_same_id() {
+    fn reconcile_pulled_bags_replaces_a_local_with_the_same_id() {
         // A crema-pushed bag round-trips its `crema_id` → decoded.id matches
         // the local id even when the local is unbound.
         let local = bean("bean:shared", "Yirg", None);
         let decoded = bean("bean:shared", "Yirg", Some("b1"));
-        let actions = reconcile_beans(&[local], &[decoded], &HashMap::new(), None);
+        let actions = pull(&[local], &[decoded], &HashMap::new(), None);
         assert!(matches!(
             actions.as_slice(),
             [BeanReconcileAction::Replace { local_id, .. }] if local_id == "bean:shared"
@@ -1800,13 +1785,13 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_beans_binds_by_signature_including_roaster_name() {
+    fn reconcile_pulled_bags_binds_by_signature_including_roaster_name() {
         // Two unbound beans share a name but differ by roaster → the
         // signature (which folds in the roaster name) must NOT match them.
         let mut local = bean("bean:l1", "Yirg", None);
         local.roaster_id = Some("roaster:a".to_owned());
         local.roasted_on = Some("2026-05-01".to_owned());
-        let mut decoded = bean("bean:remote", "Yirg", None);
+        let mut decoded = bean("bean:remote", "Yirg", Some("b9"));
         decoded.roaster_id = Some("roaster:b".to_owned());
         decoded.roasted_on = Some("2026-05-01".to_owned());
 
@@ -1814,7 +1799,7 @@ mod tests {
         names.insert("roaster:a".to_owned(), "Acme".to_owned());
         names.insert("roaster:b".to_owned(), "Onyx".to_owned());
         // Different roaster names → different signatures → no bind → Add.
-        let actions = reconcile_beans(
+        let actions = pull(
             std::slice::from_ref(&local),
             std::slice::from_ref(&decoded),
             &names,
@@ -1827,7 +1812,7 @@ mod tests {
 
         // Same roaster name → signatures match → Replace.
         names.insert("roaster:b".to_owned(), "Acme".to_owned());
-        let actions = reconcile_beans(&[local], &[decoded], &names, None);
+        let actions = pull(&[local], &[decoded], &names, None);
         assert!(matches!(
             actions.as_slice(),
             [BeanReconcileAction::Replace { local_id, .. }] if local_id == "bean:l1"
@@ -1835,7 +1820,7 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_beans_keeps_the_local_baseline_so_a_pull_never_looks_like_an_edit() {
+    fn reconcile_pulled_bags_keeps_the_local_baseline_so_a_pull_never_looks_like_an_edit() {
         let mut local = bean("bean:l1", "Yirg", Some("b1"));
         local.created_at = 10;
         local.updated_at = 100;
@@ -1844,7 +1829,7 @@ mod tests {
         let mut decoded = bean("bean:remote", "Yirgacheffe", Some("b1"));
         decoded.created_at = 9_999;
         decoded.updated_at = 9_999; // decode fallback = "now"
-        let actions = reconcile_beans(
+        let actions = pull(
             std::slice::from_ref(&local),
             std::slice::from_ref(&decoded),
             &HashMap::new(),
@@ -1862,13 +1847,13 @@ mod tests {
 
         // A second pull of the same remote changes nothing → no action.
         let applied = remote.clone();
-        let again = reconcile_beans(&[applied], &[decoded], &HashMap::new(), Some(600));
+        let again = pull(&[applied], &[decoded], &HashMap::new(), Some(600));
         assert!(again.is_empty(), "{again:?}");
     }
 
     /// #488 F7: a pull never erases the bag's saved grinds or its star.
     #[test]
-    fn reconcile_beans_keeps_the_saved_grinds() {
+    fn reconcile_pulled_bags_keeps_the_saved_grinds() {
         let mut local = bean("bean:l1", "Yirg", Some("b1"));
         local.grinds = Some(vec![crate::bag_grind::BagGrind {
             grinder_id: "grinder:nz".to_owned(),
@@ -1877,7 +1862,7 @@ mod tests {
             starred: true,
         }]);
         let decoded = bean("bean:remote", "Yirgacheffe", Some("b1"));
-        let actions = reconcile_beans(
+        let actions = pull(
             std::slice::from_ref(&local),
             &[decoded],
             &HashMap::new(),
@@ -1888,32 +1873,15 @@ mod tests {
         };
         assert_eq!(remote.name, "Yirgacheffe");
         assert_eq!(remote.grinds, local.grinds);
-        // The raw-wire kernel the shells run keeps them too.
-        let pulled = PulledBag {
-            wire: serde_json::json!({ "id": "b1", "name": "Renamed" }),
-            local_roaster_id: None,
-            fallback_id: "bean:fallback".to_owned(),
-        };
-        let actions = reconcile_pulled_bags(
-            std::slice::from_ref(&local),
-            &[pulled],
-            &HashMap::new(),
-            None,
-            1,
-        );
-        let [BeanReconcileAction::Replace { remote, .. }] = actions.as_slice() else {
-            panic!("expected one replace: {actions:?}");
-        };
-        assert_eq!(remote.grinds, local.grinds);
     }
 
     #[test]
-    fn reconcile_beans_keeps_a_bound_local_edited_since_the_last_sync() {
+    fn reconcile_pulled_bags_keeps_a_bound_local_edited_since_the_last_sync() {
         let mut local = bean("bean:l1", "Local edit", Some("b1"));
         local.updated_at = 700;
         let decoded = bean("bean:remote", "Remote", Some("b1"));
         // Edited after the baseline → kept (the push leg sends it).
-        let kept = reconcile_beans(
+        let kept = pull(
             std::slice::from_ref(&local),
             std::slice::from_ref(&decoded),
             &HashMap::new(),
@@ -1921,7 +1889,7 @@ mod tests {
         );
         assert!(kept.is_empty(), "{kept:?}");
         // Not edited since → the remote wins.
-        let replaced = reconcile_beans(&[local], &[decoded], &HashMap::new(), Some(800));
+        let replaced = pull(&[local], &[decoded], &HashMap::new(), Some(800));
         assert!(matches!(
             replaced.as_slice(),
             [BeanReconcileAction::Replace { .. }]
@@ -2031,15 +1999,50 @@ mod tests {
         assert_eq!(added.bag_size, 100.0);
     }
 
+    /// #488 follow-up 41: a bag deleted before its first upload bound it (an
+    /// unbound tombstone) stays deleted: the remote that upload made matches
+    /// it by signature and gets no action.
     #[test]
-    fn reconcile_beans_does_not_bind_a_tombstoned_local() {
-        let mut local = bean("bean:l1", "Yirg", None);
-        local.deleted_at = Some(1);
-        let decoded = bean("bean:remote", "Yirg", None);
-        let actions = reconcile_beans(&[local], &[decoded], &HashMap::new(), None);
+    fn reconcile_pulled_bags_skips_a_remote_matching_an_unbound_tombstone() {
+        let mut gone = bean("bean:l1", "Yirg", None);
+        gone.roaster_id = Some("roaster:a".to_owned());
+        gone.roasted_on = Some("2026-05-01".to_owned());
+        gone.deleted_at = Some(1);
+        let mut names = HashMap::new();
+        names.insert("roaster:a".to_owned(), "Acme".to_owned());
+        // The upload's bag, its `crema_id` not round-tripped.
+        let mut remote = bean("bean:remote", "Yirg", Some("b1"));
+        remote.roaster_id = Some("roaster:a".to_owned());
+        remote.roasted_on = Some("2026-05-01".to_owned());
+        let actions = pull(
+            std::slice::from_ref(&gone),
+            std::slice::from_ref(&remote),
+            &names,
+            None,
+        );
+        assert_eq!(actions, vec![], "never added back");
+        // Another roast date is another bag: added.
+        let mut other = remote.clone();
+        other.roasted_on = Some("2026-06-01".to_owned());
         assert!(matches!(
-            actions.as_slice(),
+            pull(std::slice::from_ref(&gone), &[other], &names, None).as_slice(),
             [BeanReconcileAction::Add { .. }]
+        ));
+        // A bound tombstone matches only by its ids, never by signature.
+        let mut bound_gone = gone.clone();
+        bound_gone.visualizer_id = Some("b0".to_owned());
+        assert!(matches!(
+            pull(&[bound_gone], std::slice::from_ref(&remote), &names, None).as_slice(),
+            [BeanReconcileAction::Add { .. }]
+        ));
+        // The trade-off: the same bag added again on purpose is taken only by
+        // a live row here, which a re-add makes (live rows match first).
+        let mut again = bean("bean:new", "Yirg", None);
+        again.roaster_id = Some("roaster:a".to_owned());
+        again.roasted_on = Some("2026-05-01".to_owned());
+        assert!(matches!(
+            pull(&[gone, again], &[remote], &names, None).as_slice(),
+            [BeanReconcileAction::Replace { local_id, .. }] if local_id == "bean:new"
         ));
     }
 
@@ -2051,10 +2054,10 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_beans_never_adds_back_a_bag_deleted_here() {
+    fn reconcile_pulled_bags_never_adds_back_a_bag_deleted_here_by_its_ids() {
         let gone = tombstone("bean:l1", "Yirg", "b1");
         let decoded = bean("bean:remote", "Yirgacheffe", Some("b1"));
-        let actions = reconcile_beans(
+        let actions = pull(
             std::slice::from_ref(&gone),
             &[decoded],
             &HashMap::new(),
@@ -2063,10 +2066,7 @@ mod tests {
         assert_eq!(actions, vec![], "the pull leaves the tombstone alone");
         // By its round-tripped `crema_id` too, before it was ever bound here.
         let by_id = bean("bean:l1", "Yirg", Some("b2"));
-        assert_eq!(
-            reconcile_beans(&[gone], &[by_id], &HashMap::new(), None),
-            vec![]
-        );
+        assert_eq!(pull(&[gone], &[by_id], &HashMap::new(), None), vec![]);
     }
 
     #[test]
@@ -2087,7 +2087,7 @@ mod tests {
         let gone = tombstone("bean:old", "Yirg", "b1");
         let again = bean("bean:new", "Yirg", None);
         let decoded = bean("bean:remote", "Yirg", Some("b1"));
-        let actions = reconcile_beans(
+        let actions = pull(
             &[gone.clone(), again],
             std::slice::from_ref(&decoded),
             &HashMap::new(),
@@ -2104,7 +2104,7 @@ mod tests {
         // Once bound, the live row matches first; the tombstone stays put.
         let mut bound = bean("bean:new", "Yirg", Some("b1"));
         bound.updated_at = 0;
-        let actions = reconcile_beans(
+        let actions = pull(
             &[gone, bound],
             &[bean("bean:remote", "Yirg 2", Some("b1"))],
             &HashMap::new(),

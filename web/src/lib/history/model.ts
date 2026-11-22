@@ -412,6 +412,13 @@ export interface StoredShot {
 	 * bag. Core `StoredShot::replay`; absent when false.
 	 */
 	replay?: boolean;
+	/**
+	 * A remote's copy of the hub's shot (#488 follow-up 51): history only,
+	 * never debited, so moving it to another bag moves nothing. Only Android
+	 * remotes write it; the web keeps it on rows from an Android backup. Core
+	 * `StoredShot::mirror_copy`; absent when false.
+	 */
+	mirrorCopy?: boolean;
 }
 
 /**

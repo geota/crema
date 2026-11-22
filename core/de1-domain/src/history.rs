@@ -554,6 +554,16 @@ pub struct StoredShot {
     /// existing bytes don't change.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub replay: bool,
+    /// A mirror copy: a remote wrote this row for the shot another device
+    /// (the hub) recorded (#488 follow-up 51). It is history only, never
+    /// debited here, so moving it to another bag in History credits and
+    /// debits nothing ([`shot_bag_move`](crate::shot_bag_move)). Set from
+    /// [`ShotCaptureContext::mirror_copy`](crate::ShotCaptureContext::mirror_copy);
+    /// kept by backups, restore and import. Omitted when false, so existing
+    /// bytes don't change; a row from before the mark reads as `false`, and
+    /// the move falls back to its legacy rule for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mirror_copy: bool,
 }
 
 /// A shot's Visualizer privacy override — the `privacy` the upload sends.
@@ -630,6 +640,7 @@ impl StoredShot {
             brew_series: None,
             bag_debit: None,
             replay: false,
+            mirror_copy: false,
         }
     }
 

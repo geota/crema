@@ -19,7 +19,8 @@ export function moveShotBag(shot: AnyShot, newBeanId: string | null): void {
 		toBagId: newBeanId,
 		bagDebit: shot.bagDebit ?? null,
 		doseG: shot.metadata?.dose ?? null,
-		replay: shot.replay === true
+		replay: shot.replay === true,
+		mirrorCopy: shot.mirrorCopy === true
 	});
 	if (!plan.moves) return;
 	getHistoryStore().setBagDebit(shot.id, plan.bagDebit ?? null);

@@ -4437,6 +4437,7 @@ export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | nul
 		...(brewMethodLabel ? { brewMethodLabel } : {}),
 		...(bagDebit !== null ? { bagDebit } : {}),
 		...(obj.replay === true ? { replay: true } : {}),
+		...(obj.mirrorCopy === true ? { mirrorCopy: true } : {}),
 		...(recipeName ? { recipeName } : {}),
 		...(brewSeries ? { brewSeries } : {})
 	};

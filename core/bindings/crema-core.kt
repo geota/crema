@@ -3831,7 +3831,8 @@ data class GrinderPickRow (
 	val saved: String? = null,
 	/// With nothing saved: the newest shot grind on the bag with it
 	/// ([`newest_shot_grind`]: by id, or an older row by name through the
-	/// catalogue's exact aliases, so "Niche" finds the Niche Zero).
+	/// catalogue's exact aliases, so "Niche" finds the Niche Zero, but never
+	/// the "Niche Zero 2").
 	val lastShot: String? = null
 )
 
@@ -4753,7 +4754,11 @@ data class QuickSaveGrindUndo (
 	/// The row before the Save; `None` = there was none (Undo removes it).
 	val before: BagGrind? = null,
 	/// The row as the Save wrote it.
-	val written: BagGrind? = null
+	val written: BagGrind? = null,
+	/// The bag had no grinds list before the Save (`grinds: None`, not
+	/// migrated): an Undo that leaves no rows puts `None` back, not `[]`
+	/// (#488 follow-up 44). Absent on an older Undo record = `false`.
+	val grindsWereNone: Boolean
 )
 
 /// The kind of profile Save would write to.
@@ -5446,17 +5451,30 @@ data class ShotBagMoveInput (
 	val bagDebit: Float? = null,
 	/// The row's dose, grams; `None` or non-positive = no dose.
 	val doseG: Float? = null,
-	/// This device is a remote: it never debits its own copy of a bag
-	/// (owner decision, round 2), so the new bag isn't debited here either.
+	/// Deprecated: read as [`Self::mirror_row`] (either one counts). It said
+	/// "this device is a remote"; since REVIEW-521 the shells pass the row's
+	/// own provenance instead, and since the mirror-copy mark (#488 follow-up
+	/// 51) that is [`Self::mirror_copy`]. Drop once no shell sends it.
 	val remote: Boolean,
 	/// The row is a replay ([`StoredShot::replay`](crate::StoredShot::replay)):
 	/// it never debits.
 	val replay: Boolean,
-	/// The row is a remote's mirror copy of the hub's shot: recorded
-	/// elsewhere, never debited here. Its `bag_debit` of `None` (what Android
-	/// wrote for these rows from #506 until `shot_debit`) then means nothing
-	/// was taken, not "a row from before the field". `false` for a row this
-	/// device recorded, so a legacy local row keeps the dose rule.
+	/// The row's mirror-copy mark
+	/// ([`StoredShot::mirror_copy`](crate::StoredShot::mirror_copy)): a
+	/// remote's copy of the hub's shot, recorded elsewhere and never debited
+	/// here. It credits only what its `bag_debit` says it took (0 when
+	/// `None`), and the new bag isn't debited.
+	val mirrorCopy: Boolean,
+	/// Legacy only: the shell's guess that a row **without the mark** is a
+	/// mirror copy (Android: the device is a remote and the row isn't a Brew
+	/// Log). Honoured only for a row with no recorded `bag_debit` (`None`):
+	/// what Android wrote for mirror rows from #506 until `shot_debit`, and
+	/// what local rows from before the field have, so the move credits and
+	/// debits nothing (conservative). An unmarked row that records a
+	/// `bag_debit` (0 included) was written since `shot_debit`, when mirror
+	/// copies already carry the mark, so it was recorded here and keeps the
+	/// dose rule (REVIEW-521: a hub-era row with 0 moved on a remote debits
+	/// the new bag).
 	val mirrorRow: Boolean
 )
 
@@ -5545,7 +5563,12 @@ data class ShotCaptureContext (
 	val machine: ShotMachine? = null,
 	/// The shot is a replay of a capture: the row gets the replay mark
 	/// ([`StoredShot::replay`]). `false` (or absent) for a live pull.
-	val replay: Boolean? = null
+	val replay: Boolean? = null,
+	/// The shot is another device's (the hub's), and this row is a remote's
+	/// copy of it: the row gets the mirror-copy mark
+	/// ([`StoredShot::mirror_copy`]). `false` (or absent) for a shot this
+	/// device recorded.
+	val mirrorCopy: Boolean? = null
 )
 
 /// What a completed shot does to its bag, and what its row records.
