@@ -723,6 +723,73 @@ export interface BrewDefaultsBounds {
 	maxShotDurationS: StepRange;
 }
 
+/** What [`brew_grind_view`] reads. */
+export interface BrewGrindInput {
+	/** The bag on Brew, if any. */
+	bag?: Bean;
+	/**
+	 * The active grinder ([`crate::grinder::active_grinder`]); `None` = no
+	 * grinder (the default scale, the "no grinder" slot).
+	 */
+	grinder?: Grinder;
+	/** Brew's grind (the per-device session value); `None` = not set. */
+	brewGrind?: string;
+}
+
+/** The unsaved-grind marker. */
+export interface UnsavedGrind {
+	/** The bag's saved grind for the active grinder; `None` = nothing saved. */
+	saved?: string;
+	/** The marker: "Bag 14", or "Bag —" when nothing is saved. */
+	label: string;
+}
+
+/**
+ * What Brew's grind is, for both shells (DESIGN "No grind set is its own
+ * state").
+ */
+export interface BrewGrindView {
+	/** The active grinder's scale, else the default. */
+	scale: GrindScale;
+	/**
+	 * Brew's grind, trimmed: what the header shows and what the shot
+	 * records. `None` when not set (or blank): the shot records no grind.
+	 */
+	value?: string;
+	/**
+	 * The value with its unit for the header and strip ("480 μm",
+	 * "2.1.3"), "—" when not set ([`format_grind`]).
+	 */
+	display: string;
+	/**
+	 * The value as the stepper's number; `None` when not set or not a plain
+	 * number.
+	 */
+	dial?: number;
+	/**
+	 * Where the stepper's first + or − goes when `dial` is `None`
+	 * ([`grind_start_from_blank`]). Not a grind: nothing shows or records
+	 * it until the user steps.
+	 */
+	startFromBlank: number;
+	/**
+	 * The bag's saved grind for the active grinder (the "no grinder" slot
+	 * with none), when there is one: the ringed chip, the tooltip.
+	 */
+	saved?: string;
+	/**
+	 * The unsaved-grind marker: a bag is selected, the grind is set, and it
+	 * differs from the saved one ([`same_grind`]) or nothing is saved. No
+	 * bag, or no grind: none.
+	 */
+	marker?: UnsavedGrind;
+	/**
+	 * The grind part of Quick Controls' Save: the value to save for the bag
+	 * and the active grinder; `None` when the marker doesn't show.
+	 */
+	saveGrind?: string;
+}
+
 /**
  * Summary metrics over a (filter/range-scoped) set of brews — the
  * History stat strip once non-espresso rows exist. `None` = "no data"
@@ -3444,6 +3511,14 @@ export interface GateStatus {
 	pending: boolean;
 }
 
+/** One Quick Controls grind chip. */
+export interface GrindChip {
+	/** The chip's value, for the stepper. */
+	value: number;
+	/** The value as Brew's grind takes it on a tap ([`grind_text`]). */
+	text: string;
+}
+
 /** What a save did to the bag. */
 export interface GrindSave {
 	/** The bag to store (as it was when nothing changed). */
@@ -4983,8 +5058,18 @@ export interface ShotCaptureContext {
 	 * [`StoredShot::grinder_id`]. `None` or blank = no grinder.
 	 */
 	grinderId?: string;
-	/** The grind dial at shot start, or `None` when it carried no value. */
+	/**
+	 * The grind dial at shot start, or `None` when it carried no value.
+	 * Recorded through [`crate::grind_value::grind_text`] (no one-decimal
+	 * rounding); [`Self::grind`] wins when set.
+	 */
 	grindDial?: number;
+	/**
+	 * Brew's grind at shot start as text ([`crate::BrewGrindView::value`]),
+	 * recorded as is (trimmed), a grind that isn't a plain number included.
+	 * `None` or blank = fall back to [`Self::grind_dial`].
+	 */
+	grind?: string;
 	/** The barista, or `None`. */
 	barista?: string;
 	/**
@@ -6668,6 +6753,21 @@ export enum ScaleLinkDeadReason {
 	Silent = "Silent",
 	/** Three scale writes in a row failed with no reading in between. */
 	WritesFailing = "WritesFailing",
+}
+
+/**
+ * Why a typed scale can't be stored (Devices' grinder fields), first
+ * failing rule first.
+ */
+export enum ScaleRefusal {
+	/** A field isn't a number: "Enter a number in each field". */
+	NotANumber = "notANumber",
+	/** "Lowest must be below Highest". */
+	LowestNotBelowHighest = "lowestNotBelowHighest",
+	/** "Step must be more than 0". */
+	StepNotPositive = "stepNotPositive",
+	/** "Step must fit between Lowest and Highest". */
+	StepTooLarge = "stepTooLarge",
 }
 
 /**

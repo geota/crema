@@ -89,6 +89,7 @@ pub mod filter;
 pub mod firmware_builds;
 pub mod firmware_image;
 pub mod flow;
+pub mod grind_value;
 pub mod grinder;
 pub mod grinder_catalogue;
 pub mod history;
@@ -291,6 +292,12 @@ pub use firmware_image::{
     validate_firmware_image_json,
 };
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
+pub use grind_value::{
+    BrewGrindInput, BrewGrindView, GrindChip, MAX_OFF_STEP_DECIMALS, MAX_STEP_DECIMALS,
+    ScaleRefusal, UnsavedGrind, brew_grind_view, brew_grind_view_json, format_grind,
+    format_grind_json, grind_chips, grind_chips_json, grind_number, grind_scale_refusal,
+    grind_scale_refusal_json, grind_start_from_blank, grind_text, grind_text_json, same_grind,
+};
 pub use grinder::{
     GrindScale, Grinder, GrinderAdd, GrinderAddKind, GrinderArchive, GrinderLibraryMigration,
     GrinderMatch, GrinderMatchKind, active_grind_scale, active_grinder, active_grinder_json,

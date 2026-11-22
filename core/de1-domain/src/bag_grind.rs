@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
 use crate::bean::Bean;
+use crate::grind_value::same_grind;
 use crate::grinder::{Grinder, active_grinder, grinder_named, grinders_for_names, names_grinder};
 #[cfg(doc)]
 use crate::history::StoredShot;
@@ -150,7 +151,7 @@ pub fn save_bag_grind(
     let mut bean = bag.clone();
     let rows = bean.grinds.get_or_insert_with(Vec::new);
     match rows.iter_mut().find(|r| r.grinder_id == id) {
-        Some(row) if row.grind == grind => return unchanged(),
+        Some(row) if same_grind(&row.grind, grind) => return unchanged(),
         Some(row) => {
             row.grind = grind.to_owned();
             if !name.trim().is_empty() {
@@ -436,7 +437,10 @@ pub fn resolve_bag_selection(input: &BagSelectInput) -> BagSelection {
         _ => active_now,
     };
     if let Some(grind) = pick_grind(bag, active_after, &input.last_grinds)
-        && input.grind.as_deref() != Some(grind.as_str())
+        && input
+            .grind
+            .as_deref()
+            .is_none_or(|now| !same_grind(now, &grind))
     {
         change.grind = Some(SetTo { value: Some(grind) });
         undo.grind = Some(SetTo {

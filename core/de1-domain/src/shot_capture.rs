@@ -35,6 +35,8 @@ use typeshare::typeshare;
 use crate::bean::ShotBean;
 use crate::crema_profile::{CremaProfile, to_wire};
 use crate::effective_profile::{BrewOverrides, effective_crema_profile, preinfusion_seconds};
+use crate::grind_value::grind_text;
+use crate::grinder::GrindScale;
 use crate::history::{ShotMachine, StoredShot};
 use crate::shot::ShotRecord;
 use crate::stop::StopReason;
@@ -67,8 +69,15 @@ pub struct ShotCaptureContext {
     #[serde(default)]
     pub grinder_id: Option<String>,
     /// The grind dial at shot start, or `None` when it carried no value.
+    /// Recorded through [`crate::grind_value::grind_text`] (no one-decimal
+    /// rounding); [`Self::grind`] wins when set.
     #[serde(default)]
     pub grind_dial: Option<f32>,
+    /// Brew's grind at shot start as text ([`crate::BrewGrindView::value`]),
+    /// recorded as is (trimmed), a grind that isn't a plain number included.
+    /// `None` or blank = fall back to [`Self::grind_dial`].
+    #[serde(default)]
+    pub grind: Option<String>,
     /// The barista, or `None`.
     #[serde(default)]
     pub barista: Option<String>,
@@ -120,17 +129,15 @@ pub struct CompletedShot {
     pub auto_tare: bool,
 }
 
-/// The grind dial as stored text: a whole number without decimals, else one
-/// decimal (`15`, `15.5`) — the web history's formatting.
-fn grind_text(dial: f32) -> Option<String> {
-    if !dial.is_finite() {
-        return None;
-    }
-    if dial.fract() == 0.0 {
-        Some(format!("{dial:.0}"))
-    } else {
-        Some(format!("{dial:.1}"))
-    }
+/// The grind the shot records: Brew's grind text when set, else the dial
+/// as text. The dial carries no scale here; [`grind_text`] on the default
+/// scale keeps a value finer than its step (2.25 stays 2.25).
+fn shot_grind(ctx: &ShotCaptureContext) -> Option<String> {
+    non_blank(ctx.grind.as_deref()).or_else(|| {
+        ctx.grind_dial
+            .map(|dial| grind_text(f64::from(dial), &GrindScale::default()))
+            .filter(|t| !t.is_empty())
+    })
 }
 
 fn non_blank(s: Option<&str>) -> Option<String> {
@@ -146,6 +153,7 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
     if shot.record.samples.is_empty() {
         return None;
     }
+    let grind = shot_grind(&ctx);
     let mut s = StoredShot::new(ctx.completed_at, shot.record);
     if let Some(id) = ctx.id.filter(|id| !id.is_empty()) {
         s.id = id;
@@ -179,7 +187,7 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
     s.stop_on_weight = Some(shot.stop_on_weight);
     s.auto_tare = Some(shot.auto_tare);
     s.metadata.yield_out = shot.final_weight.filter(|w| w.is_finite() && *w > 0.0);
-    s.metadata.grinder_setting = ctx.grind_dial.and_then(grind_text);
+    s.metadata.grinder_setting = grind;
     s.metadata.barista = non_blank(ctx.barista.as_deref());
     s.grinder_model = non_blank(ctx.settings_grinder.as_deref());
     s.grinder_id = non_blank(ctx.grinder_id.as_deref());
@@ -347,9 +355,42 @@ mod tests {
 
     #[test]
     fn the_grind_dial_is_stored_like_the_web_history() {
-        assert_eq!(grind_text(15.0).as_deref(), Some("15"));
-        assert_eq!(grind_text(15.5).as_deref(), Some("15.5"));
-        assert_eq!(grind_text(f32::NAN), None);
+        let dial = |d: f32| {
+            shot_grind(&ShotCaptureContext {
+                grind_dial: Some(d),
+                ..ShotCaptureContext::default()
+            })
+        };
+        assert_eq!(dial(15.0).as_deref(), Some("15"));
+        assert_eq!(dial(15.5).as_deref(), Some("15.5"));
+        assert_eq!(dial(4.2).as_deref(), Some("4.2"));
+        assert_eq!(dial(f32::NAN), None);
+    }
+
+    #[test]
+    fn a_fine_step_dial_is_not_rounded_to_one_decimal() {
+        // REVIEW-FINAL M2: a 0.05 (or 0.25) step, dial 2.25, records 2.25,
+        // so auto-save can't overwrite the bag's 2.25 with 2.2.
+        let ctx = ShotCaptureContext {
+            grind_dial: Some(2.25),
+            ..ShotCaptureContext::default()
+        };
+        let shot = assemble_stored_shot(completed(None), ctx).unwrap();
+        assert_eq!(shot.metadata.grinder_setting.as_deref(), Some("2.25"));
+    }
+
+    #[test]
+    fn brews_grind_text_wins_and_is_kept_as_typed() {
+        let ctx = |grind: Option<&str>| ShotCaptureContext {
+            grind: grind.map(str::to_owned),
+            grind_dial: Some(14.0),
+            ..ShotCaptureContext::default()
+        };
+        assert_eq!(shot_grind(&ctx(Some(" 2.1.3 "))).as_deref(), Some("2.1.3"));
+        assert_eq!(shot_grind(&ctx(Some("2.25"))).as_deref(), Some("2.25"));
+        assert_eq!(shot_grind(&ctx(Some(" "))).as_deref(), Some("14"));
+        assert_eq!(shot_grind(&ctx(None)).as_deref(), Some("14"));
+        assert_eq!(shot_grind(&ShotCaptureContext::default()), None);
     }
 
     #[test]
