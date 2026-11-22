@@ -242,6 +242,21 @@ describe('the bag-pick Undo keeps later changes (REVIEW-CORE H4, FINAL S9)', () 
 		expect(t.activated, 'nothing sent to the DE1').toEqual([]);
 	});
 
+	it('a pick of another bag is not a re-pick: the id from before the pick is passed', async () => {
+		const t = await undoSetup();
+		t.beans.upsertBean({
+			...blankBean('bean:c'),
+			name: 'C',
+			grinds: [{ grinderId: t.niche.id, grinderName: t.niche.name, grind: '9', starred: false }]
+		});
+		await t.activateBean('bean:c');
+		expect(t.grind.value).toBe('9');
+		await t.activateBean('bean:b'); // C was selected: B is a new pick
+		expect(t.beans.activeBeanId).toBe('bean:b');
+		expect(t.beans.activeGrinder?.id, "B's starred grinder").toBe(t.df64.id);
+		expect(t.grind.value).toBe('30');
+	});
+
 	it('re-picking the selected bag changes nothing (FINAL N7)', async () => {
 		const t = await undoSetup();
 		await t.activateBean('bean:b');
