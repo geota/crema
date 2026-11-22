@@ -71,6 +71,7 @@ pub mod brand;
 pub mod brew;
 pub mod brew_builtin;
 pub mod brew_custom;
+pub mod brew_selection;
 pub mod brew_session;
 pub mod builtin;
 pub mod capture_retention;
@@ -240,6 +241,13 @@ pub use brew_custom::{
     brew_method_presets_with_custom_json, brew_method_style_seeds, brew_method_style_seeds_json,
     custom_method_preset, is_custom_method_id, resolve_brew_method_preset,
     validate_custom_method_label, validate_custom_method_label_json,
+};
+pub use brew_selection::{
+    BrewMode, BrewPickInput, BrewPickLock, BrewPickLockInput, BrewPickLockReason, BrewSelection,
+    BrewSelectionInput, BrewSelectionKind, BrewSelectionView, LOCK_NOTE_BREW, LOCK_NOTE_SHOT,
+    MAX_SELECTION_ID_CHARS, RecipeSummary, StoredBrewSelection, brew_mode, brew_pick_lock,
+    brew_pick_lock_json, brew_selection, brew_selection_view, brew_selection_view_json,
+    pick_brew_selection, pick_brew_selection_json, recipe_summary, recipe_summary_json,
 };
 pub use brew_session::{
     APPROACH_LEAD, BREW_SAMPLE_MIN_INTERVAL, BrewCue, BrewSessionEvent, BrewSessionMonitor,

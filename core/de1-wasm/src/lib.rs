@@ -662,6 +662,38 @@ pub fn recipe_estimated_duration_json(recipe_json: &str) -> Result<Option<String
     de1_domain::recipe_estimated_duration_json(recipe_json)
 }
 
+/// Brew's selection and mode from what the shell stored (brew modes §2):
+/// a `BrewSelectionInput` JSON (`activeProfileId`, `activeRecipeId`,
+/// `recipeLive`) in, a `BrewSelectionView` JSON (`selection`, `mode`) out.
+/// See `de1_domain::brew_selection`.
+#[wasm_bindgen(js_name = brewSelectionViewJson)]
+pub fn brew_selection_view_json(input_json: &str) -> Result<String, String> {
+    de1_domain::brew_selection_view_json(input_json)
+}
+
+/// What to store after a pick on this device: a `BrewPickInput` JSON
+/// (`stored`, `pick`) in, a `StoredBrewSelection` JSON out. See
+/// `de1_domain::pick_brew_selection`.
+#[wasm_bindgen(js_name = pickBrewSelectionJson)]
+pub fn pick_brew_selection_json(input_json: &str) -> Result<String, String> {
+    de1_domain::pick_brew_selection_json(input_json)
+}
+
+/// The picker lock (brew modes §4): a `BrewPickLockInput` JSON
+/// (`shotRunning`, `guidedBrewRunning`) in, a `BrewPickLock` JSON out, or
+/// `undefined` when the rows are enabled. See `de1_domain::brew_pick_lock`.
+#[wasm_bindgen(js_name = brewPickLockJson)]
+pub fn brew_pick_lock_json(input_json: &str) -> Result<Option<String>, String> {
+    de1_domain::brew_pick_lock_json(input_json)
+}
+
+/// A recipe's header summary (`BrewRecipe` JSON in, `RecipeSummary` JSON
+/// out). See `de1_domain::recipe_summary`.
+#[wasm_bindgen(js_name = recipeSummaryJson)]
+pub fn recipe_summary_json(recipe_json: &str) -> Result<String, String> {
+    de1_domain::recipe_summary_json(recipe_json)
+}
+
 /// A recipe's planned cumulative pour total, grams (`BrewRecipe` JSON in),
 /// or `undefined` when no step carries a finite target — the editor's
 /// "250 g planned · matches water" check. See

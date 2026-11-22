@@ -784,6 +784,58 @@ pub fn recipe_estimated_duration_json(recipe_json: String) -> Result<Option<Stri
     de1_domain::recipe_estimated_duration_json(&recipe_json).map_err(CremaError::from)
 }
 
+/// Brew's selection and mode from what the shell stored (brew modes §2):
+/// a `BrewSelectionInput` JSON (`activeProfileId`, `activeRecipeId`,
+/// `recipeLive`) in, a `BrewSelectionView` JSON (`selection`, `mode`) out.
+/// A stored profile with no recipe (every install from before brew modes)
+/// reads as a profile selection. See [`de1_domain::brew_selection`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the input JSON is malformed.
+#[uniffi::export]
+pub fn brew_selection_view_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::brew_selection_view_json(&input_json).map_err(CremaError::from)
+}
+
+/// What to store after a pick on this device: a `BrewPickInput` JSON
+/// (`stored`, `pick`) in, a `StoredBrewSelection` JSON out. A profile clears
+/// the recipe; a recipe keeps the profile. See
+/// [`de1_domain::pick_brew_selection`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the input JSON is malformed.
+#[uniffi::export]
+pub fn pick_brew_selection_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::pick_brew_selection_json(&input_json).map_err(CremaError::from)
+}
+
+/// The picker lock (brew modes §4): a `BrewPickLockInput` JSON
+/// (`shotRunning`, `guidedBrewRunning`) in, a `BrewPickLock` JSON (`reason`,
+/// `note`) out, or `null` when the rows are enabled. The hub refuses a
+/// remote's `setActiveProfile` with the note. See [`de1_domain::brew_pick_lock`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the input JSON is malformed.
+#[uniffi::export]
+pub fn brew_pick_lock_json(input_json: String) -> Result<Option<String>, CremaError> {
+    de1_domain::brew_pick_lock_json(&input_json).map_err(CremaError::from)
+}
+
+/// A recipe's header summary (`BrewRecipe` JSON in, `RecipeSummary` JSON
+/// out): name, method, dose, water, temperature, estimated time and step
+/// count. See [`de1_domain::recipe_summary`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the recipe JSON is malformed.
+#[uniffi::export]
+pub fn recipe_summary_json(recipe_json: String) -> Result<String, CremaError> {
+    de1_domain::recipe_summary_json(&recipe_json).map_err(CremaError::from)
+}
+
 /// A recipe's planned cumulative pour total, grams (`BrewRecipe` JSON in),
 /// or `null` when no step carries a finite target. See
 /// [`de1_domain::BrewRecipe::planned_pour_total_g`].
