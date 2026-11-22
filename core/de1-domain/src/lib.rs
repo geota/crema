@@ -174,7 +174,8 @@ pub use bean::{
     bag_stock, bag_stock_json, bean_tombstone, bean_tombstone_json, brews_remaining_estimate,
     credit_shot_debit, days_off_roast, debit_remaining, debit_taken, duplicate_bean,
     duplicate_bean_json, resettle_remaining, resettled_bag_debit, roast_band, roast_band5,
-    roast_freshness, set_bean_frozen, set_bean_frozen_json, shot_bean_snapshot_json,
+    roast_freshness, roaster_tombstone, roaster_tombstone_json, set_bean_frozen,
+    set_bean_frozen_json, shot_bean_snapshot_json,
 };
 pub use bean_coerce::{
     coerce_bean, coerce_bean_json, coerce_grinder, coerce_grinder_json, coerce_roaster,
@@ -446,8 +447,8 @@ pub use visualizer_catalogue::{
 pub use visualizer_error::{
     AUTH_PARK_MS, DELETE_PARK_MS, MAX_QUEUE_ATTEMPTS, QueueDecision, QueueOp, RefreshFailure,
     VISUALIZER_DEFAULT_DAILY_LIMIT, VisualizerCallError, classify_token_refresh_failure,
-    is_recoverable, retry_backoff_ms, upload_refused_no_samples, upload_refused_shot, visualizer_queue_decision,
-    visualizer_queue_decision_json, visualizer_quota_limit,
+    is_recoverable, retry_backoff_ms, upload_refused_no_samples, upload_refused_shot,
+    visualizer_queue_decision, visualizer_queue_decision_json, visualizer_quota_limit,
 };
 pub use visualizer_sync::{
     BeanReconcileAction, GuardedVisualizerPrefs, LocalShotRef, PulledBag, ReconcileAction,

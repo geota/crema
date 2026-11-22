@@ -395,7 +395,10 @@ mod tests {
         // Owner decision (#488 batch 6), whatever its telemetry.
         assert!(upload_refused_shot(false, Some(180), true));
         assert!(!upload_refused_shot(false, Some(180), false));
-        assert!(upload_refused_shot(false, Some(0), false), "no samples still refuses");
+        assert!(
+            upload_refused_shot(false, Some(0), false),
+            "no samples still refuses"
+        );
     }
 
     // Cases pinned by the TS `visualizer-call.vitest.ts` retry-policy table.

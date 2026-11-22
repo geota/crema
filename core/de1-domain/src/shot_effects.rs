@@ -220,7 +220,11 @@ pub struct ShotBagMove {
 /// - Moving to no bag records `None`.
 #[must_use]
 pub fn shot_bag_move(input: &ShotBagMoveInput) -> ShotBagMove {
-    let blank = |id: &Option<String>| id.as_deref().filter(|s| !s.trim().is_empty()).map(str::to_owned);
+    let blank = |id: &Option<String>| {
+        id.as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_owned)
+    };
     let (from, to) = (blank(&input.from_bag_id), blank(&input.to_bag_id));
     if from == to {
         return ShotBagMove::default();
@@ -409,14 +413,20 @@ mod tests {
             dose_g: Some(18.0),
             debit: true,
         });
-        assert_eq!((live.remaining, live.bag_debit, live.emptied), (Some(282.0), Some(18.0), false));
+        assert_eq!(
+            (live.remaining, live.bag_debit, live.emptied),
+            (Some(282.0), Some(18.0), false)
+        );
         let last = shot_debit(&ShotDebitInput {
             has_bag: true,
             bag: bag(10.0, 340.0),
             dose_g: Some(18.0),
             debit: true,
         });
-        assert_eq!((last.remaining, last.bag_debit, last.emptied), (Some(0.0), Some(10.0), true));
+        assert_eq!(
+            (last.remaining, last.bag_debit, last.emptied),
+            (Some(0.0), Some(10.0), true)
+        );
         let empty = shot_debit(&ShotDebitInput {
             has_bag: true,
             bag: bag(0.0, 340.0),
@@ -462,7 +472,10 @@ mod tests {
         );
         // A replay on the recording device: the same.
         let replay = shot_bag_move(&mv(Some(0.0), false, true));
-        assert_eq!((replay.from_remaining, replay.to_remaining, replay.bag_debit), (None, None, Some(0.0)));
+        assert_eq!(
+            (replay.from_remaining, replay.to_remaining, replay.bag_debit),
+            (None, None, Some(0.0))
+        );
     }
 
     #[test]
@@ -501,7 +514,10 @@ mod tests {
         input.from_bag_id = None;
         input.from_bag = None;
         let plan = shot_bag_move(&input);
-        assert_eq!((plan.from_remaining, plan.to_remaining, plan.bag_debit), (None, Some(182.0), Some(18.0)));
+        assert_eq!(
+            (plan.from_remaining, plan.to_remaining, plan.bag_debit),
+            (None, Some(182.0), Some(18.0))
+        );
     }
 
     #[test]
@@ -516,7 +532,10 @@ mod tests {
         let mut low = mv(Some(18.0), false, false);
         low.to_bag = bag(10.0, 250.0);
         let plan = shot_bag_move(&low);
-        assert_eq!((plan.to_remaining, plan.bag_debit, plan.to_emptied), (Some(0.0), Some(10.0), true));
+        assert_eq!(
+            (plan.to_remaining, plan.bag_debit, plan.to_emptied),
+            (Some(0.0), Some(10.0), true)
+        );
     }
 
     #[test]
