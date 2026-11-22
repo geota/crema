@@ -113,7 +113,6 @@
 	import SplitButton from '#lib/components/shared/SplitButton.svelte';
 	import { getBeanStore, type Bean, type Roaster } from '#lib/bean/index.js';
 	import { moveShotBag } from '#lib/bean/move-shot-bag.js';
-	import { REPLAY_NOT_UPLOADED } from '#lib/effect/errors.js';
 	import { onMount, tick, untrack } from 'svelte';
 	import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
 	import { uploadPending } from '#lib/history/store.svelte.js';
@@ -399,7 +398,7 @@
 		// Brew Log rows are local-only (issue #10): no destination, no pip state.
 		if (isBrewLog(shot)) return { pip: 'local', title: 'Brew Log — stays on this device' };
 		// A replay is recorded, never uploaded (core `upload_refused_shot`, #488 batch 6).
-		if (shot.replay) return { pip: 'local', title: `Replay — ${REPLAY_NOT_UPLOADED.toLowerCase()}` };
+		if (shot.replay) return { pip: 'local', title: 'Replay — never uploaded' };
 		const enabled = uploadTargetsFor(shot).filter((t) => t.enabled);
 		if (pendingShotIds.has(shot.id)) return { pip: 'pending', title: 'Upload pending — will retry' };
 		if (enabled.length === 0) {
