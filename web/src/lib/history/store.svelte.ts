@@ -4277,6 +4277,11 @@ export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | nul
 		? tagsRaw.filter((t): t is string => typeof t === 'string')
 		: [];
 	const bean = coerceShotBean(obj.bean ?? null);
+	// The ids frozen at shot start (#488, save-boundaries F4): kept, never
+	// rebuilt from the snapshots. Omitted when absent, as the core writes them.
+	const idOf = (v: unknown): string | null => (typeof v === 'string' && v.trim().length > 0 ? v : null);
+	const grinderId = idOf(obj.grinderId);
+	const profileId = idOf(obj.profileId);
 	const grinderModelRaw = obj.grinderModel;
 	const grinderModel =
 		typeof grinderModelRaw === 'string' && grinderModelRaw.length > 0
@@ -4384,6 +4389,7 @@ export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | nul
 				? (obj.completedAt as number)
 				: 0,
 		profileName: typeof obj.profileName === 'string' ? (obj.profileName as string) : null,
+		...(profileId ? { profileId } : {}),
 		profile: (obj.profile as unknown) ?? null,
 		stopReason: (obj.stopReason as unknown) ?? null,
 		...(obj.stopEstimated === true ? { stopEstimated: true } : {}),
@@ -4391,6 +4397,7 @@ export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | nul
 		record: recordField,
 		bean,
 		grinderModel,
+		...(grinderId ? { grinderId } : {}),
 		tags,
 		yieldTarget,
 		brewTempTarget: brewTempRaw,

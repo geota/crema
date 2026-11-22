@@ -323,6 +323,11 @@ export interface StoredShot {
 	 * which are matched by name.
 	 */
 	grinderId?: string | null;
+	/**
+	 * The active profile's library id at shot start (save-boundaries F4):
+	 * lookups use it, display uses `profileName`. Absent on older rows.
+	 */
+	profileId?: string | null;
 	/** Shot-level free-form tags. Mutable. */
 	tags?: string[];
 	/** Yield target the user dialed in, grams (stop-on-weight target). */

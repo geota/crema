@@ -5,7 +5,11 @@
 	 * `BrewHeader` — the brew dashboard's top strip. The bean lives as a second
 	 * block to the right of the Profile block:
 	 *
-	 *   [ Profile ▸ name · identity · specs ]  | [ Bean ▸ name · provenance · prep ]  [Quick Controls]
+	 *   [ Profile ▸ name · specs ] | [ Grinder ▸ name · grind ] | [ Bean ▸ name · prep ]  [Quick Controls]
+	 *
+	 * The Grinder block (#488, board WideBrew2) shows the active grinder and
+	 * Brew's grind with its unit, plus the unsaved-grind marker ("● Bag 4.2")
+	 * while the grind differs from the bag's saved one.
 	 *
 	 * Each block is a single tap target that opens a searchable
 	 * {@link HeaderPicker} of all items (pinned first), whose footer carries
@@ -13,8 +17,12 @@
 	 * wiring lives in `BrewDashboard.svelte`. Errors and maintenance are not
 	 * here: they are `BrewStatusCard`, at the foot of the left column.
 	 */
+	import StarIcon from 'phosphor-svelte/lib/StarIcon';
 	import HeaderBlock from './HeaderBlock.svelte';
 	import HeaderPicker, { type PickerItem } from './HeaderPicker.svelte';
+	import GrinderPicker, { type GrinderPickRow } from '#lib/components/grinders/GrinderPicker.svelte';
+	import GrindMarker from '#lib/components/grinders/GrindMarker.svelte';
+	import type { Grinder, GrinderChoice } from '#lib/bean/grinder.js';
 
 	let {
 		// Profile block
@@ -38,6 +46,19 @@
 		beanItems,
 		activeBeanId = null,
 		beanRank,
+		// Grinder block
+		grinderName,
+		grinderStarred = false,
+		grindLabel,
+		grindMarker = null,
+		grindMarkerTitle = '',
+		grinderRows,
+		activeGrinderId = null,
+		allGrinders,
+		onSelectGrinder,
+		onAddGrinder,
+		onEditBagGrinds,
+		onDevices,
 		// Right cluster
 		quickSheetOpen = false,
 		// Callbacks
@@ -79,6 +100,22 @@
 		activeBeanId?: string | null;
 		/** Relevance ranker for the bean dropdown — see `HeaderPicker.rank`. */
 		beanRank?: (query: string) => Map<string, number> | null;
+		/** The active grinder's name, or "No grinder". */
+		grinderName: string;
+		/** The active grinder is the selected bag's starred one. */
+		grinderStarred?: boolean;
+		/** "Grind 480 μm". */
+		grindLabel: string;
+		/** "Bag 4.2" while the grind is unsaved, else null. */
+		grindMarker?: string | null;
+		grindMarkerTitle?: string;
+		grinderRows: readonly GrinderPickRow[];
+		activeGrinderId?: string | null;
+		allGrinders: readonly Grinder[];
+		onSelectGrinder: (id: string | null) => void;
+		onAddGrinder: (choice: GrinderChoice) => void;
+		onEditBagGrinds?: () => void;
+		onDevices: () => void;
 		quickSheetOpen?: boolean;
 		onEditProfile?: () => void;
 		onSelectProfile: (id: string) => void;
@@ -91,18 +128,19 @@
 		onOpenQuick?: () => void;
 	} = $props();
 
-	let openPicker = $state<'profile' | 'bean' | null>(null);
+	let openPicker = $state<'profile' | 'grinder' | 'bean' | null>(null);
 	let profileBlockEl = $state<HTMLElement | null>(null);
+	let grinderBlockEl = $state<HTMLElement | null>(null);
 	let beanBlockEl = $state<HTMLElement | null>(null);
 
-	function toggle(which: 'profile' | 'bean'): void {
+	function toggle(which: 'profile' | 'grinder' | 'bean'): void {
 		openPicker = openPicker === which ? null : which;
 	}
 	// Close the open picker on any click outside its block (the tap target + the
 	// panel both live inside the block, so opening / in-panel clicks don't self-close).
 	function onWindowClick(e: MouseEvent): void {
 		if (!openPicker) return;
-		const el = openPicker === 'profile' ? profileBlockEl : beanBlockEl;
+		const el = openPicker === 'profile' ? profileBlockEl : openPicker === 'grinder' ? grinderBlockEl : beanBlockEl;
 		if (el && !el.contains(e.target as Node)) openPicker = null;
 	}
 </script>
@@ -148,6 +186,43 @@
 				onAdd={onAddProfile}
 				onEdit={onEditProfile}
 				onLibrary={onProfileLibrary}
+				onClose={() => (openPicker = null)}
+			/>
+		{/snippet}
+	</HeaderBlock>
+
+	<!-- Grinder block (#488): Profile | Grinder | Bean, evenly spaced. -->
+	<span class="bh-divider" aria-hidden="true"></span>
+	<HeaderBlock
+		cls="bh-block-grinder"
+		variant="bean"
+		eyebrow="Grinder"
+		title={grinderName}
+		tapLabel="Grinder: {grinderName}, {grindLabel}. Choose grinder"
+		open={openPicker === 'grinder'}
+		onTap={() => toggle('grinder')}
+		bind:el={grinderBlockEl}
+	>
+		{#snippet titleExtra()}
+			{#if grinderStarred}<StarIcon weight="fill" class="bh-grinder-star" aria-label="this bag's grinder" />{/if}
+		{/snippet}
+		{#snippet footer()}
+			<span class="bh-meta bh-grind-line">
+				<span>{grindLabel}</span>
+				{#if grindMarker}<GrindMarker text={grindMarker} title={grindMarkerTitle} interactive={false} />{/if}
+			</span>
+		{/snippet}
+		{#snippet picker()}
+			<GrinderPicker
+				open={openPicker === 'grinder'}
+				rows={grinderRows}
+				activeId={activeGrinderId}
+				bagName={activeBeanId ? beanName : null}
+				{allGrinders}
+				onSelect={onSelectGrinder}
+				onAdd={onAddGrinder}
+				onEditBag={activeBeanId ? onEditBagGrinds : undefined}
+				{onDevices}
 				onClose={() => (openPicker = null)}
 			/>
 		{/snippet}
@@ -203,3 +278,22 @@
 		</button>
 	</div>
 </div>
+
+<style>
+	/* Profile | Grinder | Bean, evenly spaced (#488): the Grinder block takes
+	   the same free space after it as the Profile block does. */
+	:global(.bh-header .bh-block-grinder) {
+		margin-right: auto;
+	}
+	:global(.bh-grinder-star) {
+		color: var(--fg-accent);
+		font-size: 14px;
+		flex: none;
+	}
+	.bh-grind-line {
+		display: inline-flex;
+		align-items: center;
+		gap: 10px;
+		overflow: visible;
+	}
+</style>

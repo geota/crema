@@ -96,7 +96,11 @@ describe('Quick Controls Save on the dashboard', () => {
 
 	const sheet = (root: HTMLElement): HTMLElement => root.querySelector<HTMLElement>('.qsheet')!;
 	function buttonIn(root: HTMLElement, text: string): HTMLButtonElement | undefined {
-		return [...root.querySelectorAll('button')].find((b) => b.textContent?.trim() === text);
+		// Save's dot reads ", includes the grind" to assistive tech (#488).
+		return [...root.querySelectorAll('button')].find((b) => {
+			const t = b.textContent?.trim() ?? '';
+			return t === text || t === `${text}, includes the grind`;
+		});
 	}
 	function click(root: HTMLElement, text: string): void {
 		const b = buttonIn(root, text);
@@ -135,6 +139,7 @@ describe('Quick Controls Save on the dashboard', () => {
 		click(root, 'Grind');
 		click(root, '4.6');
 		expect(buttonIn(root, 'Save')!.disabled).toBe(false);
+		expect(buttonIn(root, 'Save')!.querySelector('.qsave-dot'), 'the dot: Save includes the grind').not.toBeNull();
 		click(root, 'Save');
 		await tick();
 		expect(getActiveDialog(), 'no name prompt for a grind').toBeNull();
@@ -184,5 +189,84 @@ describe('Quick Controls Save on the dashboard', () => {
 		await tick();
 		expect(savedGrind(), 'Cancel writes nothing').toBe('4.2');
 		expect(profiles.all.length).toBe(count);
+	});
+});
+
+/**
+ * The Brew header's Grinder block and the unsaved-grind marker (#488, boards
+ * WideBrew2, WideGrindUnsavedRest, WideGrindUnsavedQC).
+ */
+describe('the Grinder block and the unsaved-grind marker', () => {
+	let component: ReturnType<typeof mount> | null = null;
+
+	afterEach(() => {
+		if (component) unmount(component);
+		component = null;
+		document.body.innerHTML = '';
+	});
+
+	async function render(): Promise<HTMLElement> {
+		const app = { brewOverridesFor: () => ({}), setBrewOverrides: vi.fn(), state: getCremaUiState() } as unknown as CremaApp;
+		const target = document.body.appendChild(document.createElement('div'));
+		component = mount(WithAppContext, {
+			target,
+			props: { app, component: BrewDashboard, props: { ui: getCremaUiState().current } }
+		});
+		flushSync();
+		await tick();
+		return target;
+	}
+
+	function setup(brew: number) {
+		const beans = getBeanStore();
+		beans.clearAll();
+		const g = beans.addGrinder('Mignon Specialita')!;
+		beans.setActiveGrinder(g.id);
+		beans.upsertBean({
+			...blankBean('bean:a'),
+			name: 'Ethiopia Guji',
+			grinds: [{ grinderId: g.id, grinderName: g.name, grind: '4.2', starred: true }]
+		});
+		beans.setActiveBean('bean:a');
+		getBrewGrind().set(brew);
+		return g;
+	}
+
+	it('shows the grinder, the grind and "Bag 4.2" while the grind differs', async () => {
+		setup(4.3);
+		const root = await render();
+		const block = root.querySelector<HTMLElement>('.bh-block-grinder')!;
+		expect(block.textContent).toContain('Mignon Specialita');
+		expect(block.textContent).toContain('Grind 4.3');
+		const marker = block.querySelector<HTMLElement>('.gmark')!;
+		expect(marker.textContent).toContain('Bag 4.2');
+		expect(marker.title).toContain('Ethiopia Guji has 4.2 saved for Mignon Specialita');
+		expect(block.querySelector('.bh-grinder-star'), 'the bag\'s starred grinder').not.toBeNull();
+		// Quick Controls: the marker in the Grind card's label row and the ringed chip.
+		const qc = root.querySelector<HTMLElement>('.qsheet')!;
+		[...qc.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Grind')!.click();
+		flushSync();
+		expect(qc.querySelector('.qdg-marker')?.textContent).toContain('Bag 4.2');
+		expect(qc.querySelector('.qchip.is-saved')?.textContent?.trim()).toBe('4.2');
+	});
+
+	it('no marker when the grind matches the bag', async () => {
+		setup(4.2);
+		const root = await render();
+		expect(root.querySelector('.bh-block-grinder .gmark')).toBeNull();
+	});
+
+	it('the picker lists the grinders with what the bag saved, and picks one', async () => {
+		const g = setup(4.2);
+		const other = getBeanStore().addGrinder('DF64')!;
+		const root = await render();
+		root.querySelector<HTMLElement>('.bh-block-grinder .bh-block-tap')!.click();
+		flushSync();
+		const panel = root.querySelector<HTMLElement>('[aria-label="Choose grinder"]')!;
+		expect(panel.textContent).toContain("This bag's grinder · Saved 4.2");
+		expect(panel.textContent).toContain('Nothing saved');
+		[...panel.querySelectorAll<HTMLButtonElement>('.hpick-item')].find((b) => b.textContent?.includes('DF64'))!.click();
+		await vi.waitFor(() => expect(getBeanStore().activeGrinder?.id).toBe(other.id));
+		expect(g.id).not.toBe(other.id);
 	});
 });
