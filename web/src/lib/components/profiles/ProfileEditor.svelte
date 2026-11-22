@@ -54,6 +54,7 @@
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import { guardUnsavedChanges } from '#lib/beans/unsaved-guard.js';
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import { usePhoneBar } from '#lib/shell/phone-bar.svelte.js';
@@ -151,19 +152,23 @@
 	 * by field from this base (core `merge_profile_edit`, REVIEW-FINAL-2 N2).
 	 */
 	let baseline = $state.raw<CremaProfile | undefined>(untrack(() => stored));
+	/**
+	 * Whether {@link baseline} is the stored custom row itself, so Save updates
+	 * it in place (not a fork of a built-in, a `?duplicate=1` copy or a blank).
+	 * Held with the baseline: a profile deleted elsewhere while it is being
+	 * edited is still an in-place edit, which Save then refuses rather than
+	 * adding the profile back.
+	 */
+	const storedInPlace = $derived(stored != null && sourceId != null && stored.id === sourceId);
+	let inPlace = $state(untrack(() => storedInPlace));
 	$effect.pre(() => {
 		const next = stored;
-		if (!dirty) baseline = next;
+		const here = storedInPlace;
+		if (!dirty) {
+			baseline = next;
+			inPlace = here;
+		}
 	});
-
-	/**
-	 * Whether the source id in `edit` mode resolved to a profile already in the
-	 * library. False for `/profiles/new` and for an unknown id — both of which
-	 * are saving a brand-new entry.
-	 */
-	const sourceResolved = $derived(
-		mode === 'edit' && store.loaded && sourceId != null && store.get(sourceId) != null
-	);
 
 	/**
 	 * Whether the editor is saving a *new* library entry rather than updating
@@ -175,9 +180,8 @@
 	 * local override wins until the route inputs change.
 	 */
 	let isCreateOverride = $state<boolean | null>(null);
-	const isCreate = $derived(
-		isCreateOverride ?? (!sourceResolved || baseline?.source !== 'custom')
-	);
+	const GONE_MESSAGE = 'This profile was deleted on another tab or device, so these changes can’t be saved.';
+	const isCreate = $derived(isCreateOverride ?? !inPlace);
 
 	/**
 	 * The editable draft profile. It starts as a `$derived` mirror of the
@@ -323,6 +327,12 @@
 	 *    it on the DE1.
 	 */
 	function save(): void {
+		// Deleted elsewhere while open (another tab or device): Save doesn't add
+		// it back, as the bag editor refuses for a deleted bag.
+		if (!isCreate && !store.get(draft.id)) {
+			toast.error(GONE_MESSAGE);
+			return;
+		}
 		const toSave: CremaProfile = isCreate
 			? {
 					...draft,
@@ -352,8 +362,7 @@
 	/**
 	 * An in-place Save: the user's changes (the draft against its
 	 * {@link baseline}) onto the profile as stored now, field by field (core
-	 * `merge_profile_edit`), so a change made elsewhere meanwhile survives. A
-	 * profile gone meanwhile saves as the draft.
+	 * `merge_profile_edit`), so a change made elsewhere meanwhile survives.
 	 */
 	function merged(edited: CremaProfile): CremaProfile {
 		const current = store.get(edited.id);
