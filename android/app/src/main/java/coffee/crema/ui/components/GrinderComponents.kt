@@ -266,7 +266,7 @@ fun ShotGrindStepper(
 ) {
     val scale = remember(shot.grinderId, shot.grinderModel, grinders) { coffee.crema.ui.shotGrindScale(shot, grinders) }
     val grind = shot.effectiveGrindSetting
-    val value = coffee.crema.beans.grindDouble(grind)
+    val value = coffee.crema.beans.grindNumber(grind)
     val start = remember(scale) { coffee.crema.beans.grindStartFromBlank(scale) }
     CremaStepper(
         modifier = modifier,
@@ -277,6 +277,8 @@ fun ShotGrindStepper(
         min = minOf(scale.min, scale.max).toDouble(),
         max = maxOf(scale.min, scale.max).toDouble(),
         fmt = { v -> coffee.crema.beans.grindText(v, scale) },
+        parse = { coffee.crema.beans.grindNumber(it) },
+        fullKeyboard = coffee.crema.beans.grindFullKeyboard(scale),
         clampTyped = false,
         blank = if (value == null) StepperBlank(grind ?: "—", start) else null,
     )

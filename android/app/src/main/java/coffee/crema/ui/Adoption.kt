@@ -132,7 +132,7 @@ fun adopt(own: MainUiState, cfg: ConfigSnapshot, changes: Set<Setting>, hasBean:
             // The hub's grind as text; a number is still held to the sanity bound.
             Setting.QC_GRIND -> when (val g = cfg.qcGrind?.trim()?.takeIf { it.isNotEmpty() }) {
                 null -> s.copy(qcGrind = null)
-                else -> if (coffee.crema.beans.grindDouble(g)?.let { QcField.GRIND.refusal(it.toFloat()) } == null) s.copy(qcGrind = g) else s
+                else -> if (coffee.crema.beans.grindNumber(g)?.let { QcField.GRIND.refusal(it.toFloat()) } == null) s.copy(qcGrind = g) else s
             }
             Setting.ACTIVE_PROFILE -> cfg.activeProfileId?.let { s.copy(activeProfileId = it) } ?: s
             Setting.ACTIVE_BEAN -> s.copy(activeBeanId = cfg.activeBeanId?.takeIf(hasBean))

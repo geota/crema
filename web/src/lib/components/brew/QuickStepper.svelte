@@ -33,7 +33,9 @@
 		clampTyped = true,
 		blankStart = 0,
 		blankText = '',
-		precision = 2
+		precision = 2,
+		parse,
+		inputmode = 'decimal'
 	}: {
 		/** Optional caption above the stepper row. */
 		label?: string;
@@ -105,6 +107,18 @@
 		blankText?: string;
 		/** Decimals that trim float error after a `±` (a grind scale may step finer than 0.01). */
 		precision?: number;
+		/**
+		 * Reads a typed value, `null` when it isn't a number. With it the box
+		 * takes text and starts from {@link fmt}'s text: the grind reads "4⅓"
+		 * and "4 1/3" through the core (#488). Default: a number input.
+		 */
+		parse?: (text: string) => number | null;
+		/**
+		 * The keyboard the text box opens with {@link parse}: the decimal
+		 * number pad (default), or the full keyboard for a thirds scale
+		 * ("4 1/3", `grindInputMode`).
+		 */
+		inputmode?: 'decimal' | 'text';
 	} = $props();
 
 	// Numeric core (clamp + canonical↔display + grid-snapped inc + click-to-type)
@@ -124,7 +138,9 @@
 		incPrecision: () => precision,
 		canEdit: () => !!onChange,
 		clampTyped: () => clampTyped,
-		blank: () => value === null
+		blank: () => value === null,
+		parse: () => parse,
+		editText: () => (parse ? format : undefined)
 	});
 
 	/** Format a value (already in display units) — the supplied `fmt`, or step-aware default. */
@@ -149,7 +165,8 @@
 				<input
 					bind:this={stepper.inputEl}
 					class="qcs-num qcs-num-input"
-					type="number"
+					type={parse ? 'text' : 'number'}
+					inputmode={parse ? inputmode : undefined}
 					aria-label={a11yName}
 					bind:value={stepper.draft}
 					onblur={stepper.commit}

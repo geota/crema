@@ -58,8 +58,11 @@ import coffee.crema.ui.components.GrinderAddBox
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.liveGrinders
 import coffee.crema.ui.newestShotGrind
+import coffee.crema.ui.presetLabel
+import coffee.crema.ui.scaleFieldNumber
 import coffee.crema.ui.scaleNumber
 import coffee.crema.ui.scaleRangeText
+import coffee.crema.ui.scaleStepField
 
 /*
  * Devices → Grinder (#488, boards WideDevicesGrinder, WideDevicesAutoSave,
@@ -196,12 +199,12 @@ private fun GrinderSettings(vm: MainViewModel, ui: MainUiState, g: Grinder, wide
     // The form, re-seeded when the stored grinder changes.
     var lo by remember(g.id, g.scale) { mutableStateOf(scaleNumber(g.scale.min)) }
     var hi by remember(g.id, g.scale) { mutableStateOf(scaleNumber(g.scale.max)) }
-    var step by remember(g.id, g.scale) { mutableStateOf(scaleNumber(g.scale.step)) }
+    var step by remember(g.id, g.scale) { mutableStateOf(scaleStepField(g.scale)) }
     var unit by remember(g.id, g.scale) { mutableStateOf(g.scale.unit) }
     var renaming by remember { mutableStateOf(false) }
     var changingPreset by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf(false) }
-    fun num(t: String) = t.trim().replace(',', '.').toFloatOrNull()
+    fun num(t: String) = scaleFieldNumber(t)
     val refusal = scaleRefusal(num(lo), num(hi), num(step), unit.trim())
     val changed = num(lo) != g.scale.min || num(hi) != g.scale.max || num(step) != g.scale.step || unit.trim() != g.scale.unit
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -209,7 +212,7 @@ private fun GrinderSettings(vm: MainViewModel, ui: MainUiState, g: Grinder, wide
             Text("Grind scale", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             Text(
                 when {
-                    entry?.scale != null -> "From the ${entry.name} preset"
+                    entry?.scale != null -> presetLabel(entry)
                     else -> "Range not set: check your grinder's dial"
                 },
                 style = MaterialTheme.typography.bodySmall,
@@ -254,7 +257,7 @@ private fun GrinderSettings(vm: MainViewModel, ui: MainUiState, g: Grinder, wide
         if (changed) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(refusal ?: "Changes apply to Brew once saved.", style = MaterialTheme.typography.bodySmall, color = if (refusal != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                CremaButton(onClick = { lo = scaleNumber(g.scale.min); hi = scaleNumber(g.scale.max); step = scaleNumber(g.scale.step); unit = g.scale.unit }, variant = CremaButtonVariant.Text, label = "Cancel")
+                CremaButton(onClick = { lo = scaleNumber(g.scale.min); hi = scaleNumber(g.scale.max); step = scaleStepField(g.scale); unit = g.scale.unit }, variant = CremaButtonVariant.Text, label = "Cancel")
                 CremaButton(
                     onClick = { vm.saveGrinderEdit(g, g.copy(scale = g.scale.copy(min = num(lo)!!, max = num(hi)!!, step = num(step)!!, unit = unit.trim()))) },
                     enabled = refusal == null,
@@ -277,7 +280,7 @@ private fun GrinderSettings(vm: MainViewModel, ui: MainUiState, g: Grinder, wide
                         Text(shown, style = MaterialTheme.typography.displaySmall.copy(fontFamily = coffee.crema.ui.theme.JetBrainsMono))
                         if (number && g.scale.unit.isNotBlank()) Text(g.scale.unit, style = MaterialTheme.typography.bodyLarge.copy(fontFamily = coffee.crema.ui.theme.JetBrainsMono), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    Text("Steps of ${scaleNumber(g.scale.step)} · tap the number to type it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Steps of ${coffee.crema.beans.grindStepText(g.scale)} · tap the number to type it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             if (wide) Box(Modifier.weight(1f)) { SavedOnBags(vm, ui, g) }

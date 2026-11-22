@@ -8,6 +8,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import { blankBean, type Bean } from '#lib/bean/index.js';
 import {
+	countsInThirds,
 	DEFAULT_GRIND_SCALE,
 	formatGrind,
 	grindChips,
@@ -17,6 +18,8 @@ import {
 	grindText,
 	sameGrind,
 	ScaleRefusal,
+	shotGrindScale,
+	stepText,
 	type Grinder,
 	type GrindScale
 } from '#lib/bean/grinder.js';
@@ -83,8 +86,44 @@ describe('the core grind text (H1, M2)', () => {
 		expect(grindNumber('9'.repeat(400))).toBeNull();
 		expect(grindNumber('1000000')).toBe(1e6);
 		expect(grindNumber('1000001')).toBeNull();
+		expect(grindNumber('0.' + '1'.repeat(31)), 'more than 32 characters').toBeNull();
 		expect(formatGrind('1e999999999', MOTTO), 'shown as typed').toBe('1e999999999');
 		expect(grindView({ bag: null, grinder: grinder(MOTTO), brewGrind: '1e999999999' }).dial, 'the core keeps it as text').toBeNull();
+	});
+});
+
+describe('thirds (Fellow Ode, step 1/3)', () => {
+	const ODE: GrindScale = { min: 1, max: 11, step: Math.fround(1 / 3), unit: '' };
+
+	it('writes 4⅓ and 4⅔, never 4.33, and reads them and 4 1/3 back as numbers', () => {
+		expect(countsInThirds(ODE)).toBe(true);
+		expect(countsInThirds(DEFAULT_GRIND_SCALE)).toBe(false);
+		expect(grindText(4 + 1 / 3, ODE)).toBe('4⅓');
+		expect(grindText(4 + Math.fround(1 / 3), ODE), 'a step from 4').toBe('4⅓');
+		expect(grindText(14 / 3, ODE)).toBe('4⅔');
+		expect(grindNumber('4⅓')).toBeCloseTo(4 + 1 / 3, 12);
+		expect(grindNumber('4 1/3')).toBe(grindNumber('4⅓'));
+		expect(grindNumber('4⅔')).toBeCloseTo(14 / 3, 12);
+		expect(grindNumber('41/3'), 'a fraction after a whole number needs a space').toBeNull();
+		expect(sameGrind('4⅓', '4 1/3')).toBe(true);
+		expect(stepText(ODE)).toBe('⅓');
+		expect(stepText({ min: 0, max: 10, step: 0.05, unit: '' })).toBe('0.05');
+	});
+
+	it('the chips around 4⅓ land on thirds', () => {
+		expect(grindChips(ODE, '4⅓', 3).map((c) => c.text)).toEqual(['4', '4⅓', '4⅔']);
+		expect(grindChips(ODE, '4 1/3', 3).map((c) => c.text)).toEqual(['4', '4⅓', '4⅔']);
+	});
+});
+
+describe('shotGrindScale (history)', () => {
+	const ode = { id: 'grinder:ode', name: 'Fellow Ode', scale: { min: 1, max: 11, step: 1 / 3, unit: '' } } as Grinder;
+
+	it("reads the shot's grinder by id, else by name for an old shot, else the default", () => {
+		expect(shotGrindScale({ grinderId: 'grinder:ode' }, [ode])).toBe(ode.scale);
+		expect(shotGrindScale({ grinderId: null, grinderModel: ' fellow ode ' }, [ode])).toBe(ode.scale);
+		expect(shotGrindScale({ grinderId: 'grinder:gone', grinderModel: 'Fellow Ode' }, [ode])).toBe(DEFAULT_GRIND_SCALE);
+		expect(shotGrindScale({}, [ode])).toBe(DEFAULT_GRIND_SCALE);
 	});
 });
 

@@ -1111,6 +1111,25 @@ pub fn grind_text_json(dial: f64, scale_json: String) -> Result<String, CremaErr
     de1_domain::grind_text_json(dial, &scale_json).map_err(crema_err)
 }
 
+/// A typed or stored grind as a number, or `None` when it isn't a plain
+/// one (thirds such as "4⅓" and "4 1/3" read; no exponent, at most 1e6).
+/// See [`de1_domain::grind_number`].
+#[uniffi::export]
+#[must_use]
+pub fn grind_number(grind: String) -> Option<f64> {
+    de1_domain::grind_number(&grind)
+}
+
+/// Whether a scale counts in thirds (the Fellow Ode): a `GrindScale` JSON
+/// in. See [`de1_domain::counts_in_thirds`].
+///
+/// # Errors
+/// On a malformed scale.
+#[uniffi::export]
+pub fn counts_in_thirds_json(scale_json: String) -> Result<bool, CremaError> {
+    de1_domain::counts_in_thirds_json(&scale_json).map_err(crema_err)
+}
+
 /// Whether two grinds are the same: numeric when both parse, else trimmed
 /// text. See [`de1_domain::same_grind`].
 #[uniffi::export]

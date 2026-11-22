@@ -60,6 +60,7 @@
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { downloadBlob } from '#lib/utils/download.js';
 	import { getBeanStore } from '#lib/bean/index.js';
+	import { grindInputMode, grindNumber, grindStartFromBlank, grindText, shotGrindScale } from '#lib/bean/grinder.js';
 	import { getHistoryContext } from '#lib/state/index.js';
 	import TagInput from '#lib/components/profiles/TagInput.svelte';
 	import SplitButton from '#lib/components/shared/SplitButton.svelte';
@@ -554,14 +555,16 @@
 	const beanTagsLine = $derived((shot.bean?.tags ?? []).filter((x) => x.trim()).join(' · '));
 
 	// ── Grind stepper (issue #16) — edits the shot's own recorded grind.
-	const grindValue = $derived.by(() => {
-		const raw = effectiveGrindSetting(shot)?.replace(',', '.');
-		const parsed = raw ? Number.parseFloat(raw) : NaN;
-		return Number.isFinite(parsed) ? parsed : 0;
-	});
+	// On the shot's grinder's scale (#488): its number as the core reads it
+	// ("4⅓" on a Fellow Ode), blank when it isn't one ("6 + a tooth" shows as
+	// recorded), each step written as the core's grind text.
+	const grindScale = $derived(shotGrindScale(shot, library.allGrinders));
+	const grindRecorded = $derived(effectiveGrindSetting(shot));
+	const grindValue = $derived(grindNumber(grindRecorded));
+	const grindStart = $derived(grindStartFromBlank(grindScale));
+	const grindFmt = (v: number): string => grindText(v, grindScale);
 	function commitGrind(v: number): void {
-		const fmt = Number.isInteger(v) ? String(v) : v.toFixed(1);
-		onGrindChange(shotId, fmt);
+		onGrindChange(shotId, grindText(v, grindScale));
 	}
 
 	/** Open the notes editor, seeding the draft from the current notes. */
@@ -1271,11 +1274,18 @@
 					<QuickStepper
 						name="Grind"
 						value={grindValue}
-						min={0}
-						max={200}
-						step={0.1}
+						blankStart={grindStart}
+						blankText={grindValue === null ? (grindRecorded ?? '') : ''}
+						unit={grindScale.unit}
+						min={grindScale.min}
+						max={grindScale.max}
+						step={grindScale.step}
+						precision={6}
+						clampTyped={false}
 						onChange={commitGrind}
-						fmt={(v) => (Number.isInteger(v) ? String(v) : v.toFixed(1))}
+						fmt={grindFmt}
+						parse={grindNumber}
+						inputmode={grindInputMode(grindScale)}
 					/>
 				</div>
 				{@render peopleFields()}
@@ -1664,11 +1674,18 @@
 			<span class="t-eyebrow" style="color:var(--fg-3)">Grind</span>
 			<QuickStepper
 				value={grindValue}
-				min={0}
-				max={200}
-				step={0.1}
+				blankStart={grindStart}
+				blankText={grindValue === null ? (grindRecorded ?? '') : ''}
+				unit={grindScale.unit}
+				min={grindScale.min}
+				max={grindScale.max}
+				step={grindScale.step}
+				precision={6}
+				clampTyped={false}
 				onChange={commitGrind}
-				fmt={(v) => (Number.isInteger(v) ? String(v) : v.toFixed(1))}
+				fmt={grindFmt}
+				parse={grindNumber}
+				inputmode={grindInputMode(grindScale)}
 			/>
 		</div>
 	</div>

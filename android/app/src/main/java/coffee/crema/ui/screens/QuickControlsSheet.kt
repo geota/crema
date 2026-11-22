@@ -177,7 +177,7 @@ fun QuickControlsSheet(
     // Grind: Brew's grind (issue 15), blank when not set (#488 round 2).
     val grind = grindView.dial ?: grindView.startFromBlank
     val grindScale = grindView.scale
-    val savedGrind = coffee.crema.beans.grindDouble(grindView.saved)
+    val savedGrind = coffee.crema.beans.grindNumber(grindView.saved)
     val unsavedGrind = grindView.marker
     val grindChips = remember(grindScale, grindView.value) { coffee.crema.beans.grindChips(grindScale, grindView.value).map { it.value } }
 
@@ -312,6 +312,8 @@ fun QuickControlsSheet(
                         chipRing = if (doseGrindMode == DoseGrindMode.Grind && savedGrind != null) { c -> kotlin.math.abs(c - savedGrind) < 1e-6 } else null,
                         clampTyped = doseGrindMode == DoseGrindMode.Dose,
                         blank = if (doseGrindMode == DoseGrindMode.Grind) grindView.stepperBlank() else null,
+                        parse = if (doseGrindMode == DoseGrindMode.Grind) ({ t: String -> coffee.crema.beans.grindNumber(t) }) else null,
+                        fullKeyboard = doseGrindMode == DoseGrindMode.Grind && coffee.crema.beans.grindFullKeyboard(grindScale),
                         onChange = { if (doseGrindMode == DoseGrindMode.Dose) onAdjustBrew(it, yieldOut, brewTemp, preinfOverride) else onGrind(it) },
                         style = CremaStepperStyle.Boxed,
                         gate = doseGrindGate,

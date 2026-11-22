@@ -63,6 +63,18 @@ export interface UseStepperOptions {
 	 * from it, and click-to-type starts with an empty draft.
 	 */
 	blank?: () => boolean;
+	/**
+	 * Reads click-to-type's draft as a number (display units), `null` when it
+	 * isn't one (reactive). Default: `Number`. The grind reads through the
+	 * core's `grind_number`, so a typed "4⅓" or "4 1/3" is a number (#488).
+	 */
+	parse?: () => ((text: string) => number | null) | undefined;
+	/**
+	 * Click-to-type's starting text for a value in display units (reactive).
+	 * Default: the value at `decimals`. The grind starts from its own text
+	 * ("4⅓").
+	 */
+	editText?: () => ((display: number) => string) | undefined;
 }
 
 export interface Stepper {
@@ -153,7 +165,13 @@ export function useStepper(opts: UseStepperOptions): Stepper {
 
 	function beginEdit(): void {
 		if (opts.canEdit && !opts.canEdit()) return;
-		draft = opts.blank?.() ? '' : String(Number(toDisplay(opts.value()).toFixed(effectiveDecimals)));
+		const shown = toDisplay(opts.value());
+		const editText = opts.editText?.();
+		draft = opts.blank?.()
+			? ''
+			: editText
+				? editText(shown)
+				: String(Number(shown.toFixed(effectiveDecimals)));
 		editing = true;
 		queueMicrotask(() => {
 			inputEl?.focus();
@@ -165,8 +183,9 @@ export function useStepper(opts: UseStepperOptions): Stepper {
 		editing = false;
 		// An emptied field is no edit (not 0).
 		if (String(draft).trim() === '') return;
-		const n = Number(draft);
-		if (!Number.isFinite(n)) return;
+		const parse = opts.parse?.();
+		const n = parse ? parse(String(draft)) : Number(draft);
+		if (n === null || !Number.isFinite(n)) return;
 		const typed = fromDisplay(n);
 		const next = opts.clampTyped?.() === false ? typed : clamp(typed);
 		if (opts.blank?.() || next !== opts.value()) opts.commit(next);

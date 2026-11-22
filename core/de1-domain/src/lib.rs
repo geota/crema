@@ -299,10 +299,11 @@ pub use firmware_image::{
 };
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
 pub use grind_value::{
-    BrewGrindInput, BrewGrindView, GrindChip, MAX_OFF_STEP_DECIMALS, MAX_STEP_DECIMALS,
-    ScaleRefusal, UnsavedGrind, brew_grind_view, brew_grind_view_json, format_grind,
-    format_grind_json, grind_chips, grind_chips_json, grind_number, grind_scale_refusal,
-    grind_scale_refusal_json, grind_start_from_blank, grind_text, grind_text_json, same_grind,
+    BrewGrindInput, BrewGrindView, GrindChip, MAX_GRIND_NUMBER, MAX_GRIND_NUMBER_LEN,
+    MAX_OFF_STEP_DECIMALS, MAX_STEP_DECIMALS, ScaleRefusal, UnsavedGrind, brew_grind_view,
+    brew_grind_view_json, counts_in_thirds, counts_in_thirds_json, format_grind, format_grind_json,
+    grind_chips, grind_chips_json, grind_number, grind_scale_refusal, grind_scale_refusal_json,
+    grind_start_from_blank, grind_text, grind_text_json, same_grind,
 };
 pub use grinder::{
     GrindScale, Grinder, GrinderAdd, GrinderAddKind, GrinderArchive, GrinderLibraryMigration,

@@ -153,11 +153,81 @@ class GrinderStateTest {
         // entries (names only) are never in the list.
         val listed = coffee.crema.beans.grinderCatalogue
         assertTrue(listed.all { it.scale != null })
-        listed.forEach { assertEquals("Adds it to your grinders, with its scale", catalogueOfferLine(it.id), it.id) }
         val typical = listed.filter { it.tier == coffee.crema.core.ScaleTier.Typical }.map { it.id }
         assertTrue("comandante-c40" in typical && "fellow-opus" in typical, "typical ranges are still offered: $typical")
+        // #501: a typical range says to check the dial, where a verified one comes with its scale.
+        listed.forEach {
+            val line = if (it.id in typical) "Adds it to your grinders · Typical range — check your dial" else "Adds it to your grinders, with its scale"
+            assertEquals(line, catalogueOfferLine(it.id), it.id)
+        }
         assertTrue(listed.none { it.id == "df64" }, "a hidden entry is never offered")
         assertEquals("Adds it to your grinders · set its range on Devices", catalogueOfferLine("df64"))
+    }
+
+    @Test
+    fun `Devices labels a typical preset and a verified one (#501)`() {
+        val catalogue = coffee.crema.beans.grinderCatalogue
+        val typical = catalogue.first { it.id == "comandante-c40" }
+        val verified = catalogue.first { it.tier == coffee.crema.core.ScaleTier.Verified && it.scale != null }
+        assertEquals("Typical range — check your dial", presetLabel(typical))
+        assertEquals("From the ${verified.name} preset", presetLabel(verified))
+    }
+
+    @Test
+    fun `a thirds scale shows its step as a third and reads one typed (#488)`() {
+        val ode = coffee.crema.beans.grinderCatalogue.first { it.id == "fellow-ode" }.scale!!
+        assertTrue(coffee.crema.beans.countsInThirds(ode))
+        assertEquals("⅓", scaleStepField(ode))
+        assertEquals("⅓", coffee.crema.beans.grindStepText(ode))
+        assertEquals("0.1", scaleStepField(GrindScale(0f, 20f, 0.1f, "")))
+        assertEquals("0.05", coffee.crema.beans.grindStepText(GrindScale(0f, 10f, 0.05f, "")))
+        // The field's "⅓" reads back as the stored step: nothing changed.
+        assertEquals(ode.step, scaleFieldNumber("⅓"))
+        assertEquals(ode.step, scaleFieldNumber("1/3"))
+        assertEquals(0.5f, scaleFieldNumber("0,5"))
+        assertNull(scaleFieldNumber("a"))
+    }
+
+    @Test
+    fun `grinds read through the core, thirds as numbers and exponents or huge values as text (#488)`() {
+        val third = 1.0 / 3.0
+        assertEquals(4 + third, coffee.crema.beans.grindNumber("4⅓"))
+        assertEquals(4 + third, coffee.crema.beans.grindNumber("4 1/3"))
+        assertEquals(4 + 2 * third, coffee.crema.beans.grindNumber(" 4⅔ "))
+        assertEquals(2.5, coffee.crema.beans.grindNumber("2,5"))
+        listOf("41/3", "2.1.3", "1e3", "1e999999999", "1000001", "Infinity", "", "0." + "1".repeat(31)).forEach {
+            assertNull(coffee.crema.beans.grindNumber(it), it)
+        }
+        assertNull(coffee.crema.beans.grindNumber(null))
+        val ode = coffee.crema.beans.grinderCatalogue.first { it.id == "fellow-ode" }.scale!!
+        assertEquals("4⅓", coffee.crema.beans.grindText(coffee.crema.beans.grindNumber("4 1/3")!!, ode))
+    }
+
+    @Test
+    fun `a grind field opens the full keyboard only on a thirds scale`() {
+        val ode = coffee.crema.beans.grinderCatalogue.first { it.id == "fellow-ode" }.scale!!
+        assertTrue(coffee.crema.beans.grindFullKeyboard(ode))
+        assertEquals(androidx.compose.ui.text.input.KeyboardType.Text, coffee.crema.ui.components.editKeyboardType(coffee.crema.beans.grindFullKeyboard(ode)))
+        for (scale in listOf(coffee.crema.beans.DEFAULT_GRIND_SCALE, GrindScale(0f, 999f, 1f, "μm"), GrindScale(0f, 10f, 0.05f, ""))) {
+            assertFalse(coffee.crema.beans.grindFullKeyboard(scale), scale.toString())
+            assertEquals(androidx.compose.ui.text.input.KeyboardType.Decimal, coffee.crema.ui.components.editKeyboardType(coffee.crema.beans.grindFullKeyboard(scale)))
+        }
+    }
+
+    @Test
+    fun `a thirds stepper lands on thirds`() {
+        val ode = coffee.crema.beans.grinderCatalogue.first { it.id == "fellow-ode" }.scale!!
+        val step = ode.step.toDouble()
+        val places = coffee.crema.ui.components.stepperPlaces(step)
+        assertEquals(6, places)
+        val up = coffee.crema.ui.components.roundTo(4.0 + step, places)
+        assertEquals("4⅓", coffee.crema.beans.grindText(up, ode))
+        assertEquals("4⅔", coffee.crema.beans.grindText(coffee.crema.ui.components.roundTo(up + step, places), ode))
+        // A step on the 0.01 grid keeps today's two decimals.
+        assertEquals(2, coffee.crema.ui.components.stepperPlaces(0.1))
+        assertEquals(2, coffee.crema.ui.components.stepperPlaces(1.0))
+        assertEquals(2, coffee.crema.ui.components.stepperPlaces(0.05))
+        assertEquals(18.1, coffee.crema.ui.components.roundTo(18.0 + 0.1, 2))
     }
 
     @Test

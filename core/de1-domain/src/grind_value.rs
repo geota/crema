@@ -170,24 +170,46 @@ pub fn grind_text(dial: f64, scale: &GrindScale) -> String {
     }
 }
 
+/// The largest grind (either sign) [`grind_number`] reads as a number; past
+/// it a grind stays text. Far past any grinder's scale.
+pub const MAX_GRIND_NUMBER: f64 = 1e6;
+
+/// The longest grind (trimmed, in bytes) [`grind_number`] reads as a number.
+pub const MAX_GRIND_NUMBER_LEN: usize = 32;
+
+/// Whether `raw` is a plain decimal: an optional sign, then digits with at
+/// most one point (`12`, `1.`, `.5`, `+2.25`). No exponent, no words.
+fn plain_decimal(raw: &str) -> bool {
+    let digits = raw.strip_prefix(['+', '-']).unwrap_or(raw);
+    let (int, frac) = digits.split_once('.').unwrap_or((digits, ""));
+    let all_digits = |t: &str| t.bytes().all(|b| b.is_ascii_digit());
+    (!int.is_empty() || !frac.is_empty()) && all_digits(int) && all_digits(frac)
+}
+
 /// A grind as a number, when it is a plain one: trimmed, a decimal comma
 /// read as a point (`"2,5"` → 2.5), or thirds (`"4⅓"`, `"4 1/3"`, see the
-/// module docs). `None` for text ("2.1.3", "6 + a tooth"), blank, or a word
-/// Rust would parse ("inf", "NaN").
+/// module docs). `None` for text ("2.1.3", "6 + a tooth"), blank, a word
+/// Rust would parse ("inf", "NaN"), an exponent (`"1e3"`: an imported
+/// `"1e999999999"` stays text, never a number to expand), more than
+/// [`MAX_GRIND_NUMBER_LEN`] bytes, or past [`MAX_GRIND_NUMBER`]. Both
+/// shells read typed and stored grinds through this.
 #[must_use]
 pub fn grind_number(grind: &str) -> Option<f64> {
-    if let Some(n) = thirds_number(grind.trim()) {
-        return Some(n);
-    }
-    let raw = grind.trim().replace(',', ".");
-    if raw.is_empty()
-        || !raw
-            .bytes()
-            .all(|b| b.is_ascii_digit() || b"+-.eE".contains(&b))
-    {
+    let trimmed = grind.trim();
+    if trimmed.len() > MAX_GRIND_NUMBER_LEN {
         return None;
     }
-    raw.parse::<f64>().ok().filter(|n| n.is_finite())
+    let n = match thirds_number(trimmed) {
+        Some(n) => n,
+        None => {
+            let raw = trimmed.replace(',', ".");
+            if !plain_decimal(&raw) {
+                return None;
+            }
+            raw.parse::<f64>().ok()?
+        }
+    };
+    (n.is_finite() && n.abs() <= MAX_GRIND_NUMBER).then_some(n)
 }
 
 /// Whether two grinds are the same: numerically when both are plain numbers
@@ -446,6 +468,14 @@ pub fn grind_text_json(dial: f64, scale_json: &str) -> Result<String, String> {
     Ok(grind_text(dial, &parse(scale_json)?))
 }
 
+/// [`counts_in_thirds`] with a `GrindScale` JSON.
+///
+/// # Errors
+/// The JSON parse error string on a malformed scale.
+pub fn counts_in_thirds_json(scale_json: &str) -> Result<bool, String> {
+    Ok(counts_in_thirds(&parse(scale_json)?))
+}
+
 /// [`format_grind`] with a `GrindScale` JSON.
 ///
 /// # Errors
@@ -585,6 +615,51 @@ mod tests {
     }
 
     #[test]
+    fn grind_number_reads_plain_decimals_within_the_bound() {
+        for (text, n) in [
+            ("15", 15.0),
+            (" 2,5 ", 2.5),
+            ("+2.25", 2.25),
+            ("-1", -1.0),
+            ("1.", 1.0),
+            (".5", 0.5),
+            ("1000000", MAX_GRIND_NUMBER),
+            ("-1000000", -MAX_GRIND_NUMBER),
+        ] {
+            assert_eq!(grind_number(text), Some(n), "{text}");
+        }
+        // The web's parse (REVIEW-CORE H1, PLAN 29): no exponent, no hex or
+        // words, nothing past 1e6 or longer than 32 bytes.
+        for text in [
+            "1e3",
+            "1E3",
+            "1e999999999",
+            "1000000.5",
+            "1000001",
+            "0x10",
+            "inf",
+            "Infinity",
+            ".",
+            "-",
+            "+",
+            "1.2.3",
+            "--1",
+            "1 000",
+            "",
+        ] {
+            assert_eq!(grind_number(text), None, "{text}");
+        }
+        let long = format!("0.{}", "1".repeat(MAX_GRIND_NUMBER_LEN - 2));
+        assert!(grind_number(&long).is_some());
+        assert_eq!(grind_number(&format!("{long}1")), None);
+        // Thirds are bounded too.
+        assert_eq!(grind_number("4000000 1/3"), None);
+        // Text past the bound is still a grind: shown as typed.
+        assert_eq!(format_grind("1e3", &motto()), "1e3");
+        assert!(!same_grind("1e3", "1000"));
+    }
+
+    #[test]
     fn format_grind_adds_the_unit_only_after_a_plain_number() {
         assert_eq!(format_grind("480", &motto()), "480 μm");
         assert_eq!(format_grind(" 6 + a tooth ", &motto()), "6 + a tooth");
@@ -694,6 +769,17 @@ mod tests {
             format_grind("4⅓", &scale(1.0, 11.0, 1.0 / 3.0, "clicks")),
             "4⅓ clicks"
         );
+        // The step itself reads as a third, for Devices' "Steps of ⅓".
+        assert_eq!(grind_text(f64::from(ode().step), &ode()), "⅓");
+        assert_eq!(
+            counts_in_thirds_json(r#"{"min":1,"max":11,"step":0.33333334,"unit":""}"#),
+            Ok(true)
+        );
+        assert_eq!(
+            counts_in_thirds_json(r#"{"min":0,"max":20,"step":0.1,"unit":""}"#),
+            Ok(false)
+        );
+        assert!(counts_in_thirds_json("{").is_err());
     }
 
     #[test]

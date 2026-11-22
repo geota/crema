@@ -6,10 +6,13 @@
  * (`#lib/bean/grinder.js`); this only shapes them for the tab.
  */
 import {
+	countsInThirds,
 	DEFAULT_GRIND_SCALE,
 	grinderCatalogue,
+	grindNumber,
 	grindScaleRefusal,
 	SCALE_REFUSAL_TEXT,
+	ScaleTier,
 	type CatalogueGrinderInfo,
 	type Grinder,
 	type GrindScale
@@ -24,13 +27,23 @@ export interface ScaleDraft {
 	unit: string;
 }
 
-/** A grinder's scale as the fields show it. */
+/** A grinder's scale as the fields show it: a thirds step as "⅓" (the Fellow Ode), not 0.33333334. */
 export function draftOf(scale: GrindScale): ScaleDraft {
-	return { min: String(scale.min), max: String(scale.max), step: String(scale.step), unit: scale.unit };
+	return { min: String(scale.min), max: String(scale.max), step: stepFieldText(scale), unit: scale.unit };
 }
 
-/** A typed number ("0,5" reads as 0.5); NaN when blank or not a number. */
+/** The Step field's text: "⅓" on a thirds scale (`de1_domain::counts_in_thirds`), else the stored step. */
+export function stepFieldText(scale: GrindScale): string {
+	return countsInThirds(scale) ? '⅓' : String(scale.step);
+}
+
+/**
+ * A typed number ("0,5" reads as 0.5, "⅓" and "1/3" as a third through the
+ * core's `grind_number`); NaN when blank or not a number.
+ */
 function numberOf(text: string): number {
+	const typed = grindNumber(text);
+	if (typed !== null) return typed;
 	const raw = text.trim().replace(',', '.');
 	return raw === '' ? Number.NaN : Number(raw);
 }
@@ -60,6 +73,23 @@ export function sameScale(a: GrindScale, b: GrindScale): boolean {
 export function presetOf(grinder: Grinder): CatalogueGrinderInfo | null {
 	if (!grinder.presetId) return null;
 	return grinderCatalogue().find((c) => c.id === grinder.presetId) ?? null;
+}
+
+/**
+ * What the grinder header says while the scale is its preset's: "From the X
+ * preset" for a verified range, "Typical range — check your dial" for a
+ * typical one (`ScaleTier::Typical`, #501).
+ */
+export function presetLabel(preset: CatalogueGrinderInfo): string {
+	return preset.tier === ScaleTier.Typical ? 'Typical range — check your dial' : `From the ${preset.name} preset`;
+}
+
+/** What the type-or-pick box says under a catalogue entry: its scale comes with it, typical or not, or is set on Devices. */
+export function catalogueOfferLine(entry: CatalogueGrinderInfo | undefined): string {
+	if (!entry?.scale) return 'Adds it to your grinders; set its range on Devices';
+	return entry.tier === ScaleTier.Typical
+		? 'Adds it to your grinders · Typical range — check your dial'
+		: 'Adds it to your grinders, with its scale';
 }
 
 /** The verified scale of the preset `grinder` came from: what "Reset to preset" restores. */
