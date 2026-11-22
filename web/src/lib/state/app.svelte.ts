@@ -26,7 +26,9 @@ import {
 	type CremaCore
 } from '#lib/core/index.js';
 import { MachineState, MmrRegister } from '#lib/core/crema-core.js';
-import type { BrewRecipe, MaintenanceFailure, StartEnd } from '#lib/core/crema-core.js';
+import type { BrewRecipe, MaintenanceFailure, ShotSelections, StartEnd } from '#lib/core/crema-core.js';
+import { grindView } from '#lib/brew/grind-view.js';
+import { getBrewGrind } from '#lib/brew/grind-session.svelte.js';
 import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
 import { playBrewCue } from '#lib/brew/cues.js';
 import {
@@ -714,6 +716,13 @@ export class CremaApp {
 				const s = getSettingsStore().current;
 				void this.core.setStartSettings(s.groupFlushBeforeShot, s.requireScale, s.autoPurgeAfterSteam);
 			});
+			// What Brew has selected (REVIEW-CORE H3): the core freezes it at
+			// its own shot start, so a group-head start records it too.
+			// TODO(#488 batch 2 web): a replay's selections, and drop the
+			// shell's own freeze.
+			$effect(() => {
+				this.core.setShotSelections(this.shotSelections());
+			});
 		});
 		// A hidden tab gets no wake-up tick (the regular tick covers the
 		// core's deadline when it is visible again).
@@ -1044,6 +1053,34 @@ export class CremaApp {
 			grinderModel,
 			grinderId,
 			source: 'live'
+		};
+	}
+
+	/** What Brew has selected now, for the core to freeze at shot start (reactive). */
+	private shotSelections(): ShotSelections {
+		const library = getBeanStore();
+		const bag = library.activeBean;
+		const snap = snapshotFromBean(bag, bag?.roasterId ? library.getRoaster(bag.roasterId) : null);
+		const profiles = getProfileStore();
+		const profile = profiles.activeId ? profiles.get(profiles.activeId) : undefined;
+		const grinder = library.activeGrinder;
+		return {
+			bean: snap
+				? {
+						beanId: snap.beanId ?? undefined,
+						name: snap.name,
+						roasterName: snap.roasterName ?? undefined,
+						roastedOn: snap.roastedOn ?? undefined,
+						roastLevel: snap.roastLevel ?? undefined,
+						tags: snap.tags,
+						notes: snap.notes
+					}
+				: undefined,
+			profileId: profile?.id,
+			profileName: profile?.name,
+			grinderId: grinder?.id,
+			grinderName: grinder?.name.trim() || undefined,
+			grind: grindView({ bag, grinder, brewGrind: getBrewGrind().value }).recorded ?? undefined
 		};
 	}
 

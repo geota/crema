@@ -433,13 +433,13 @@ pub struct StoredShot {
     /// rewrite history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bean: Option<ShotBean>,
-    /// Equipment-level grinder model at completion time
-    /// (e.g. `"Niche Zero"`). Snapshotted from the shell's
-    /// `settings.prefs.grinderModel` — distinct from `metadata.grinder_setting`
-    /// (the *dial*) and `bean.grinder_setting` (the bean's recorded dial).
-    /// `None` when no value was set at completion time; the upload-time
-    /// cascade in the shell's Visualizer sync falls back to the current
-    /// settings default.
+    /// The grinder's name snapshot (e.g. `"Niche Zero"`): since #488 the
+    /// active grinder record's name at shot start
+    /// ([`crate::ShotSelections::grinder_name`]); on older rows the settings
+    /// `grinderModel` at completion. Distinct from `metadata.grinder_setting`
+    /// (the *dial*) and `bean.grinder_setting` (the bag's old recorded dial,
+    /// on old rows only). `None` = no grinder: uploads and exports send none
+    /// and never fall back to the settings `grinder_model` (REVIEW-FINAL S3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grinder_model: Option<String>,
     /// The id of the active grinder record at shot start (#488;

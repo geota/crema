@@ -735,6 +735,31 @@ data class BrewHistoryStats (
 	val scopeMethod: String? = null
 )
 
+/// The grinder and grind a logged brew records (REVIEW-FINAL S4), stamped
+/// the way a shot is: the active grinder's id and name snapshot, and the
+/// grind as text on its scale.
+@Serializable
+data class BrewLogGrind (
+	/// The row's `grinder_id` ([`crate::StoredShot::grinder_id`]).
+	val grinderId: String? = null,
+	/// The row's grinder name snapshot ([`crate::StoredShot::grinder_model`]).
+	val grinderName: String? = null,
+	/// The row's grind: [`grind_text`] on the grinder's scale (the default
+	/// with none), so a 0.05 step keeps its decimals and a whole number has
+	/// none; `None` when not set or not finite.
+	val grind: String? = null
+)
+
+/// What [`brew_log_grind`] reads: the Log-brew form's grinder and grind.
+@Serializable
+data class BrewLogGrindInput (
+	/// The active grinder ([`crate::grinder::active_grinder`]) when the brew
+	/// is logged; `None` = no grinder.
+	val grinder: Grinder? = null,
+	/// The form's grind; `None` = not set. 0 is a grind.
+	val grind: Double? = null
+)
+
 /// Explicit seed values a caller opens the form with — "Log again" (a
 /// whole prior brew) or a finished guided session's measured summary.
 /// Every field optional.
@@ -835,8 +860,13 @@ data class BrewLogSeedInput (
 	val lastUsedMethod: String? = null,
 	/// The bag the form is logging against.
 	val beanId: String? = null,
-	/// That bag's own grinder setting — the grind fallback.
-	val beanGrinderSetting: String? = null,
+	/// That bag, for its saved grind with [`Self::grinder`] — the grind
+	/// fallback ([`crate::bag_grind::pick_grind`]). Its legacy
+	/// `grinder_setting` is not read (REVIEW-FINAL S4).
+	val bag: Bean? = null,
+	/// The active grinder ([`crate::grinder::active_grinder`]); `None` = no
+	/// grinder (the bag's "no grinder" slot).
+	val grinder: Grinder? = null,
 	val prefill: BrewLogPrefill? = null,
 	/// Prior brews, newest first.
 	val rows: List<BrewSeedInput>,
@@ -857,7 +887,8 @@ data class BrewLogSeeds (
 	/// Water-in, grams, for filter methods — **beverage-out** for the
 	/// espresso family (the form's single "water / yield" field).
 	val water: Float,
-	/// Grind setting, or `None` when nothing numeric is known.
+	/// Grind setting, or `None` when nothing numeric is known. A grind of 0
+	/// is a grind.
 	val grind: Float? = null,
 	/// Water temperature, °C, or `None`.
 	val tempC: Float? = null,
@@ -5062,7 +5093,9 @@ data class ShotMachine (
 )
 
 /// What a shell knows about a finished shot that the core doesn't — handed
-/// to the core's `take_stored_shot` on `Event::ShotCompleted`.
+/// to the core's `take_stored_shot` on `Event::ShotCompleted`. What Brew had
+/// selected is not here: the core froze it at shot start
+/// ([`ShotSelections`]), so a completion-time value can't reach the shot.
 @Serializable
 data class ShotCaptureContext (
 	/// When the shot completed, Unix epoch ms — the core has no wall clock.
@@ -5070,41 +5103,70 @@ data class ShotCaptureContext (
 	/// The id to store the shot under, or `None` to mint a fresh one (a
 	/// shell that showed the id already, e.g. Android's "Last shot" card).
 	val id: String? = null,
-	/// The bean snapshot the shot was pulled with, or `None`.
-	val bean: ShotBean? = null,
-	/// The active grinder's name at shot start ([`crate::grinder::Grinder`]
-	/// `name`, from [`crate::grinder::active_grinder`]): the shot's name
-	/// snapshot. `None` or blank = no grinder. Not the settings
-	/// `grinder_model`. (The field keeps its pre-#488 name so both shells'
-	/// contexts still decode.)
-	val settingsGrinder: String? = null,
-	/// The active grinder's id at shot start (#488), stamped as
-	/// [`StoredShot::grinder_id`]. `None` or blank = no grinder.
-	val grinderId: String? = null,
-	/// The grind dial at shot start, or `None` when it carried no value.
-	/// Recorded through [`crate::grind_value::grind_text`] (no one-decimal
-	/// rounding); [`Self::grind`] wins when set.
-	val grindDial: Float? = null,
-	/// Brew's grind at shot start as text ([`crate::BrewGrindView::value`]),
-	/// recorded as is (trimmed), a grind that isn't a plain number included.
-	/// `None` or blank = fall back to [`Self::grind_dial`].
-	val grind: String? = null,
 	/// The barista, or `None`.
 	val barista: String? = null,
 	/// The shot's tags at capture (a copy of the bean's tags today). `None`
 	/// (or `null` on the wire) = no tags.
 	val tags: List<String>? = null,
 	/// The DE1 the shot ran on, or `None` when it isn't known.
-	val machine: ShotMachine? = null,
-	/// The profile name the shell knows, the last fallback when the core
-	/// knows neither the profile it ran nor a title — a replay, whose shadow
-	/// core saw no upload, passes the capture's name here.
-	val profileName: String? = null,
-	/// The library id of the profile the shell has active, or `None`. The
-	/// fallback for [`StoredShot::profile_id`] when the core doesn't hold the
-	/// profile it ran; stamped only when the shot's name is this profile's
-	/// (`profile_name`), so a profile another app loaded never gets an id.
-	val profileId: String? = null
+	val machine: ShotMachine? = null
+)
+
+/// What a completed shot does. "When kept": at once for a recorded shot, on
+/// the Undo for a discarded aborted pull.
+@Serializable
+data class ShotEffects (
+	/// Add the history row now.
+	val record: Boolean,
+	/// Hold the row behind an Undo (an aborted pull) instead.
+	val offerUndo: Boolean,
+	/// Debit the dose from the shot's bag (its frozen `bean.beanId`) now.
+	val debit: Boolean,
+	/// Fire the `shotCompleted` webhook now.
+	val webhook: Boolean,
+	/// When kept: save the shot's grind to its bag, if the device's
+	/// auto-save setting is on ([`crate::bag_grind::auto_save_shot_grind`]
+	/// keeps its own gates).
+	val autoSave: Boolean,
+	/// When kept: offer the shot to the armed upload destinations (each
+	/// keeps its own gates).
+	val upload: Boolean
+)
+
+/// What the shell should do with a just-completed shot — decided at the
+/// core boundary so both shells classify identically (previously each
+/// re-implemented the aborted rule and the cleaning-profile lookup).
+/// 
+/// The *mechanics* stay shell-side: `DiscardAborted` is held behind an
+/// undo toast (live side effects — bean debit, webhook — still run,
+/// because the dose was physically ground); `SkipCleaning` records
+/// nothing at all (nothing was ground — machine maintenance runs in the
+/// DE1's Espresso state, so a cleaning/backflush profile would otherwise
+/// be recorded as a shot; Decenza #1325, `maincontroller.cpp:1841-1853`).
+@Serializable
+enum class ShotDisposition(val string: String) {
+	/// A real shot — persist the history row, sync, capture.
+	@SerialName("Record")
+	Record("Record"),
+	/// An aborted pull (short AND light) — discard behind an undo.
+	@SerialName("DiscardAborted")
+	DiscardAborted("DiscardAborted"),
+	/// A cleaning/backflush run — record nothing.
+	@SerialName("SkipCleaning")
+	SkipCleaning("SkipCleaning"),
+}
+
+/// What [`shot_effects`] reads.
+@Serializable
+data class ShotEffectsInput (
+	/// The core's classification of the completion (`ShotCompleted`'s
+	/// `disposition`).
+	val disposition: ShotDisposition,
+	/// This device recorded the shot: the hub, or a device on its own. A
+	/// remote watching the hub's shot passes `false`.
+	val recordedHere: Boolean,
+	/// The shot is a replay of a capture, not a live pull.
+	val replay: Boolean
 )
 
 /// What the merge reads of the local row.
@@ -5316,6 +5378,41 @@ data class ShotSample (
 	val frameNumber: UByte,
 	/// Steam heater temperature, °C.
 	val steamTemp: Float
+)
+
+/// What Brew has selected, for the next shot (REVIEW-CORE H3). The shells
+/// hand it to the core (`CremaCore::set_shot_selections`) whenever a part
+/// changes, the way they hand in the desired profile; the core freezes a
+/// copy on its own shot-start event and the shot records that copy. On a
+/// remote, the hub's selections (its mirror records the shot it watched);
+/// for a replay, the capture's.
+@Serializable
+data class ShotSelections (
+	/// The bag on Brew, as a snapshot ([`ShotBean::snapshot_of`]), or `None`.
+	/// The shot's bag, and so the bag a recorded shot debits. Its legacy
+	/// `grinder_setting` / `grinder` are never recorded.
+	val bean: ShotBean? = null,
+	/// The library id of the active profile, or `None`. The fallback for
+	/// [`StoredShot::profile_id`] when the core doesn't hold the profile it
+	/// ran; stamped only when the shot's name is this profile's
+	/// ([`Self::profile_name`]), so a profile another app loaded never gets
+	/// an id.
+	val profileId: String? = null,
+	/// The active profile's name: the last fallback name when the core knows
+	/// neither the profile it ran nor a title (a remote's mirror core and a
+	/// replay's shadow core saw no upload).
+	val profileName: String? = null,
+	/// The active grinder's id ([`crate::grinder::active_grinder`]), stamped
+	/// as [`StoredShot::grinder_id`]. `None` or blank = no grinder.
+	val grinderId: String? = null,
+	/// The active grinder's name ([`crate::grinder::Grinder::name`]): the
+	/// shot's name snapshot ([`StoredShot::grinder_model`]). `None` or blank
+	/// = no grinder. Not the settings `grinder_model`.
+	val grinderName: String? = null,
+	/// Brew's grind as text ([`crate::BrewGrindView::value`]), recorded as is
+	/// (trimmed), a grind that isn't a plain number included. `None` or blank
+	/// = no grind.
+	val grind: String? = null
 )
 
 /// One shot's inputs to the History summary strip — a light projection
@@ -7172,29 +7269,6 @@ enum class ScaleRefusal(val string: String) {
 	/// "Step must fit between Lowest and Highest".
 	@SerialName("stepTooLarge")
 	StepTooLarge("stepTooLarge"),
-}
-
-/// What the shell should do with a just-completed shot — decided at the
-/// core boundary so both shells classify identically (previously each
-/// re-implemented the aborted rule and the cleaning-profile lookup).
-/// 
-/// The *mechanics* stay shell-side: `DiscardAborted` is held behind an
-/// undo toast (live side effects — bean debit, webhook — still run,
-/// because the dose was physically ground); `SkipCleaning` records
-/// nothing at all (nothing was ground — machine maintenance runs in the
-/// DE1's Espresso state, so a cleaning/backflush profile would otherwise
-/// be recorded as a shot; Decenza #1325, `maincontroller.cpp:1841-1853`).
-@Serializable
-enum class ShotDisposition(val string: String) {
-	/// A real shot — persist the history row, sync, capture.
-	@SerialName("Record")
-	Record("Record"),
-	/// An aborted pull (short AND light) — discard behind an undo.
-	@SerialName("DiscardAborted")
-	DiscardAborted("DiscardAborted"),
-	/// A cleaning/backflush run — record nothing.
-	@SerialName("SkipCleaning")
-	SkipCleaning("SkipCleaning"),
 }
 
 /// Where an espresso shot is in its lifecycle.

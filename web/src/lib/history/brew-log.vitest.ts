@@ -108,7 +108,13 @@ describe('core-backed brew-log rules', () => {
 
 	it('brewLogSeeds opens on the last-used method and keeps the preset table in core', () => {
 		localStorage.setItem('crema.brewlog.lastMethod.v1', 'aeropress');
-		const s = brewLogSeeds({ method: null, beanId: null, beanGrinderSetting: '20', prefill: undefined, rows: [] });
+		// The bag's saved grind for the active grinder (none here: the "no
+		// grinder" slot), never its legacy grinderSetting (REVIEW-FINAL S4).
+		const bag = {
+			...coerceBean({ id: 'b1', name: 'House', grinderSetting: '9' })!,
+			grinds: [{ grinderId: '', grinderName: '', grind: '20', starred: false }]
+		};
+		const s = brewLogSeeds({ method: null, beanId: 'b1', bag, grinder: null, prefill: undefined, rows: [] });
 		expect(s.method).toBe('aeropress');
 		expect(s.dose).toBe(14);
 		expect(s.water).toBe(220);
@@ -178,7 +184,6 @@ describe('core-backed brew-log rules', () => {
 		const s = brewLogSeeds({
 			method: null,
 			beanId: null,
-			beanGrinderSetting: null,
 			prefill: { method: 'espresso', dose: 18, durationMs: 29_000, ...w },
 			rows
 		});

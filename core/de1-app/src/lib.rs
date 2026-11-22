@@ -99,8 +99,8 @@ use de1_domain::{
     BrewRecipe, BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase, CompletedShot,
     CremaProfile, Estimate, FlowAlgorithm, FlowEstimator, HotWaterDose, LineFreqDetector,
     LowWaterMonitor, MAX_COUNTED_GAP_S, Profile, STOP_WEIGHT_BEFORE, SampleOverlays,
-    ShotCaptureContext, ShotEvent, ShotMonitor, ShotPhase, ShotRecord, SteamEvent, SteamMonitor,
-    StepWeightExit, StopCapture, StopConfig, StopReason, StopTargets, StoredShot,
+    ShotCaptureContext, ShotEvent, ShotMonitor, ShotPhase, ShotRecord, ShotSelections, SteamEvent,
+    SteamMonitor, StepWeightExit, StopCapture, StopConfig, StopReason, StopTargets, StoredShot,
     TankLevelSmoother, TareSettleWindow, VolumeIntegrator, WaterEvent, WaterMonitor,
     WeightSpikeGate, WeightUnit, WeightVerdict, clamp_refill_point_mm, counts_toward_water,
     pre_shot_zero_offset, sav_counts_volume, shot_disposition, water_tank_depth_mm,
@@ -856,6 +856,13 @@ pub struct CremaCore {
     /// started (F10) — snapshotted at `ShotStarted` from the profile sync,
     /// `None` when the DE1 holds a profile the core didn't push.
     shot_as_run: Option<AsRunShot>,
+    /// What Brew has selected for the next shot, as the shell last handed it
+    /// in ([`set_shot_selections`](Self::set_shot_selections)). User state,
+    /// so it survives a [`reset`](Self::reset).
+    shot_selections: ShotSelections,
+    /// [`Self::shot_selections`] frozen on the current shot's start
+    /// (REVIEW-CORE H3), whoever started it: the shot records this copy.
+    shot_selections_at_start: Option<ShotSelections>,
     /// The first stop the core commanded for the current shot, if any.
     shot_stop_reason: Option<StopReason>,
     /// The last finished shot, waiting for the shell's
@@ -1197,6 +1204,8 @@ impl CremaCore {
             post_shot_settle: None,
             target_hold: None,
             shot_as_run: None,
+            shot_selections: ShotSelections::default(),
+            shot_selections_at_start: None,
             shot_stop_reason: None,
             pending_shot: None,
             capture: CaptureRecorder::default(),
@@ -3312,9 +3321,30 @@ impl CremaCore {
         self.gate_read_only(out)
     }
 
+    /// What Brew has selected for the next shot (REVIEW-CORE H3): the bag
+    /// snapshot, the profile, the grinder and Brew's grind. Call it whenever
+    /// a part changes, the way [`set_desired_profile`](Self::set_desired_profile)
+    /// is called; the core freezes a copy when a shot starts — the app's
+    /// start or the group head's — and the shot records that copy, so a
+    /// change mid-shot or before [`take_stored_shot`](Self::take_stored_shot)
+    /// never reaches it. Kept across a [`reset`](Self::reset).
+    pub fn set_shot_selections(&mut self, selections: ShotSelections) {
+        self.shot_selections = selections;
+    }
+
+    /// [`set_shot_selections`](Self::set_shot_selections) over JSON.
+    ///
+    /// # Errors
+    ///
+    /// The JSON error string on malformed selections.
+    pub fn set_shot_selections_json(&mut self, selections_json: &str) -> Result<(), String> {
+        self.set_shot_selections(de1_domain::parse_shot_selections(selections_json)?);
+        Ok(())
+    }
+
     /// The last finished shot as a [`StoredShot`], assembled by the core
-    /// ([`de1_domain::assemble_stored_shot`]) from its own record and the
-    /// shell's `ctx`. Call it on `Event::ShotCompleted` — whatever the
+    /// ([`de1_domain::assemble_stored_shot`]) from its own record, the
+    /// selections it froze at the shot's start, and the shell's `ctx`. Call it on `Event::ShotCompleted` — whatever the
     /// disposition, so an aborted shot's undo can still record it. One-shot:
     /// a second call returns `None`, as does a shot with no telemetry.
     pub fn take_stored_shot(&mut self, ctx: ShotCaptureContext) -> Option<StoredShot> {
@@ -3536,6 +3566,8 @@ impl CremaCore {
             self.finalize_shot_completed(settle, now, &mut out);
         }
         let pending_shot = self.pending_shot.take();
+        // Brew's selections are user state, like the start settings below.
+        let shot_selections = std::mem::take(&mut self.shot_selections);
         // No session survives a reset, so no stop is owed.
         out.commands.push(Command::CancelStop);
         self.stop_scale_timer_for_link_loss(&mut out);
@@ -3627,6 +3659,7 @@ impl CremaCore {
         let unknown_substates_reported = std::mem::take(&mut self.unknown_substates_reported);
         *self = CremaCore::new();
         self.pending_shot = pending_shot;
+        self.shot_selections = shot_selections;
         self.next_upload_id = next_upload_id;
         self.unknown_substates_reported = unknown_substates_reported;
         self.starter.settings = start_settings;
@@ -5816,6 +5849,12 @@ impl CremaCore {
             final_weight,
             stop_on_weight: self.stop_on_weight,
             auto_tare: self.auto_tare,
+            // A completion always follows a start; the current selections
+            // are only the backstop.
+            selections: self
+                .shot_selections_at_start
+                .take()
+                .unwrap_or_else(|| self.shot_selections.clone()),
         });
         // Drip learning (Decenza SAW learning): the measured sample is (final
         // settled weight − weight at the stop trigger) at the trigger's flow.
@@ -5915,6 +5954,10 @@ impl CremaCore {
                             profile: profile.clone(),
                             qc: *qc,
                         });
+                // What Brew had selected (REVIEW-CORE H3): frozen here, on
+                // the machine's own start, so a group-head start records the
+                // same bag, profile, grinder and grind an app start does.
+                self.shot_selections_at_start = Some(self.shot_selections.clone());
                 self.shot_stop_reason = None;
                 // Flow hasn't begun yet (the shot opens in the heating phase) —
                 // the elapsed clock is zeroed at the first preinfusion/pouring
@@ -14163,7 +14206,7 @@ mod tests {
             /// what the shell hands in (`take_stored_shot`).
             mod stored_shot {
                 use super::*;
-                use de1_domain::{ShotBean, ShotCaptureContext, StopReason};
+                use de1_domain::{ShotBean, ShotCaptureContext, ShotSelections, StopReason};
 
                 /// A ShotSample in `frame` (byte 17 is the frame number).
                 fn sample_in(frame: u8) -> [u8; 19] {
@@ -14332,41 +14375,161 @@ mod tests {
                     assert_eq!(shot.brew_temp_target, None);
                 }
 
+                fn selections(bag: &str, grind: &str) -> ShotSelections {
+                    ShotSelections {
+                        bean: Some(ShotBean {
+                            bean_id: Some(format!("bean:{bag}")),
+                            name: bag.to_owned(),
+                            grinder_setting: Some("9".into()),
+                            grinder: Some("Old grinder".into()),
+                            ..ShotBean::default()
+                        }),
+                        profile_id: Some(format!("profile:{bag}")),
+                        profile_name: Some(format!("Profile {bag}")),
+                        grinder_id: Some(format!("grinder:{bag}")),
+                        grinder_name: Some(format!("Grinder {bag}")),
+                        grind: Some(grind.to_owned()),
+                    }
+                }
+
+                /// What the shot records of the selections: bag, profile id,
+                /// grinder id and name, grind.
+                fn recorded(shot: &de1_domain::StoredShot) -> [Option<String>; 5] {
+                    [
+                        shot.bean.as_ref().and_then(|b| b.bean_id.clone()),
+                        shot.profile_id.clone(),
+                        shot.grinder_id.clone(),
+                        shot.grinder_model.clone(),
+                        shot.metadata.grinder_setting.clone(),
+                    ]
+                }
+
+                fn frozen_a() -> [Option<String>; 5] {
+                    [
+                        Some("bean:A".into()),
+                        Some("profile:A".into()),
+                        Some("grinder:A".into()),
+                        Some("Grinder A".into()),
+                        Some("14".into()),
+                    ]
+                }
+
+                /// REVIEW-CORE H3: the selections are frozen on the
+                /// machine's own start, for an app start and a group-head
+                /// start alike; a change mid-shot, or between the completion
+                /// and `take_stored_shot`, never reaches the shot.
                 #[test]
-                fn grinder_model_is_the_active_grinder_never_the_bags() {
-                    // #488: the shot carries the active grinder's id and name
-                    // (the shell passes them as `grinder_id` and
-                    // `settings_grinder`, taken at shot start); the bag's old
-                    // stored grinder is not read.
-                    let bean = |grinder: Option<&str>| ShotBean {
-                        name: "Gesha".into(),
-                        grinder: grinder.map(str::to_owned),
-                        ..ShotBean::default()
-                    };
-                    for (b, active, want) in [
-                        (Some(bean(Some("Niche Zero"))), Some("EK43"), Some("EK43")),
-                        (Some(bean(None)), Some(" EK43 "), Some("EK43")),
-                        (Some(bean(Some("Niche Zero"))), None, None),
-                        (None, Some("  "), None),
-                        (None, None, None),
-                    ] {
+                fn the_selections_are_frozen_at_shot_start_for_either_start() {
+                    for app_start in [false, true] {
+                        let p = library("Daily");
                         let mut core = connected();
-                        pour(&mut core, 1_000);
-                        let shot = core
-                            .take_stored_shot(ShotCaptureContext {
-                                bean: b,
-                                settings_grinder: active.map(str::to_owned),
-                                grinder_id: active.map(|_| " grinder:ek43 ".to_owned()),
-                                ..ctx()
-                            })
-                            .expect("a shot");
-                        assert_eq!(shot.grinder_model.as_deref(), want);
+                        let _ = desire(&mut core, &p, &BrewOverrides::default(), 0);
+                        let first = sweep(&mut core, 0);
+                        let _ = ack_every_frame(&mut core, &first.commands, 1);
+                        core.set_shot_selections(selections("A", "14"));
+                        let mut events = Vec::new();
+                        if app_start {
+                            let r = core.start_shot(
+                                &p,
+                                &BrewOverrides::default(),
+                                Duration::from_millis(600),
+                            );
+                            assert!(r.accepted, "{:?}", r.refusal);
+                            events.extend(core.on_tick(900).events);
+                        }
+                        events.extend(
+                            core.on_notification(Source::De1State, &[4, 5], 1_000)
+                                .events,
+                        );
+                        let ended = events.iter().find_map(|e| match e {
+                            Event::ShotStartEnded { end, .. } => Some(end.clone()),
+                            _ => None,
+                        });
+                        if app_start {
+                            assert_eq!(ended, Some(crate::StartEnd::Started), "an app start");
+                        } else {
+                            assert_eq!(ended, None, "a group-head start");
+                        }
+                        assert!(events.contains(&Event::ShotStarted));
+                        for (i, frame) in (1u64..).zip([0u8, 2, 2, 3]) {
+                            core.on_notification(
+                                Source::De1ShotSample,
+                                &sample_in(frame),
+                                1_000 + 250 * i,
+                            );
+                            // Mid-shot: another bag, grinder and grind.
+                            core.set_shot_selections(selections("B", "15"));
+                        }
+                        idle(&mut core, 3_000);
+                        core.set_shot_selections(selections("C", "16"));
+                        let shot = core.take_stored_shot(ctx()).expect("a shot");
+                        assert_eq!(recorded(&shot), frozen_a(), "app start: {app_start}");
+                        let bean = shot.bean.expect("the bag");
                         assert_eq!(
-                            shot.grinder_id.as_deref(),
-                            active.map(|_| "grinder:ek43"),
-                            "the id is stamped next to the name"
+                            (bean.grinder_setting, bean.grinder),
+                            (None, None),
+                            "no legacy bag grind or grinder on a new row"
                         );
                     }
+                }
+
+                #[test]
+                fn the_next_shot_freezes_the_selections_at_its_own_start() {
+                    let mut core = connected();
+                    core.set_shot_selections(selections("A", "14"));
+                    pour(&mut core, 1_000);
+                    assert_eq!(recorded(&core.take_stored_shot(ctx()).unwrap()), frozen_a());
+                    core.set_shot_selections(selections("B", "15"));
+                    pour(&mut core, 10_000);
+                    let shot = core.take_stored_shot(ctx()).unwrap();
+                    assert_eq!(shot.bean.and_then(|b| b.bean_id).as_deref(), Some("bean:B"));
+                    assert_eq!(shot.metadata.grinder_setting.as_deref(), Some("15"));
+                }
+
+                #[test]
+                fn a_read_only_mirror_freezes_the_hubs_selections_too() {
+                    // A remote's mirror core records the shot it watched,
+                    // with the hub's selections its shell handed in.
+                    let mut core = connected();
+                    core.set_read_only(true);
+                    core.set_shot_selections(selections("A", "14"));
+                    pour(&mut core, 1_000);
+                    let shot = core.take_stored_shot(ctx()).expect("a shot");
+                    assert_eq!(shot.grinder_id.as_deref(), Some("grinder:A"));
+                    assert_eq!(shot.metadata.grinder_setting.as_deref(), Some("14"));
+                }
+
+                #[test]
+                fn the_selections_survive_a_reset() {
+                    let mut core = connected();
+                    core.set_shot_selections(selections("A", "14"));
+                    let _ = core.reset();
+                    let _ = idle(&mut core, 500);
+                    pour(&mut core, 1_000);
+                    assert_eq!(recorded(&core.take_stored_shot(ctx()).unwrap()), frozen_a());
+                }
+
+                #[test]
+                fn with_no_selections_a_shot_records_no_bag_grinder_or_grind() {
+                    // #488: no settings grinder, no bag fallback.
+                    let mut core = connected();
+                    pour(&mut core, 1_000);
+                    let shot = core.take_stored_shot(ctx()).expect("a shot");
+                    assert_eq!(recorded(&shot), [None, None, None, None, None]);
+                }
+
+                #[test]
+                fn the_selections_json_bridge_reads_the_wire_names() {
+                    let mut core = connected();
+                    core.set_shot_selections_json(
+                        r#"{"bean":{"beanId":"bean:A","name":"A"},"grinderId":"grinder:A","grinderName":"Grinder A","grind":"2.1.3","profileId":null}"#,
+                    )
+                    .unwrap();
+                    assert!(core.set_shot_selections_json("{").is_err());
+                    pour(&mut core, 1_000);
+                    let shot = core.take_stored_shot(ctx()).unwrap();
+                    assert_eq!(shot.grinder_model.as_deref(), Some("Grinder A"));
+                    assert_eq!(shot.metadata.grinder_setting.as_deref(), Some("2.1.3"));
                 }
 
                 #[test]

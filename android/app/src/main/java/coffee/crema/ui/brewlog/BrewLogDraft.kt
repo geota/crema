@@ -2,10 +2,12 @@ package coffee.crema.ui.brewlog
 
 import coffee.crema.brew.formatClock
 import coffee.crema.brew.isEspressoMethod
+import coffee.crema.core.Bean
 import coffee.crema.core.BrewLogPrefill
 import coffee.crema.core.BrewLogSeedInput
 import coffee.crema.core.BrewSeedInput
 import coffee.crema.core.BrewSeries
+import coffee.crema.core.Grinder
 import coffee.crema.core.brewLogSeedsJson
 import coffee.crema.history.ShotMeta
 import coffee.crema.history.brewDateError
@@ -129,7 +131,8 @@ object BrewLogSeeds {
         method: String?,
         lastUsedMethod: String?,
         beanId: String?,
-        beanGrinderSetting: String?,
+        bag: Bean?,
+        grinder: Grinder?,
         prefill: BrewLogPrefill?,
         seedsJson: (String) -> String = ::brewLogSeedsJson,
         customMethods: List<coffee.crema.core.CustomBrewMethod> = coffee.crema.brew.CustomMethods.all,
@@ -138,7 +141,9 @@ object BrewLogSeeds {
             method = method,
             lastUsedMethod = lastUsedMethod,
             beanId = beanId,
-            beanGrinderSetting = beanGrinderSetting,
+            // The bag's saved grind for the active grinder (REVIEW-FINAL S4).
+            bag = bag,
+            grinder = grinder,
             prefill = prefill,
             rows = history.map(::seedRow),
             // Every custom method, tombstones included — a "Log again" of an
@@ -161,7 +166,8 @@ object BrewLogSeeds {
      * A fresh draft. The opening method is the core's call: a "Log again"
      * [prefill]'s / guided session's method, else [lastUsedMethod], else
      * pourover. [prefillBeanId] (the bean-detail door) wins over the active
-     * bag. [grinderOf] resolves a bag's own grinder setting. A guided
+     * bag. [bagOf] resolves a bag, whose saved grind for [grinder] (the
+     * active grinder) is the grind fallback. A guided
      * session passes the setup's bag as [guidedBeanId] — explicitly, so its
      * "No bean" (null) doesn't fall back to the active bag.
      */
@@ -172,7 +178,8 @@ object BrewLogSeeds {
         prefill: ShotMeta? = null,
         prefillBeanId: String? = null,
         lastUsedMethod: String? = null,
-        grinderOf: (String) -> String? = { null },
+        bagOf: (String) -> Bean? = { null },
+        grinder: Grinder? = null,
         guidedMethod: String? = null,
         guidedDoseG: Float? = null,
         guidedWeightG: Float? = null,
@@ -207,7 +214,7 @@ object BrewLogSeeds {
             )
             else -> null
         }
-        val s = seeds(history, null, lastUsedMethod, beanId, beanId?.let(grinderOf), corePrefill, seedsJson)
+        val s = seeds(history, null, lastUsedMethod, beanId, beanId?.let(bagOf), grinder, corePrefill, seedsJson)
         val blank = BrewLogDraft(
             owner = owner,
             method = s.method,
@@ -232,11 +239,12 @@ object BrewLogSeeds {
         draft: BrewLogDraft,
         history: List<ShotMeta>,
         newMethod: String,
-        grinderOf: (String) -> String? = { null },
+        bagOf: (String) -> Bean? = { null },
+        grinder: Grinder? = null,
         seedsJson: (String) -> String = ::brewLogSeedsJson,
     ): BrewLogDraft {
         if (newMethod == BrewLogDraft.OTHER) return draft.copy(method = newMethod)
-        val s = seeds(history, newMethod, null, draft.beanId, draft.beanId?.let(grinderOf), draft.prefill, seedsJson)
+        val s = seeds(history, newMethod, null, draft.beanId, draft.beanId?.let(bagOf), grinder, draft.prefill, seedsJson)
         return apply(draft.copy(method = newMethod), s)
     }
 }

@@ -1,8 +1,8 @@
 /**
  * A shot records the profile it started with by id (save-boundaries review
  * F4/F9): the live shot's start freezes the active profile's id next to the
- * bag snapshot, and the completion hands it to the core as the
- * `ShotCaptureContext.profileId` fallback.
+ * bag snapshot. The core freezes its own copy at shot start
+ * (`setShotSelections`, REVIEW-CORE H3), so the completion hands in none.
  */
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
@@ -19,7 +19,7 @@ beforeAll(async () => {
 });
 
 describe('the shot records its profile id', () => {
-	it('the completion passes the id frozen at shot start to the core', () => {
+	it('the completion hands the core no profile: it froze it at shot start (REVIEW-CORE H3)', () => {
 		getActiveShotStore().set({
 			bean: null,
 			profileName: 'Mine',
@@ -40,7 +40,9 @@ describe('the shot records its profile id', () => {
 			runtime: null
 		} as unknown as Parameters<typeof commitShotCompletion>[1]);
 		expect(takeStoredShot).toHaveBeenCalled();
-		expect(takeStoredShot.mock.lastCall![0]).toMatchObject({ profileName: 'Mine', profileId: 'profile:mine' });
+		const ctx = takeStoredShot.mock.lastCall![0] as unknown as Record<string, unknown>;
+		expect(ctx).not.toHaveProperty('profileName');
+		expect(ctx).not.toHaveProperty('profileId');
 	});
 
 	it('the live shot start freezes the active profile id', async () => {

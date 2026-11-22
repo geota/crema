@@ -511,6 +511,16 @@ pub fn brew_log_seeds_json(input_json: &str) -> Result<String, String> {
     de1_domain::brew_log_seeds_json(input_json)
 }
 
+/// The grinder and grind a logged brew records: a `BrewLogGrindInput` JSON
+/// in, a `BrewLogGrind` JSON out. See `de1_domain::brew_log_grind`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = brewLogGrindJson)]
+pub fn brew_log_grind_json(input_json: &str) -> Result<String, String> {
+    de1_domain::brew_log_grind_json(input_json)
+}
+
 /// Mint a `recipe:<uuid-v7>` id for a new brew recipe.
 #[wasm_bindgen(js_name = newRecipeId)]
 pub fn new_recipe_id() -> String {
@@ -868,6 +878,28 @@ pub fn resolve_bag_selection_json(input_json: &str) -> Result<String, String> {
 #[wasm_bindgen(js_name = resolveGrinderSwitchJson)]
 pub fn resolve_grinder_switch_json(input_json: &str) -> Result<String, String> {
     de1_domain::resolve_grinder_switch_json(input_json)
+}
+
+/// What a completed shot does (REVIEW-CORE M4): a `ShotEffectsInput` JSON
+/// in, a `ShotEffects` JSON out. See `de1_domain::shot_effects`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = shotEffectsJson)]
+pub fn shot_effects_json(input_json: &str) -> Result<String, String> {
+    de1_domain::shot_effects_json(input_json)
+}
+
+/// A bag's snapshot for a shot, a logged brew or a shot moved to another
+/// bag: a `Bean` JSON and the roaster's name (blank = none) in, a `ShotBean`
+/// JSON out, without the bag's legacy grind and grinder. See
+/// `de1_domain::ShotBean::snapshot_of`.
+///
+/// # Errors
+/// Throws on a malformed bag.
+#[wasm_bindgen(js_name = shotBeanSnapshotJson)]
+pub fn shot_bean_snapshot_json(bean_json: &str, roaster_name: &str) -> Result<String, String> {
+    de1_domain::shot_bean_snapshot_json(bean_json, roaster_name)
 }
 
 /// Auto-save after a kept shot, on the recording device only (#488, review
@@ -3295,9 +3327,18 @@ impl CremaBridge {
         json(self.state().core.on_scale_write_result(ok))
     }
 
+    /// What Brew has selected for the next shot, a `ShotSelections` JSON:
+    /// call it whenever a part changes; the core freezes a copy when a shot
+    /// starts, whoever started it (REVIEW-CORE H3). See
+    /// `CremaCore::set_shot_selections`.
+    pub fn set_shot_selections(&self, selections_json: &str) -> Result<(), String> {
+        self.state().core.set_shot_selections_json(selections_json)
+    }
+
     /// The last finished shot as a `StoredShot` JSON (or `null`), assembled by
-    /// the core from its own record and the shell's `ShotCaptureContext` JSON.
-    /// Call it on `ShotCompleted`; one-shot. See `CremaCore::take_stored_shot`.
+    /// the core from its own record, the selections it froze at the shot's
+    /// start and the shell's `ShotCaptureContext` JSON. Call it on
+    /// `ShotCompleted`; one-shot. See `CremaCore::take_stored_shot`.
     pub fn take_stored_shot(&self, ctx_json: &str) -> Result<String, String> {
         self.state().core.take_stored_shot_json(ctx_json)
     }

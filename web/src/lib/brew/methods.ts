@@ -9,12 +9,14 @@
  * brew still imports, carrying its name as a free-text method.
  */
 
+import type { Bean } from '#lib/bean/model.js';
 import type {
 	BrewLogPrefill,
 	BrewLogSeeds,
 	BrewMethodPreset as CoreBrewMethodPreset,
 	BrewSeedInput,
-	BrewSeries
+	BrewSeries,
+	Grinder
 } from '#lib/core/crema-core.js';
 import {
 	brewLogSeedsJson as wasmBrewLogSeeds,
@@ -201,7 +203,6 @@ export function openingMethod(): string {
 	return brewLogSeeds({
 		method: null,
 		beanId: null,
-		beanGrinderSetting: null,
 		prefill: undefined,
 		rows: []
 	}).method;
@@ -245,7 +246,10 @@ export type { BrewSeedInput, BrewLogSeeds };
 export function brewLogSeeds(input: {
 	method: string | null;
 	beanId: string | null;
-	beanGrinderSetting: string | null;
+	/** The bag, for its saved grind with `grinder` (never its legacy field). */
+	bag?: Bean | null;
+	/** The active grinder; `null` = no grinder. */
+	grinder?: Grinder | null;
 	prefill: LogBrewPrefill | undefined;
 	rows: BrewSeedInput[];
 }): BrewLogSeeds {
@@ -267,7 +271,8 @@ export function brewLogSeeds(input: {
 				method: input.method ?? undefined,
 				lastUsedMethod: lastUsedMethod() ?? undefined,
 				beanId: input.beanId ?? undefined,
-				beanGrinderSetting: input.beanGrinderSetting ?? undefined,
+				bag: input.bag ?? undefined,
+				grinder: input.grinder ?? undefined,
 				prefill,
 				rows: input.rows,
 				// Tombstones included: an old row's custom method still seeds.

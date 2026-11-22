@@ -48,13 +48,13 @@ describe('the shot records its grinder', () => {
 		expect(none.grinderModel).toBeNull();
 	});
 
-	it('the completion passes the frozen id and name to the core', () => {
+	it('the completion hands the core no grinder or grind: it froze them at shot start (REVIEW-CORE H3)', () => {
 		getSettingsStore().set('grinderModel', 'EK43');
 		getActiveShotStore().set({
 			bean: null,
 			profileName: null,
 			dose: 18,
-			brewParams: null,
+			brewParams: { yieldTarget: 36, brewTemp: 93, preinfuseTarget: 0, stopOnWeight: true, autoTare: true, grind: '2.25' },
 			grinderModel: 'Niche Zero',
 			grinderId: 'grinder:niche',
 			source: 'live'
@@ -69,58 +69,10 @@ describe('the shot records its grinder', () => {
 			takeStoredShot,
 			runtime: null
 		} as unknown as Parameters<typeof commitShotCompletion>[1]);
-		expect(takeStoredShot.mock.lastCall![0]).toMatchObject({ settingsGrinder: 'Niche Zero', grinderId: 'grinder:niche' });
-	});
-
-	it.each([
-		['a fine step, not rounded to one decimal (review M2)', '2.25'],
-		['a grind that isn\'t a plain number (review N2)', '2.1.3']
-	])('the completion passes Brew\'s grind as text: %s', (_name, grind) => {
-		getActiveShotStore().set({
-			bean: null,
-			profileName: null,
-			dose: 18,
-			brewParams: { yieldTarget: 36, brewTemp: 93, preinfuseTarget: 0, stopOnWeight: true, autoTare: true, grind },
-			grinderModel: 'Fine',
-			grinderId: 'grinder:fine',
-			source: 'live'
-		});
-		const takeStoredShot = vi.fn((_ctx: ShotCaptureContext) => null);
-		commitShotCompletion({ content: { duration: 28_000, disposition: 'Record' } } as unknown as Event, {
-			snapshot: { activeProfileName: null },
-			shotStartedAtMs: null,
-			lastNotificationAtMs: null,
-			sliceJsonl: async () => '',
-			fireWebhook: () => {},
-			takeStoredShot,
-			runtime: null
-		} as unknown as Parameters<typeof commitShotCompletion>[1]);
-		const ctx = takeStoredShot.mock.lastCall![0];
-		expect(ctx.grind).toBe(grind);
-		expect(ctx.grindDial, 'no number for the core to round').toBeUndefined();
-	});
-
-	it('no grind set: the shot records none', () => {
-		getActiveShotStore().set({
-			bean: null,
-			profileName: null,
-			dose: 18,
-			brewParams: { yieldTarget: 36, brewTemp: 93, preinfuseTarget: 0, stopOnWeight: true, autoTare: true, grind: null },
-			grinderModel: null,
-			grinderId: null,
-			source: 'live'
-		});
-		const takeStoredShot = vi.fn((_ctx: ShotCaptureContext) => null);
-		commitShotCompletion({ content: { duration: 28_000, disposition: 'Record' } } as unknown as Event, {
-			snapshot: { activeProfileName: null },
-			shotStartedAtMs: null,
-			lastNotificationAtMs: null,
-			sliceJsonl: async () => '',
-			fireWebhook: () => {},
-			takeStoredShot,
-			runtime: null
-		} as unknown as Parameters<typeof commitShotCompletion>[1]);
-		expect(takeStoredShot.mock.lastCall![0].grind).toBeUndefined();
+		const ctx = takeStoredShot.mock.lastCall![0] as unknown as Record<string, unknown>;
+		for (const key of ['bean', 'settingsGrinder', 'grinderId', 'grind', 'grindDial', 'profileName', 'profileId']) {
+			expect(ctx, key).not.toHaveProperty(key);
+		}
 	});
 });
 

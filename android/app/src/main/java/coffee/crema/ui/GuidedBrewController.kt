@@ -639,6 +639,8 @@ internal class GuidedBrewController(
             guidedSeries = summary?.series?.takeIf { it.samples.isNotEmpty() },
             // The setup's bag, not the active one; still changeable in the form.
             guidedBeanId = guidedBeanId(s),
+            bagOf = ::bagOf,
+            grinder = s.activeGrinder(),
         )
     }
 
@@ -806,13 +808,14 @@ internal class GuidedBrewController(
             prefill = prefill,
             prefillBeanId = beanId,
             lastUsedMethod = s.lastBrewLogMethod,
-            grinderOf = ::beanGrinderSetting,
+            bagOf = ::bagOf,
+            grinder = s.activeGrinder(),
         )
     }
 
-    /** A library bag's own grinder setting — the log form's grind fallback. */
-    private fun beanGrinderSetting(beanId: String): String? =
-        uiState().beans.firstOrNull { it.id == beanId }?.grinderSetting
+    /** A library bag: its saved grind for the active grinder is the log form's grind fallback. */
+    private fun bagOf(beanId: String): coffee.crema.core.Bean? =
+        uiState().beans.firstOrNull { it.id == beanId }
 
     fun updateLogBrew(transform: (coffee.crema.ui.brewlog.BrewLogDraft) -> coffee.crema.ui.brewlog.BrewLogDraft) {
         _logBrew.update { it?.let(transform) }
@@ -821,7 +824,7 @@ internal class GuidedBrewController(
     /** A method chip: re-template the draft's seeds for [method]. */
     fun reseedLogBrew(method: String) {
         val history = historyRows()
-        _logBrew.update { it?.let { d -> coffee.crema.ui.brewlog.BrewLogSeeds.reseed(d, history, method, ::beanGrinderSetting) } }
+        _logBrew.update { it?.let { d -> coffee.crema.ui.brewlog.BrewLogSeeds.reseed(d, history, method, ::bagOf, effectiveState().activeGrinder()) } }
     }
 
     fun closeLogBrew() {

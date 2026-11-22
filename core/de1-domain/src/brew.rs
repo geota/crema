@@ -26,6 +26,9 @@
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
+use crate::bean::Bean;
+use crate::grind_value::{grind_number, grind_text};
+use crate::grinder::{GrindScale, Grinder};
 use crate::history::brew_ratio;
 
 // ── Method classification ────────────────────────────────────────────
@@ -411,8 +414,13 @@ pub struct BrewLogSeedInput {
     pub last_used_method: Option<String>,
     /// The bag the form is logging against.
     pub bean_id: Option<String>,
-    /// That bag's own grinder setting — the grind fallback.
-    pub bean_grinder_setting: Option<String>,
+    /// That bag, for its saved grind with [`Self::grinder`] — the grind
+    /// fallback ([`crate::bag_grind::pick_grind`]). Its legacy
+    /// `grinder_setting` is not read (REVIEW-FINAL S4).
+    pub bag: Option<Bean>,
+    /// The active grinder ([`crate::grinder::active_grinder`]); `None` = no
+    /// grinder (the bag's "no grinder" slot).
+    pub grinder: Option<Grinder>,
     pub prefill: Option<BrewLogPrefill>,
     /// Prior brews, newest first.
     pub rows: Vec<BrewSeedInput>,
@@ -435,7 +443,8 @@ pub struct BrewLogSeeds {
     /// Water-in, grams, for filter methods — **beverage-out** for the
     /// espresso family (the form's single "water / yield" field).
     pub water: f32,
-    /// Grind setting, or `None` when nothing numeric is known.
+    /// Grind setting, or `None` when nothing numeric is known. A grind of 0
+    /// is a grind.
     pub grind: Option<f32>,
     /// Water temperature, °C, or `None`.
     pub temp_c: Option<f32>,
@@ -465,16 +474,24 @@ fn positive(v: Option<f32>) -> Option<f32> {
     v.filter(|x| x.is_finite() && *x > 0.0)
 }
 
-/// A grind setting string's leading number (`"12"`, `"3.5 clicks"`), or
-/// `None` when it has none or it isn't positive.
+/// A grind setting string as a number: a plain one ([`grind_number`],
+/// `"2,5"` included), else its leading number (`"3.5 clicks"`). `None` when
+/// it has none or it is negative; 0 is a grind (follow-up 34).
 fn parse_grind(raw: Option<&str>) -> Option<f32> {
     let t = raw?.trim();
-    let end = t
-        .char_indices()
-        .take_while(|&(i, c)| c.is_ascii_digit() || c == '.' || (i == 0 && c == '+'))
-        .map(|(i, c)| i + c.len_utf8())
-        .last()?;
-    positive(t[..end].parse::<f32>().ok())
+    #[allow(clippy::cast_possible_truncation)] // a dial reading, well inside f32
+    let plain = grind_number(t).map(|n| n as f32);
+    let leading = || {
+        let end = t
+            .char_indices()
+            .take_while(|&(i, c)| c.is_ascii_digit() || c == '.' || (i == 0 && c == '+'))
+            .map(|(i, c)| i + c.len_utf8())
+            .last()?;
+        t[..end].parse::<f32>().ok()
+    };
+    plain
+        .or_else(leading)
+        .filter(|x| x.is_finite() && *x >= 0.0)
 }
 
 /// Seed the Log-brew form's numeric fields.
@@ -485,7 +502,8 @@ fn parse_grind(raw: Option<&str>) -> Option<f32> {
 ///    belongs to the seeded method;
 /// 2. the **last brew of this method** — on this bag first, else on any
 ///    bag (rows are newest first);
-/// 3. for grind only, the **bag's own grinder setting**;
+/// 3. for grind only, the **bag's saved grind for the active grinder**
+///    ([`crate::bag_grind::pick_grind`]; never the bag's legacy field);
 /// 4. the **method preset** seed ([`brew_method_presets`], or a custom
 ///    method's seeds / style defaults from
 ///    [`custom_methods`](BrewLogSeedInput::custom_methods)), then a
@@ -564,7 +582,10 @@ pub fn brew_log_seeds(input: &BrewLogSeedInput) -> BrewLogSeeds {
         });
     let grind = parse_grind(prefill.and_then(|p| p.grinder_setting.as_deref()))
         .or_else(|| parse_grind(last.and_then(|r| r.grinder_setting.as_deref())))
-        .or_else(|| parse_grind(input.bean_grinder_setting.as_deref()));
+        .or_else(|| {
+            let bag = input.bag.as_ref()?;
+            parse_grind(crate::bag_grind::pick_grind(bag, input.grinder.as_ref(), &[]).as_deref())
+        });
     let temp_c = positive(prefill.and_then(|p| p.temp_c))
         .or_else(|| positive(last.and_then(|r| r.temp_c)))
         .or_else(|| preset.as_ref().and_then(|p| p.seed_temp_c));
@@ -591,6 +612,67 @@ pub fn brew_log_seeds(input: &BrewLogSeedInput) -> BrewLogSeeds {
 pub fn brew_log_seeds_json(input_json: &str) -> Result<String, String> {
     let input: BrewLogSeedInput = serde_json::from_str(input_json).map_err(|e| e.to_string())?;
     serde_json::to_string(&brew_log_seeds(&input)).map_err(|e| e.to_string())
+}
+
+/// What [`brew_log_grind`] reads: the Log-brew form's grinder and grind.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BrewLogGrindInput {
+    /// The active grinder ([`crate::grinder::active_grinder`]) when the brew
+    /// is logged; `None` = no grinder.
+    pub grinder: Option<Grinder>,
+    /// The form's grind; `None` = not set. 0 is a grind.
+    pub grind: Option<f64>,
+}
+
+/// The grinder and grind a logged brew records (REVIEW-FINAL S4), stamped
+/// the way a shot is: the active grinder's id and name snapshot, and the
+/// grind as text on its scale.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrewLogGrind {
+    /// The row's `grinder_id` ([`crate::StoredShot::grinder_id`]).
+    pub grinder_id: Option<String>,
+    /// The row's grinder name snapshot ([`crate::StoredShot::grinder_model`]).
+    pub grinder_name: Option<String>,
+    /// The row's grind: [`grind_text`] on the grinder's scale (the default
+    /// with none), so a 0.05 step keeps its decimals and a whole number has
+    /// none; `None` when not set or not finite.
+    pub grind: Option<String>,
+}
+
+/// Stamp a logged brew's grinder and grind (REVIEW-FINAL S4, follow-up 34):
+/// the logged brew then counts for "the newest shot on this bag with this
+/// grinder" and uploads under its own grinder, never the settings one.
+#[must_use]
+pub fn brew_log_grind(input: &BrewLogGrindInput) -> BrewLogGrind {
+    let non_blank = |s: &str| {
+        let t = s.trim();
+        (!t.is_empty()).then(|| t.to_owned())
+    };
+    let grinder = input.grinder.as_ref();
+    let scale = grinder.map_or_else(GrindScale::default, |g| g.scale.clone());
+    BrewLogGrind {
+        grinder_id: grinder.and_then(|g| non_blank(&g.id)),
+        grinder_name: grinder.and_then(|g| non_blank(&g.name)),
+        grind: input
+            .grind
+            .filter(|g| g.is_finite())
+            .map(|g| grind_text(g, &scale))
+            .filter(|t| !t.is_empty()),
+    }
+}
+
+/// JSON-bridged [`brew_log_grind`]: a [`BrewLogGrindInput`] JSON in, a
+/// [`BrewLogGrind`] JSON out.
+///
+/// # Errors
+/// The JSON parse error string on a malformed `input_json`.
+pub fn brew_log_grind_json(input_json: &str) -> Result<String, String> {
+    let input: BrewLogGrindInput = serde_json::from_str(input_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&brew_log_grind(&input)).map_err(|e| e.to_string())
 }
 
 // ── Guided-brew data types (Phase 2) ─────────────────────────────────
@@ -1317,12 +1399,38 @@ mod tests {
         assert_eq!((s.dose, s.water), (20.0, 320.0));
     }
 
+    fn bag_with(grinds: &[(&str, &str)], legacy: &str) -> Bean {
+        let mut bag = Bean::new("bean:1".to_owned(), "Gesha".to_owned(), 0);
+        bag.grinder_setting = legacy.to_owned();
+        bag.grinds = Some(
+            grinds
+                .iter()
+                .map(|(id, grind)| crate::bag_grind::BagGrind {
+                    grinder_id: (*id).to_owned(),
+                    grind: (*grind).to_owned(),
+                    ..crate::bag_grind::BagGrind::default()
+                })
+                .collect(),
+        );
+        bag
+    }
+
+    fn grinder(id: &str) -> Grinder {
+        Grinder {
+            id: id.to_owned(),
+            name: "Niche Zero".to_owned(),
+            ..Grinder::default()
+        }
+    }
+
     #[test]
-    fn grind_falls_back_to_the_bags_grinder_setting() {
-        // Drift bug 2: Android fell back to 0.
+    fn grind_falls_back_to_the_bags_saved_grind_for_the_active_grinder() {
+        // Drift bug 2: Android fell back to 0. REVIEW-FINAL S4: the bag's
+        // saved grind for the active grinder, never its legacy field.
         let mut input = BrewLogSeedInput {
             method: Some("pourover".to_owned()),
-            bean_grinder_setting: Some("22 clicks".to_owned()),
+            bag: Some(bag_with(&[("grinder:niche", "22 clicks"), ("", "9")], "14")),
+            grinder: Some(grinder("grinder:niche")),
             ..BrewLogSeedInput::default()
         };
         assert_eq!(brew_log_seeds(&input).grind, Some(22.0));
@@ -1334,9 +1442,65 @@ mod tests {
         // A non-numeric setting falls through rather than blanking.
         input.rows[0].grinder_setting = Some("fine".to_owned());
         assert_eq!(brew_log_seeds(&input).grind, Some(22.0));
-        // Nothing numeric anywhere → None, never 0.
-        input.bean_grinder_setting = None;
+        // No grinder: the bag's "no grinder" slot.
+        input.grinder = None;
+        assert_eq!(brew_log_seeds(&input).grind, Some(9.0));
+        // Another grinder with nothing saved: the legacy "14" isn't read.
+        input.grinder = Some(grinder("grinder:ek43"));
         assert_eq!(brew_log_seeds(&input).grind, None);
+        // Nothing numeric anywhere → None, never an invented 0.
+        input.bag = None;
+        assert_eq!(brew_log_seeds(&input).grind, None);
+    }
+
+    #[test]
+    fn a_grind_of_zero_seeds_zero() {
+        // Follow-up 34: 0 is a grind.
+        let mut r = row(Some("pourover"), None, 15.0, Some(250.0));
+        r.grinder_setting = Some("0".to_owned());
+        let input = BrewLogSeedInput {
+            method: Some("pourover".to_owned()),
+            rows: vec![r],
+            ..BrewLogSeedInput::default()
+        };
+        assert_eq!(brew_log_seeds(&input).grind, Some(0.0));
+        let mut r = row(Some("pourover"), None, 15.0, Some(250.0));
+        r.grinder_setting = Some("2,5".to_owned());
+        let input = BrewLogSeedInput {
+            rows: vec![r],
+            ..input
+        };
+        assert_eq!(brew_log_seeds(&input).grind, Some(2.5), "a decimal comma");
+    }
+
+    #[test]
+    fn a_logged_brew_stamps_the_active_grinder_and_its_scales_text() {
+        let mut fine = grinder(" grinder:niche ");
+        fine.scale = GrindScale {
+            step: 0.05,
+            ..GrindScale::default()
+        };
+        let stamp = |grinder: Option<Grinder>, grind: Option<f64>| {
+            brew_log_grind(&BrewLogGrindInput { grinder, grind })
+        };
+        let out = stamp(Some(fine.clone()), Some(2.25));
+        assert_eq!(out.grinder_id.as_deref(), Some("grinder:niche"));
+        assert_eq!(out.grinder_name.as_deref(), Some("Niche Zero"));
+        assert_eq!(out.grind.as_deref(), Some("2.25"));
+        // A whole number has no decimals; 0 is kept.
+        assert_eq!(
+            stamp(Some(fine.clone()), Some(15.0)).grind.as_deref(),
+            Some("15")
+        );
+        assert_eq!(stamp(Some(fine), Some(0.0)).grind.as_deref(), Some("0"));
+        // No grinder: none stamped, the default scale.
+        let none = stamp(None, Some(4.2));
+        assert_eq!((none.grinder_id, none.grinder_name), (None, None));
+        assert_eq!(none.grind.as_deref(), Some("4.2"));
+        assert_eq!(stamp(None, None).grind, None);
+        assert_eq!(stamp(None, Some(f64::NAN)).grind, None);
+        let json = brew_log_grind_json(r#"{"grind":0}"#).unwrap();
+        assert_eq!(json, r#"{"grinderId":null,"grinderName":null,"grind":"0"}"#);
     }
 
     #[test]
@@ -1443,7 +1607,7 @@ mod tests {
     fn other_is_free_text_with_generic_fallbacks() {
         let s = brew_log_seeds(&BrewLogSeedInput {
             method: Some(BREW_METHOD_OTHER.to_owned()),
-            bean_grinder_setting: Some("12".to_owned()),
+            bag: Some(bag_with(&[("", "12")], "")),
             rows: vec![row(Some("other"), None, 99.0, Some(999.0))],
             ..BrewLogSeedInput::default()
         });

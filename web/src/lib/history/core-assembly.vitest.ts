@@ -5,6 +5,7 @@
  * v2 export is the core's, `metadata.crema` included. Drives the real
  * `CremaApp` and the real wasm core.
  */
+import { flushSync } from 'svelte';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import type { CoreOutput, CremaCore, NotificationSource } from '#lib/core/index.js';
@@ -59,7 +60,13 @@ async function makeApp() {
 describe('the web records shots through the core', () => {
 	it('AC-F10.9 a shot is recorded through the core assembly', async () => {
 		const t = await makeApp();
-		t.settings.set('grinderModel', 'EK43');
+		// The settings grinder is not the shot's: the active grinder is.
+		t.settings.set('grinderModel', 'Old setting');
+		const { getBeanStore } = await import('#lib/bean/index.js');
+		const ek43 = getBeanStore().addGrinder('EK43')!;
+		getBeanStore().setActiveGrinder(ek43.id);
+		// The app hands the selections to the core from an effect.
+		flushSync();
 		t.settings.set('baristaName', 'Sam');
 		// A real pour: 48 samples × 250 ms = 12 s, so it isn't an aborted pull.
 		await t.pour(1_000, 48);
@@ -68,11 +75,25 @@ describe('the web records shots through the core', () => {
 		// The core's record: its frames and the overlays it filled live.
 		expect(shot.record.samples.slice(0, 4).map((s) => s.sample.frameNumber)).toEqual([0, 2, 2, 3]);
 		expect(shot.record.samples.every((s) => s.dispensedVolume != null)).toBe(true);
-		// The core's rules: no bean → the Settings grinder; its stop switches.
+		// The core's rules: the grinder frozen at shot start (the active one,
+		// handed in with the selections); its stop switches.
 		expect(shot.grinderModel).toBe('EK43');
 		expect(shot.metadata.barista).toBe('Sam');
 		expect(shot.stopOnWeight).toBeTypeOf('boolean');
 		expect(shot.autoTare).toBeTypeOf('boolean');
+	});
+
+	it('a group-head start records Brew\'s grind, frozen at shot start (follow-up 26, REVIEW-CORE H3)', async () => {
+		const t = await makeApp();
+		const { getBrewGrind } = await import('#lib/brew/grind-session.svelte.js');
+		getBrewGrind().set('14');
+		flushSync();
+		// `pour` reports Espresso with no app start: the group head's.
+		await t.pour(1_000, 48);
+		getBrewGrind().set(null);
+		flushSync();
+		const shot = (await t.history.loadShot(p3RowsOf(t.history).live[0].id))!;
+		expect(shot.metadata.grinderSetting).toBe('14');
 	});
 
 	it('AC-F10.10 an undone discard records the core’s shot', async () => {

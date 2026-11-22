@@ -120,7 +120,6 @@ describe('custom brew methods', () => {
 		const s = brewLogSeeds({
 			method: press.id,
 			beanId: null,
-			beanGrinderSetting: null,
 			prefill: undefined,
 			rows: []
 		});

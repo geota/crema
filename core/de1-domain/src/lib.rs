@@ -117,6 +117,7 @@ pub mod session;
 pub mod settings_import;
 pub mod shot;
 pub mod shot_capture;
+pub mod shot_effects;
 pub mod shot_merge;
 pub mod shot_quality;
 pub mod shot_summary;
@@ -166,7 +167,7 @@ pub use bean::{
     bag_stock, bag_stock_json, brews_remaining_estimate, credit_shot_debit, days_off_roast,
     debit_remaining, debit_taken, duplicate_bean, duplicate_bean_json, resettle_remaining,
     resettled_bag_debit, roast_band, roast_band5, roast_freshness, set_bean_frozen,
-    set_bean_frozen_json,
+    set_bean_frozen_json, shot_bean_snapshot_json,
 };
 pub use bean_coerce::{
     coerce_bean, coerce_bean_json, coerce_grinder, coerce_grinder_json, coerce_roaster,
@@ -208,14 +209,15 @@ pub use bounds::{
     quick_control_bounds_for_grinder_json, quick_control_bounds_json,
 };
 pub use brew::{
-    BREW_METHOD_OTHER, BrewHistoryStats, BrewLogPrefill, BrewLogSeedInput, BrewLogSeeds,
-    BrewMethodPreset, BrewRecipe, BrewSample, BrewSeedInput, BrewSeries, BrewStatInput, BrewStep,
-    BrewStepKind, DEFAULT_LOG_METHOD, RecipeTimeEstimate, StageMark, StairSegment, StepAdvance,
-    blank_recipe, blank_recipe_json, brew_history_stats, brew_log_seeds, brew_log_seeds_json,
-    brew_method_preset, brew_method_presets, brew_method_presets_json, is_espresso_method,
-    max_planned_target, max_planned_target_json, normalize_brew_method, planned_staircase,
-    planned_staircase_json, ratio_for_method, recipe_estimated_duration_json,
-    recipe_planned_pour_total_g_json, stage_mark_for, stage_mark_for_json,
+    BREW_METHOD_OTHER, BrewHistoryStats, BrewLogGrind, BrewLogGrindInput, BrewLogPrefill,
+    BrewLogSeedInput, BrewLogSeeds, BrewMethodPreset, BrewRecipe, BrewSample, BrewSeedInput,
+    BrewSeries, BrewStatInput, BrewStep, BrewStepKind, DEFAULT_LOG_METHOD, RecipeTimeEstimate,
+    StageMark, StairSegment, StepAdvance, blank_recipe, blank_recipe_json, brew_history_stats,
+    brew_log_grind, brew_log_grind_json, brew_log_seeds, brew_log_seeds_json, brew_method_preset,
+    brew_method_presets, brew_method_presets_json, is_espresso_method, max_planned_target,
+    max_planned_target_json, normalize_brew_method, planned_staircase, planned_staircase_json,
+    ratio_for_method, recipe_estimated_duration_json, recipe_planned_pour_total_g_json,
+    stage_mark_for, stage_mark_for_json,
 };
 pub use brew_builtin::{
     BUILTIN_BREW_RECIPE_COUNT, BUILTIN_RECIPE_ID_PREFIX, RecipeLibrary, RecipeLibraryMigration,
@@ -369,8 +371,10 @@ pub use shot::{
     ShotRecord, TimedSample, aborted_max_weight_g, downsample_indices, shot_disposition,
 };
 pub use shot_capture::{
-    AsRunShot, CompletedShot, ShotCaptureContext, assemble_stored_shot, parse_shot_capture_context,
+    AsRunShot, CompletedShot, ShotCaptureContext, ShotSelections, assemble_stored_shot,
+    parse_shot_capture_context, parse_shot_selections,
 };
+pub use shot_effects::{ShotEffects, ShotEffectsInput, shot_effects, shot_effects_json};
 pub use shot_merge::{
     ShotMergeInput, ShotPatch, TagMarks, edited_during_fetch, mark_tag_edit, mark_tag_edit_json,
     merge_remote_shot, merge_remote_shot_json, normalize_tag, normalize_tags, normalize_tags_json,
