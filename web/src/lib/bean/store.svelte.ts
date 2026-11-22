@@ -46,6 +46,7 @@ import {
 	addGrinder as coreAddGrinder,
 	archiveGrinder as coreArchiveGrinder,
 	activeGrinder as coreActiveGrinder,
+	cleanGrinderName,
 	coerceGrinder,
 	grindersForNames,
 	isLiveGrinder,
@@ -217,6 +218,11 @@ export class BeanLibraryStore {
 	private activeGrinderPtr = $state.raw<string | null>(
 		readJson<string | null>(ACTIVE_GRINDER_KEY, null, { valid: isIdOrNull })
 	);
+	/**
+	 * Bags whose first Visualizer upload (the POST that binds them) is running
+	 * in this tab: a delete meanwhile leaves a tombstone (#488 follow-up 41).
+	 */
+	private readonly firstUploads = new Set<string>();
 
 	constructor() {
 		// Another tab's debit or edit is taken, not written back over (#333).
@@ -423,7 +429,11 @@ export class BeanLibraryStore {
 	 * active). A bag that is on Visualizer leaves a tombstone: the row stays,
 	 * hidden, with `deletedAt` set and its photo dropped, so the next pull
 	 * doesn't add it back (#488 review S5). That holds for both scopes, as the
-	 * remote DELETE is best-effort. Any other bag is removed outright.
+	 * remote DELETE is best-effort. So does a bag whose first upload is still
+	 * running ({@link beginFirstUpload}): the bag that upload makes is skipped
+	 * by the next pull (the core matches the unbound tombstone by signature,
+	 * #488 follow-up 41), and the upload binds the tombstone when it lands.
+	 * Any other bag is removed outright.
 	 *
 	 * Local-only by design: the Visualizer-side DELETE is owned by the caller
 	 * (the delete-split component), which runs `BeanSync.deleteBean` on the app
@@ -435,8 +445,9 @@ export class BeanLibraryStore {
 		const doomed = this.envelope.beans.filter((b) => b.id === id && b.deletedAt == null);
 		if (doomed.length === 0) return;
 		const now = Date.now();
+		const keep = (b: Bean) => b.visualizerId != null || this.firstUploads.has(b.id);
 		const beans = this.envelope.beans.flatMap((b) =>
-			b.id !== id ? [b] : b.visualizerId ? [beanTombstone(b, now)] : []
+			b.id !== id ? [b] : keep(b) ? [beanTombstone(b, now)] : []
 		);
 		this.envelope = { ...this.envelope, beans };
 		this.persist();
@@ -959,6 +970,27 @@ export class BeanLibraryStore {
 		this.replaceBean(bean);
 	}
 
+	/** The Visualizer sync is POSTing bag `id` for the first time (see {@link deleteBean}). */
+	beginFirstUpload(id: string): void {
+		this.firstUploads.add(id);
+	}
+
+	/**
+	 * A first upload landed: bind its Visualizer id to the bag, or to the
+	 * tombstone a delete left meanwhile, so later pulls match it by id. Keeps
+	 * `updatedAt`: not a local edit. A row bound already is left alone.
+	 */
+	bindFirstUpload(id: string, visualizerId: string): void {
+		const row = this.envelope.beans.find((b) => b.id === id);
+		if (!row || row.visualizerId) return;
+		this.replaceBean({ ...row, visualizerId });
+	}
+
+	/** The first upload of bag `id` ended, landed or not. */
+	endFirstUpload(id: string): void {
+		this.firstUploads.delete(id);
+	}
+
 	/** Records for grinder names an import carried that no grinder has yet. */
 	addGrindersForNames(names: readonly string[]): Grinder[] {
 		const fresh = grindersForNames(this.allGrinders, names);
@@ -966,9 +998,13 @@ export class BeanLibraryStore {
 		return fresh;
 	}
 
-	/** Bulk-insert or replace grinder records by id (an import's merge). */
+	/**
+	 * Bulk-insert or replace grinder records by id (an import's merge). Names
+	 * are stored clean (`cleanGrinderName`, REVIEW-513 follow-up 1), whoever
+	 * built the rows.
+	 */
 	putImportedGrinders(rows: readonly Grinder[]): void {
-		this.putGrinders(rows);
+		this.putGrinders(rows.map((g) => ({ ...g, name: cleanGrinderName(g.name) })));
 	}
 
 	/**

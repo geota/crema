@@ -49,6 +49,7 @@ import {
 	bagGrindsToFixJson,
 	bagSelectionUndoJson,
 	brewGrindViewJson,
+	cleanGrinderName as wasmCleanGrinderName,
 	coerceGrinder as wasmCoerceGrinder,
 	countsInThirdsJson,
 	formatGrindJson,
@@ -103,6 +104,15 @@ export const NO_GRINDER_ID = '';
 
 /** The scale Brew uses with no active grinder: 0–20, step 0.1, no unit. */
 export const DEFAULT_GRIND_SCALE: GrindScale = { min: 0, max: 20, step: 0.1, unit: '' };
+
+/**
+ * A grinder name as stored (`de1_domain::clean_grinder_name`, REVIEW-513
+ * follow-up 1): control characters, newlines included, become one space, and
+ * the ends are trimmed. Empty for a name with nothing visible.
+ */
+export function cleanGrinderName(name: string): string {
+	return wasmCleanGrinderName(name);
+}
 
 /** A stored grinder row, normalised, or `null` without a string id. */
 export function coerceGrinder(raw: unknown): Grinder | null {

@@ -111,12 +111,6 @@ export interface QuickSaveUndo {
 	readonly core: CoreUndo;
 	/** The profile's body before the Save: what Undo stores back. */
 	readonly previous: CremaProfile;
-	/**
-	 * The bag had no saved grinds at all before the Save (`grinds` null: not
-	 * migrated yet). Undo puts that back, not an empty list, so the migration
-	 * still runs for it (PLAN follow-up 13).
-	 */
-	readonly grindsWereNull: boolean;
 }
 
 export interface QuickSaveResult {
@@ -175,8 +169,7 @@ export function runQuickSave(
 					profileName: profile.name,
 					writtenProfile: plain(deps.profiles.get(profile.id) ?? baked)
 				},
-				previous: plain(profile),
-				grindsWereNull: false
+				previous: plain(profile)
 			};
 			parts.push(`“${profile.name}” updated`);
 		}
@@ -202,8 +195,7 @@ export function runQuickSave(
 							written: plain(rowFor(saved.bean, plan.grinderId)),
 							grindsWereNone: before?.grinds == null
 						}
-					},
-					grindsWereNull: before?.grinds == null
+					}
 				};
 			}
 		}
@@ -233,10 +225,9 @@ export function undoQuickSave(
 	) as QuickSaveUndoPlan;
 	if (out.restoreProfile) deps.profiles.save(u.previous);
 	if (out.restoreBean) {
-		const bean = out.restoreBean as Bean;
-		// The row the Save added is gone again: a bag that had no saved grinds goes back to none.
-		const back = u.grindsWereNull && (bean.grinds ?? []).length === 0 ? { ...bean, grinds: null } : bean;
-		deps.beans.storeBagFromCore(back);
+		// The core puts a bag that had no saved grinds back to none (`grindsWereNone`,
+		// #488 follow-up 44), so the migration still runs for it (PLAN follow-up 13).
+		deps.beans.storeBagFromCore(out.restoreBean as Bean);
 	}
 	return {
 		profileRestored: out.restoreProfile,

@@ -216,9 +216,14 @@ describe('Quick Controls Save', () => {
 		const { plan, opts } = dialled(mine, 13, mine.dose + 1);
 		const r = runQuickSave(plan, deps, opts)!;
 		expect(saved()).toBe('13');
+		// The core's Undo record says so; the core puts it back (#488 follow-up 44).
+		expect(r.undo!.core.grind?.grindsWereNone).toBe(true);
 		const u = undoQuickSave(r.undo!, deps);
 		expect(u.outcome).toBe(QuickSaveUndoOutcome.Undone);
-		expect(beans.getBean('bean:a')!.grinds, 'as the bag had it').toBeNull();
+		// No list, as the bag had it: the core leaves the key out (`None`), which
+		// reads as not migrated like `null` does.
+		expect(beans.getBean('bean:a')!.grinds ?? null, 'as the bag had it').toBeNull();
+		expect(beans.getBean('bean:a')!.grinds, 'not an empty list').not.toEqual([]);
 	});
 
 	it('Undo of a grind the Save added removes just that row', () => {

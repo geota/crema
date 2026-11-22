@@ -23,6 +23,7 @@
 	import StarIcon from 'phosphor-svelte/lib/StarIcon';
 	import { getBeanStore } from '#lib/bean/store.svelte.js';
 	import {
+		cleanGrinderName,
 		formatGrind,
 		grindStartFromBlank,
 		grindText,
@@ -184,7 +185,9 @@
 
 	function saveName(): void {
 		if (!selected) return;
-		const name = nameText.trim();
+		// As stored: control characters (a pasted newline) become one space, so
+		// a name of nothing visible is refused here, not saved blank.
+		const name = cleanGrinderName(nameText);
 		if (!name) {
 			nameError = 'Enter a name.';
 			return;
