@@ -442,6 +442,14 @@ pub struct StoredShot {
     /// settings default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grinder_model: Option<String>,
+    /// The id of the active grinder record at shot start (#488;
+    /// [`crate::grinder::Grinder::id`]), next to the `grinder_model` name
+    /// snapshot: lookups ("the newest shot on this bag with this grinder")
+    /// use the id, display uses the name (review F4). `None` on rows from
+    /// before grinder ids, which are matched by name, read-only; old rows are
+    /// never rewritten. Omitted when absent; never sent to Visualizer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grinder_id: Option<String>,
     /// Shot-level free-form tags. Independent from `bean.tags` — the
     /// shell unions them at upload time. Mutable post-completion via
     /// the shot-detail panel.
@@ -593,6 +601,7 @@ impl StoredShot {
             record,
             bean: None,
             grinder_model: None,
+            grinder_id: None,
             tags: Vec::new(),
             yield_target: None,
             brew_temp_target: None,

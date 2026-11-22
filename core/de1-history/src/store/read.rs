@@ -624,11 +624,14 @@ impl Store {
     }
 
     /// The newest grind per grinder on a bag (#488): for each grinder the
-    /// bag's listed rows name (matched ignoring case and surrounding spaces,
-    /// [`de1_domain::same_grinder`]), the grind of its newest row that
-    /// recorded one, newest first. A grind is the row's text as stored, or
-    /// an Android row's number written without a trailing `.0`; a blank one
-    /// doesn't count. Values are never clamped or rewritten otherwise.
+    /// bag's listed rows name, the grind of its newest row that recorded one,
+    /// newest first. A row stamped with a grinder id counts for that id; a
+    /// row from before grinder ids counts for its grinder name (matched
+    /// ignoring case and surrounding spaces, [`de1_domain::same_grinder`]),
+    /// for the core to match by name ([`de1_domain::newest_shot_grind`]). A
+    /// grind is the row's text as stored, or an Android row's number written
+    /// without a trailing `.0`; a blank one doesn't count. Values are never
+    /// clamped or rewritten otherwise.
     ///
     /// # Errors
     /// A SQLite error class.
@@ -636,25 +639,34 @@ impl Store {
         let found = self.read(|conn, faults, _| {
             rows(conn, faults, &sql::grinds_for_bag(bean_id), |r| {
                 Ok((
-                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<String>>(0).ok().flatten(),
                     grind_text(r.get_ref(1)?),
                     r.get::<_, i64>(2)?,
+                    r.get::<_, Option<String>>(3).ok().flatten(),
                 ))
             })
         })?;
         let mut out: Vec<LastGrind> = Vec::new();
-        for (grinder, grind, completed_at) in found {
-            let (Some(grinder), Some(grind)) = (grinder, grind) else {
+        for (grinder, grind, completed_at, grinder_id) in found {
+            let Some(grind) = grind else {
                 continue;
             };
-            if de1_domain::grinder_key(&grinder).is_empty()
-                || out
-                    .iter()
-                    .any(|l| de1_domain::same_grinder(&l.grinder, &grinder))
-            {
+            let grinder = grinder.unwrap_or_default();
+            let grinder_id = grinder_id.filter(|id| !id.trim().is_empty());
+            let seen = match grinder_id.as_deref() {
+                Some(id) => out.iter().any(|l| l.grinder_id.as_deref() == Some(id)),
+                None => {
+                    de1_domain::grinder_key(&grinder).is_empty()
+                        || out.iter().any(|l| {
+                            l.grinder_id.is_none() && de1_domain::same_grinder(&l.grinder, &grinder)
+                        })
+                }
+            };
+            if seen {
                 continue;
             }
             out.push(LastGrind {
+                grinder_id,
                 grinder,
                 grind,
                 completed_at,

@@ -1699,6 +1699,8 @@ class LibraryController(
                 ),
                 beans = s.beans.map { it.id },
                 roasters = s.roasters.map { it.id },
+                // #488: no grinder store on Android yet (issue 03 adds it).
+                grinders = emptyList(),
                 profiles = customProfilesJson.mapNotNull { profileIdOf(it, json) },
                 recipes = s.brewRecipes.map { it.id }.filterNot { it in builtinRecipeIds },
                 customMethods = s.customMethods.map { it.id },

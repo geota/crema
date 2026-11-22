@@ -49,6 +49,7 @@ class RestoreEngineTest {
         health = emptyList(),
         beans = beans,
         roasters = emptyList(),
+        grinders = emptyList(),
         profiles = emptyList(),
         recipes = emptyList(),
         customMethods = emptyList(),

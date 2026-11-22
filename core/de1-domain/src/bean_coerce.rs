@@ -16,7 +16,9 @@
 //! read, matching the TS. `now_ms` seeds the `created_at` / `updated_at`
 //! defaults (the shell passes `Date.now()`, as the TS `blankBean` does).
 
+use crate::bag_grind::BagGrind;
 use crate::bean::{Bean, BeanMix, BeanOrigin, BeanRoastType, Roaster};
+use crate::grinder::Grinder;
 use serde_json::{Map, Value};
 
 /// Read `obj[key]` as an owned string, or `None` when absent / not a string.
@@ -145,6 +147,9 @@ pub fn coerce_bean(raw: &Value, now_ms: i64) -> Option<Bean> {
     if let Some(v) = str_field(obj, "grinderSetting") {
         bean.grinder_setting = v;
     }
+    if let Some(Value::Array(rows)) = obj.get("grinds") {
+        bean.grinds = Some(rows.iter().filter_map(coerce_bag_grind).collect());
+    }
     if let Some(Value::Array(arr)) = obj.get("tags") {
         bean.tags = arr
             .iter()
@@ -183,6 +188,76 @@ pub fn coerce_bean(raw: &Value, now_ms: i64) -> Option<Bean> {
         bean.updated_at = n;
     }
     Some(bean)
+}
+
+/// One saved grind (#488), read leniently: a wrong-typed field takes its
+/// default, a numeric grind reads as its text; a non-object is skipped.
+/// Rows are never de-duplicated here: an unknown grinder's row is kept.
+fn coerce_bag_grind(raw: &Value) -> Option<BagGrind> {
+    let obj = raw.as_object()?;
+    let grind = match obj.get("grind") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => String::new(),
+    };
+    Some(BagGrind {
+        grinder_id: str_field(obj, "grinderId").unwrap_or_default(),
+        grinder_name: str_field(obj, "grinderName").unwrap_or_default(),
+        grind,
+        starred: obj.get("starred").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
+/// Coerce a stored grinder row (#488) into a valid [`Grinder`]: each field
+/// with the right type is kept (the scale field by field), the rest take
+/// their defaults. `None` only when the row isn't an object or lacks a
+/// non-empty string `id`.
+#[must_use]
+pub fn coerce_grinder(raw: &Value) -> Option<Grinder> {
+    let obj = raw.as_object()?;
+    let id = obj
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())?;
+    let mut g = Grinder {
+        id: id.to_owned(),
+        ..Grinder::default()
+    };
+    if let Some(v) = str_field(obj, "name") {
+        g.name = v;
+    }
+    if let Some(scale) = obj.get("scale").and_then(Value::as_object) {
+        let num = |k: &str| scale.get(k).and_then(crate::coerce::as_f64);
+        #[allow(clippy::cast_possible_truncation)]
+        let as_f32 = |n: f64| n as f32;
+        if let Some(n) = num("min") {
+            g.scale.min = as_f32(n);
+        }
+        if let Some(n) = num("max") {
+            g.scale.max = as_f32(n);
+        }
+        if let Some(n) = num("step") {
+            g.scale.step = as_f32(n);
+        }
+        if let Some(v) = str_field(scale, "unit") {
+            g.scale.unit = v;
+        }
+    }
+    g.preset_id = str_field(obj, "presetId");
+    if let Some(n) = obj.get("updatedAt").and_then(Value::as_i64) {
+        g.updated_at = n;
+    }
+    g.archived_at = obj.get("archivedAt").and_then(Value::as_i64);
+    g.deleted_at = obj.get("deletedAt").and_then(Value::as_i64);
+    Some(g)
+}
+
+/// JSON-bridged [`coerce_grinder`]: a stored row in, a `Grinder` JSON or
+/// `None` out.
+#[must_use]
+pub fn coerce_grinder_json(raw_json: &str) -> Option<String> {
+    let raw: Value = serde_json::from_str(raw_json).ok()?;
+    serde_json::to_string(&coerce_grinder(&raw)?).ok()
 }
 
 /// Coerce a stored row into a valid [`Roaster`]; `None` on garbage / a row
@@ -255,6 +330,64 @@ pub fn coerce_roaster_json(raw_json: &str, now_ms: i64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── #488: saved grinds and grinder rows ──
+
+    #[test]
+    fn a_stored_bags_grinds_survive_the_coerce_leniently() {
+        let raw = serde_json::json!({
+            "id": "b1", "name": "Guji",
+            "grinds": [
+                { "grinderId": "grinder:nz", "grinderName": "Niche Zero", "grind": "14", "starred": true },
+                { "grinderId": "grinder:gone", "grind": 480, "starred": "yes" },
+                "not a row",
+            ],
+        });
+        let b = coerce_bean(&raw, 0).unwrap();
+        let rows = b.grinds.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!((rows[0].grind.as_str(), rows[0].starred), ("14", true));
+        assert_eq!(
+            (
+                rows[1].grinder_id.as_str(),
+                rows[1].grind.as_str(),
+                rows[1].starred
+            ),
+            ("grinder:gone", "480", false)
+        );
+        // No `grinds`: not migrated yet.
+        let old = coerce_bean(
+            &serde_json::json!({ "id": "b1", "name": "x", "grinderSetting": "3" }),
+            0,
+        )
+        .unwrap();
+        assert_eq!((old.grinds, old.grinder_setting.as_str()), (None, "3"));
+    }
+
+    #[test]
+    fn a_grinder_row_reads_field_by_field() {
+        let g = coerce_grinder(&serde_json::json!({
+            "id": "grinder:a", "name": 7, "scale": { "min": "low", "max": 40, "step": 1, "unit": "clicks" },
+            "presetId": "niche-zero", "updatedAt": 5, "archivedAt": 6,
+        }))
+        .unwrap();
+        assert_eq!((g.id.as_str(), g.name.as_str()), ("grinder:a", ""));
+        assert_eq!(
+            (
+                g.scale.min,
+                g.scale.max,
+                g.scale.step,
+                g.scale.unit.as_str()
+            ),
+            (0.0, 40.0, 1.0, "clicks")
+        );
+        assert_eq!(
+            (g.preset_id.as_deref(), g.updated_at, g.archived_at),
+            (Some("niche-zero"), 5, Some(6))
+        );
+        assert!(coerce_grinder(&serde_json::json!({ "name": "x" })).is_none());
+        assert!(coerce_grinder_json("nope").is_none());
+    }
 
     // ── coerce_bean (mirrors model.vitest.ts) ──────────────────────────
 

@@ -509,6 +509,15 @@ pub struct Bean {
     /// Bean-scoped grinder click / setting — `"1.2"`, `"6 + a tooth"`.
     #[serde(default)]
     pub grinder_setting: String,
+    /// The grinds saved on this bag, one per grinder, at most one starred
+    /// ("this bag's grinder") (#488; [`crate::bag_grind`]). `None` = not
+    /// migrated yet: the library migration turns the old `grinder_setting`
+    /// into a row ([`crate::grinder::migrate_grinder_library`]). Crema-only:
+    /// a Visualizer pull and an older import or restore row (`None`) keep the
+    /// local value (review F7). Omitted when `None`, so older bytes don't
+    /// change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grinds: Option<Vec<crate::bag_grind::BagGrind>>,
     /// Free-form user tags — e.g. `"daily-driver"`, `"comp"`, `"experimental"`.
     /// Defaults to an empty list. Serialised as `tags` so the JSON contract
     /// matches the [`crate::Profile`] tag pattern.
@@ -883,6 +892,7 @@ pub fn duplicate_bean(source: &Bean, new_id: &str, now_ms: i64) -> Bean {
         archived_at: _,
         grinder,
         grinder_setting,
+        grinds,
         tags,
         linked_profile_id,
         visualizer_id: _,
@@ -927,6 +937,7 @@ pub fn duplicate_bean(source: &Bean, new_id: &str, now_ms: i64) -> Bean {
         archived_at: None,
         grinder,
         grinder_setting,
+        grinds,
         tags,
         linked_profile_id,
         visualizer_id: None,
@@ -1060,6 +1071,7 @@ impl Bean {
             archived_at: None,
             grinder: String::new(),
             grinder_setting: String::new(),
+            grinds: None,
             tags: Vec::new(),
             linked_profile_id: None,
             visualizer_id: None,

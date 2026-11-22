@@ -393,6 +393,7 @@ class HistorySourceTest {
             health = listOf(LocalStoreHealth("shots", LocalHealth.Ok)),
             beans = emptyList(),
             roasters = emptyList(),
+            grinders = emptyList(),
             profiles = emptyList(),
             recipes = emptyList(),
             customMethods = emptyList(),

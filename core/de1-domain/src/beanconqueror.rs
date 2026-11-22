@@ -518,6 +518,10 @@ impl<'de> Deserialize<'de> for BcQuantityKind {
 pub struct ImportPlan {
     pub beans: Vec<Bean>,
     pub roasters: Vec<Roaster>,
+    /// Grinder records (#488): a Crema library export's `grinder` lines.
+    /// Beanconqueror has none; its grinder names ride on the shots.
+    #[serde(default)]
+    pub grinders: Vec<crate::grinder::Grinder>,
     /// Each shot ships the core [`StoredShot`] (sans-IO; no ShotBean
     /// snapshot — that's a shell-side enrichment) alongside the
     /// resolved bean / grinder / roaster strings so the shell can build

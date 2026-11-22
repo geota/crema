@@ -6,6 +6,7 @@
 //! {"kind":"crema/v1","exportedAt":<unix_ms>,"beanCount":N,"roasterCount":M,"shotCount":K}
 //! {"kind":"roaster", ...full Roaster JSON...}
 //! {"kind":"roaster", ...}
+//! {"kind":"grinder", ...full Grinder JSON... (#488)}
 //! {"kind":"bean", ...full Bean JSON...}
 //! {"kind":"shot", ...full StoredShot JSON...}
 //! ```
@@ -35,7 +36,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Bean, BrewRecipe, CustomBrewMethod, Roaster, StoredShot, beanconqueror::ImportPlan,
-    is_builtin_recipe, is_custom_method_id,
+    grinder::Grinder, is_builtin_recipe, is_custom_method_id,
 };
 
 /// Header record — the first line of a Crema export.
@@ -50,6 +51,9 @@ pub struct CremaExportHeader {
     /// Per-entity counts so consumers can pre-allocate / show progress.
     pub bean_count: usize,
     pub roaster_count: usize,
+    /// Grinder records (#488); absent in files that don't carry them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grinder_count: Option<usize>,
     pub shot_count: usize,
     /// Crema version that wrote the file (free-form for now).
     #[serde(default)]
@@ -67,11 +71,33 @@ pub fn export_jsonl(
     exported_at_unix_ms: i64,
     crema_version: &str,
 ) -> String {
+    export_library_jsonl(
+        beans,
+        roasters,
+        None,
+        shots,
+        exported_at_unix_ms,
+        crema_version,
+    )
+}
+
+/// [`export_jsonl`] with the grinder records (#488): `grinders` `Some` writes
+/// a `grinderCount` and one `grinder` line each, after the roasters.
+#[must_use]
+pub fn export_library_jsonl(
+    beans: &[Bean],
+    roasters: &[Roaster],
+    grinders: Option<&[Grinder]>,
+    shots: &[StoredShot],
+    exported_at_unix_ms: i64,
+    crema_version: &str,
+) -> String {
     let header = CremaExportHeader {
         kind: "crema/v1".to_owned(),
         exported_at: exported_at_unix_ms,
         bean_count: beans.len(),
         roaster_count: roasters.len(),
+        grinder_count: grinders.map(<[Grinder]>::len),
         shot_count: shots.len(),
         crema_version: crema_version.to_owned(),
     };
@@ -79,6 +105,9 @@ pub fn export_jsonl(
     push_line(&mut out, &header);
     for r in roasters {
         push_tagged_line(&mut out, "roaster", r);
+    }
+    for g in grinders.unwrap_or_default() {
+        push_tagged_line(&mut out, "grinder", g);
     }
     for b in beans {
         push_tagged_line(&mut out, "bean", b);
@@ -157,6 +186,11 @@ pub fn parse_jsonl(text: &str) -> Result<ImportPlan, String> {
             "roaster" => {
                 if let Ok(r) = serde_json::from_value::<Roaster>(value) {
                     plan.roasters.push(r);
+                }
+            }
+            "grinder" => {
+                if let Some(g) = crate::bean_coerce::coerce_grinder(&value) {
+                    plan.grinders.push(g);
                 }
             }
             "bean" => {
@@ -239,8 +273,9 @@ pub fn parse_jsonl(text: &str) -> Result<ImportPlan, String> {
 }
 
 /// JSON-in / JSON-out adapter for the wasm + uniffi bridges. Takes a
-/// JSON envelope `{ "beans": [...], "roasters": [...], "shots": [...] }`
-/// and returns the JSONL text.
+/// JSON envelope `{ "beans": [...], "roasters": [...], "grinders"?: [...],
+/// "shots": [...] }` and returns the JSONL text. `grinders` (#488) is
+/// written only when the envelope carries it.
 ///
 /// # Errors
 ///
@@ -258,12 +293,15 @@ pub fn export_jsonl_from_json(
         #[serde(default)]
         roasters: Vec<Roaster>,
         #[serde(default)]
+        grinders: Option<Vec<Grinder>>,
+        #[serde(default)]
         shots: Vec<StoredShot>,
     }
     let inp: In = serde_json::from_str(envelope_json).map_err(|e| e.to_string())?;
-    Ok(export_jsonl(
+    Ok(export_library_jsonl(
         &inp.beans,
         &inp.roasters,
+        inp.grinders.as_deref(),
         &inp.shots,
         exported_at_unix_ms,
         crema_version,
@@ -307,6 +345,11 @@ pub struct BackupHeader {
     pub profile_count: usize,
     pub bean_count: usize,
     pub roaster_count: usize,
+    /// Grinder records (#488). Written only when the shell's envelope carries
+    /// a `grinders` list: a backup without the count doesn't carry the store,
+    /// so a Replace keeps the device's grinders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grinder_count: Option<usize>,
     pub shot_count: usize,
     /// User brew recipes in the bundle (built-ins are never written).
     /// Absent in bundles made before recipes were backed up.
@@ -332,8 +375,8 @@ fn is_zero(n: &usize) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OmittedBackupRow {
-    /// The row's line kind: `shot`, `bean`, `roaster`, `recipe`, `brewMethod`
-    /// or `profile`.
+    /// The row's line kind: `shot`, `bean`, `roaster`, `grinder`, `recipe`,
+    /// `brewMethod` or `profile`.
     pub kind: &'static str,
     /// Where the row sat in the envelope's list of that kind.
     pub index: usize,
@@ -393,6 +436,8 @@ pub struct BackupImportPlan {
     pub beans: Vec<Bean>,
     /// Roaster directory — same typed shape as a library import.
     pub roasters: Vec<Roaster>,
+    /// Grinder records (#488), merged by id like roasters.
+    pub grinders: Vec<Grinder>,
     /// Shot history — the full [`StoredShot`] wire shape (including the `bean`
     /// snapshot), parsed straight off the `shot` lines so a restore is verbatim.
     pub shots: Vec<StoredShot>,
@@ -451,6 +496,8 @@ pub fn export_backup_jsonl_from_json(
         #[serde(default)]
         roasters: Vec<serde_json::Value>,
         #[serde(default)]
+        grinders: Option<Vec<serde_json::Value>>,
+        #[serde(default)]
         shots: Vec<serde_json::Value>,
         #[serde(default)]
         recipes: Vec<serde_json::Value>,
@@ -472,6 +519,17 @@ pub fn export_backup_jsonl_from_json(
     let profiles = read_rows(inp.profiles, "profile", &mut omitted, read_profile_row)?;
     let beans: Vec<Bean> = read_rows(inp.beans, "bean", &mut omitted, read_row)?;
     let roasters: Vec<Roaster> = read_rows(inp.roasters, "roaster", &mut omitted, read_row)?;
+    let grinders: Option<Vec<Grinder>> = inp
+        .grinders
+        .map(|rows| {
+            read_rows(
+                rows,
+                "grinder",
+                &mut omitted,
+                crate::bean_coerce::coerce_grinder,
+            )
+        })
+        .transpose()?;
     let shots: Vec<ShotRow> = read_rows(inp.shots, "shot", &mut omitted, read_shot_row)?;
     let recipes: Vec<BrewRecipe> = read_rows(inp.recipes, "recipe", &mut omitted, read_row)?;
     let custom_methods: Vec<CustomBrewMethod> =
@@ -488,6 +546,7 @@ pub fn export_backup_jsonl_from_json(
         profile_count: profiles.len(),
         bean_count: beans.len(),
         roaster_count: roasters.len(),
+        grinder_count: grinders.as_ref().map(Vec::len),
         shot_count: shots.len(),
         recipe_count: recipes.len(),
         custom_method_count: custom_methods.len(),
@@ -515,6 +574,9 @@ pub fn export_backup_jsonl_from_json(
     }
     for r in &roasters {
         push_tagged_line(&mut out, "roaster", r);
+    }
+    for g in grinders.iter().flatten() {
+        push_tagged_line(&mut out, "grinder", g);
     }
     for b in &beans {
         push_tagged_line(&mut out, "bean", b);
@@ -571,6 +633,8 @@ struct EnvelopeRows {
     beans: Vec<serde_json::Value>,
     #[serde(default)]
     roasters: Vec<serde_json::Value>,
+    #[serde(default)]
+    grinders: Option<Vec<serde_json::Value>>,
     #[serde(default)]
     recipes: Vec<serde_json::Value>,
     #[serde(default, rename = "customMethods")]
@@ -668,6 +732,18 @@ pub fn backup_prelude_jsonl(
         &mut omitted,
         read_row,
     )?;
+    let grinders: Option<Vec<Grinder>> = inp
+        .grinders
+        .take()
+        .map(|rows| {
+            read_rows(
+                rows,
+                "grinder",
+                &mut omitted,
+                crate::bean_coerce::coerce_grinder,
+            )
+        })
+        .transpose()?;
     let tail = read_tail(&mut inp, &mut omitted)?;
     let header = BackupHeader {
         kind: "crema-backup/v1".to_owned(),
@@ -677,6 +753,7 @@ pub fn backup_prelude_jsonl(
         profile_count: tail.profiles.len(),
         bean_count: beans.len(),
         roaster_count: roasters.len(),
+        grinder_count: grinders.as_ref().map(Vec::len),
         shot_count,
         recipe_count: tail.recipes.len(),
         custom_method_count: tail.custom_methods.len(),
@@ -697,6 +774,9 @@ pub fn backup_prelude_jsonl(
     }
     for r in &roasters {
         push_tagged_line(&mut out, "roaster", r);
+    }
+    for g in grinders.iter().flatten() {
+        push_tagged_line(&mut out, "grinder", g);
     }
     for b in &beans {
         push_tagged_line(&mut out, "bean", b);
@@ -950,6 +1030,7 @@ pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
         visualizer_prefs,
         beans: library.beans,
         roasters: library.roasters,
+        grinders: library.grinders,
         shots,
         recipes,
         recipe_meta,
@@ -1004,42 +1085,68 @@ mod tests {
     }
 
     /// #488: the pre-#488 grinder fields (`Bean::grinder`,
-    /// `Bean::grinder_setting`, `CommonSettings::grinder_model`) and the owned
-    /// grinders ride through a backup, a bean-library export and the settings
-    /// sanitize unchanged.
+    /// `Bean::grinder_setting`, `CommonSettings::grinder_model`), the saved
+    /// grinds and the grinder records ride through a backup and a
+    /// bean-library export unchanged.
     #[test]
-    fn the_old_grinder_fields_and_owned_grinders_survive_round_trips() {
+    fn the_old_grinder_fields_grinds_and_grinder_records_survive_round_trips() {
         let mut bean = sample_bean("bean:b1", "Yirg", None);
         bean.grinder = " Niche Zero ".into();
         bean.grinder_setting = "6 + a tooth".into();
-        let settings = crate::migrate_grinders(
-            crate::app_settings::CommonSettings {
-                grinder_model: "EK43".into(),
-                ..crate::app_settings::default_common_settings()
-            },
-            &[bean.grinder.as_str()],
-        );
+        let m = crate::migrate_grinder_library(&[], std::slice::from_ref(&bean), "EK43", 7);
+        let migrated = m.updated_beans[0].clone();
+        assert!(migrated.grinds.is_some());
+        let settings = crate::app_settings::CommonSettings {
+            grinder_model: "EK43".into(),
+            ..crate::app_settings::default_common_settings()
+        };
         let envelope = serde_json::json!({
-            "beans": [bean.clone()],
+            "beans": [migrated.clone()],
+            "grinders": m.new_grinders.clone(),
             "settings": settings.clone(),
         });
-        let plan = parse_backup_jsonl(&export(&envelope).jsonl);
-        assert_eq!(plan.beans.len(), 1);
+        let jsonl = export(&envelope).jsonl;
+        assert!(
+            jsonl
+                .lines()
+                .next()
+                .unwrap()
+                .contains(r#""grinderCount":2"#),
+            "{jsonl}"
+        );
+        let plan = parse_backup_jsonl(&jsonl);
+        assert_eq!(plan.beans, std::slice::from_ref(&migrated));
         assert_eq!(plan.beans[0].grinder, " Niche Zero ");
         assert_eq!(plan.beans[0].grinder_setting, "6 + a tooth");
+        assert_eq!(plan.grinders, m.new_grinders);
+        let imported = crate::backup_plan::import_backup_bytes(jsonl.as_bytes());
+        assert_eq!(imported.grinders, m.new_grinders);
         let restored =
             crate::app_settings::sanitize_common_settings(&plan.settings.expect("settings"));
-        assert_eq!(restored, settings);
         assert_eq!(restored.grinder_model, "EK43");
         // Restoring runs the migration again: already migrated, so a no-op.
         assert_eq!(
-            crate::migrate_grinders(restored.clone(), &[bean.grinder.as_str()]),
-            restored
+            crate::migrate_grinder_library(&plan.grinders, &plan.beans, &restored.grinder_model, 9),
+            crate::GrinderLibraryMigration::default()
         );
+        // An envelope without grinders doesn't carry the store.
+        let none = export(&serde_json::json!({ "beans": [migrated.clone()] })).jsonl;
+        assert!(!none.contains("grinderCount"), "{none}");
 
-        let lib = parse_jsonl(&export_jsonl(&[bean], &[], &[], 1, "test")).unwrap();
-        assert_eq!(lib.beans[0].grinder, " Niche Zero ");
-        assert_eq!(lib.beans[0].grinder_setting, "6 + a tooth");
+        let lib = parse_jsonl(&export_library_jsonl(
+            std::slice::from_ref(&migrated),
+            &[],
+            Some(&m.new_grinders),
+            &[],
+            1,
+            "test",
+        ))
+        .unwrap();
+        assert_eq!(lib.beans, [migrated]);
+        assert_eq!(lib.grinders, m.new_grinders);
+        let old = parse_jsonl(&export_jsonl(&[bean], &[], &[], 1, "test")).unwrap();
+        assert_eq!(old.beans[0].grinder_setting, "6 + a tooth");
+        assert!(old.beans[0].grinds.is_none());
     }
 
     /// A shot row with a curve, the way a shell hands it over.

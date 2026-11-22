@@ -230,12 +230,13 @@ pub fn quick_control_bounds_json() -> String {
     serde_json::to_string(&quick_control_bounds()).unwrap_or_default()
 }
 
-/// [`quick_control_bounds_for`] the active grinder of a settings blob (read
-/// through [`crate::app_settings::sanitize_common_settings`]), as JSON.
+/// [`quick_control_bounds_for`] the active grinder's scale, as JSON: the
+/// active `Grinder` JSON in ([`crate::grinder::active_grinder_json`]), or
+/// `null` (or anything that isn't a grinder) for the default scale.
 #[must_use]
-pub fn quick_control_bounds_for_settings_json(settings_json: &str) -> String {
-    let settings = crate::grinder::settings_from_json(settings_json);
-    let scale = crate::grinder::active_grind_scale(&settings);
+pub fn quick_control_bounds_for_grinder_json(grinder_json: &str) -> String {
+    let scale = serde_json::from_str::<crate::grinder::Grinder>(grinder_json)
+        .map_or_else(|_| GrindScale::default(), |g| g.scale);
     serde_json::to_string(&quick_control_bounds_for(&scale)).unwrap_or_default()
 }
 

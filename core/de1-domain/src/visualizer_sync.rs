@@ -781,7 +781,8 @@ pub fn reconcile_roasters(
 ///   keeps the local `id`, `created_at` and **`updated_at`** (the pull is not a
 ///   local edit, so it must not look like one to the next push leg), plus the
 ///   Crema-only fields the wire never carries (`tags`, `image_ref`,
-///   `linked_profile_id`, `cost`, `roast_type`, `deleted_at`).
+///   `linked_profile_id`, `cost`, `roast_type`, `deleted_at`, and the saved
+///   `grinds` and their star, #488 review F7).
 /// - A replacement identical to the local row is skipped (no churn).
 ///
 /// `roaster_names` maps a local roaster id → its display name, so the
@@ -937,6 +938,7 @@ fn pulled_over_local(local: &Bean, remote: &Bean) -> Bean {
     out.cost = local.cost;
     out.roast_type = local.roast_type;
     out.deleted_at = local.deleted_at;
+    out.grinds.clone_from(&local.grinds);
     out
 }
 
@@ -1808,6 +1810,47 @@ mod tests {
         let applied = remote.clone();
         let again = reconcile_beans(&[applied], &[decoded], &HashMap::new(), Some(600));
         assert!(again.is_empty(), "{again:?}");
+    }
+
+    /// #488 F7: a pull never erases the bag's saved grinds or its star.
+    #[test]
+    fn reconcile_beans_keeps_the_saved_grinds() {
+        let mut local = bean("bean:l1", "Yirg", Some("b1"));
+        local.grinds = Some(vec![crate::bag_grind::BagGrind {
+            grinder_id: "grinder:nz".to_owned(),
+            grinder_name: "Niche Zero".to_owned(),
+            grind: "14".to_owned(),
+            starred: true,
+        }]);
+        let decoded = bean("bean:remote", "Yirgacheffe", Some("b1"));
+        let actions = reconcile_beans(
+            std::slice::from_ref(&local),
+            &[decoded],
+            &HashMap::new(),
+            None,
+        );
+        let [BeanReconcileAction::Replace { remote, .. }] = actions.as_slice() else {
+            panic!("expected one replace: {actions:?}");
+        };
+        assert_eq!(remote.name, "Yirgacheffe");
+        assert_eq!(remote.grinds, local.grinds);
+        // The raw-wire kernel the shells run keeps them too.
+        let pulled = PulledBag {
+            wire: serde_json::json!({ "id": "b1", "name": "Renamed" }),
+            local_roaster_id: None,
+            fallback_id: "bean:fallback".to_owned(),
+        };
+        let actions = reconcile_pulled_bags(
+            std::slice::from_ref(&local),
+            &[pulled],
+            &HashMap::new(),
+            None,
+            1,
+        );
+        let [BeanReconcileAction::Replace { remote, .. }] = actions.as_slice() else {
+            panic!("expected one replace: {actions:?}");
+        };
+        assert_eq!(remote.grinds, local.grinds);
     }
 
     #[test]

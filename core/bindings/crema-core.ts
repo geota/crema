@@ -23,31 +23,6 @@ export interface AutoBackupRetention {
 	shrink?: BackupShrink;
 }
 
-/** How many shots a backup holds, and how many of those have curves. */
-export interface BackupCounts {
-	shots: number;
-	curves: number;
-}
-
-/** A file in Drive, as a shell lists it. */
-export interface BackupFile {
-	id: string;
-	name: string;
-	modifiedMs: number;
-}
-
-/**
- * What a backup's name says about it, for a list to pick from. Any name will
- * do: what it doesn't say stays empty.
- */
-export interface BackupFileInfo {
-	/** The device label, as it went into the name. */
-	device?: string;
-	/** Made by the daily backup, not by hand. */
-	automatic: boolean;
-	counts?: BackupCounts;
-}
-
 /**
  * Whether a bag of coffee is a single-origin lot or a blend. `None` =
  * unknown / unset. Serialises as the lowercase wire string
@@ -109,6 +84,25 @@ export interface BeanOrigin {
 	processing?: string;
 	/** Harvest time — `"2024 Spring"`, `"October 2024"`. */
 	harvestTime?: string;
+}
+
+/** A grind saved on a bag for one grinder. */
+export interface BagGrind {
+	/**
+	 * The grinder's id ([`Grinder::id`]); [`NO_GRINDER_ID`] for the "no
+	 * grinder" slot. May name a grinder that is archived or unknown here:
+	 * kept, never dropped.
+	 */
+	grinderId: string;
+	/**
+	 * The grinder's name when saved, so the row still reads right after the
+	 * grinder is removed from Devices.
+	 */
+	grinderName: string;
+	/** The grind, as typed or recorded; never clamped or rewritten. */
+	grind: string;
+	/** "This bag's grinder": at most one row per bag. */
+	starred: boolean;
 }
 
 /**
@@ -217,6 +211,16 @@ export interface Bean {
 	/** Bean-scoped grinder click / setting — `"1.2"`, `"6 + a tooth"`. */
 	grinderSetting?: string;
 	/**
+	 * The grinds saved on this bag, one per grinder, at most one starred
+	 * ("this bag's grinder") (#488; [`crate::bag_grind`]). `None` = not
+	 * migrated yet: the library migration turns the old `grinder_setting`
+	 * into a row ([`crate::grinder::migrate_grinder_library`]). Crema-only:
+	 * a Visualizer pull and an older import or restore row (`None`) keep the
+	 * local value (review F7). Omitted when `None`, so older bytes don't
+	 * change.
+	 */
+	grinds?: BagGrind[];
+	/**
 	 * Free-form user tags — e.g. `"daily-driver"`, `"comp"`, `"experimental"`.
 	 * Defaults to an empty list. Serialised as `tags` so the JSON contract
 	 * matches the [`crate::Profile`] tag pattern.
@@ -278,6 +282,180 @@ export interface Bean {
 	createdAt: number;
 	/** Unix epoch ms when this bag was last updated. */
 	updatedAt: number;
+}
+
+/** What [`auto_save_shot_grind`] reads. */
+export interface AutoSaveInput {
+	/**
+	 * The device's "Save each shot's grind to its bag" setting
+	 * ([`crate::app_settings::CommonSettings::grind_auto_save`]).
+	 */
+	enabled: boolean;
+	/**
+	 * This device recorded the shot (the hub, or a device on its own). A
+	 * remote's mirror copy of a shot never auto-saves (review F8).
+	 */
+	recordedHere: boolean;
+	/**
+	 * The kept shot's bag id (`bean.beanId`). A discarded aborted shot
+	 * isn't kept; an undone discard is.
+	 */
+	shotBeanId?: string;
+	/**
+	 * The shot's grinder id ([`StoredShot::grinder_id`]); `None` = no
+	 * grinder.
+	 */
+	shotGrinderId?: string;
+	/** The shot's grinder name snapshot ([`StoredShot::grinder_model`]). */
+	shotGrinderName?: string;
+	/**
+	 * The shot's grind, as stored (web `metadata.grinderSetting`, Android
+	 * `grindSetting` as text).
+	 */
+	shotGrind?: string;
+	/** The shot's bag, as stored now. */
+	bag?: Bean;
+}
+
+/** How many shots a backup holds, and how many of those have curves. */
+export interface BackupCounts {
+	shots: number;
+	curves: number;
+}
+
+/** A file in Drive, as a shell lists it. */
+export interface BackupFile {
+	id: string;
+	name: string;
+	modifiedMs: number;
+}
+
+/**
+ * What a backup's name says about it, for a list to pick from. Any name will
+ * do: what it doesn't say stays empty.
+ */
+export interface BackupFileInfo {
+	/** The device label, as it went into the name. */
+	device?: string;
+	/** Made by the daily backup, not by hand. */
+	automatic: boolean;
+	counts?: BackupCounts;
+}
+
+/**
+ * A grinder's grind scale: the stepper's range and the unit shown next to a
+ * value. `unit` is free text and may be empty ("μm", "clicks", "turns", …).
+ */
+export interface GrindScale {
+	/** Lowest setting. */
+	min: number;
+	/** Highest setting. */
+	max: number;
+	/** Step between settings. */
+	step: number;
+	/** The unit label; empty for none. */
+	unit: string;
+}
+
+/**
+ * A grinder the user owns: a bean-library record, next to the roasters.
+ * Read leniently (`default` on every field), so a stored row with a missing
+ * field still loads.
+ */
+export interface Grinder {
+	/** Stable id, `grinder:<slug>` ([`add_grinder`] mints it). */
+	id: string;
+	/** The name shots are stamped with: `"Niche Zero"`. */
+	name: string;
+	/** Its grind scale; the user may change any of it. */
+	scale: GrindScale;
+	/**
+	 * The catalogue entry it came from ([`crate::grinder_catalogue`]), if
+	 * any.
+	 */
+	presetId?: string;
+	/** Unix epoch ms of the last change. */
+	updatedAt: number;
+	/** Unix epoch ms when it was removed from Devices; `None` = owned. */
+	archivedAt?: number;
+	/** Unix epoch ms of its tombstone; `None` = not deleted. */
+	deletedAt?: number;
+}
+
+/**
+ * The newest grind recorded on one bag with one grinder: what the history
+ * answers per (bag, grinder) (`de1_history`'s `last_grinds_for_bag`).
+ */
+export interface LastGrind {
+	/**
+	 * The grinder id the shot was stamped with; `None` on rows from before
+	 * grinder ids, which are matched by `grinder` (the name).
+	 */
+	grinderId?: string;
+	/** The grinder name the shot was stamped with, as spelled on the newest. */
+	grinder: string;
+	/** The grind it recorded, as stored. */
+	grind: string;
+	/** When that shot completed, Unix epoch ms. */
+	completedAt: number;
+}
+
+/** What [`resolve_bag_selection`] reads. */
+export interface BagSelectInput {
+	/** The bag being selected. */
+	bag?: Bean;
+	/** The active profile id now. */
+	activeProfileId?: string;
+	/**
+	 * The bag's linked profile isn't in this device's library (a dangling
+	 * id): it isn't loaded.
+	 */
+	linkedProfileMissing: boolean;
+	/** The active grinder pointer now. */
+	activeGrinderId?: string;
+	/** Brew's grind value now. */
+	grind?: string;
+	/** The grinder records. */
+	grinders: Grinder[];
+	/** The bag's newest grind per grinder, from the history. */
+	lastGrinds: LastGrind[];
+}
+
+/** Set a pointer or value to `value` (`None` clears it). */
+export interface SetTo {
+	/** The new value; `None` = none. */
+	value?: string;
+}
+
+/**
+ * What a bag selection changes besides the bag: each part `None` when it
+ * stays as it is.
+ */
+export interface SelectionChange {
+	/** The active profile id. */
+	profileId?: SetTo;
+	/** The active grinder id. */
+	grinderId?: SetTo;
+	/** Brew's grind value. */
+	grind?: SetTo;
+}
+
+/**
+ * One bag selection, resolved (review F6): the change, its inverse for the
+ * one Undo, and whether to show the message.
+ */
+export interface BagSelection {
+	/** What to apply, with the bag. */
+	change: SelectionChange;
+	/** What Undo applies: the previous value of each changed part. */
+	undo: SelectionChange;
+	/**
+	 * Something besides the bag changed: show one message ("Ethiopia Guji:
+	 * Blooming profile, Niche Zero at 14") with one Undo.
+	 */
+	changed: boolean;
+	/** The grinder switched to, for the message; `None` when it stays. */
+	grinderName?: string;
 }
 
 /** The lifecycle subset a library list shows — the Status chip group. */
@@ -445,6 +623,16 @@ export interface BeanImportMerge {
 	newRoasters: Roaster[];
 	/** Incoming roasters that replace the library row with the same id. */
 	updatedRoasters: Roaster[];
+	/**
+	 * Incoming grinder records (#488) the library doesn't have, by id or by
+	 * name. Not deleted ones: there's nothing to bring.
+	 */
+	newGrinders: Grinder[];
+	/**
+	 * Incoming grinder records that replace the library row with the same
+	 * id (newer `updated_at`, as for roasters).
+	 */
+	updatedGrinders: Grinder[];
 	/** Incoming bean id → the library bean id its shots should reference. */
 	beanIdRemap: Record<string, string>;
 	/**
@@ -1049,6 +1237,37 @@ export interface CatalogueCoffeeBag {
 	meta?: string;
 }
 
+/** Electric or hand. */
+export enum GrinderKind {
+	/** A motor grinder. */
+	Electric = "electric",
+	/** A hand grinder. */
+	Hand = "hand",
+}
+
+/** A catalogue entry as the shells list it. */
+export interface CatalogueGrinderInfo {
+	/** [`CatalogueGrinder::id`]. */
+	id: string;
+	/** Display name. */
+	name: string;
+	/** The maker. */
+	maker: string;
+	/** The model. */
+	model: string;
+	/** Other names that name it. */
+	aliases: string[];
+	/** Electric or hand. */
+	kind: GrinderKind;
+	/**
+	 * Its verified scale; `None` = "Range not set: check your grinder's
+	 * dial".
+	 */
+	scale?: GrindScale;
+	/** Where the scale was checked; `None` without one. */
+	source?: string;
+}
+
 /** One page of catalogue search results. */
 export interface CataloguePage {
 	/** The rows, in server order. Malformed rows are dropped. */
@@ -1175,33 +1394,6 @@ export interface CatalogueRoasterPage {
 	page: number;
 	/** Total page count (`paging.pages`; `1` when absent). */
 	pages: number;
-}
-
-/**
- * A grinder's grind scale: the stepper's range and the unit shown next to a
- * value. `unit` is free text and may be empty ("μm", "clicks", "turns", …).
- */
-export interface GrindScale {
-	/** Lowest setting. */
-	min: number;
-	/** Highest setting. */
-	max: number;
-	/** Step between settings. */
-	step: number;
-	/** The unit label; empty for none. */
-	unit: string;
-}
-
-/** A grinder the user owns. */
-export interface OwnedGrinder {
-	/** Stable id, unique among the owned grinders ([`add_grinder`] mints it). */
-	id: string;
-	/** The name shots are stamped with: `"Niche Zero"`. */
-	name: string;
-	/** Its grind scale; the user may change any of it. */
-	scale: GrindScale;
-	/** The [`GrinderPreset::id`] the scale came from, if any. */
-	presetId?: string;
 }
 
 /** How the hot-water amount is set. */
@@ -1350,24 +1542,18 @@ export interface CommonSettings {
 	/**
 	 * Free-text equipment grinder model: the one grinder before #488. Kept
 	 * in storage, import, export and backups as it is, and read only by the
-	 * migration to owned grinders ([`crate::grinder::migrate_grinders`]);
+	 * library migration to grinder records
+	 * ([`crate::grinder::migrate_grinder_library`]);
 	 * no longer edited in the UI.
 	 */
 	grinderModel: string;
 	/**
-	 * The owned grinders (#488), each with its grind scale. `None` = not
-	 * migrated yet: the shells run [`crate::grinder::migrate_grinders`] on
-	 * load, which fills it once. `Some(empty)` = the user owns none (or
-	 * removed them all), and the migration doesn't run again. `Option` so
-	 * older blobs and backups decode.
+	 * "Save each shot's grind to its bag" (#488, Devices → Grinder): a
+	 * personal, per-device setting. `None` = never set, read as off. Only
+	 * the device that records a shot auto-saves
+	 * ([`crate::bag_grind::auto_save_shot_grind`]).
 	 */
-	grinders?: OwnedGrinder[];
-	/**
-	 * The active owned grinder's id ([`crate::grinder::active_grinder`]).
-	 * `None`, or an id no owned grinder has, = no active grinder: the
-	 * default grind scale, and shots carry no grinder.
-	 */
-	activeGrinderId?: string;
+	grindAutoSave?: boolean;
 	/**
 	 * Default barista name, stamped on each new shot's
 	 * [`ShotMetadata::barista`](crate::ShotMetadata::barista). `None` (or
@@ -3258,43 +3444,100 @@ export interface GateStatus {
 	pending: boolean;
 }
 
-/**
- * The newest grind recorded on one bag with one grinder: what the history
- * answers per (bag, grinder) (`de1_history`'s `last_grinds_for_bag`).
- */
-export interface LastGrind {
-	/** The grinder the shot was stamped with, as spelled on the newest one. */
-	grinder: string;
-	/** The grind it recorded, as stored. */
-	grind: string;
-	/** When that shot completed, Unix epoch ms. */
-	completedAt: number;
+/** What a save did to the bag. */
+export interface GrindSave {
+	/** The bag to store (as it was when nothing changed). */
+	bean: Bean;
+	/**
+	 * Whether the saved value changed: the shells show "Grind 480 μm saved
+	 * to …" only then.
+	 */
+	changed: boolean;
 }
 
-/** What [`grind_on_select`] reads. */
-export interface GrindOnSelectInput {
-	/** The active grinder's name; `None` or blank when there is none. */
-	activeGrinder?: string;
+/** How [`add_grinder`] got its grinder. */
+export enum GrinderAddKind {
+	/** A new record. */
+	Created = "created",
+	/** An archived record brought back, same id: its bag grinds come back. */
+	Revived = "revived",
+	/** Already owned: nothing changed. */
+	Existing = "existing",
+}
+
+/** What [`add_grinder`] answers: the row to store and how it came about. */
+export interface GrinderAdd {
+	/** The grinder row; the shell upserts it (unless `Existing`). */
+	grinder: Grinder;
+	/** Created, revived or already owned. */
+	kind: GrinderAddKind;
+}
+
+/** What [`archive_grinder`] answers. */
+export interface GrinderArchive {
+	/** The archived row to store. */
+	grinder: Grinder;
+	/**
+	 * The active-grinder pointer afterwards: cleared when it was this one
+	 * (review F5), else as it was.
+	 */
+	activeGrinderId?: string;
+}
+
+/**
+ * What [`migrate_grinder_library`] changes. Empty lists when there is
+ * nothing to do.
+ */
+export interface GrinderLibraryMigration {
+	/** Grinder records to add. */
+	newGrinders: Grinder[];
+	/**
+	 * Bags whose `grinds` it filled (they were `None`); `updated_at` is not
+	 * changed, since the migration isn't an edit.
+	 */
+	updatedBeans: Bean[];
+	/**
+	 * When the grinders step ran: the grinder to make active (the one the
+	 * settings `grinder_model` names), else none. `None` when it didn't
+	 * run: keep the pointer as it is.
+	 */
+	activeGrinderId?: string;
+	/** Whether the grinders step ran (there were no grinder records). */
+	grindersMigrated: boolean;
+}
+
+/** Which list a [`GrinderMatch`] comes from, in the order they are listed. */
+export enum GrinderMatchKind {
+	/** One of the user's grinders. */
+	Owned = "owned",
+	/** A catalogue entry the user doesn't own. */
+	Catalogue = "catalogue",
+	/** One of the user's archived grinders: picking it restores it. */
+	Archived = "archived",
+}
+
+/** One row of the type-or-pick box. */
+export interface GrinderMatch {
+	/** Owned, catalogue or archived. */
+	kind: GrinderMatchKind;
+	/** The grinder's id (owned, archived) or the catalogue entry's id. */
+	id: string;
+	/** What to show. */
+	name: string;
+	/** How well it matched, `0..=1`; `0` for a blank query. */
+	score: number;
+}
+
+/** What [`resolve_grinder_switch`] reads. */
+export interface GrinderSwitchInput {
+	/** The selected bag, if any. */
+	bag?: Bean;
+	/** The grinder being switched to; `None` = no grinder. */
+	grinderId?: string;
+	/** The grinder records. */
+	grinders: Grinder[];
 	/** The bag's newest grind per grinder, from the history. */
 	lastGrinds: LastGrind[];
-	/** The bag's old stored grinder (`Bean::grinder`). */
-	bagGrinder: string;
-	/** The bag's old stored setting (`Bean::grinder_setting`). */
-	bagGrinderSetting: string;
-}
-
-/** A preset as the shells list it. */
-export interface GrinderPresetInfo {
-	/** [`GrinderPreset::id`]. */
-	id: string;
-	/** Display name. */
-	name: string;
-	/** Other names that pick it. */
-	aliases: string[];
-	/** Its scale. */
-	scale: GrindScale;
-	/** The maker's page the range was checked against. */
-	source: string;
 }
 
 /**
@@ -3602,6 +3845,8 @@ export interface LocalState {
 	health: LocalStoreHealth[];
 	beans: string[];
 	roasters: string[];
+	/** Grinder records (#488), archived and tombstones included. */
+	grinders: string[];
 	/** Custom profiles only: built-ins aren't the backup's to change. */
 	profiles: string[];
 	/** The user's own recipes only. */
@@ -3619,6 +3864,8 @@ export interface LocalState {
 	visualizerPrefs: VisualizerSyncPrefs;
 	totalLitres: number;
 	activeBeanId?: string;
+	/** The device's active-grinder pointer (#488). */
+	activeGrinderId?: string;
 	/**
 	 * Beans an earlier, interrupted run of this restore added, from its
 	 * marker. They don't count as here for `zero_debit`: a re-run after any
@@ -4334,6 +4581,14 @@ export interface RestorePlan {
 	source: PlanSource;
 	beans: StorePlan;
 	roasters: StorePlan;
+	/** Grinder records (#488), merged by id like roasters. */
+	grinders: StorePlan;
+	/**
+	 * Beans Replace overwrites with a backup row that has no `grinds` (an
+	 * app from before #488): the shell keeps the device's `grinds` on them
+	 * (review F7).
+	 */
+	beansKeepGrinds: string[];
 	profiles: StorePlan;
 	recipes: StorePlan;
 	customMethods: StorePlan;
@@ -4347,6 +4602,8 @@ export interface RestorePlan {
 	recipeMeta: RecipeMetaPlan;
 	/** Replace clears an active bean the backup doesn't have. */
 	clearActiveBean: boolean;
+	/** Replace clears an active grinder the backup doesn't have (#488). */
+	clearActiveGrinder: boolean;
 }
 
 /**
@@ -4604,8 +4861,8 @@ export interface SeriesPoint {
 /**
  * What "Restore defaults" leaves: every common setting back to the default
  * bundle except the facts about the user's setup it keeps: the weight unit
- * (it matches their scale), the mains line frequency, and the grinders (the
- * owned grinders, the active one and the pre-#488 `grinder_model`). The idle-sleep
+ * (it matches their scale), the mains line frequency, and the pre-#488
+ * `grinder_model` (the grinders themselves are library records). The idle-sleep
  * timer gets its default explicitly, and so does the hot-water dose: ratio
  * 1:3 stored with its mode, so the next load doesn't run the never-changed
  * rule on it.
@@ -4714,11 +4971,18 @@ export interface ShotCaptureContext {
 	/** The bean snapshot the shot was pulled with, or `None`. */
 	bean?: ShotBean;
 	/**
-	 * The active grinder's name ([`crate::grinder::active_grinder_name`]):
-	 * what the shot is stamped with. `None` or blank = no grinder. (The
-	 * field keeps its pre-#488 name so both shells' contexts still decode.)
+	 * The active grinder's name at shot start ([`crate::grinder::Grinder`]
+	 * `name`, from [`crate::grinder::active_grinder`]): the shot's name
+	 * snapshot. `None` or blank = no grinder. Not the settings
+	 * `grinder_model`. (The field keeps its pre-#488 name so both shells'
+	 * contexts still decode.)
 	 */
 	settingsGrinder?: string;
+	/**
+	 * The active grinder's id at shot start (#488), stamped as
+	 * [`StoredShot::grinder_id`]. `None` or blank = no grinder.
+	 */
+	grinderId?: string;
 	/** The grind dial at shot start, or `None` when it carried no value. */
 	grindDial?: number;
 	/** The barista, or `None`. */

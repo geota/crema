@@ -33,32 +33,6 @@ data class AutoBackupRetention (
 	val shrink: BackupShrink? = null
 )
 
-/// How many shots a backup holds, and how many of those have curves.
-@Serializable
-data class BackupCounts (
-	val shots: UInt,
-	val curves: UInt
-)
-
-/// A file in Drive, as a shell lists it.
-@Serializable
-data class BackupFile (
-	val id: String,
-	val name: String,
-	val modifiedMs: Long
-)
-
-/// What a backup's name says about it, for a list to pick from. Any name will
-/// do: what it doesn't say stays empty.
-@Serializable
-data class BackupFileInfo (
-	/// The device label, as it went into the name.
-	val device: String? = null,
-	/// Made by the daily backup, not by hand.
-	val automatic: Boolean,
-	val counts: BackupCounts? = null
-)
-
 /// Whether a bag of coffee is a single-origin lot or a blend. `None` =
 /// unknown / unset. Serialises as the lowercase wire string
 /// (`"single"` / `"blend"`) to match the TS shell's typed string union.
@@ -118,6 +92,22 @@ data class BeanOrigin (
 	val processing: String? = null,
 	/// Harvest time — `"2024 Spring"`, `"October 2024"`.
 	val harvestTime: String? = null
+)
+
+/// A grind saved on a bag for one grinder.
+@Serializable
+data class BagGrind (
+	/// The grinder's id ([`Grinder::id`]); [`NO_GRINDER_ID`] for the "no
+	/// grinder" slot. May name a grinder that is archived or unknown here:
+	/// kept, never dropped.
+	val grinderId: String,
+	/// The grinder's name when saved, so the row still reads right after the
+	/// grinder is removed from Devices.
+	val grinderName: String,
+	/// The grind, as typed or recorded; never clamped or rewritten.
+	val grind: String,
+	/// "This bag's grinder": at most one row per bag.
+	val starred: Boolean
 )
 
 /// One bag of coffee — a row in the bean library. This is
@@ -204,6 +194,14 @@ data class Bean (
 	val grinder: String? = null,
 	/// Bean-scoped grinder click / setting — `"1.2"`, `"6 + a tooth"`.
 	val grinderSetting: String? = null,
+	/// The grinds saved on this bag, one per grinder, at most one starred
+	/// ("this bag's grinder") (#488; [`crate::bag_grind`]). `None` = not
+	/// migrated yet: the library migration turns the old `grinder_setting`
+	/// into a row ([`crate::grinder::migrate_grinder_library`]). Crema-only:
+	/// a Visualizer pull and an older import or restore row (`None`) keep the
+	/// local value (review F7). Omitted when `None`, so older bytes don't
+	/// change.
+	val grinds: List<BagGrind>? = null,
 	/// Free-form user tags — e.g. `"daily-driver"`, `"comp"`, `"experimental"`.
 	/// Defaults to an empty list. Serialised as `tags` so the JSON contract
 	/// matches the [`crate::Profile`] tag pattern.
@@ -252,6 +250,161 @@ data class Bean (
 	val createdAt: Long,
 	/// Unix epoch ms when this bag was last updated.
 	val updatedAt: Long
+)
+
+/// What [`auto_save_shot_grind`] reads.
+@Serializable
+data class AutoSaveInput (
+	/// The device's "Save each shot's grind to its bag" setting
+	/// ([`crate::app_settings::CommonSettings::grind_auto_save`]).
+	val enabled: Boolean,
+	/// This device recorded the shot (the hub, or a device on its own). A
+	/// remote's mirror copy of a shot never auto-saves (review F8).
+	val recordedHere: Boolean,
+	/// The kept shot's bag id (`bean.beanId`). A discarded aborted shot
+	/// isn't kept; an undone discard is.
+	val shotBeanId: String? = null,
+	/// The shot's grinder id ([`StoredShot::grinder_id`]); `None` = no
+	/// grinder.
+	val shotGrinderId: String? = null,
+	/// The shot's grinder name snapshot ([`StoredShot::grinder_model`]).
+	val shotGrinderName: String? = null,
+	/// The shot's grind, as stored (web `metadata.grinderSetting`, Android
+	/// `grindSetting` as text).
+	val shotGrind: String? = null,
+	/// The shot's bag, as stored now.
+	val bag: Bean? = null
+)
+
+/// How many shots a backup holds, and how many of those have curves.
+@Serializable
+data class BackupCounts (
+	val shots: UInt,
+	val curves: UInt
+)
+
+/// A file in Drive, as a shell lists it.
+@Serializable
+data class BackupFile (
+	val id: String,
+	val name: String,
+	val modifiedMs: Long
+)
+
+/// What a backup's name says about it, for a list to pick from. Any name will
+/// do: what it doesn't say stays empty.
+@Serializable
+data class BackupFileInfo (
+	/// The device label, as it went into the name.
+	val device: String? = null,
+	/// Made by the daily backup, not by hand.
+	val automatic: Boolean,
+	val counts: BackupCounts? = null
+)
+
+/// A grinder's grind scale: the stepper's range and the unit shown next to a
+/// value. `unit` is free text and may be empty ("μm", "clicks", "turns", …).
+@Serializable
+data class GrindScale (
+	/// Lowest setting.
+	val min: Float,
+	/// Highest setting.
+	val max: Float,
+	/// Step between settings.
+	val step: Float,
+	/// The unit label; empty for none.
+	val unit: String
+)
+
+/// A grinder the user owns: a bean-library record, next to the roasters.
+/// Read leniently (`default` on every field), so a stored row with a missing
+/// field still loads.
+@Serializable
+data class Grinder (
+	/// Stable id, `grinder:<slug>` ([`add_grinder`] mints it).
+	val id: String,
+	/// The name shots are stamped with: `"Niche Zero"`.
+	val name: String,
+	/// Its grind scale; the user may change any of it.
+	val scale: GrindScale,
+	/// The catalogue entry it came from ([`crate::grinder_catalogue`]), if
+	/// any.
+	val presetId: String? = null,
+	/// Unix epoch ms of the last change.
+	val updatedAt: Long,
+	/// Unix epoch ms when it was removed from Devices; `None` = owned.
+	val archivedAt: Long? = null,
+	/// Unix epoch ms of its tombstone; `None` = not deleted.
+	val deletedAt: Long? = null
+)
+
+/// The newest grind recorded on one bag with one grinder: what the history
+/// answers per (bag, grinder) (`de1_history`'s `last_grinds_for_bag`).
+@Serializable
+data class LastGrind (
+	/// The grinder id the shot was stamped with; `None` on rows from before
+	/// grinder ids, which are matched by `grinder` (the name).
+	val grinderId: String? = null,
+	/// The grinder name the shot was stamped with, as spelled on the newest.
+	val grinder: String,
+	/// The grind it recorded, as stored.
+	val grind: String,
+	/// When that shot completed, Unix epoch ms.
+	val completedAt: Long
+)
+
+/// What [`resolve_bag_selection`] reads.
+@Serializable
+data class BagSelectInput (
+	/// The bag being selected.
+	val bag: Bean? = null,
+	/// The active profile id now.
+	val activeProfileId: String? = null,
+	/// The bag's linked profile isn't in this device's library (a dangling
+	/// id): it isn't loaded.
+	val linkedProfileMissing: Boolean,
+	/// The active grinder pointer now.
+	val activeGrinderId: String? = null,
+	/// Brew's grind value now.
+	val grind: String? = null,
+	/// The grinder records.
+	val grinders: List<Grinder>,
+	/// The bag's newest grind per grinder, from the history.
+	val lastGrinds: List<LastGrind>
+)
+
+/// Set a pointer or value to `value` (`None` clears it).
+@Serializable
+data class SetTo (
+	/// The new value; `None` = none.
+	val value: String? = null
+)
+
+/// What a bag selection changes besides the bag: each part `None` when it
+/// stays as it is.
+@Serializable
+data class SelectionChange (
+	/// The active profile id.
+	val profileId: SetTo? = null,
+	/// The active grinder id.
+	val grinderId: SetTo? = null,
+	/// Brew's grind value.
+	val grind: SetTo? = null
+)
+
+/// One bag selection, resolved (review F6): the change, its inverse for the
+/// one Undo, and whether to show the message.
+@Serializable
+data class BagSelection (
+	/// What to apply, with the bag.
+	val change: SelectionChange,
+	/// What Undo applies: the previous value of each changed part.
+	val undo: SelectionChange,
+	/// Something besides the bag changed: show one message ("Ethiopia Guji:
+	/// Blooming profile, Niche Zero at 14") with one Undo.
+	val changed: Boolean,
+	/// The grinder switched to, for the message; `None` when it stays.
+	val grinderName: String? = null
 )
 
 /// The lifecycle subset a library list shows — the Status chip group.
@@ -404,6 +557,12 @@ data class BeanImportMerge (
 	val newRoasters: List<Roaster>,
 	/// Incoming roasters that replace the library row with the same id.
 	val updatedRoasters: List<Roaster>,
+	/// Incoming grinder records (#488) the library doesn't have, by id or by
+	/// name. Not deleted ones: there's nothing to bring.
+	val newGrinders: List<Grinder>,
+	/// Incoming grinder records that replace the library row with the same
+	/// id (newer `updated_at`, as for roasters).
+	val updatedGrinders: List<Grinder>,
 	/// Incoming bean id → the library bean id its shots should reference.
 	val beanIdRemap: HashMap<String, String>,
 	/// Incoming beans that change nothing: already in the library and not
@@ -957,6 +1116,39 @@ data class CatalogueCoffeeBag (
 	val meta: String? = null
 )
 
+/// Electric or hand.
+@Serializable
+enum class GrinderKind(val string: String) {
+	/// A motor grinder.
+	@SerialName("electric")
+	Electric("electric"),
+	/// A hand grinder.
+	@SerialName("hand")
+	Hand("hand"),
+}
+
+/// A catalogue entry as the shells list it.
+@Serializable
+data class CatalogueGrinderInfo (
+	/// [`CatalogueGrinder::id`].
+	val id: String,
+	/// Display name.
+	val name: String,
+	/// The maker.
+	val maker: String,
+	/// The model.
+	val model: String,
+	/// Other names that name it.
+	val aliases: List<String>,
+	/// Electric or hand.
+	val kind: GrinderKind,
+	/// Its verified scale; `None` = "Range not set: check your grinder's
+	/// dial".
+	val scale: GrindScale? = null,
+	/// Where the scale was checked; `None` without one.
+	val source: String? = null
+)
+
 /// One page of catalogue search results.
 @Serializable
 data class CataloguePage (
@@ -1095,33 +1287,6 @@ data class CatalogueRoasterPage (
 	val pages: UInt
 )
 
-/// A grinder's grind scale: the stepper's range and the unit shown next to a
-/// value. `unit` is free text and may be empty ("μm", "clicks", "turns", …).
-@Serializable
-data class GrindScale (
-	/// Lowest setting.
-	val min: Float,
-	/// Highest setting.
-	val max: Float,
-	/// Step between settings.
-	val step: Float,
-	/// The unit label; empty for none.
-	val unit: String
-)
-
-/// A grinder the user owns.
-@Serializable
-data class OwnedGrinder (
-	/// Stable id, unique among the owned grinders ([`add_grinder`] mints it).
-	val id: String,
-	/// The name shots are stamped with: `"Niche Zero"`.
-	val name: String,
-	/// Its grind scale; the user may change any of it.
-	val scale: GrindScale,
-	/// The [`GrinderPreset::id`] the scale came from, if any.
-	val presetId: String? = null
-)
-
 /// How the hot-water amount is set.
 @Serializable
 enum class HotWaterMode(val string: String) {
@@ -1246,19 +1411,15 @@ data class CommonSettings (
 	val defaultPreinfuseS: Float,
 	/// Free-text equipment grinder model: the one grinder before #488. Kept
 	/// in storage, import, export and backups as it is, and read only by the
-	/// migration to owned grinders ([`crate::grinder::migrate_grinders`]);
+	/// library migration to grinder records
+	/// ([`crate::grinder::migrate_grinder_library`]);
 	/// no longer edited in the UI.
 	val grinderModel: String,
-	/// The owned grinders (#488), each with its grind scale. `None` = not
-	/// migrated yet: the shells run [`crate::grinder::migrate_grinders`] on
-	/// load, which fills it once. `Some(empty)` = the user owns none (or
-	/// removed them all), and the migration doesn't run again. `Option` so
-	/// older blobs and backups decode.
-	val grinders: List<OwnedGrinder>? = null,
-	/// The active owned grinder's id ([`crate::grinder::active_grinder`]).
-	/// `None`, or an id no owned grinder has, = no active grinder: the
-	/// default grind scale, and shots carry no grinder.
-	val activeGrinderId: String? = null,
+	/// "Save each shot's grind to its bag" (#488, Devices → Grinder): a
+	/// personal, per-device setting. `None` = never set, read as off. Only
+	/// the device that records a shot auto-saves
+	/// ([`crate::bag_grind::auto_save_shot_grind`]).
+	val grindAutoSave: Boolean? = null,
 	/// Default barista name, stamped on each new shot's
 	/// [`ShotMetadata::barista`](crate::ShotMetadata::barista). `None` (or
 	/// blank) = no default; `Option` so an older `prefs.json` / backup still
@@ -3361,44 +3522,104 @@ data class GateStatus (
 	val pending: Boolean
 )
 
-/// The newest grind recorded on one bag with one grinder: what the history
-/// answers per (bag, grinder) (`de1_history`'s `last_grinds_for_bag`).
+/// What a save did to the bag.
 @Serializable
-data class LastGrind (
-	/// The grinder the shot was stamped with, as spelled on the newest one.
-	val grinder: String,
-	/// The grind it recorded, as stored.
-	val grind: String,
-	/// When that shot completed, Unix epoch ms.
-	val completedAt: Long
+data class GrindSave (
+	/// The bag to store (as it was when nothing changed).
+	val bean: Bean,
+	/// Whether the saved value changed: the shells show "Grind 480 μm saved
+	/// to …" only then.
+	val changed: Boolean
 )
 
-/// What [`grind_on_select`] reads.
+/// How [`add_grinder`] got its grinder.
 @Serializable
-data class GrindOnSelectInput (
-	/// The active grinder's name; `None` or blank when there is none.
-	val activeGrinder: String? = null,
-	/// The bag's newest grind per grinder, from the history.
-	val lastGrinds: List<LastGrind>,
-	/// The bag's old stored grinder (`Bean::grinder`).
-	val bagGrinder: String,
-	/// The bag's old stored setting (`Bean::grinder_setting`).
-	val bagGrinderSetting: String
+enum class GrinderAddKind(val string: String) {
+	/// A new record.
+	@SerialName("created")
+	Created("created"),
+	/// An archived record brought back, same id: its bag grinds come back.
+	@SerialName("revived")
+	Revived("revived"),
+	/// Already owned: nothing changed.
+	@SerialName("existing")
+	Existing("existing"),
+}
+
+/// What [`add_grinder`] answers: the row to store and how it came about.
+@Serializable
+data class GrinderAdd (
+	/// The grinder row; the shell upserts it (unless `Existing`).
+	val grinder: Grinder,
+	/// Created, revived or already owned.
+	val kind: GrinderAddKind
 )
 
-/// A preset as the shells list it.
+/// What [`archive_grinder`] answers.
 @Serializable
-data class GrinderPresetInfo (
-	/// [`GrinderPreset::id`].
+data class GrinderArchive (
+	/// The archived row to store.
+	val grinder: Grinder,
+	/// The active-grinder pointer afterwards: cleared when it was this one
+	/// (review F5), else as it was.
+	val activeGrinderId: String? = null
+)
+
+/// What [`migrate_grinder_library`] changes. Empty lists when there is
+/// nothing to do.
+@Serializable
+data class GrinderLibraryMigration (
+	/// Grinder records to add.
+	val newGrinders: List<Grinder>,
+	/// Bags whose `grinds` it filled (they were `None`); `updated_at` is not
+	/// changed, since the migration isn't an edit.
+	val updatedBeans: List<Bean>,
+	/// When the grinders step ran: the grinder to make active (the one the
+	/// settings `grinder_model` names), else none. `None` when it didn't
+	/// run: keep the pointer as it is.
+	val activeGrinderId: String? = null,
+	/// Whether the grinders step ran (there were no grinder records).
+	val grindersMigrated: Boolean
+)
+
+/// Which list a [`GrinderMatch`] comes from, in the order they are listed.
+@Serializable
+enum class GrinderMatchKind(val string: String) {
+	/// One of the user's grinders.
+	@SerialName("owned")
+	Owned("owned"),
+	/// A catalogue entry the user doesn't own.
+	@SerialName("catalogue")
+	Catalogue("catalogue"),
+	/// One of the user's archived grinders: picking it restores it.
+	@SerialName("archived")
+	Archived("archived"),
+}
+
+/// One row of the type-or-pick box.
+@Serializable
+data class GrinderMatch (
+	/// Owned, catalogue or archived.
+	val kind: GrinderMatchKind,
+	/// The grinder's id (owned, archived) or the catalogue entry's id.
 	val id: String,
-	/// Display name.
+	/// What to show.
 	val name: String,
-	/// Other names that pick it.
-	val aliases: List<String>,
-	/// Its scale.
-	val scale: GrindScale,
-	/// The maker's page the range was checked against.
-	val source: String
+	/// How well it matched, `0..=1`; `0` for a blank query.
+	val score: Float
+)
+
+/// What [`resolve_grinder_switch`] reads.
+@Serializable
+data class GrinderSwitchInput (
+	/// The selected bag, if any.
+	val bag: Bean? = null,
+	/// The grinder being switched to; `None` = no grinder.
+	val grinderId: String? = null,
+	/// The grinder records.
+	val grinders: List<Grinder>,
+	/// The bag's newest grind per grinder, from the history.
+	val lastGrinds: List<LastGrind>
 )
 
 /// The user's Visualizer sync **preferences** — the portable, cross-shell
@@ -3701,6 +3922,8 @@ data class LocalState (
 	val health: List<LocalStoreHealth>,
 	val beans: List<String>,
 	val roasters: List<String>,
+	/// Grinder records (#488), archived and tombstones included.
+	val grinders: List<String>,
 	/// Custom profiles only: built-ins aren't the backup's to change.
 	val profiles: List<String>,
 	/// The user's own recipes only.
@@ -3718,6 +3941,8 @@ data class LocalState (
 	val visualizerPrefs: VisualizerSyncPrefs,
 	val totalLitres: Double,
 	val activeBeanId: String? = null,
+	/// The device's active-grinder pointer (#488).
+	val activeGrinderId: String? = null,
 	/// Beans an earlier, interrupted run of this restore added, from its
 	/// marker. They don't count as here for `zero_debit`: a re-run after any
 	/// prefix of the steps must end where a clean run does.
@@ -4446,6 +4671,12 @@ data class RestorePlan (
 	val source: PlanSource,
 	val beans: StorePlan,
 	val roasters: StorePlan,
+	/// Grinder records (#488), merged by id like roasters.
+	val grinders: StorePlan,
+	/// Beans Replace overwrites with a backup row that has no `grinds` (an
+	/// app from before #488): the shell keeps the device's `grinds` on them
+	/// (review F7).
+	val beansKeepGrinds: List<String>,
 	val profiles: StorePlan,
 	val recipes: StorePlan,
 	val customMethods: StorePlan,
@@ -4458,7 +4689,9 @@ data class RestorePlan (
 	val profileMeta: ProfileMetaPlan,
 	val recipeMeta: RecipeMetaPlan,
 	/// Replace clears an active bean the backup doesn't have.
-	val clearActiveBean: Boolean
+	val clearActiveBean: Boolean,
+	/// Replace clears an active grinder the backup doesn't have (#488).
+	val clearActiveGrinder: Boolean
 )
 
 /// What deleting a roaster does (web `RoasterDeleteSplit` + the store's
@@ -4672,8 +4905,8 @@ data class SeriesPoint (
 
 /// What "Restore defaults" leaves: every common setting back to the default
 /// bundle except the facts about the user's setup it keeps: the weight unit
-/// (it matches their scale), the mains line frequency, and the grinders (the
-/// owned grinders, the active one and the pre-#488 `grinder_model`). The idle-sleep
+/// (it matches their scale), the mains line frequency, and the pre-#488
+/// `grinder_model` (the grinders themselves are library records). The idle-sleep
 /// timer gets its default explicitly, and so does the hot-water dose: ratio
 /// 1:3 stored with its mode, so the next load doesn't run the never-changed
 /// rule on it.
@@ -4762,10 +4995,15 @@ data class ShotCaptureContext (
 	val id: String? = null,
 	/// The bean snapshot the shot was pulled with, or `None`.
 	val bean: ShotBean? = null,
-	/// The active grinder's name ([`crate::grinder::active_grinder_name`]):
-	/// what the shot is stamped with. `None` or blank = no grinder. (The
-	/// field keeps its pre-#488 name so both shells' contexts still decode.)
+	/// The active grinder's name at shot start ([`crate::grinder::Grinder`]
+	/// `name`, from [`crate::grinder::active_grinder`]): the shot's name
+	/// snapshot. `None` or blank = no grinder. Not the settings
+	/// `grinder_model`. (The field keeps its pre-#488 name so both shells'
+	/// contexts still decode.)
 	val settingsGrinder: String? = null,
+	/// The active grinder's id at shot start (#488), stamped as
+	/// [`StoredShot::grinder_id`]. `None` or blank = no grinder.
+	val grinderId: String? = null,
 	/// The grind dial at shot start, or `None` when it carried no value.
 	val grindDial: Float? = null,
 	/// The barista, or `None`.

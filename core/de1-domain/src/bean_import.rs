@@ -7,6 +7,7 @@
 //! result to their stores and land any shots through `bean_id_remap`.
 
 use crate::bean::{Bean, Roaster};
+use crate::grinder::{Grinder, grinder_named};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use typeshare::typeshare;
@@ -25,6 +26,12 @@ pub struct BeanImportMerge {
     pub new_roasters: Vec<Roaster>,
     /// Incoming roasters that replace the library row with the same id.
     pub updated_roasters: Vec<Roaster>,
+    /// Incoming grinder records (#488) the library doesn't have, by id or by
+    /// name. Not deleted ones: there's nothing to bring.
+    pub new_grinders: Vec<Grinder>,
+    /// Incoming grinder records that replace the library row with the same
+    /// id (newer `updated_at`, as for roasters).
+    pub updated_grinders: Vec<Grinder>,
     /// Incoming bean id → the library bean id its shots should reference.
     pub bean_id_remap: HashMap<String, String>,
     /// Incoming beans that change nothing: already in the library and not
@@ -58,12 +65,42 @@ fn local_stamp(updated_at: i64, deleted_at: Option<i64>) -> i64 {
 /// Incoming roasters are added only when a new or updated bean points at them;
 /// one with an id the library has follows the same newer-wins rule. Skipped
 /// beans remap to the library row they matched, kept beans to themselves.
+///
+/// **Grinder records** (#488) merge by id like roasters (newer wins, a
+/// tombstone here is not resurrected by an older row); an incoming record
+/// whose id is new but whose name names a library grinder
+/// ([`crate::grinder::grinder_named`]: "niche" is the Niche Zero) is that
+/// grinder, and the kept beans' saved grinds are repointed to it.
+///
+/// **Saved grinds survive an older row (review F7):** an updated bean whose
+/// `grinds` is `None` (written by an app from before #488) keeps the
+/// library's `grinds`.
 #[must_use]
 pub fn merge_bean_import(
     incoming_beans: &[Bean],
     incoming_roasters: &[Roaster],
     library_beans: &[Bean],
     library_roasters: &[Roaster],
+) -> BeanImportMerge {
+    merge_library_import(
+        incoming_beans,
+        incoming_roasters,
+        &[],
+        library_beans,
+        library_roasters,
+        &[],
+    )
+}
+
+/// [`merge_bean_import`] with grinder records: see its docs.
+#[must_use]
+pub fn merge_library_import(
+    incoming_beans: &[Bean],
+    incoming_roasters: &[Roaster],
+    incoming_grinders: &[Grinder],
+    library_beans: &[Bean],
+    library_roasters: &[Roaster],
+    library_grinders: &[Grinder],
 ) -> BeanImportMerge {
     let live_beans = || library_beans.iter().filter(|b| b.deleted_at.is_none());
     let library_bean_by_id: HashMap<&str, &Bean> =
@@ -108,6 +145,9 @@ pub fn merge_bean_import(
         if let Some(local) = library_bean_by_id.get(bean.id.as_str()) {
             out.bean_id_remap.insert(bean.id.clone(), local.id.clone());
             if bean.updated_at > local_stamp(local.updated_at, local.deleted_at) {
+                if resolved.grinds.is_none() {
+                    resolved.grinds.clone_from(&local.grinds);
+                }
                 out.updated_beans.push(resolved);
             } else {
                 out.skipped += 1;
@@ -163,12 +203,43 @@ pub fn merge_bean_import(
             Some(_) => {}
         }
     }
+
+    // Grinder records, by id, else by name.
+    let library_grinder_by_id: HashMap<&str, &Grinder> = library_grinders
+        .iter()
+        .map(|g| (g.id.as_str(), g))
+        .collect();
+    let mut grinder_remap: HashMap<String, String> = HashMap::new();
+    for g in incoming_grinders {
+        if let Some(local) = library_grinder_by_id.get(g.id.as_str()) {
+            if g.updated_at > local_stamp(local.updated_at, local.deleted_at) {
+                out.updated_grinders.push(g.clone());
+            }
+        } else if let Some(local) = grinder_named(library_grinders, &g.name) {
+            grinder_remap.insert(g.id.clone(), local.id.clone());
+        } else if g.deleted_at.is_none() && !out.new_grinders.iter().any(|n| n.id == g.id) {
+            out.new_grinders.push(g.clone());
+        }
+    }
+    if !grinder_remap.is_empty() {
+        for bean in out.new_beans.iter_mut().chain(out.updated_beans.iter_mut()) {
+            for row in bean.grinds.iter_mut().flatten() {
+                if let Some(to) = grinder_remap.get(&row.grinder_id) {
+                    row.grinder_id.clone_from(to);
+                }
+            }
+        }
+    }
     out
 }
 
-/// JSON-bridged [`merge_bean_import`]. Input: `{"incomingBeans": Bean[],
-/// "incomingRoasters": Roaster[], "libraryBeans": Bean[], "libraryRoasters":
-/// Roaster[]}` (each defaults to empty); output: a [`BeanImportMerge`].
+/// JSON-bridged [`merge_library_import`]. Input: `{"incomingBeans": Bean[],
+/// "incomingRoasters": Roaster[], "incomingGrinders": Grinder[],
+/// "libraryBeans": Bean[], "libraryRoasters": Roaster[], "libraryGrinders":
+/// Grinder[]}` (each defaults to empty); output: a [`BeanImportMerge`]. After
+/// applying it, the shell runs the library migration
+/// ([`crate::grinder::migrate_grinder_library`]) so imported bags from an
+/// older app get their saved grinds.
 ///
 /// # Errors
 /// The JSON parse error string on malformed input.
@@ -184,13 +255,19 @@ pub fn merge_bean_import_json(payload: &str) -> Result<String, String> {
         library_beans: Vec<Bean>,
         #[serde(default)]
         library_roasters: Vec<Roaster>,
+        #[serde(default)]
+        incoming_grinders: Vec<Grinder>,
+        #[serde(default)]
+        library_grinders: Vec<Grinder>,
     }
     let inp: In = serde_json::from_str(payload).map_err(|e| e.to_string())?;
-    let merge = merge_bean_import(
+    let merge = merge_library_import(
         &inp.incoming_beans,
         &inp.incoming_roasters,
+        &inp.incoming_grinders,
         &inp.library_beans,
         &inp.library_roasters,
+        &inp.library_grinders,
     );
     serde_json::to_string(&merge).map_err(|e| e.to_string())
 }
@@ -317,6 +394,80 @@ mod tests {
             &[lib],
         );
         assert!(m.new_roasters.is_empty() && m.updated_roasters.is_empty());
+    }
+
+    fn grinds(id: &str, grind: &str) -> Option<Vec<crate::bag_grind::BagGrind>> {
+        Some(vec![crate::bag_grind::BagGrind {
+            grinder_id: id.into(),
+            grinder_name: "Niche Zero".into(),
+            grind: grind.into(),
+            starred: true,
+        }])
+    }
+
+    #[test]
+    fn a_newer_row_from_an_older_app_keeps_the_local_saved_grinds() {
+        // F7: the incoming row has no `grinds` (written before #488).
+        let mut local = bean("bean:1", "Gesha", None, 100);
+        local.grinds = grinds("grinder:nz", "14");
+        let incoming = bean("bean:1", "Gesha (renamed)", None, 200);
+        let m = merge_bean_import(&[incoming], &[], std::slice::from_ref(&local), &[]);
+        assert_eq!(m.updated_beans[0].name, "Gesha (renamed)");
+        assert_eq!(m.updated_beans[0].grinds, local.grinds);
+        // A row that carries grinds (even none) is the newer word.
+        let mut cleared = bean("bean:1", "Gesha", None, 300);
+        cleared.grinds = Some(Vec::new());
+        let m = merge_bean_import(&[cleared], &[], &[local], &[]);
+        assert_eq!(m.updated_beans[0].grinds, Some(Vec::new()));
+    }
+
+    fn grinder(id: &str, name: &str, updated_at: i64) -> Grinder {
+        Grinder {
+            id: id.into(),
+            name: name.into(),
+            updated_at,
+            ..Grinder::default()
+        }
+    }
+
+    #[test]
+    fn grinder_records_merge_by_id_then_by_name_and_bag_grinds_follow() {
+        let lib = vec![
+            grinder("grinder:ek43", "EK43", 100),
+            grinder("grinder:niche-zero", "Niche Zero", 100),
+        ];
+        let incoming = vec![
+            grinder("grinder:ek43", "EK43 (renamed)", 200),
+            grinder("grinder:niche", "niche", 50),
+            grinder("grinder:c40", "Comandante C40", 50),
+            Grinder {
+                deleted_at: Some(9),
+                ..grinder("grinder:gone", "Gone", 50)
+            },
+        ];
+        let mut b = bean("bean:new", "Kenya", None, 0);
+        b.grinds = grinds("grinder:niche", "14");
+        let m = merge_library_import(&[b], &[], &incoming, &[], &[], &lib);
+        assert_eq!(m.updated_grinders, [incoming[0].clone()]);
+        assert_eq!(m.new_grinders, [incoming[2].clone()]);
+        assert_eq!(
+            m.new_beans[0].grinds.as_deref().unwrap()[0].grinder_id,
+            "grinder:niche-zero",
+            "the incoming 'niche' is the library's Niche Zero"
+        );
+        // An older or tied incoming row keeps the library's; a tombstone here
+        // isn't resurrected by an older row.
+        let mut dead = grinder("grinder:ek43", "EK43", 100);
+        dead.deleted_at = Some(300);
+        let m = merge_library_import(
+            &[],
+            &[],
+            &[grinder("grinder:ek43", "EK43", 250)],
+            &[],
+            &[],
+            &[dead],
+        );
+        assert!(m.updated_grinders.is_empty() && m.new_grinders.is_empty());
     }
 
     #[test]

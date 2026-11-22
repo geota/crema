@@ -16,6 +16,10 @@
 //! result differs from `current`, `updated_at` is bumped to `now_unix_ms`
 //! (never backwards); a Save that changes nothing returns `current` as it is,
 //! so it doesn't look like a fresh edit to sync.
+//!
+//! A bag's saved grinds (`Bean::grinds`, #488) merge row by row, by grinder
+//! id ([`crate::bag_grind`]): the editor's edits, adds, removals and star move
+//! onto the stored rows in one Save, and a row auto-saved meanwhile stays.
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -63,7 +67,11 @@ fn merged(current: Option<&Value>, edited: Option<&Value>, base: Option<&Value>)
 /// The three-way merge over any row type. Falls back to a top-level merge
 /// (each changed field whole from `edited`) when a nested merge doesn't make
 /// a valid row, and to `edited` if even that fails.
-fn merge_row<T: Serialize + DeserializeOwned + Clone>(base: &T, edited: &T, current: &T) -> T {
+pub(crate) fn merge_row<T: Serialize + DeserializeOwned + Clone>(
+    base: &T,
+    edited: &T,
+    current: &T,
+) -> T {
     let tree = |row: &T| match serde_json::to_value(row) {
         Ok(Value::Object(m)) => Some(m),
         _ => None,
@@ -92,6 +100,12 @@ fn merge_row<T: Serialize + DeserializeOwned + Clone>(base: &T, edited: &T, curr
 #[must_use]
 pub fn merge_bean_edit(base: &Bean, edited: &Bean, current: &Bean, now_unix_ms: i64) -> Bean {
     let mut out = merge_row(base, edited, current);
+    // The saved grinds merge row by row, by grinder id (#488).
+    out.grinds = crate::bag_grind::merge_bag_grinds(
+        base.grinds.as_deref(),
+        edited.grinds.as_deref(),
+        current.grinds.as_deref(),
+    );
     out.id.clone_from(&current.id);
     out.created_at = current.created_at;
     out.updated_at = current.updated_at;

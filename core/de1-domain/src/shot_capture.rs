@@ -17,9 +17,11 @@
 //! - **Profile id.** The library id of the profile the DE1 held, else the
 //!   shell's [`ShotCaptureContext::profile_id`] when the shot's name is that
 //!   profile's; stored next to the name snapshot (save-boundaries review F4).
-//! - **Grinder.** The active grinder's name (#488), frozen at capture —
-//!   history never changes when Settings do. The bag's old stored grinder is
-//!   not read: the grinder is equipment picked on Brew, not a bag field.
+//! - **Grinder.** The active grinder record's id and its name as a snapshot
+//!   (#488, review F4), taken by the shell **at shot start** (review F9), so
+//!   switching grinder mid-shot can't mislabel it. Not the settings
+//!   `grinder_model`, and not the bag's old stored grinder: the grinder is
+//!   equipment picked on Brew. History never changes when the grinder does.
 //! - **Measured values.** The settled final weight, the stop reason and the
 //!   stop switches come from the core.
 //! - **Full series.** The stored record keeps every sample (up to
@@ -53,11 +55,17 @@ pub struct ShotCaptureContext {
     /// The bean snapshot the shot was pulled with, or `None`.
     #[serde(default)]
     pub bean: Option<ShotBean>,
-    /// The active grinder's name ([`crate::grinder::active_grinder_name`]):
-    /// what the shot is stamped with. `None` or blank = no grinder. (The
-    /// field keeps its pre-#488 name so both shells' contexts still decode.)
+    /// The active grinder's name at shot start ([`crate::grinder::Grinder`]
+    /// `name`, from [`crate::grinder::active_grinder`]): the shot's name
+    /// snapshot. `None` or blank = no grinder. Not the settings
+    /// `grinder_model`. (The field keeps its pre-#488 name so both shells'
+    /// contexts still decode.)
     #[serde(default)]
     pub settings_grinder: Option<String>,
+    /// The active grinder's id at shot start (#488), stamped as
+    /// [`StoredShot::grinder_id`]. `None` or blank = no grinder.
+    #[serde(default)]
+    pub grinder_id: Option<String>,
     /// The grind dial at shot start, or `None` when it carried no value.
     #[serde(default)]
     pub grind_dial: Option<f32>,
@@ -174,6 +182,7 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
     s.metadata.grinder_setting = ctx.grind_dial.and_then(grind_text);
     s.metadata.barista = non_blank(ctx.barista.as_deref());
     s.grinder_model = non_blank(ctx.settings_grinder.as_deref());
+    s.grinder_id = non_blank(ctx.grinder_id.as_deref());
     s.tags = ctx.tags.unwrap_or_default();
     s.bean = ctx.bean;
     s.machine = ctx.machine;

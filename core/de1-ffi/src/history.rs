@@ -452,6 +452,9 @@ pub enum HistoryDir {
 /// The newest grind on a bag with one grinder (#488; core `LastGrind`).
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct HistoryLastGrind {
+    /// The grinder id the shots were stamped with; `None` on rows from
+    /// before grinder ids (matched by `grinder`, the name).
+    pub grinder_id: Option<String>,
     /// The grinder, as the newest shot spells it.
     pub grinder: String,
     /// The grind, as stored.
@@ -463,6 +466,7 @@ pub struct HistoryLastGrind {
 impl From<de1_domain::LastGrind> for HistoryLastGrind {
     fn from(l: de1_domain::LastGrind) -> Self {
         Self {
+            grinder_id: l.grinder_id,
             grinder: l.grinder,
             grind: l.grind,
             completed_at: l.completed_at,
@@ -1504,7 +1508,7 @@ impl HistoryDb {
 
     /// The newest grind per grinder on a bag, newest first (#488): what
     /// selecting a bag or switching grinder reads
-    /// (`grindOnSelectJson`).
+    /// (`resolveBagSelectionJson`, `resolveGrinderSwitchJson`).
     ///
     /// # Errors
     /// A store error class.

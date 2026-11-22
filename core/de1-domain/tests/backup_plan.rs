@@ -78,7 +78,116 @@ fn both_fixtures_scan_clean_and_carry_every_store() {
         assert!(m.settings.is_some() && m.has_maintenance && m.has_visualizer_prefs);
         assert_eq!(m.shots.len(), 1);
         assert!(m.shots[0].has_samples);
+        // Written before grinder records (#488): the store isn't carried.
+        assert!(!m.carries(RowStore::Grinders));
     }
+}
+
+// ── Grinder records and saved grinds (#488) ───────────────────────────────
+
+/// A backup with `grinders` and `beans` rows (each a full row object).
+fn grinder_backup(grinders: Option<&[Value]>, beans: &[Value]) -> Vec<u8> {
+    let mut header = json!({
+        "kind": "crema-backup/v1", "createdAt": 1, "profileCount": 0,
+        "beanCount": beans.len(), "roasterCount": 0, "shotCount": 0,
+    });
+    if let Some(g) = grinders {
+        header["grinderCount"] = json!(g.len());
+    }
+    let mut lines = vec![header];
+    for g in grinders.unwrap_or_default() {
+        let mut g = g.clone();
+        g["kind"] = json!("grinder");
+        lines.push(g);
+    }
+    for b in beans {
+        let mut b = b.clone();
+        b["kind"] = json!("bean");
+        lines.push(b);
+    }
+    to_bytes(&lines)
+}
+
+fn bean_row(id: &str, grinds: Option<Value>) -> Value {
+    let mut b = json!({ "id": id, "name": id, "createdAt": 1, "updatedAt": 1, "metadata": {} });
+    if let Some(g) = grinds {
+        b["grinds"] = g;
+    }
+    b
+}
+
+fn grinder_row(id: &str) -> Value {
+    json!({ "id": id, "name": id, "updatedAt": 1 })
+}
+
+fn local_with(beans: &[&str], grinders: &[&str], active_grinder: Option<&str>) -> LocalState {
+    serde_json::from_value(json!({
+        "shell": "web", "beans": beans, "grinders": grinders, "activeGrinderId": active_grinder,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn grinder_records_merge_by_id_like_roasters() {
+    let bytes = grinder_backup(
+        Some(&[grinder_row("grinder:a"), grinder_row("grinder:b")]),
+        &[],
+    );
+    let m = scan_backup_bytes(&bytes);
+    assert!(
+        m.count_mismatches.is_empty() && m.problems.is_empty(),
+        "{m:?}"
+    );
+    assert!(m.carries(RowStore::Grinders));
+    let local = local_with(&[], &["grinder:a", "grinder:c"], Some("grinder:c"));
+    let merge = plan_restore(&m, &local, RestoreMode::Merge, RestoreOpts::default());
+    assert_eq!(merge.grinders.add, ["grinder:b"]);
+    assert_eq!((merge.grinders.keep, merge.grinders.remove.len()), (1, 0));
+    assert!(!merge.clear_active_grinder);
+    let replace = plan_restore(&m, &local, RestoreMode::Replace, RestoreOpts::default());
+    assert_eq!(replace.grinders.overwrite, ["grinder:a"]);
+    assert_eq!(replace.grinders.remove, ["grinder:c"]);
+    assert!(
+        replace.clear_active_grinder,
+        "the active grinder was removed"
+    );
+    // The records come through the import too.
+    let records = import_backup_bytes(&bytes);
+    assert_eq!(records.grinders.len(), 2);
+}
+
+#[test]
+fn a_backup_without_grinder_records_keeps_the_devices() {
+    let bytes = grinder_backup(None, &[]);
+    let m = scan_backup_bytes(&bytes);
+    let local = local_with(&[], &["grinder:a"], Some("grinder:a"));
+    let replace = plan_restore(&m, &local, RestoreMode::Replace, RestoreOpts::default());
+    assert!(replace.grinders.remove.is_empty() && replace.grinders.overwrite.is_empty());
+    assert_eq!(replace.grinders.keep, 1);
+    assert!(!replace.clear_active_grinder);
+}
+
+/// Review F7: Replace overwrites a bean with an older app's row (no
+/// `grinds`): the plan says to keep the device's saved grinds on it.
+#[test]
+fn replace_keeps_the_saved_grinds_a_pre_488_bean_row_lacks() {
+    let rows = [
+        bean_row("bean:old", None),
+        bean_row(
+            "bean:new",
+            Some(json!([{ "grinderId": "grinder:a", "grind": "14" }])),
+        ),
+        bean_row("bean:added", None),
+    ];
+    let m = scan_backup_bytes(&grinder_backup(None, &rows));
+    assert_eq!(m.beans_without_grinds, ["bean:old", "bean:added"]);
+    let local = local_with(&["bean:old", "bean:new"], &[], None);
+    let replace = plan_restore(&m, &local, RestoreMode::Replace, RestoreOpts::default());
+    assert_eq!(replace.beans.overwrite, ["bean:old", "bean:new"]);
+    assert_eq!(replace.beans_keep_grinds, ["bean:old"]);
+    // Merge never changes a bean that's here.
+    let merge = plan_restore(&m, &local, RestoreMode::Merge, RestoreOpts::default());
+    assert!(merge.beans_keep_grinds.is_empty() && merge.beans.overwrite.is_empty());
 }
 
 #[test]
@@ -265,7 +374,7 @@ fn the_import_a_line_at_a_time_is_the_whole_import() {
     for bytes in [WEB, ANDROID] {
         let whole = serde_json::to_value(import_backup_bytes(bytes)).unwrap();
         let mut by_line = json!({
-            "hasHeader": true, "profiles": [], "beans": [], "roasters": [], "shots": [],
+            "hasHeader": true, "profiles": [], "beans": [], "roasters": [], "grinders": [], "shots": [],
             "recipes": [], "customMethods": [],
             "settings": null, "profileMeta": null, "maintenance": null,
             "visualizerPrefs": null, "recipeMeta": null,
@@ -274,6 +383,7 @@ fn the_import_a_line_at_a_time_is_the_whole_import() {
             ("shot", "shot", "shots"),
             ("bean", "bean", "beans"),
             ("roaster", "roaster", "roasters"),
+            ("grinder", "grinder", "grinders"),
             ("recipe", "recipe", "recipes"),
             ("brewMethod", "method", "customMethods"),
             ("profile", "profile", "profiles"),
@@ -518,25 +628,17 @@ fn a_fresh_install_is_pristine_on_both_shells() {
     // Android's first launch: the idle-sleep default and `resolveHotWater`.
     let reset = de1_domain::app_settings::reset_settings(&CommonSettings::default(), 0.0);
     assert!(common_is_pristine(&reset.common));
-    // #488: a fresh install the grinder migration ran on owns no grinders,
-    // and is still pristine.
-    let migrated = de1_domain::migrate_grinders::<&str>(CommonSettings::default(), &[]);
-    assert_eq!(migrated.grinders, Some(Vec::new()));
-    assert!(common_is_pristine(&migrated));
 }
 
 #[test]
-fn owning_a_grinder_is_not_pristine() {
-    let owned = de1_domain::migrate_grinders::<&str>(
-        CommonSettings {
-            grinder_model: "EK43".to_owned(),
-            ..CommonSettings::default()
-        },
-        &[],
-    );
+fn a_settings_grinder_is_not_pristine() {
+    // #488: grinders are library records now; the old settings field still
+    // counts as a change.
+    let owned = CommonSettings {
+        grinder_model: "EK43".to_owned(),
+        ..CommonSettings::default()
+    };
     assert!(!common_is_pristine(&owned));
-    let added = de1_domain::add_grinder(CommonSettings::default(), "Niche Zero", None).0;
-    assert!(!common_is_pristine(&added));
 }
 
 #[test]

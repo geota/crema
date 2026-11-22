@@ -23,12 +23,12 @@ class CommonSettingsMappingTest {
     private val json = Json { encodeDefaults = true }
 
     /**
-     * #488's owned grinders: the core has them (issue 01), the Android shell
-     * doesn't carry them through AppPrefs / MainUiState yet. Issue 03
-     * (`.scratch/grinder-488/issues/03-android-ui.md`) maps them and removes
-     * this list, before the shell runs the grinder migration.
+     * #488's grind auto-save setting: the core has it (issue 04), the Android
+     * shell doesn't carry it through AppPrefs / MainUiState yet. Issue 03
+     * (`.scratch/grinder-488/issues/03-android-ui.md`) maps it and removes
+     * this list.
      */
-    private val NOT_MAPPED_YET = setOf("grinders", "activeGrinderId")
+    private val NOT_MAPPED_YET = setOf("grindAutoSave")
 
     private val nonDefault = CommonSettings(
         themeMode = "light", maxShotDurationS = 40f, autoTare = false, stopOnWeight = false,

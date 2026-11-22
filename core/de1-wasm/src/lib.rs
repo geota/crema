@@ -717,52 +717,167 @@ pub fn sanitize_common_settings_json(blob_json: &str) -> String {
     de1_domain::app_settings::sanitize_common_settings_json(blob_json)
 }
 
-/// The built-in grinder presets (`GrinderPresetInfo[]` JSON) (#488). See
-/// `de1_domain::grinder_presets`.
-#[wasm_bindgen(js_name = grinderPresetsJson)]
-pub fn grinder_presets_json() -> String {
-    de1_domain::grinder_presets_json()
+/// The grinder catalogue (`CatalogueGrinderInfo[]` JSON, #488). See
+/// `de1_domain::grinder_catalogue`.
+#[wasm_bindgen(js_name = grinderCatalogueJson)]
+pub fn grinder_catalogue_json() -> String {
+    de1_domain::grinder_catalogue_json()
 }
 
-/// The one-time migration to owned grinders (#488): a `CommonSettings` JSON
-/// and the bean library (`Bean[]` JSON) in, the settings JSON out. See
-/// `de1_domain::migrate_grinders`.
+/// The type-or-pick box (#488): a `GrinderMatch[]` JSON. See
+/// `de1_domain::match_grinders`.
 ///
 /// # Errors
-/// Throws when the settings aren't a non-empty JSON object: keep what you
-/// have.
-#[wasm_bindgen(js_name = migrateGrindersJson)]
-pub fn migrate_grinders_json(settings_json: &str, beans_json: &str) -> Result<String, String> {
-    de1_domain::migrate_grinders_json(settings_json, beans_json)
-}
-
-/// An owned grinder for each new name among an import's grinder names (#488).
-/// See `de1_domain::add_grinders_for_names`.
-///
-/// # Errors
-/// Throws when the settings aren't a non-empty JSON object: keep what you
-/// have.
-#[wasm_bindgen(js_name = addGrindersForNamesJson)]
-pub fn add_grinders_for_names_json(
-    settings_json: &str,
-    names_json: &str,
+/// Throws when the grinders aren't a `Grinder[]` JSON.
+#[wasm_bindgen(js_name = matchGrindersJson)]
+pub fn match_grinders_json(
+    query: &str,
+    grinders_json: &str,
+    exclude_ids_json: &str,
 ) -> Result<String, String> {
-    de1_domain::add_grinders_for_names_json(settings_json, names_json)
+    de1_domain::match_grinders_json(query, grinders_json, exclude_ids_json)
 }
 
-/// The active grinder's scale (`GrindScale` JSON), else the default (#488).
-/// See `de1_domain::active_grind_scale`.
-#[wasm_bindgen(js_name = activeGrindScaleJson)]
-pub fn active_grind_scale_json(settings_json: &str) -> String {
-    de1_domain::active_grind_scale_json(settings_json)
+/// Add a grinder (catalogue id, empty for none, or a typed name), reviving an
+/// archived record (#488): a `GrinderAdd` JSON or `null`. See
+/// `de1_domain::add_grinder`.
+///
+/// # Errors
+/// Throws when the grinders aren't a `Grinder[]` JSON.
+#[wasm_bindgen(js_name = addGrinderJson)]
+pub fn add_grinder_json(
+    grinders_json: &str,
+    name: &str,
+    catalogue_id: &str,
+    now_ms: f64,
+) -> Result<String, String> {
+    de1_domain::add_grinder_json(grinders_json, name, catalogue_id, f64_to_ms(now_ms))
 }
 
-/// The grind Brew takes on selecting a bag or switching grinder (#488):
-/// `GrindOnSelectInput` JSON in, a JSON string or `null` out. See
-/// `de1_domain::grind_on_select`.
-#[wasm_bindgen(js_name = grindOnSelectJson)]
-pub fn grind_on_select_json(input_json: &str) -> String {
-    de1_domain::grind_on_select_json(input_json)
+/// Archive a grinder, clearing the active pointer when it was the active one
+/// (#488): a `GrinderArchive` JSON. See `de1_domain::archive_grinder`.
+///
+/// # Errors
+/// Throws when the grinder isn't a `Grinder` JSON.
+#[wasm_bindgen(js_name = archiveGrinderJson)]
+pub fn archive_grinder_json(
+    grinder_json: &str,
+    active_id: &str,
+    now_ms: f64,
+) -> Result<String, String> {
+    de1_domain::archive_grinder_json(grinder_json, active_id, f64_to_ms(now_ms))
+}
+
+/// An archived grinder brought back, same id (#488). See
+/// `de1_domain::restore_grinder`.
+///
+/// # Errors
+/// Throws when the grinder isn't a `Grinder` JSON.
+#[wasm_bindgen(js_name = restoreGrinderJson)]
+pub fn restore_grinder_json(grinder_json: &str, now_ms: f64) -> Result<String, String> {
+    de1_domain::restore_grinder_json(grinder_json, f64_to_ms(now_ms))
+}
+
+/// A grinder edit's Save onto the row as stored (#488). See
+/// `de1_domain::merge_grinder_edit`.
+///
+/// # Errors
+/// Throws when a row isn't a `Grinder` JSON.
+#[wasm_bindgen(js_name = mergeGrinderEditJson)]
+pub fn merge_grinder_edit_json(
+    base_json: &str,
+    edited_json: &str,
+    current_json: &str,
+    now_ms: f64,
+) -> Result<String, String> {
+    de1_domain::merge_grinder_edit_json(base_json, edited_json, current_json, f64_to_ms(now_ms))
+}
+
+/// New grinder records for an import's grinder names (#488). See
+/// `de1_domain::grinders_for_names`.
+///
+/// # Errors
+/// Throws when the grinders aren't a `Grinder[]` JSON.
+#[wasm_bindgen(js_name = grindersForNamesJson)]
+pub fn grinders_for_names_json(
+    grinders_json: &str,
+    names_json: &str,
+    now_ms: f64,
+) -> Result<String, String> {
+    de1_domain::grinders_for_names_json(grinders_json, names_json, f64_to_ms(now_ms))
+}
+
+/// The active grinder (`Grinder` JSON or `null`) (#488). See
+/// `de1_domain::active_grinder`.
+#[wasm_bindgen(js_name = activeGrinderJson)]
+pub fn active_grinder_json(grinders_json: &str, active_id: &str) -> String {
+    de1_domain::active_grinder_json(grinders_json, active_id)
+}
+
+/// The library migration (#488): `{grinders, beans, grinderModel}` in, a
+/// `GrinderLibraryMigration` JSON out. See
+/// `de1_domain::migrate_grinder_library`.
+///
+/// # Errors
+/// Throws on malformed input: keep what you have.
+#[wasm_bindgen(js_name = migrateGrinderLibraryJson)]
+pub fn migrate_grinder_library_json(payload_json: &str, now_ms: f64) -> Result<String, String> {
+    de1_domain::migrate_grinder_library_json(payload_json, f64_to_ms(now_ms))
+}
+
+/// Brew's Save of the grind to the (bag, grinder) row (#488): a `GrindSave`
+/// JSON. See `de1_domain::save_bag_grind`.
+///
+/// # Errors
+/// Throws on a malformed bag or grinder.
+#[wasm_bindgen(js_name = saveBagGrindJson)]
+pub fn save_bag_grind_json(
+    bean_json: &str,
+    grinder_json: &str,
+    grind: &str,
+    now_ms: f64,
+) -> Result<String, String> {
+    de1_domain::save_bag_grind_json(bean_json, grinder_json, grind, f64_to_ms(now_ms))
+}
+
+/// The grind rows the bag editor's Save refuses (#488). See
+/// `de1_domain::bag_grinds_to_fix`.
+///
+/// # Errors
+/// Throws on a malformed bag.
+#[wasm_bindgen(js_name = bagGrindsToFixJson)]
+pub fn bag_grinds_to_fix_json(bean_json: &str) -> Result<String, String> {
+    de1_domain::bag_grinds_to_fix_json(bean_json)
+}
+
+/// Selecting a bag as one change and its Undo (#488, review F6). See
+/// `de1_domain::resolve_bag_selection`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = resolveBagSelectionJson)]
+pub fn resolve_bag_selection_json(input_json: &str) -> Result<String, String> {
+    de1_domain::resolve_bag_selection_json(input_json)
+}
+
+/// The grind Brew takes on switching grinder (#488). See
+/// `de1_domain::resolve_grinder_switch`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = resolveGrinderSwitchJson)]
+pub fn resolve_grinder_switch_json(input_json: &str) -> Result<String, String> {
+    de1_domain::resolve_grinder_switch_json(input_json)
+}
+
+/// Auto-save after a kept shot, on the recording device only (#488, review
+/// F8). See `de1_domain::auto_save_shot_grind`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = autoSaveShotGrindJson)]
+pub fn auto_save_shot_grind_json(input_json: &str, now_ms: f64) -> Result<String, String> {
+    de1_domain::auto_save_shot_grind_json(input_json, f64_to_ms(now_ms))
 }
 
 /// "Restore defaults": the current `CommonSettings` JSON and line-frequency
@@ -1739,6 +1854,14 @@ fn f64_to_elapsed(ms: f64) -> u64 {
 #[must_use]
 pub fn coerce_bean(raw_json: &str, now_ms: f64) -> Option<String> {
     de1_domain::coerce_bean_json(raw_json, f64_to_ms(now_ms))
+}
+
+/// Coerce a stored grinder row JSON (#488) → a normalised `Grinder` JSON, or
+/// `null` without a string id. See `de1_domain::coerce_grinder`.
+#[wasm_bindgen(js_name = coerceGrinder)]
+#[must_use]
+pub fn coerce_grinder(raw_json: &str) -> Option<String> {
+    de1_domain::coerce_grinder_json(raw_json)
 }
 
 /// Coerce a stored roaster row JSON → a normalised `Roaster` JSON (CORE2), or
@@ -2776,11 +2899,11 @@ pub fn profile_bounds_json() -> String {
 }
 
 /// The Quick Controls steppers' ranges with the grind range and unit of the
-/// active grinder in a `CommonSettings` JSON (#488). See
-/// `de1_domain::quick_control_bounds_for_settings_json`.
-#[wasm_bindgen(js_name = quickControlBoundsForSettingsJson)]
-pub fn quick_control_bounds_for_settings_json(settings_json: &str) -> String {
-    de1_domain::quick_control_bounds_for_settings_json(settings_json)
+/// active grinder (`Grinder` JSON, or `null` for the default) (#488). See
+/// `de1_domain::quick_control_bounds_for_grinder_json`.
+#[wasm_bindgen(js_name = quickControlBoundsForGrinderJson)]
+pub fn quick_control_bounds_for_grinder_json(grinder_json: &str) -> String {
+    de1_domain::quick_control_bounds_for_grinder_json(grinder_json)
 }
 
 /// The Quick Controls steppers' ranges (`QuickControlBounds` JSON; hot water
