@@ -200,6 +200,33 @@ class BagDebitVmTest {
         assertEquals(10f, vm.shot("s").bagDebitG)
     }
 
+    /** #488 batch 6: a replay never debits, so a History move gives back
+     *  nothing and takes nothing (core `shot_bag_move`). */
+    @Test
+    fun `a replay moved to another bag gives back and takes nothing`() {
+        val replay = row("s", "a", 0f).copy(replay = true)
+        val vm = vmWith(listOf(bag("a", 100f, 250f), bag("b", 100f, 250f)), listOf(replay))
+        vm.setShotBean("s", "b")
+        assertEquals(100f, vm.remaining("a"))
+        assertEquals(100f, vm.remaining("b"), "a replay never debits")
+        assertEquals(0f, vm.shot("s").bagDebitG, "the row says it took nothing")
+        assertEquals(true, vm.shot("s").replay, "the mark stays")
+    }
+
+    /** #488 batch 6: the replay mark survives a backup and a reload; a live
+     *  row's bytes don't carry it (omitted when false, as the core writes it). */
+    @Test
+    fun `the replay mark survives a backup round trip and stays off a live row`() {
+        val replay = row("s", "a", 0f).copy(replay = true)
+        val wire = wireShotJson(replay, forBackup = true)
+        assertEquals("true", wire["replay"]?.toString())
+        assertEquals(true, storedShotFromBackupJson(wire, coreJson)?.replay)
+        assertNull(wireShotJson(row("t", "a", 18f), forBackup = true)["replay"], "a live row's bytes don't change")
+        assertNull(wireShotJson(replay)["replay"], "never on the upload wire")
+        val vm = vmWith(listOf(bag("a", 100f, 250f)), listOf(replay))
+        assertEquals(true, vm.shot("s").replay, "kept by the history store")
+    }
+
     @Test
     fun `a move to no bag clears the record`() {
         val vm = vmWith(listOf(bag("a", 100f, 250f)), listOf(row("s", "a", 18f)))

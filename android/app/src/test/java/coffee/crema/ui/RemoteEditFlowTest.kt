@@ -311,7 +311,7 @@ class RemoteEditFlowTest {
         )
         fixture.dispatch = { method, args ->
             when (val outcome = dispatcher.dispatch(method, args, CommandOrigin("remote", "Phone"))) {
-                CommandOutcome.Accepted -> Result.success(Unit)
+                CommandOutcome.Accepted, is CommandOutcome.BagPicked -> Result.success(null)
                 is CommandOutcome.Refused -> Result.failure(IllegalStateException(outcome.reason))
                 is CommandOutcome.Unknown -> Result.failure(IllegalStateException(outcome.detail))
             }

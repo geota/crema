@@ -195,10 +195,16 @@ sealed class Frame {
     @SerialName("control")
     data class Control(val id: Long, val method: String, val args: String = "") : Frame()
 
-    /** Primary → secondary: the [Control] was dispatched on the real link. */
+    /**
+     * Primary → secondary: the [Control] was dispatched on the real link.
+     * [result] is what the command answers, an opaque app-level JSON like
+     * [Config.json]: a bag pick's `BagSelection` (#488 review F6), so the
+     * remote that picked shows its message and its own Undo. Off the wire
+     * when null, so every other reply keeps its bytes.
+     */
     @Serializable
     @SerialName("controlOk")
-    data class ControlOk(val id: Long) : Frame()
+    data class ControlOk(val id: Long, val result: String? = null) : Frame()
 
     /** Primary → secondary: the [Control] was refused or failed to dispatch. */
     @Serializable

@@ -702,6 +702,22 @@ class DecentSyncTest {
         assertNull(h.sync.state.value.email)
     }
 
+    /** #488 batch 6: a replay is never uploaded (core `upload_refused_shot`),
+     *  whatever its telemetry, and isn't in the backlog. */
+    @Test
+    fun `a replay is refused with no POST and stays out of the backlog`() = runTest {
+        val replay = shot("s1").copy(replay = true)
+        val h = harness(listOf(replay))
+
+        val o = h.sync.uploadNow(replay.row(), manual = true, replace = false)
+
+        assertEquals(DecentSync.Outcome.Skipped(coffee.crema.visualizer.REPLAY_NOT_UPLOADED), o)
+        assertTrue(h.api.posts.isEmpty())
+        assertTrue(h.stamped.isEmpty())
+        assertFalse(h.sync.inBacklog(replay.row()))
+        assertFalse(h.sync.canUpload(replay.row()))
+    }
+
     @Test
     fun `non_brew_no_samples_refused - no POST, and the shot isn't marked uploaded`() = runTest {
         val bare = shot("s1").copy(samples = emptyList())

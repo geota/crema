@@ -54,6 +54,9 @@ const val API_BASE = "https://visualizer.coffee/api"
 /** A 2xx whose body isn't JSON: a captive portal's page looks like this. */
 const val MALFORMED_BODY = "Visualizer returned a malformed body"
 
+/** Why an upload refused a replayed shot (#488 batch 6), on every destination. */
+const val REPLAY_NOT_UPLOADED = "A replay stays on this device"
+
 /** The closed error union (web `VisualizerCallError`). */
 sealed class VisualizerError(message: String) : Exception(message) {
     /** 401 — token invalid/expired beyond refresh. */
@@ -77,6 +80,10 @@ sealed class VisualizerError(message: String) : Exception(message) {
      * Terminal for the queue; the row stays unsynced, so a later pass offers it.
      */
     class NoSeries : VisualizerError("This shot has no telemetry to upload")
+
+    /** A replay of a capture (#488 batch 6): a copy of a shot the user already
+     *  has, kept in History but never uploaded. Refused before any request. */
+    class Replay : VisualizerError(REPLAY_NOT_UPLOADED)
 
     /** The shot was deleted while its upload waited, so nothing was sent. */
     class RowDeleted : VisualizerError("This shot was deleted")

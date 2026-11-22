@@ -114,10 +114,83 @@ class ShotRecordsVmTest {
         VmHarness.idleUntil("the mirror copy to be recorded", 5_000) { VmHarness.rows(vm).isNotEmpty() }
         val shot = VmHarness.whole(vm, VmHarness.rows(vm).first().id)
         assertEquals(RemoteFixture.BEAN_S, shot.bean?.beanId, "the hub's bag, as the hub's own row says")
-        assertNull(shot.bagDebitG, "a remote's copy takes nothing")
+        // REVIEW-FINAL-2 MF1: 0, not null, so a later move credits nothing.
+        assertEquals(0f, shot.bagDebitG, "a remote's copy takes nothing, and says so")
         assertEquals(200f, vm.bean(RemoteFixture.BEAN_S).remaining, "the hub debits its own bag")
         assertEquals(200f, vm.bean(RemoteFixture.BEAN_P).remaining)
         assertEquals(emptyList(), offered, "the hub uploads its own row")
+    }
+
+    /** REVIEW-FINAL-2 MF1 repro: a remote moves its mirror copy of the hub's
+     *  18 g shot to another bag in History. The bag it named gets back nothing
+     *  it never lost, and the new bag isn't debited on a remote (core
+     *  `shot_bag_move`). Both a row written now (0) and one an older build
+     *  wrote (null, REVIEW-518 follow-up 1). */
+    @Test
+    fun `a remote's mirror shot moved in History credits and debits nothing`() {
+        fun mirrorRow(id: String, bagDebit: Float?) = coffee.crema.history.StoredShot(
+            id = id, completedAtMs = 1_700_000_000_000, durationMs = 28_000, doseG = 18f, bagDebitG = bagDebit,
+            bean = coffee.crema.core.ShotBean(beanId = RemoteFixture.BEAN_S, name = "Bag ${RemoteFixture.BEAN_S}"),
+        )
+        kotlinx.coroutines.runBlocking {
+            coffee.crema.history.HistoryStore(VmHarness.app(), coreJson).save(listOf(mirrorRow("now", 0f), mirrorRow("older", null)))
+        }
+        val library = BeanLibrary(listOf(bag(RemoteFixture.BEAN_P), bag(RemoteFixture.BEAN_S)), emptyList(), RemoteFixture.BEAN_P)
+        val vm = fixture.start(library = library)
+        fixture.push()
+        VmHarness.idleUntil("the rows") { VmHarness.rows(vm).size == 2 }
+        for (id in listOf("now", "older")) {
+            vm.setShotBean(id, RemoteFixture.BEAN_P)
+            VmHarness.idle()
+            val row = VmHarness.rows(vm).single { it.id == id }
+            assertEquals(RemoteFixture.BEAN_P, row.bean?.beanId, "$id moved")
+            assertEquals(0f, row.bagDebitG, "$id took nothing here")
+            assertEquals(200f, vm.bean(RemoteFixture.BEAN_S).remaining, "$id: no coffee that doesn't exist")
+            assertEquals(200f, vm.bean(RemoteFixture.BEAN_P).remaining, "$id: a remote never debits its own copy")
+        }
+        vm.setShotBean("older", null)
+        VmHarness.idle()
+        assertEquals(200f, vm.bean(RemoteFixture.BEAN_P).remaining, "to no bag credits nothing either")
+        assertNull(VmHarness.rows(vm).single { it.id == "older" }.bagDebitG, "no bag, no debit")
+    }
+
+    /** REVIEW-521 M1 probe: on a remote, a row this device recorded and debited
+     *  itself (a logged brew; a shot from when it held the machine) moves as on
+     *  any device: the old bag gets its grams back and the new bag is debited. */
+    @Test
+    fun `on a remote, a row recorded here moves its debit with it`() {
+        val hubEra = coffee.crema.history.StoredShot(
+            id = "hub-era", completedAtMs = 1_700_000_000_000, durationMs = 28_000, doseG = 18f, bagDebitG = 18f,
+            bean = coffee.crema.core.ShotBean(beanId = RemoteFixture.BEAN_S, name = "Bag ${RemoteFixture.BEAN_S}"),
+        )
+        kotlinx.coroutines.runBlocking { coffee.crema.history.HistoryStore(VmHarness.app(), coreJson).save(listOf(hubEra)) }
+        val library = BeanLibrary(listOf(bag(RemoteFixture.BEAN_P), bag(RemoteFixture.BEAN_S)), emptyList(), RemoteFixture.BEAN_P)
+        val vm = fixture.start(library = library)
+        fixture.push()
+        VmHarness.idleUntil("the row") { VmHarness.rows(vm).isNotEmpty() }
+        val brew = vm.addManualBrew(
+            LibraryController.ManualBrewInput(
+                method = "pourover", completedAtMs = 1_700_000_100_000, beanId = RemoteFixture.BEAN_S, doseG = 18f, waterG = 300f,
+                yieldG = null, grind = null, brewTempC = null, durationMs = 180_000, rating = null, notes = null, nextPlan = null,
+            ),
+        )
+        VmHarness.idle()
+        assertEquals(182f, vm.bean(RemoteFixture.BEAN_S).remaining, "a brew logged here debits its bag")
+        vm.setShotBean(brew.id, RemoteFixture.BEAN_P)
+        VmHarness.idle()
+        assertEquals(200f, vm.bean(RemoteFixture.BEAN_S).remaining, "S gets the 18 g back")
+        assertEquals(182f, vm.bean(RemoteFixture.BEAN_P).remaining, "P lost the 18 g the brew used")
+        assertEquals(18f, VmHarness.rows(vm).single { it.id == brew.id }.bagDebitG)
+        vm.setShotBean(brew.id, RemoteFixture.BEAN_S)
+        VmHarness.idle()
+        assertEquals(200f, vm.bean(RemoteFixture.BEAN_P).remaining)
+        assertEquals(182f, vm.bean(RemoteFixture.BEAN_S).remaining, "and back: no coffee vanishes")
+        // A shot this device debited while it held the machine.
+        vm.setShotBean("hub-era", RemoteFixture.BEAN_P)
+        VmHarness.idle()
+        assertEquals(200f, vm.bean(RemoteFixture.BEAN_S).remaining)
+        assertEquals(182f, vm.bean(RemoteFixture.BEAN_P).remaining)
+        assertEquals(18f, VmHarness.rows(vm).single { it.id == "hub-era" }.bagDebitG)
     }
 
     /** A completed shot's side effects are the core's rule (REVIEW-CORE M4). */

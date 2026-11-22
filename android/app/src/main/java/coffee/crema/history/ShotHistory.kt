@@ -184,6 +184,10 @@ data class StoredShot(
      *  capture past the limit, and it is exempt from any cleanup. Core
      *  `StoredShot::pinned`; kept by backups, moves between the apps. */
     override val pinned: Boolean = false,
+    /** A replay of a capture, not a live pull (owner decision, #488 batch 6):
+     *  kept in History with a replay mark, never uploaded or debited. Core
+     *  `StoredShot::replay`; kept by backups, omitted when false. */
+    override val replay: Boolean = false,
     /**
      * The DE1 this shot was pulled on, stamped at record time (#84). The Decent
      * upload needs the serial (the server checks it belongs to the account);

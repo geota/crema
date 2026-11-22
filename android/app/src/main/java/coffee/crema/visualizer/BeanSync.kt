@@ -67,6 +67,10 @@ interface BeanSyncCore {
     fun remoteIdsNeedingDetail(payload: String): String
     fun remoteRoasterUnlinked(remoteJson: String): Boolean
     fun coffeeBagWriteRequest(beanJson: String, roasterRemoteId: String?): String
+
+    /** The Visualizer id a bag's push sends as its `roaster_id`, its roaster
+     *  found among every roaster, tombstones included (#488 review SF1). */
+    fun bagRoasterRemoteId(payload: String): String? = coffee.crema.core.bagRoasterRemoteId(payload)
     fun roasterWriteRequest(roasterJson: String): String
     fun resolveRoasterCatalogueLink(payload: String): String?
     fun mergePulledRoaster(localJson: String, remoteJson: String, refresh: Boolean, lastSyncAt: Long?): String
@@ -511,7 +515,15 @@ class BeanSyncRunner(
                         }
                         continue
                     }
-                    val remoteRoasterId = roaster(local.roasterId)?.visualizerId
+                    // Tombstones included (REVIEW-518 follow-up 2): a bag a "this
+                    // device only" roaster delete left filed under the tombstone
+                    // keeps its roaster on Visualizer.
+                    val remoteRoasterId = core.bagRoasterRemoteId(
+                        buildJsonObject {
+                            put("bean", json.encodeToJsonElement(Bean.serializer(), local))
+                            put("roasters", json.encodeToJsonElement(ListSerializer(Roaster.serializer()), roasters))
+                        }.toString(),
+                    )
                     try {
                         val vid = uploadBean(local, remoteRoasterId)
                         // Not a local edit: the row matches the remote now.

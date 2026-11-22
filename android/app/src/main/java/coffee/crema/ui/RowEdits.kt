@@ -71,8 +71,16 @@ fun <T> rowViewOf(rows: List<T> = emptyList()): RowView<T> = ViewOf(rows)
  */
 fun beanViewOf(rows: List<Bean>): BeanView = ViewOf(rows, rows.filter { it.deletedAt == null })
 
-/** Every bag row, tombstones included: what the sync, the library file and backups take. */
-fun BeanView.withTombstones(): List<Bean> = (this as ViewOf<Bean>).rows
+/**
+ * The roasters as the state hands them out: a tombstone (a Visualizer roaster
+ * deleted here, kept so the next pull doesn't add it back and its bags keep
+ * their link; #488 review SF1) is left out of every list, picker, lookup and
+ * count. Edits get every row, and [withTombstones] reads them all.
+ */
+fun roasterViewOf(rows: List<Roaster>): RoasterView = ViewOf(rows, rows.filter { it.deletedAt == null })
+
+/** Every row, tombstones included: what the sync, the library file, backups and restores take. */
+fun <T> RowView<T>.withTombstones(): List<T> = (this as ViewOf<T>).rows
 
 /** Rows for an edit outside [UiStore], in tests of what an edit does. */
 fun <T> rowsForTest(rows: List<T>): Rows<T> = EditOf(rows)
@@ -122,7 +130,7 @@ class UiStore(initial: MainUiState) {
             val edited = rows(LibraryRows(current.beans.forEdit(), current.roasters.forEdit(), current.grinders.forEdit()))
             rest(current).copy(
                 beans = beanViewOf((edited.beans as EditOf<Bean>).rows),
-                roasters = edited.roasters.forState(),
+                roasters = roasterViewOf((edited.roasters as EditOf<Roaster>).rows),
                 grinders = edited.grinders.forState(),
             )
         }

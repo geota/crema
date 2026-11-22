@@ -173,7 +173,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pushConfig = { proxy.pushConfig() },
         profileJson = { library.profileJson(it) },
         persistLibrary = { library.persistLibrary() },
-        onBagSelected = { id, before -> library.onBagSelected(id, before) },
+        onBagSelected = { id, before, relayed -> library.onBagSelected(id, before, relayed) },
         onGrinderSelected = { library.onGrinderSelected(it) },
         pushStopTargets = { state -> session.pushStopTargets(state) },
         refreshStopTargetProjection = { session.refreshStopTargetProjection() },
@@ -509,6 +509,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onShotAnnotationsEdited = { id -> decent.scheduleReplaceAfterEdit(id) },
         setGrindDial = { v -> setGrindDial(v) },
         pushConfig = { proxy.pushConfig() },
+        // A remote's Undo of its relayed bag pick (F6): each part back to the
+        // hub as the command a pick sends. "No profile" and "no grind" have
+        // no relay command, so those parts stay as the hub has them.
+        relaySelectionUndo = { change, grinderName ->
+            change.profileId?.value?.let { setActiveProfile(it) }
+            change.grinderId?.let { to -> machine.execute(MachineCommand.SetActiveGrinder(to.value, to.value?.let { grinderName })) }
+            change.grind?.value?.let { machine.execute(MachineCommand.SetGrind(it)) }
+        },
     )
 
     // ── Guided brew sessions, recipes, custom methods and the Brew Log ────
@@ -652,7 +660,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         override fun applyTareScale() = scaleController.applyTareScale()
         override fun applyHotWaterDose(dose: coffee.crema.core.HotWaterDose) = machineConfig.applyHotWaterDose(dose)
         override fun showConfig(cmd: MachineCommand.Config) = machineConfig.showConfig(cmd)
-        override fun commitConfig(cmd: MachineCommand.Config) = machineConfig.commitConfig(cmd)
+        override fun commitConfig(cmd: MachineCommand.Config, relayed: Boolean) = machineConfig.commitConfig(cmd, relayed)
         override fun hasProfile(id: String): Boolean = library.hasProfile(id)
         override fun hasBean(id: String): Boolean = _ui.value.beans.any { it.id == id }
         override fun liveGrinder(id: String): coffee.crema.core.Grinder? = _ui.value.liveGrinders.firstOrNull { it.id == id }
@@ -2986,7 +2994,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── Bean library — see [LibraryController] ──────────────────────────────
 
     /** Set (or with `null`, clear) the active bean (the Brew bean block). Persisted. */
-    fun setActiveBean(id: String?) = machine.execute(MachineCommand.SetActiveBean(id))
+    fun setActiveBean(id: String?) {
+        // On a remote the hub answers a pick with what it changed (F6): shown
+        // here, with this device's own Undo, which needs the name of the hub's
+        // grinder before the pick.
+        val grinderBefore = effectiveState().activeGrinder()?.name
+        machine.execute(MachineCommand.SetActiveBean(id)) { outcome ->
+            if (outcome is CommandOutcome.BagPicked) library.showRelayedBagSelection(outcome.selection, grinderBefore)
+        }
+    }
 
     /** Pick Brew's grinder (#488), or none: on a remote, relayed to the hub
      *  like a bag pick, with the picked record's name, so the hub checks it

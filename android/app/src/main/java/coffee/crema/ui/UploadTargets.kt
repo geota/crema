@@ -97,11 +97,13 @@ fun shareableTargets(all: List<UploadTarget>): List<UploadTarget> = all.filter {
 
 /**
  * The destinations for one shot — one row per service the user can enable in
- * Settings → Sharing. NONE for a Brew Log row (issue #10): brews are
- * local-only, so no Upload / View / Share rows and no cloud pip.
+ * Settings → Sharing. NONE for a Brew Log row (issue #10) or a replay
+ * (#488 batch 6): both stay local, so no Upload / View / Share rows and no
+ * cloud pip.
  */
 fun uploadTargetsFor(shot: ShotRow, destinations: List<UploadDestination>): List<UploadTarget> =
-    if (shot.isBrewLog) emptyList() else destinations.map { d ->
+    // A replay is never uploaded either (#488 batch 6, core `upload_refused_shot`).
+    if (shot.isBrewLog || shot.replay) emptyList() else destinations.map { d ->
         val uploaded = d.isUploaded(shot)
         UploadTarget(
             id = d.id,

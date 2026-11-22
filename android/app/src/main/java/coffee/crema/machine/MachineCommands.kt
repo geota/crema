@@ -7,6 +7,14 @@ import coffee.crema.ui.sameRecord
 sealed interface CommandOutcome {
     data object Accepted : CommandOutcome
 
+    /**
+     * Accepted: a peer's bag pick, with the core's [selection] (its message,
+     * notices and the change it made; review F6, SF4). The hub sends it back
+     * in the relay reply, and the remote that picked shows it, with its own
+     * Undo; the hub doesn't show it.
+     */
+    data class BagPicked(val selection: coffee.crema.core.BagSelection) : CommandOutcome
+
     /** Not applied, with a reason for the person who asked. */
     data class Refused(val reason: String) : CommandOutcome
 
@@ -59,8 +67,10 @@ interface MachineActions {
     fun showConfig(cmd: MachineCommand.Config)
 
     /** The rest of a config change on the device that owns the config: persist
-     *  it, write the machine, push it to mirrors. */
-    fun commitConfig(cmd: MachineCommand.Config)
+     *  it, write the machine, push it to mirrors. For a peer's bag pick
+     *  ([relayed]), returns the core's selection for the peer to show (F6)
+     *  instead of showing it here; null otherwise. */
+    fun commitConfig(cmd: MachineCommand.Config, relayed: Boolean = false): coffee.crema.core.BagSelection?
 
     fun hasProfile(id: String): Boolean
 
@@ -120,10 +130,10 @@ class LocalMachine(
         is MachineCommand.Config -> if (origin != null && !actions.configReady()) {
             CommandOutcome.Refused("${hostName()} is starting up")
         } else {
-            accepted {
-                actions.showConfig(cmd)
-                actions.commitConfig(cmd)
-            }
+            actions.showConfig(cmd)
+            // A peer's bag pick answers with what it changed (F6).
+            actions.commitConfig(cmd, relayed = origin != null)?.let { CommandOutcome.BagPicked(it) }
+                ?: CommandOutcome.Accepted
         }
         MachineCommand.RawEspresso -> accepted { actions.applyMachineState(MachineRequest.ESPRESSO) }
         is MachineCommand.SetHotWaterDose -> accepted { actions.applyHotWaterDose(cmd.dose) }

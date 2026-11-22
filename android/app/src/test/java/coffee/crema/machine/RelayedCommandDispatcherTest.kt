@@ -45,6 +45,24 @@ class RelayedCommandDispatcherTest {
     private fun dispatch(method: String, args: String = "", origin: CommandOrigin = phone) =
         runBlocking { dispatcher.dispatch(method, args, origin) }
 
+    /** F6: a peer's bag pick answers with the core's selection; this device's own pick doesn't. */
+    @Test
+    fun `a relayed bag pick answers with its selection`() {
+        val selection = coffee.crema.core.BagSelection(
+            change = coffee.crema.core.SelectionChange(grind = coffee.crema.core.SetTo("18")),
+            undo = coffee.crema.core.SelectionChange(grind = coffee.crema.core.SetTo("15")),
+            changed = true,
+            message = "Bag b: Niche Zero at 18",
+        )
+        actions.picked = selection
+        assertEquals(CommandOutcome.BagPicked(selection), dispatch("setActiveBean", "bean-1"))
+        var local: CommandOutcome? = null
+        LocalMachine(actions, notify = {}).execute(MachineCommand.SetActiveBean("bean-1")) { local = it }
+        assertEquals(CommandOutcome.Accepted, local, "the hub's own pick shows itself")
+        actions.picked = null
+        assertEquals(CommandOutcome.Accepted, dispatch("setActiveBean", "bean-1"), "nothing to say: a plain accept")
+    }
+
     @Test
     fun `commands run on the lane in the order they were dispatched`() {
         runBlocking {

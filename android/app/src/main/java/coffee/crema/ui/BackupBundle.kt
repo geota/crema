@@ -93,7 +93,7 @@ internal data class BuiltBackup(
 internal fun omittedRowId(row: OmittedBackupRow, snap: BackupSnapshot): String? = row.id ?: when (row.kind) {
     "shot" -> snap.shots.getOrNull(row.index)?.id
     "bean" -> snap.state.beans.withTombstones().getOrNull(row.index)?.id
-    "roaster" -> snap.state.roasters.getOrNull(row.index)?.id
+    "roaster" -> snap.state.roasters.withTombstones().getOrNull(row.index)?.id
     "grinder" -> snap.state.grinders.getOrNull(row.index)?.id
     "recipe" -> snap.userRecipes.getOrNull(row.index)?.id
     "brewMethod" -> snap.state.customMethods.getOrNull(row.index)?.id
@@ -164,7 +164,8 @@ internal fun backupEnvelope(snap: BackupSnapshot, json: Json, withShots: Boolean
     )
     // Bag tombstones too (#488 review S5): a restore keeps a bag deleted here deleted.
     val beans = rowStrings(s.beans.withTombstones()) { json.encodeToString(Bean.serializer(), it) }
-    val roasters = rowStrings(s.roasters) { json.encodeToString(Roaster.serializer(), it) }
+    // Roaster tombstones too (#488 review SF1), as the bags'.
+    val roasters = rowStrings(s.roasters.withTombstones()) { json.encodeToString(Roaster.serializer(), it) }
     // Grinder records (#488), archived and tombstones included: a `grinder`
     // line each and a `grinderCount`, so a restore on either shell brings them.
     val grinders = rowStrings(s.grinders) { json.encodeToString(coffee.crema.core.Grinder.serializer(), it) }

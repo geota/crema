@@ -28,8 +28,9 @@ import java.util.concurrent.atomic.AtomicLong
 
 /** How a relayed control ended, as far as the secondary can tell. */
 sealed interface ControlReply {
-    /** The primary accepted it ([Frame.ControlOk]). */
-    data object Ok : ControlReply
+    /** The primary accepted it ([Frame.ControlOk]), with what it answered
+     *  ([Frame.ControlOk.result]: a bag pick's selection, F6), if anything. */
+    data class Ok(val result: String? = null) : ControlReply
 
     /** The primary refused it ([Frame.ControlErr]), with its reason. */
     data class Err(val reason: String) : ControlReply
@@ -328,7 +329,7 @@ class ProxyTransport(
      * never throwing into the UI thread. [sendControl] says which failure.
      */
     suspend fun control(method: String, args: String = ""): Result<Unit> = when (val reply = sendControl(method, args)) {
-        ControlReply.Ok -> Result.success(Unit)
+        is ControlReply.Ok -> Result.success(Unit)
         is ControlReply.Err -> Result.failure(IllegalStateException("control rejected: ${reply.reason}"))
         is ControlReply.NotSent -> Result.failure(IllegalStateException(reply.detail))
         is ControlReply.NoReply -> Result.failure(IllegalStateException(reply.detail))
@@ -344,7 +345,7 @@ class ProxyTransport(
         var sent = false
         return try {
             when (val reply = request(id, onWire = { sent = it }) { Frame.Control(id, method, args) }) {
-                is Frame.ControlOk -> ControlReply.Ok
+                is Frame.ControlOk -> ControlReply.Ok(reply.result)
                 is Frame.ControlErr -> ControlReply.Err(reply.reason)
                 else -> ControlReply.NoReply("unexpected reply to control: $reply")
             }

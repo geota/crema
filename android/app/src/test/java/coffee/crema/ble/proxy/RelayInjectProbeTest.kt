@@ -37,7 +37,7 @@ class RelayInjectProbeTest {
     /** A remote welcomed through a relay probe bound on [bindHost]. */
     private fun welcomedThroughProbe(bindHost: String = "127.0.0.1"): Run {
         val controls = CopyOnWriteArrayList<String>()
-        val hub = RelayRig.defaultHub(controlHandler = { method, _, _, _ -> controls += method; Result.success(Unit) })
+        val hub = RelayRig.defaultHub(controlHandler = { method, _, _, _ -> controls += method; Result.success(null) })
         val remote = RelayKeys.generate()
         val rig = RelayRig(hub).also { it.trust.pin(remote) }.start()
         val probe = WsRelayProbe(rig.port, bindHost).start()

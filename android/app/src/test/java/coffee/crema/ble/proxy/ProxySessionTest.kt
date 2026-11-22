@@ -279,7 +279,7 @@ class ProxySessionTest {
     fun `the first request reaches a real relay on a multi-threaded dispatcher`() = runBlocking {
         val hub = RelayHub(
             "P", roster = { emptyList() }, readSource = { _, _, _ -> ByteArray(0) }, isSnapshotChar = { _, _ -> false },
-            controlHandler = { _, _, _, _ -> Result.success(Unit) },
+            controlHandler = { _, _, _, _ -> Result.success(null) },
         )
         val rig = RelayRig(hub).start()
         val remote = coffee.crema.core.RelayKeys.generate()

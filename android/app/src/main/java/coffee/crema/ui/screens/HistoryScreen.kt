@@ -857,7 +857,9 @@ private fun ShotRow(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             val rowName = coffee.crema.history.shotTitle(shot)
             Text(
-                (if (shot.isManualLog) "$rowName · logged" else rowName) + if (shot.pinned) " · pinned" else "",
+                (if (shot.isManualLog) "$rowName · logged" else rowName) +
+                    // A replay of a capture is marked (#488 batch 6): it never uploads.
+                    (if (shot.replay) " · $REPLAY_MARK" else "") + if (shot.pinned) " · pinned" else "",
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.Medium),
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
@@ -910,8 +912,9 @@ private fun ShotRow(
         // Visualizer sync pip (web .hi-row pip): cloud-check once uploaded,
         // a spinner mid-upload, a faint cloud when local-only.
         when {
-            // Brew-log rows never upload (issue #10), so they carry no cloud pip.
-            shot.isBrewLog -> {}
+            // Brew-log rows never upload (issue #10), nor does a replay (#488
+            // batch 6), so they carry no cloud pip.
+            shot.isBrewLog || shot.replay -> {}
             syncing -> CircularProgressIndicator(
                 modifier = Modifier.size(12.dp),
                 strokeWidth = 1.5.dp,
@@ -1064,7 +1067,8 @@ private fun ShotDetail(
                     eyebrowBelow = if (narrow) stamp else null,
                     title = when {
                         isBrew -> (shot.recipeName ?: methodLabel(method)) + if (manual) " · logged" else ""
-                        else -> shot.profileName?.trim()?.takeIf { it.isNotEmpty() } ?: coffee.crema.history.UNTITLED_SHOT
+                        else -> (shot.profileName?.trim()?.takeIf { it.isNotEmpty() } ?: coffee.crema.history.UNTITLED_SHOT) +
+                            if (shot.replay) " · $REPLAY_MARK" else ""
                     },
                     // A shot's profile is a historical fact — no picker, no caret.
                     showCaret = false,
@@ -1514,6 +1518,9 @@ private fun shotRatio(shot: ShotMeta): String? =
     // water-in — the core's ratio_for_method, which the web's ratioLabel
     // also calls.
     shot.methodRatioLabel()
+
+/** A replayed capture's mark in History (#488 batch 6): kept, never uploaded. */
+internal const val REPLAY_MARK = "replay"
 
 /** The delete confirmation's body: a pinned shot says so (#311). */
 internal fun deleteBody(shot: ShotMeta): String =

@@ -72,14 +72,15 @@ class RelayHub(
     /**
      * Dispatch a relayed user-intent [Frame.Control] from a secondary to the
      * primary's command router (the machine command seam in production):
-     * `success` when accepted — the effect returns to the secondary over the
-     * [Frame.Notify] stream — `failure` with the reason to reply
+     * `success` when accepted, with what the command answers for
+     * [Frame.ControlOk.result] (null for most) — the effect returns to the
+     * secondary over the [Frame.Notify] stream — `failure` with the reason to reply
      * [Frame.ControlErr]. Called one control at a time per session, in arrival
      * order. The default rejects every control; the real handler is
      * wired only on the primary (a normal/loopback relay has no machine to
      * drive), so M1 and the unit tests keep a read-only mirror by construction.
      */
-    private val controlHandler: suspend (method: String, args: String, originId: String?, originName: String?) -> Result<Unit> =
+    private val controlHandler: suspend (method: String, args: String, originId: String?, originName: String?) -> Result<String?> =
         { _, _, _, _ -> Result.failure(UnsupportedOperationException("relay has no control handler")) },
     /**
      * The primary's current session-config JSON (an app-level `ConfigSnapshot`),
@@ -391,7 +392,7 @@ class RelayHub(
         }
         Log.i(TAG, "relayed control: ${frame.method}${if (frame.args.isEmpty()) "" else " (${frame.args})"}")
         val reply = controlHandler(frame.method, frame.args, session.clientId, session.clientName).fold(
-            onSuccess = { Frame.ControlOk(frame.id) },
+            onSuccess = { Frame.ControlOk(frame.id, it) },
             onFailure = { Frame.ControlErr(frame.id, it.message ?: "control failed") },
         )
         deliver(session, reply)
