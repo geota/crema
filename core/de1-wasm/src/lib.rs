@@ -1016,6 +1016,28 @@ pub fn shot_effects_json(input_json: &str) -> Result<String, String> {
     de1_domain::shot_effects_json(input_json)
 }
 
+/// A completed shot's bag change and its row's `bagDebit` (review MF1): a
+/// `ShotDebitInput` JSON in, a `ShotDebit` JSON out. See
+/// `de1_domain::shot_debit`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = shotDebitJson)]
+pub fn shot_debit_json(input_json: &str) -> Result<String, String> {
+    de1_domain::shot_debit_json(input_json)
+}
+
+/// A logged shot moved to another bag or to none (review MF1): a
+/// `ShotBagMoveInput` JSON in, a `ShotBagMove` JSON out. See
+/// `de1_domain::shot_bag_move`.
+///
+/// # Errors
+/// Throws on malformed input.
+#[wasm_bindgen(js_name = shotBagMoveJson)]
+pub fn shot_bag_move_json(input_json: &str) -> Result<String, String> {
+    de1_domain::shot_bag_move_json(input_json)
+}
+
 /// A bag's snapshot for a shot, a logged brew or a shot moved to another
 /// bag: a `Bean` JSON and the roaster's name (blank = none) in, a `ShotBean`
 /// JSON out, without the bag's legacy grind and grinder. See
@@ -1253,6 +1275,14 @@ pub fn bean_tombstone_json(bean_json: &str, now_ms: f64) -> Result<String, Strin
     de1_domain::bean_tombstone_json(bean_json, f64_to_ms(now_ms))
 }
 
+/// The row a roaster on Visualizer deleted on this device leaves (`Roaster`
+/// JSON in and out): only what matching needs. See
+/// `de1_domain::roaster_tombstone`.
+#[wasm_bindgen(js_name = roasterTombstoneJson)]
+pub fn roaster_tombstone_json(roaster_json: &str, now_ms: f64) -> Result<String, String> {
+    de1_domain::roaster_tombstone_json(roaster_json, f64_to_ms(now_ms))
+}
+
 /// A new bag copied from a bean (`Bean` JSON in and out): `new_id`,
 /// "<name> (copy)", `now_ms` stamps, and no Visualizer id, Beanconqueror
 /// id, photo ref, tombstone, archive or pin. See
@@ -1306,6 +1336,18 @@ pub fn merge_roaster_edit_json(
     now_ms: f64,
 ) -> Result<String, String> {
     de1_domain::merge_roaster_edit_json(base_json, edited_json, current_json, f64_to_ms(now_ms))
+}
+
+/// A profile editor's Save (profile JSON in and out), field by field: the
+/// fields the user changed onto the stored profile, the body (segments and
+/// preinfusion count) whole. See `de1_domain::merge_profile_edit`.
+#[wasm_bindgen(js_name = mergeProfileEditJson)]
+pub fn merge_profile_edit_json(
+    base_json: &str,
+    edited_json: &str,
+    current_json: &str,
+) -> Result<String, String> {
+    de1_domain::merge_profile_edit_json(base_json, edited_json, current_json)
 }
 
 /// The "≈N brews left" estimate — shared
@@ -2178,6 +2220,15 @@ pub fn is_recoverable(tag: &str, status: Option<u32>) -> bool {
 #[must_use]
 pub fn upload_refused_no_samples(is_brew_log: bool, sample_count: Option<u32>) -> bool {
     de1_domain::upload_refused_no_samples(is_brew_log, sample_count)
+}
+
+/// Whether an upload must refuse a stored row: no telemetry, or a replay
+/// (#488 batch 6: a replay is never uploaded). See
+/// `de1_domain::upload_refused_shot`.
+#[wasm_bindgen(js_name = uploadRefusedShot)]
+#[must_use]
+pub fn upload_refused_shot(is_brew_log: bool, sample_count: Option<u32>, replay: bool) -> bool {
+    de1_domain::upload_refused_shot(is_brew_log, sample_count, replay)
 }
 
 /// Visualizer's free-plan daily upload cap: the cap (e.g. `30`) when a reply
