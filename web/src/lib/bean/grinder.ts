@@ -61,6 +61,11 @@ export type {
 	LastGrind
 };
 
+/** What the type-or-pick box answers: one of its matches, or "+ Create “<typed>”". */
+export type GrinderChoice =
+	| { kind: 'owned' | 'catalogue' | 'archived'; id: string; name: string }
+	| { kind: 'create'; name: string };
+
 /** The "no grinder" slot's id on a bag grind (`de1_domain::NO_GRINDER_ID`). */
 export const NO_GRINDER_ID = '';
 

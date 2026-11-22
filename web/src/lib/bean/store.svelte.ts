@@ -39,6 +39,7 @@ import {
 } from '#lib/wasm/de1_wasm.js';
 import {
 	type Grinder,
+	type GrinderChoice,
 	type GrindSave,
 	addGrinder as coreAddGrinder,
 	archiveGrinder as coreArchiveGrinder,
@@ -757,6 +758,25 @@ export class BeanLibraryStore {
 		const out = coreRestoreGrinder(g);
 		this.putGrinders([out]);
 		return out;
+	}
+
+	/**
+	 * Take a type-or-pick box choice: an owned grinder as it is, a catalogue
+	 * entry added with its scale (or the record that is already it), an
+	 * archived one restored with the same id, or a typed name created with
+	 * the default scale.
+	 */
+	takeGrinderChoice(choice: GrinderChoice): Grinder | null {
+		switch (choice.kind) {
+			case 'owned':
+				return this.getGrinder(choice.id);
+			case 'archived':
+				return this.restoreGrinder(choice.id);
+			case 'catalogue':
+				return this.addGrinder('', choice.id);
+			case 'create':
+				return this.addGrinder(choice.name, '');
+		}
 	}
 
 	/** Point Brew at a grinder (`null` = no grinder). */
