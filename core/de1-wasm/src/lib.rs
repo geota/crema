@@ -1940,6 +1940,17 @@ pub fn roaster_write_request(roaster_json: &str) -> Result<String, String> {
     de1_domain::roaster_write_request_json(roaster_json)
 }
 
+/// The Visualizer id to push as a bag's `roaster_id`. `payload` is
+/// `{"bean": Bean, "roasters": Roaster[]}`, every roaster, tombstones
+/// included. See `de1_domain::bag_roaster_remote_id`.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+#[wasm_bindgen(js_name = bagRoasterRemoteId)]
+pub fn bag_roaster_remote_id(payload: &str) -> Result<Option<String>, String> {
+    de1_domain::bag_roaster_remote_id_json(payload)
+}
+
 /// A roaster's catalogue link for a write. `payload` is
 /// `{"roaster": Roaster, "beans": Bean[]}`. See
 /// `de1_domain::resolve_roaster_catalogue_link`.

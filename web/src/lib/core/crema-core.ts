@@ -5480,6 +5480,14 @@ export interface ShotBagMoveInput {
 	 * it never debits.
 	 */
 	replay: boolean;
+	/**
+	 * The row is a remote's mirror copy of the hub's shot: recorded
+	 * elsewhere, never debited here. Its `bag_debit` of `None` (what Android
+	 * wrote for these rows from #506 until `shot_debit`) then means nothing
+	 * was taken, not "a row from before the field". `false` for a row this
+	 * device recorded, so a legacy local row keeps the dose rule.
+	 */
+	mirrorRow: boolean;
 }
 
 /**
