@@ -104,7 +104,6 @@ describe('a backdated brew', () => {
 		const seeds = brewLogSeeds({
 			method: 'pourover',
 			beanId: null,
-			beanGrinderSetting: null,
 			prefill: undefined,
 			rows: seedRows(store)
 		});
@@ -118,7 +117,6 @@ describe('a backdated brew', () => {
 		const seeds = brewLogSeeds({
 			method: 'pourover',
 			beanId: null,
-			beanGrinderSetting: null,
 			prefill: undefined,
 			rows: seedRows(store)
 		});

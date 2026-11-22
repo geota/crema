@@ -41,6 +41,7 @@ import coffee.crema.core.debitTaken
 import coffee.crema.core.resettleRemaining
 import coffee.crema.core.resettledBagDebit
 import coffee.crema.core.ShotCaptureContext
+import coffee.crema.core.ShotSelections
 import coffee.crema.core.exportProfileFile
 import coffee.crema.core.importProfileFile
 import coffee.crema.core.exportBeanconquerorMainJson
@@ -3250,6 +3251,41 @@ class LibraryController(
     private var shotStart: ShotStartSelections? = null
 
     /**
+     * What Brew has selected (REVIEW-CORE H3) in [s], the effective state (on
+     * a remote, the hub's): the core freezes it on its own shot start, the
+     * app's or the group head's, and the shot records that copy.
+     */
+    fun shotSelectionsOf(s: MainUiState): ShotSelections {
+        val bean = s.beans.firstOrNull { it.id == s.activeBeanId }
+        val grinder = s.activeGrinder()
+        val profile = s.activeProfile()
+        return ShotSelections(
+            bean = bean?.let { b ->
+                ShotBean(
+                    beanId = b.id,
+                    name = b.name,
+                    roasterName = b.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name },
+                    roastedOn = b.roastedOn,
+                    roastLevel = b.roastLevel,
+                    tags = b.tags,
+                    notes = b.notes?.takeIf { it.isNotBlank() },
+                )
+            },
+            profileId = profile?.id,
+            profileName = profile?.name,
+            grinderId = grinder?.id,
+            grinderName = grinder?.name?.trim()?.ifEmpty { null },
+            grind = s.brewGrindView().value,
+        )
+    }
+
+    /** Hand [selections] to the core for the next shot's start. */
+    fun pushShotSelections(selections: ShotSelections) {
+        runCatching { bridge.setShotSelections(json.encodeToString(ShotSelections.serializer(), selections)) }
+            .onFailure { appendLog("Shot selections not handed to the core: ${it.message}") }
+    }
+
+    /**
      * A shot started (`ShotStarted`): freeze the selections on screen (on a
      * remote, the hub's: its mirror copy of the shot is labelled the same way)
      * for [captureCompletedShot].
@@ -3318,43 +3354,18 @@ class LibraryController(
         // the DE1 held and its dose / yield / brew temp / pre-infusion, the
         // grinder (bean, else Settings) frozen now, the stop reason and
         // switches. The shell hands in only what the core can't know.
+        // The bag, profile, grinder and grind are the core's own: it froze
+        // them at shot start from [shotSelectionsOf] (REVIEW-CORE H3).
+        // TODO(#488 batch 2 Android): drop this shell's own freeze.
         val ctx = ShotCaptureContext(
             completedAt = now,
             id = shotId,
-            bean = bean?.let { b ->
-                ShotBean(
-                    beanId = b.id,
-                    name = b.name,
-                    roasterName = roasterName,
-                    roastedOn = b.roastedOn,
-                    roastLevel = b.roastLevel,
-                    tags = b.tags,
-                    grinderSetting = b.grinderSetting?.takeIf { it.isNotBlank() },
-                    grinder = b.grinder?.takeIf { it.isNotBlank() },
-                    notes = b.notes?.takeIf { it.isNotBlank() },
-                )
-            },
-            // The active grinder (#488, review F4): its name is the shot's
-            // snapshot and its id the lookup key, both from the shot's start.
-            // Not the old settings grinderModel.
-            settingsGrinder = if (started != null) started.settingsGrinder else s.activeGrinder()?.name?.trim()?.ifEmpty { null },
-            grinderId = if (started != null) started.grinderId else s.activeGrinder()?.id,
-            // Brew's grind at the start (issue 15, #488 round 2): what the
-            // header showed, text included; none when it isn't set.
-            grind = if (started != null) started.grind else s.brewGrindView().value,
             // The Settings default barista (dye2 audit #1), editable later.
             barista = s.baristaName.trim().ifEmpty { null },
             tags = bean?.tags?.takeIf { it.isNotEmpty() },
             // The DE1 this ran on — frozen here so a later Decent upload (#84)
             // carries the serial the server verifies.
             machine = liveMachine(),
-            // The profile on screen, the core's last fallback name: a remote's
-            // mirror core never uploads, so it knows no profile title (on a
-            // remote the screen shows the hub's selection).
-            profileName = profile?.name,
-            // Its library id (save boundaries F4), from the shot's start: the
-            // core stamps it when the DE1 held no profile it knows of.
-            profileId = profile?.id,
         )
         assembling()
         val assembled = runCatching {

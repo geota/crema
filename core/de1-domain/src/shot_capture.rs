@@ -3,10 +3,14 @@
 //! The core records every shot — the DE1 samples with their frame numbers,
 //! and the scale / volume / resistance overlays — and knows how it ran: the
 //! profile and Quick Controls the DE1 held, the stop switches, why it
-//! stopped, the settled yield. A shell hands in only what the core can't
-//! know ([`ShotCaptureContext`]: the wall clock, the bean snapshot, the
-//! grinder, the grind dial, the barista, tags, the machine), and
-//! [`assemble_stored_shot`] applies one rule set for both shells:
+//! stopped, the settled yield. It also holds what Brew had selected
+//! ([`ShotSelections`]: the bag, the profile, the grinder, Brew's grind),
+//! which the shells hand in as it changes, and freezes a copy on its own
+//! shot-start event, whoever started the shot (the app or the group head;
+//! REVIEW-CORE H3). At completion a shell hands in only what the core can't
+//! know ([`ShotCaptureContext`]: the wall clock, the id, the barista, tags,
+//! the machine), and [`assemble_stored_shot`] applies one rule set for both
+//! shells:
 //!
 //! - **As-run values.** With the profile the DE1 held, the stored profile is
 //!   the *effective* one ([`effective_crema_profile`]: brew temperature
@@ -15,13 +19,20 @@
 //!   override, else the profile's own. Without it (a profile another app
 //!   loaded) the shot keeps the profile's name only and no Quick Controls.
 //! - **Profile id.** The library id of the profile the DE1 held, else the
-//!   shell's [`ShotCaptureContext::profile_id`] when the shot's name is that
+//!   frozen [`ShotSelections::profile_id`] when the shot's name is that
 //!   profile's; stored next to the name snapshot (save-boundaries review F4).
 //! - **Grinder.** The active grinder record's id and its name as a snapshot
-//!   (#488, review F4), taken by the shell **at shot start** (review F9), so
-//!   switching grinder mid-shot can't mislabel it. Not the settings
-//!   `grinder_model`, and not the bag's old stored grinder: the grinder is
-//!   equipment picked on Brew. History never changes when the grinder does.
+//!   (#488, review F4), frozen at shot start (review F9), so switching
+//!   grinder mid-shot can't mislabel it. Not the settings `grinder_model`,
+//!   and not the bag's old stored grinder: the grinder is equipment picked
+//!   on Brew. History never changes when the grinder does.
+//! - **Grind.** Brew's grind at shot start, as text
+//!   ([`crate::BrewGrindView::value`]): what Brew showed is what the shot
+//!   records, a text grind included.
+//! - **Bag snapshot.** The bag at shot start, without the bag's legacy
+//!   `grinder_setting` / `grinder` (REVIEW-FINAL S2): a new row never carries
+//!   them, so the old-row fallbacks in History and the exports read nothing
+//!   for it.
 //! - **Measured values.** The settled final weight, the stop reason and the
 //!   stop switches come from the core.
 //! - **Full series.** The stored record keeps every sample (up to
@@ -35,14 +46,51 @@ use typeshare::typeshare;
 use crate::bean::ShotBean;
 use crate::crema_profile::{CremaProfile, to_wire};
 use crate::effective_profile::{BrewOverrides, effective_crema_profile, preinfusion_seconds};
-use crate::grind_value::grind_text;
-use crate::grinder::GrindScale;
 use crate::history::{ShotMachine, StoredShot};
 use crate::shot::ShotRecord;
 use crate::stop::StopReason;
 
+/// What Brew has selected, for the next shot (REVIEW-CORE H3). The shells
+/// hand it to the core (`CremaCore::set_shot_selections`) whenever a part
+/// changes, the way they hand in the desired profile; the core freezes a
+/// copy on its own shot-start event and the shot records that copy. On a
+/// remote, the hub's selections (its mirror records the shot it watched);
+/// for a replay, the capture's.
+#[typeshare]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ShotSelections {
+    /// The bag on Brew, as a snapshot ([`ShotBean::snapshot_of`]), or `None`.
+    /// The shot's bag, and so the bag a recorded shot debits. Its legacy
+    /// `grinder_setting` / `grinder` are never recorded.
+    pub bean: Option<ShotBean>,
+    /// The library id of the active profile, or `None`. The fallback for
+    /// [`StoredShot::profile_id`] when the core doesn't hold the profile it
+    /// ran; stamped only when the shot's name is this profile's
+    /// ([`Self::profile_name`]), so a profile another app loaded never gets
+    /// an id.
+    pub profile_id: Option<String>,
+    /// The active profile's name: the last fallback name when the core knows
+    /// neither the profile it ran nor a title (a remote's mirror core and a
+    /// replay's shadow core saw no upload).
+    pub profile_name: Option<String>,
+    /// The active grinder's id ([`crate::grinder::active_grinder`]), stamped
+    /// as [`StoredShot::grinder_id`]. `None` or blank = no grinder.
+    pub grinder_id: Option<String>,
+    /// The active grinder's name ([`crate::grinder::Grinder::name`]): the
+    /// shot's name snapshot ([`StoredShot::grinder_model`]). `None` or blank
+    /// = no grinder. Not the settings `grinder_model`.
+    pub grinder_name: Option<String>,
+    /// Brew's grind as text ([`crate::BrewGrindView::value`]), recorded as is
+    /// (trimmed), a grind that isn't a plain number included. `None` or blank
+    /// = no grind.
+    pub grind: Option<String>,
+}
+
 /// What a shell knows about a finished shot that the core doesn't — handed
-/// to the core's `take_stored_shot` on `Event::ShotCompleted`.
+/// to the core's `take_stored_shot` on `Event::ShotCompleted`. What Brew had
+/// selected is not here: the core froze it at shot start
+/// ([`ShotSelections`]), so a completion-time value can't reach the shot.
 #[typeshare]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,30 +102,6 @@ pub struct ShotCaptureContext {
     /// shell that showed the id already, e.g. Android's "Last shot" card).
     #[serde(default)]
     pub id: Option<String>,
-    /// The bean snapshot the shot was pulled with, or `None`.
-    #[serde(default)]
-    pub bean: Option<ShotBean>,
-    /// The active grinder's name at shot start ([`crate::grinder::Grinder`]
-    /// `name`, from [`crate::grinder::active_grinder`]): the shot's name
-    /// snapshot. `None` or blank = no grinder. Not the settings
-    /// `grinder_model`. (The field keeps its pre-#488 name so both shells'
-    /// contexts still decode.)
-    #[serde(default)]
-    pub settings_grinder: Option<String>,
-    /// The active grinder's id at shot start (#488), stamped as
-    /// [`StoredShot::grinder_id`]. `None` or blank = no grinder.
-    #[serde(default)]
-    pub grinder_id: Option<String>,
-    /// The grind dial at shot start, or `None` when it carried no value.
-    /// Recorded through [`crate::grind_value::grind_text`] (no one-decimal
-    /// rounding); [`Self::grind`] wins when set.
-    #[serde(default)]
-    pub grind_dial: Option<f32>,
-    /// Brew's grind at shot start as text ([`crate::BrewGrindView::value`]),
-    /// recorded as is (trimmed), a grind that isn't a plain number included.
-    /// `None` or blank = fall back to [`Self::grind_dial`].
-    #[serde(default)]
-    pub grind: Option<String>,
     /// The barista, or `None`.
     #[serde(default)]
     pub barista: Option<String>,
@@ -88,17 +112,6 @@ pub struct ShotCaptureContext {
     /// The DE1 the shot ran on, or `None` when it isn't known.
     #[serde(default)]
     pub machine: Option<ShotMachine>,
-    /// The profile name the shell knows, the last fallback when the core
-    /// knows neither the profile it ran nor a title — a replay, whose shadow
-    /// core saw no upload, passes the capture's name here.
-    #[serde(default)]
-    pub profile_name: Option<String>,
-    /// The library id of the profile the shell has active, or `None`. The
-    /// fallback for [`StoredShot::profile_id`] when the core doesn't hold the
-    /// profile it ran; stamped only when the shot's name is this profile's
-    /// (`profile_name`), so a profile another app loaded never gets an id.
-    #[serde(default)]
-    pub profile_id: Option<String>,
 }
 
 /// The profile and Quick Controls the DE1 held when the shot started.
@@ -127,17 +140,8 @@ pub struct CompletedShot {
     pub stop_on_weight: bool,
     /// Whether auto-tare was armed.
     pub auto_tare: bool,
-}
-
-/// The grind the shot records: Brew's grind text when set, else the dial
-/// as text. The dial carries no scale here; [`grind_text`] on the default
-/// scale keeps a value finer than its step (2.25 stays 2.25).
-fn shot_grind(ctx: &ShotCaptureContext) -> Option<String> {
-    non_blank(ctx.grind.as_deref()).or_else(|| {
-        ctx.grind_dial
-            .map(|dial| grind_text(f64::from(dial), &GrindScale::default()))
-            .filter(|t| !t.is_empty())
-    })
+    /// What Brew had selected when the shot started (frozen by the core).
+    pub selections: ShotSelections,
 }
 
 fn non_blank(s: Option<&str>) -> Option<String> {
@@ -153,7 +157,7 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
     if shot.record.samples.is_empty() {
         return None;
     }
-    let grind = shot_grind(&ctx);
+    let sel = shot.selections;
     let mut s = StoredShot::new(ctx.completed_at, shot.record);
     if let Some(id) = ctx.id.filter(|id| !id.is_empty()) {
         s.id = id;
@@ -162,7 +166,7 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
         let effective = effective_crema_profile(&as_run.profile, &as_run.qc);
         s.profile_name = non_blank(Some(&effective.name));
         s.profile_id =
-            non_blank(Some(&as_run.profile.id)).or_else(|| non_blank(ctx.profile_id.as_deref()));
+            non_blank(Some(&as_run.profile.id)).or_else(|| non_blank(sel.profile_id.as_deref()));
         s.metadata.dose = Some(effective.dose).filter(|d| *d > 0.0);
         s.yield_target = Some(effective.yield_out).filter(|y| *y > 0.0);
         s.brew_temp_target = Some(effective.brew_temp).filter(|t| t.is_finite());
@@ -170,11 +174,11 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
         s.profile = Some(to_wire(&effective));
     } else {
         s.profile_name = non_blank(shot.profile_title.as_deref())
-            .or_else(|| non_blank(ctx.profile_name.as_deref()));
-        // The shell's id only when the name is its profile's: a title the DE1
-        // reported may be a profile another app loaded.
-        if s.profile_name.is_some() && s.profile_name == non_blank(ctx.profile_name.as_deref()) {
-            s.profile_id = non_blank(ctx.profile_id.as_deref());
+            .or_else(|| non_blank(sel.profile_name.as_deref()));
+        // The selected id only when the name is its profile's: a title the
+        // DE1 reported may be a profile another app loaded.
+        if s.profile_name.is_some() && s.profile_name == non_blank(sel.profile_name.as_deref()) {
+            s.profile_id = non_blank(sel.profile_id.as_deref());
         }
     }
     // An estimated stop is stored as `Weight`, which older builds parse,
@@ -187,12 +191,16 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
     s.stop_on_weight = Some(shot.stop_on_weight);
     s.auto_tare = Some(shot.auto_tare);
     s.metadata.yield_out = shot.final_weight.filter(|w| w.is_finite() && *w > 0.0);
-    s.metadata.grinder_setting = grind;
+    s.metadata.grinder_setting = non_blank(sel.grind.as_deref());
     s.metadata.barista = non_blank(ctx.barista.as_deref());
-    s.grinder_model = non_blank(ctx.settings_grinder.as_deref());
-    s.grinder_id = non_blank(ctx.grinder_id.as_deref());
+    s.grinder_model = non_blank(sel.grinder_name.as_deref());
+    s.grinder_id = non_blank(sel.grinder_id.as_deref());
     s.tags = ctx.tags.unwrap_or_default();
-    s.bean = ctx.bean;
+    s.bean = sel.bean.map(|bean| ShotBean {
+        grinder_setting: None,
+        grinder: None,
+        ..bean
+    });
     s.machine = ctx.machine;
     Some(s)
 }
@@ -203,6 +211,15 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
 ///
 /// The JSON error string on a malformed context.
 pub fn parse_shot_capture_context(json: &str) -> Result<ShotCaptureContext, String> {
+    serde_json::from_str(json).map_err(|e| e.to_string())
+}
+
+/// [`ShotSelections`] as JSON (the FFI / wasm boundary).
+///
+/// # Errors
+///
+/// The JSON error string on malformed selections.
+pub fn parse_shot_selections(json: &str) -> Result<ShotSelections, String> {
     serde_json::from_str(json).map_err(|e| e.to_string())
 }
 
@@ -249,7 +266,13 @@ mod tests {
             final_weight: Some(36.4),
             stop_on_weight: true,
             auto_tare: false,
+            selections: ShotSelections::default(),
         }
+    }
+
+    fn with(sel: ShotSelections, mut shot: CompletedShot) -> CompletedShot {
+        shot.selections = sel;
+        shot
     }
 
     fn profile() -> CremaProfile {
@@ -303,94 +326,126 @@ mod tests {
     }
 
     #[test]
-    fn the_shells_profile_name_is_the_last_fallback() {
+    fn the_selected_profile_name_is_the_last_fallback() {
         let mut nameless = completed(None);
         nameless.profile_title = None;
-        let ctx = ShotCaptureContext {
+        let sel = ShotSelections {
             profile_name: Some("From the capture".into()),
-            ..ShotCaptureContext::default()
+            ..ShotSelections::default()
         };
-        let shot = assemble_stored_shot(nameless, ctx.clone()).unwrap();
+        let shot = assemble_stored_shot(with(sel.clone(), nameless), ShotCaptureContext::default())
+            .unwrap();
         assert_eq!(shot.profile_name.as_deref(), Some("From the capture"));
         // The core's own title wins over it.
-        let shot = assemble_stored_shot(completed(None), ctx).unwrap();
+        let shot = assemble_stored_shot(with(sel, completed(None)), ShotCaptureContext::default())
+            .unwrap();
         assert_eq!(shot.profile_name.as_deref(), Some("Foreign"));
     }
 
     #[test]
-    fn the_profile_id_is_the_held_profiles_else_the_shells_for_its_name() {
+    fn the_profile_id_is_the_held_profiles_else_the_selected_one_for_its_name() {
         let held = profile();
         let shot = assemble_stored_shot(
-            completed(Some(AsRunShot {
-                profile: held.clone(),
-                qc: BrewOverrides::default(),
-            })),
-            ShotCaptureContext {
-                profile_id: Some("profile:other".into()),
-                ..ShotCaptureContext::default()
-            },
+            with(
+                ShotSelections {
+                    profile_id: Some("profile:other".into()),
+                    ..ShotSelections::default()
+                },
+                completed(Some(AsRunShot {
+                    profile: held.clone(),
+                    qc: BrewOverrides::default(),
+                })),
+            ),
+            ShotCaptureContext::default(),
         )
         .unwrap();
         assert_eq!(shot.profile_id.as_deref(), Some(held.id.as_str()));
         assert_eq!(shot.profile_name.as_deref(), Some("Test"));
 
-        // A replay: the core held nothing, the shell names its profile.
+        // A replay: the core held nothing, the selections name the profile.
         let mut nameless = completed(None);
         nameless.profile_title = None;
-        let ctx = ShotCaptureContext {
+        let sel = ShotSelections {
             profile_name: Some("From the capture".into()),
             profile_id: Some("profile:capture".into()),
-            ..ShotCaptureContext::default()
+            ..ShotSelections::default()
         };
-        let shot = assemble_stored_shot(nameless, ctx.clone()).unwrap();
+        let shot = assemble_stored_shot(with(sel.clone(), nameless), ShotCaptureContext::default())
+            .unwrap();
         assert_eq!(shot.profile_id.as_deref(), Some("profile:capture"));
 
-        // A title another app loaded never takes the shell's id.
-        let shot = assemble_stored_shot(completed(None), ctx).unwrap();
+        // A title another app loaded never takes the selected id.
+        let shot = assemble_stored_shot(with(sel, completed(None)), ShotCaptureContext::default())
+            .unwrap();
         assert_eq!(shot.profile_name.as_deref(), Some("Foreign"));
         assert_eq!(shot.profile_id, None);
         let shot = assemble_stored_shot(completed(None), ShotCaptureContext::default()).unwrap();
         assert_eq!(shot.profile_id, None);
     }
 
-    #[test]
-    fn the_grind_dial_is_stored_like_the_web_history() {
-        let dial = |d: f32| {
-            shot_grind(&ShotCaptureContext {
-                grind_dial: Some(d),
-                ..ShotCaptureContext::default()
-            })
-        };
-        assert_eq!(dial(15.0).as_deref(), Some("15"));
-        assert_eq!(dial(15.5).as_deref(), Some("15.5"));
-        assert_eq!(dial(4.2).as_deref(), Some("4.2"));
-        assert_eq!(dial(f32::NAN), None);
-    }
-
-    #[test]
-    fn a_fine_step_dial_is_not_rounded_to_one_decimal() {
-        // REVIEW-FINAL M2: a 0.05 (or 0.25) step, dial 2.25, records 2.25,
-        // so auto-save can't overwrite the bag's 2.25 with 2.2.
-        let ctx = ShotCaptureContext {
-            grind_dial: Some(2.25),
-            ..ShotCaptureContext::default()
-        };
-        let shot = assemble_stored_shot(completed(None), ctx).unwrap();
-        assert_eq!(shot.metadata.grinder_setting.as_deref(), Some("2.25"));
-    }
-
-    #[test]
-    fn brews_grind_text_wins_and_is_kept_as_typed() {
-        let ctx = |grind: Option<&str>| ShotCaptureContext {
+    fn grind_of(grind: Option<&str>) -> Option<String> {
+        let sel = ShotSelections {
             grind: grind.map(str::to_owned),
-            grind_dial: Some(14.0),
-            ..ShotCaptureContext::default()
+            ..ShotSelections::default()
         };
-        assert_eq!(shot_grind(&ctx(Some(" 2.1.3 "))).as_deref(), Some("2.1.3"));
-        assert_eq!(shot_grind(&ctx(Some("2.25"))).as_deref(), Some("2.25"));
-        assert_eq!(shot_grind(&ctx(Some(" "))).as_deref(), Some("14"));
-        assert_eq!(shot_grind(&ctx(None)).as_deref(), Some("14"));
-        assert_eq!(shot_grind(&ShotCaptureContext::default()), None);
+        assemble_stored_shot(with(sel, completed(None)), ShotCaptureContext::default())
+            .unwrap()
+            .metadata
+            .grinder_setting
+    }
+
+    #[test]
+    fn brews_grind_is_recorded_as_shown() {
+        assert_eq!(grind_of(Some(" 2.1.3 ")).as_deref(), Some("2.1.3"));
+        // A fine step is never rounded (REVIEW-FINAL M2).
+        assert_eq!(grind_of(Some("2.25")).as_deref(), Some("2.25"));
+        assert_eq!(grind_of(Some("0")).as_deref(), Some("0"));
+        assert_eq!(grind_of(Some("4⅓")).as_deref(), Some("4⅓"));
+        assert_eq!(grind_of(Some(" ")), None);
+        assert_eq!(grind_of(None), None);
+    }
+
+    #[test]
+    fn the_grinder_is_the_selected_record() {
+        let sel = ShotSelections {
+            grinder_id: Some(" grinder:ek43 ".into()),
+            grinder_name: Some(" EK43 ".into()),
+            ..ShotSelections::default()
+        };
+        let shot = assemble_stored_shot(with(sel, completed(None)), ShotCaptureContext::default())
+            .unwrap();
+        assert_eq!(shot.grinder_id.as_deref(), Some("grinder:ek43"));
+        assert_eq!(shot.grinder_model.as_deref(), Some("EK43"));
+        // No grinder selected: none recorded (no settings fallback).
+        let shot = assemble_stored_shot(completed(None), ShotCaptureContext::default()).unwrap();
+        assert_eq!(shot.grinder_id, None);
+        assert_eq!(shot.grinder_model, None);
+    }
+
+    #[test]
+    fn a_new_rows_bag_snapshot_has_no_legacy_grind_or_grinder() {
+        // REVIEW-FINAL S2: the bag's frozen `grinder_setting` / `grinder`
+        // never reach a new row, so nothing falls back to them for it.
+        let sel = ShotSelections {
+            bean: Some(ShotBean {
+                bean_id: Some("bean:1".into()),
+                name: "Gesha".into(),
+                grinder_setting: Some("14".into()),
+                grinder: Some("Niche Zero".into()),
+                notes: Some("floral".into()),
+                ..ShotBean::default()
+            }),
+            ..ShotSelections::default()
+        };
+        let shot = assemble_stored_shot(with(sel, completed(None)), ShotCaptureContext::default())
+            .unwrap();
+        let bean = shot.bean.expect("the bag");
+        assert_eq!(bean.bean_id.as_deref(), Some("bean:1"));
+        assert_eq!(bean.notes.as_deref(), Some("floral"));
+        assert_eq!(bean.grinder_setting, None);
+        assert_eq!(bean.grinder, None);
+        assert_eq!(shot.metadata.grinder_setting, None, "no grind on Brew");
+        assert_eq!(shot.grinder_model, None);
     }
 
     #[test]
@@ -398,7 +453,6 @@ mod tests {
         let ctx = ShotCaptureContext {
             completed_at: 1_700_000_000_000,
             id: Some("shot:1".into()),
-            grind_dial: Some(2.5),
             tags: Some(vec!["dial-in".into()]),
             ..ShotCaptureContext::default()
         };
@@ -408,7 +462,7 @@ mod tests {
         // Only completedAt is required, and a `null` (Kotlin's default) reads
         // as absent.
         let minimal =
-            parse_shot_capture_context(r#"{"completedAt":1,"tags":null,"bean":null}"#).unwrap();
+            parse_shot_capture_context(r#"{"completedAt":1,"tags":null,"machine":null}"#).unwrap();
         assert_eq!(minimal.completed_at, 1);
         assert_eq!(minimal.tags, None);
     }

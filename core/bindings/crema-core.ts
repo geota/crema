@@ -834,6 +834,35 @@ export interface BrewHistoryStats {
 }
 
 /**
+ * The grinder and grind a logged brew records (REVIEW-FINAL S4), stamped
+ * the way a shot is: the active grinder's id and name snapshot, and the
+ * grind as text on its scale.
+ */
+export interface BrewLogGrind {
+	/** The row's `grinder_id` ([`crate::StoredShot::grinder_id`]). */
+	grinderId?: string;
+	/** The row's grinder name snapshot ([`crate::StoredShot::grinder_model`]). */
+	grinderName?: string;
+	/**
+	 * The row's grind: [`grind_text`] on the grinder's scale (the default
+	 * with none), so a 0.05 step keeps its decimals and a whole number has
+	 * none; `None` when not set or not finite.
+	 */
+	grind?: string;
+}
+
+/** What [`brew_log_grind`] reads: the Log-brew form's grinder and grind. */
+export interface BrewLogGrindInput {
+	/**
+	 * The active grinder ([`crate::grinder::active_grinder`]) when the brew
+	 * is logged; `None` = no grinder.
+	 */
+	grinder?: Grinder;
+	/** The form's grind; `None` = not set. 0 is a grind. */
+	grind?: number;
+}
+
+/**
  * Explicit seed values a caller opens the form with — "Log again" (a
  * whole prior brew) or a finished guided session's measured summary.
  * Every field optional.
@@ -942,8 +971,17 @@ export interface BrewLogSeedInput {
 	lastUsedMethod?: string;
 	/** The bag the form is logging against. */
 	beanId?: string;
-	/** That bag's own grinder setting — the grind fallback. */
-	beanGrinderSetting?: string;
+	/**
+	 * That bag, for its saved grind with [`Self::grinder`] — the grind
+	 * fallback ([`crate::bag_grind::pick_grind`]). Its legacy
+	 * `grinder_setting` is not read (REVIEW-FINAL S4).
+	 */
+	bag?: Bean;
+	/**
+	 * The active grinder ([`crate::grinder::active_grinder`]); `None` = no
+	 * grinder (the bag's "no grinder" slot).
+	 */
+	grinder?: Grinder;
 	prefill?: BrewLogPrefill;
 	/** Prior brews, newest first. */
 	rows: BrewSeedInput[];
@@ -969,7 +1007,10 @@ export interface BrewLogSeeds {
 	 * espresso family (the form's single "water / yield" field).
 	 */
 	water: number;
-	/** Grind setting, or `None` when nothing numeric is known. */
+	/**
+	 * Grind setting, or `None` when nothing numeric is known. A grind of 0
+	 * is a grind.
+	 */
 	grind?: number;
 	/** Water temperature, °C, or `None`. */
 	tempC?: number;
@@ -5033,7 +5074,9 @@ export interface ShotMachine {
 
 /**
  * What a shell knows about a finished shot that the core doesn't — handed
- * to the core's `take_stored_shot` on `Event::ShotCompleted`.
+ * to the core's `take_stored_shot` on `Event::ShotCompleted`. What Brew had
+ * selected is not here: the core froze it at shot start
+ * ([`ShotSelections`]), so a completion-time value can't reach the shot.
  */
 export interface ShotCaptureContext {
 	/** When the shot completed, Unix epoch ms — the core has no wall clock. */
@@ -5043,33 +5086,6 @@ export interface ShotCaptureContext {
 	 * shell that showed the id already, e.g. Android's "Last shot" card).
 	 */
 	id?: string;
-	/** The bean snapshot the shot was pulled with, or `None`. */
-	bean?: ShotBean;
-	/**
-	 * The active grinder's name at shot start ([`crate::grinder::Grinder`]
-	 * `name`, from [`crate::grinder::active_grinder`]): the shot's name
-	 * snapshot. `None` or blank = no grinder. Not the settings
-	 * `grinder_model`. (The field keeps its pre-#488 name so both shells'
-	 * contexts still decode.)
-	 */
-	settingsGrinder?: string;
-	/**
-	 * The active grinder's id at shot start (#488), stamped as
-	 * [`StoredShot::grinder_id`]. `None` or blank = no grinder.
-	 */
-	grinderId?: string;
-	/**
-	 * The grind dial at shot start, or `None` when it carried no value.
-	 * Recorded through [`crate::grind_value::grind_text`] (no one-decimal
-	 * rounding); [`Self::grind`] wins when set.
-	 */
-	grindDial?: number;
-	/**
-	 * Brew's grind at shot start as text ([`crate::BrewGrindView::value`]),
-	 * recorded as is (trimmed), a grind that isn't a plain number included.
-	 * `None` or blank = fall back to [`Self::grind_dial`].
-	 */
-	grind?: string;
 	/** The barista, or `None`. */
 	barista?: string;
 	/**
@@ -5079,19 +5095,69 @@ export interface ShotCaptureContext {
 	tags?: string[];
 	/** The DE1 the shot ran on, or `None` when it isn't known. */
 	machine?: ShotMachine;
+}
+
+/**
+ * What a completed shot does. "When kept": at once for a recorded shot, on
+ * the Undo for a discarded aborted pull.
+ */
+export interface ShotEffects {
+	/** Add the history row now. */
+	record: boolean;
+	/** Hold the row behind an Undo (an aborted pull) instead. */
+	offerUndo: boolean;
+	/** Debit the dose from the shot's bag (its frozen `bean.beanId`) now. */
+	debit: boolean;
+	/** Fire the `shotCompleted` webhook now. */
+	webhook: boolean;
 	/**
-	 * The profile name the shell knows, the last fallback when the core
-	 * knows neither the profile it ran nor a title — a replay, whose shadow
-	 * core saw no upload, passes the capture's name here.
+	 * When kept: save the shot's grind to its bag, if the device's
+	 * auto-save setting is on ([`crate::bag_grind::auto_save_shot_grind`]
+	 * keeps its own gates).
 	 */
-	profileName?: string;
+	autoSave: boolean;
 	/**
-	 * The library id of the profile the shell has active, or `None`. The
-	 * fallback for [`StoredShot::profile_id`] when the core doesn't hold the
-	 * profile it ran; stamped only when the shot's name is this profile's
-	 * (`profile_name`), so a profile another app loaded never gets an id.
+	 * When kept: offer the shot to the armed upload destinations (each
+	 * keeps its own gates).
 	 */
-	profileId?: string;
+	upload: boolean;
+}
+
+/**
+ * What the shell should do with a just-completed shot — decided at the
+ * core boundary so both shells classify identically (previously each
+ * re-implemented the aborted rule and the cleaning-profile lookup).
+ * 
+ * The *mechanics* stay shell-side: `DiscardAborted` is held behind an
+ * undo toast (live side effects — bean debit, webhook — still run,
+ * because the dose was physically ground); `SkipCleaning` records
+ * nothing at all (nothing was ground — machine maintenance runs in the
+ * DE1's Espresso state, so a cleaning/backflush profile would otherwise
+ * be recorded as a shot; Decenza #1325, `maincontroller.cpp:1841-1853`).
+ */
+export enum ShotDisposition {
+	/** A real shot — persist the history row, sync, capture. */
+	Record = "Record",
+	/** An aborted pull (short AND light) — discard behind an undo. */
+	DiscardAborted = "DiscardAborted",
+	/** A cleaning/backflush run — record nothing. */
+	SkipCleaning = "SkipCleaning",
+}
+
+/** What [`shot_effects`] reads. */
+export interface ShotEffectsInput {
+	/**
+	 * The core's classification of the completion (`ShotCompleted`'s
+	 * `disposition`).
+	 */
+	disposition: ShotDisposition;
+	/**
+	 * This device recorded the shot: the hub, or a device on its own. A
+	 * remote watching the hub's shot passes `false`.
+	 */
+	recordedHere: boolean;
+	/** The shot is a replay of a capture, not a live pull. */
+	replay: boolean;
 }
 
 /** What the merge reads of the local row. */
@@ -5338,6 +5404,54 @@ export interface ShotSample {
 	frameNumber: number;
 	/** Steam heater temperature, °C. */
 	steamTemp: number;
+}
+
+/**
+ * What Brew has selected, for the next shot (REVIEW-CORE H3). The shells
+ * hand it to the core (`CremaCore::set_shot_selections`) whenever a part
+ * changes, the way they hand in the desired profile; the core freezes a
+ * copy on its own shot-start event and the shot records that copy. On a
+ * remote, the hub's selections (its mirror records the shot it watched);
+ * for a replay, the capture's.
+ */
+export interface ShotSelections {
+	/**
+	 * The bag on Brew, as a snapshot ([`ShotBean::snapshot_of`]), or `None`.
+	 * The shot's bag, and so the bag a recorded shot debits. Its legacy
+	 * `grinder_setting` / `grinder` are never recorded.
+	 */
+	bean?: ShotBean;
+	/**
+	 * The library id of the active profile, or `None`. The fallback for
+	 * [`StoredShot::profile_id`] when the core doesn't hold the profile it
+	 * ran; stamped only when the shot's name is this profile's
+	 * ([`Self::profile_name`]), so a profile another app loaded never gets
+	 * an id.
+	 */
+	profileId?: string;
+	/**
+	 * The active profile's name: the last fallback name when the core knows
+	 * neither the profile it ran nor a title (a remote's mirror core and a
+	 * replay's shadow core saw no upload).
+	 */
+	profileName?: string;
+	/**
+	 * The active grinder's id ([`crate::grinder::active_grinder`]), stamped
+	 * as [`StoredShot::grinder_id`]. `None` or blank = no grinder.
+	 */
+	grinderId?: string;
+	/**
+	 * The active grinder's name ([`crate::grinder::Grinder::name`]): the
+	 * shot's name snapshot ([`StoredShot::grinder_model`]). `None` or blank
+	 * = no grinder. Not the settings `grinder_model`.
+	 */
+	grinderName?: string;
+	/**
+	 * Brew's grind as text ([`crate::BrewGrindView::value`]), recorded as is
+	 * (trimmed), a grind that isn't a plain number included. `None` or blank
+	 * = no grind.
+	 */
+	grind?: string;
 }
 
 /**
@@ -6768,27 +6882,6 @@ export enum ScaleRefusal {
 	StepNotPositive = "stepNotPositive",
 	/** "Step must fit between Lowest and Highest". */
 	StepTooLarge = "stepTooLarge",
-}
-
-/**
- * What the shell should do with a just-completed shot — decided at the
- * core boundary so both shells classify identically (previously each
- * re-implemented the aborted rule and the cleaning-profile lookup).
- * 
- * The *mechanics* stay shell-side: `DiscardAborted` is held behind an
- * undo toast (live side effects — bean debit, webhook — still run,
- * because the dose was physically ground); `SkipCleaning` records
- * nothing at all (nothing was ground — machine maintenance runs in the
- * DE1's Espresso state, so a cleaning/backflush profile would otherwise
- * be recorded as a shot; Decenza #1325, `maincontroller.cpp:1841-1853`).
- */
-export enum ShotDisposition {
-	/** A real shot — persist the history row, sync, capture. */
-	Record = "Record",
-	/** An aborted pull (short AND light) — discard behind an undo. */
-	DiscardAborted = "DiscardAborted",
-	/** A cleaning/backflush run — record nothing. */
-	SkipCleaning = "SkipCleaning",
 }
 
 /**

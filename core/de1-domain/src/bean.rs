@@ -1293,24 +1293,24 @@ impl ShotBean {
     /// Snapshot a [`Bean`] for storage on a shot. The shell passes the
     /// resolved roaster name (looked up in the directory) alongside —
     /// the core stays sans-IO and does not own the roaster table.
+    ///
+    /// The bag's legacy `grinder_setting` / `grinder` are not copied
+    /// (REVIEW-FINAL S2): since #488 a shot's grind and grinder are its own
+    /// ([`crate::ShotSelections`]), and the old-row fallbacks to the snapshot's
+    /// fields read nothing for a new row.
     pub fn snapshot_of(bean: &Bean, roaster_name: Option<&str>) -> ShotBean {
         ShotBean {
             bean_id: Some(bean.id.clone()),
             name: bean.name.clone(),
-            roaster_name: roaster_name.map(str::to_owned),
+            roaster_name: roaster_name
+                .map(str::trim)
+                .filter(|r| !r.is_empty())
+                .map(str::to_owned),
             roasted_on: bean.roasted_on.clone(),
             roast_level: bean.roast_level,
             tags: bean.tags.clone(),
-            grinder_setting: if bean.grinder_setting.is_empty() {
-                None
-            } else {
-                Some(bean.grinder_setting.clone())
-            },
-            grinder: if bean.grinder.is_empty() {
-                None
-            } else {
-                Some(bean.grinder.clone())
-            },
+            grinder_setting: None,
+            grinder: None,
             notes: if bean.notes.is_empty() {
                 None
             } else {
@@ -1318,6 +1318,18 @@ impl ShotBean {
             },
         }
     }
+}
+
+/// JSON-bridged [`ShotBean::snapshot_of`]: a `Bean` JSON and the roaster's
+/// name (blank = none) in, a `ShotBean` JSON out — the one snapshot both
+/// shells store on a shot, a logged brew and a shot moved to another bag.
+///
+/// # Errors
+/// The JSON parse error string on a malformed bag.
+pub fn shot_bean_snapshot_json(bean_json: &str, roaster_name: &str) -> Result<String, String> {
+    let bean: Bean = serde_json::from_str(bean_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&ShotBean::snapshot_of(&bean, Some(roaster_name)))
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1971,6 +1983,25 @@ mod tests {
         assert_eq!(parsed.roaster_name.as_deref(), Some("Counter Culture"));
         assert_eq!(parsed.roasted_on.as_deref(), Some("2026-05-08"));
         assert_eq!(parsed.roast_level, Some(3));
+    }
+
+    #[test]
+    fn a_shot_snapshot_drops_the_bags_legacy_grind_and_grinder() {
+        // REVIEW-FINAL S2.
+        let mut bean = sample_bean();
+        bean.grinder_setting = "14".into();
+        bean.grinder = "Niche Zero".into();
+        bean.notes = "floral".into();
+        let snap = ShotBean::snapshot_of(&bean, Some(" "));
+        assert_eq!(snap.grinder_setting, None);
+        assert_eq!(snap.grinder, None);
+        assert_eq!(snap.roaster_name, None, "a blank roaster is none");
+        assert_eq!(snap.notes.as_deref(), Some("floral"), "notes kept (N6)");
+        let json = serde_json::to_string(&bean).unwrap();
+        let out: ShotBean =
+            serde_json::from_str(&shot_bean_snapshot_json(&json, "Counter Culture").unwrap())
+                .unwrap();
+        assert_eq!(out, ShotBean::snapshot_of(&bean, Some("Counter Culture")));
     }
 
     #[test]

@@ -579,6 +579,17 @@ pub fn brew_log_seeds_json(input_json: String) -> Result<String, CremaError> {
     de1_domain::brew_log_seeds_json(&input_json).map_err(CremaError::from)
 }
 
+/// The grinder and grind a logged brew records: a `BrewLogGrindInput` JSON
+/// in, a `BrewLogGrind` JSON out. See [`de1_domain::brew_log_grind`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the input JSON is malformed.
+#[uniffi::export]
+pub fn brew_log_grind_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::brew_log_grind_json(&input_json).map_err(CremaError::from)
+}
+
 /// Mint a `recipe:<uuid-v7>` id for a new brew recipe.
 #[uniffi::export]
 pub fn new_recipe_id() -> String {
@@ -986,6 +997,31 @@ pub fn resolve_bag_selection_json(input_json: String) -> Result<String, CremaErr
 #[uniffi::export]
 pub fn resolve_grinder_switch_json(input_json: String) -> Result<String, CremaError> {
     de1_domain::resolve_grinder_switch_json(&input_json).map_err(crema_err)
+}
+
+/// What a completed shot does (REVIEW-CORE M4): a `ShotEffectsInput` JSON
+/// in, a `ShotEffects` JSON out. See [`de1_domain::shot_effects`].
+///
+/// # Errors
+/// On malformed input.
+#[uniffi::export]
+pub fn shot_effects_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::shot_effects_json(&input_json).map_err(crema_err)
+}
+
+/// A bag's snapshot for a shot, a logged brew or a shot moved to another
+/// bag: a `Bean` JSON and the roaster's name (blank = none) in, a `ShotBean`
+/// JSON out, without the bag's legacy grind and grinder. See
+/// [`de1_domain::ShotBean::snapshot_of`].
+///
+/// # Errors
+/// On a malformed bag.
+#[uniffi::export]
+pub fn shot_bean_snapshot_json(
+    bean_json: String,
+    roaster_name: String,
+) -> Result<String, CremaError> {
+    de1_domain::shot_bean_snapshot_json(&bean_json, &roaster_name).map_err(crema_err)
 }
 
 /// Auto-save after a kept shot, on the recording device only (#488, review
@@ -3420,9 +3456,20 @@ impl CremaBridge {
         self.emit(self.core().on_scale_write_result(ok))
     }
 
+    /// What Brew has selected for the next shot, a `ShotSelections` JSON:
+    /// call it whenever a part changes; the core freezes a copy when a shot
+    /// starts, whoever started it (REVIEW-CORE H3). See
+    /// `CremaCore::set_shot_selections`.
+    pub fn set_shot_selections(&self, selections_json: String) -> Result<(), CremaError> {
+        self.core()
+            .set_shot_selections_json(&selections_json)
+            .map_err(crema_err)
+    }
+
     /// The last finished shot as a `StoredShot` JSON (or `null`), assembled by
-    /// the core from its own record and the shell's `ShotCaptureContext` JSON.
-    /// Call it on `ShotCompleted`; one-shot. See `CremaCore::take_stored_shot`.
+    /// the core from its own record, the selections it froze at the shot's
+    /// start and the shell's `ShotCaptureContext` JSON. Call it on
+    /// `ShotCompleted`; one-shot. See `CremaCore::take_stored_shot`.
     pub fn take_stored_shot(&self, ctx_json: String) -> Result<String, CremaError> {
         self.core()
             .take_stored_shot_json(&ctx_json)

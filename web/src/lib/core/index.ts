@@ -27,7 +27,7 @@ import type { ShotQualityInput, ShotQualityReport, SawModelLoad } from './crema-
 import type { FlashBlocker, FlashShellConditions, FlashStep } from './crema-core';
 import type { BrewOverrides, ProfileSyncOutput, ProfileSyncStatus, StartShotResult } from './crema-core';
 import type { HotWaterBounds, HotWaterTarget, SteamHotWaterTargets } from './crema-core';
-import type { ShotCaptureContext } from './crema-core';
+import type { ShotCaptureContext, ShotSelections } from './crema-core';
 import { guardStoppedBridge } from './stopped-guard';
 
 /** Parse a bridge `FlashStep` JSON; `status: null` reads as "no flash". */
@@ -345,6 +345,12 @@ export interface CremaCore {
 	 * that emitted the event (the shadow core during a replay).
 	 */
 	takeStoredShot(ctx: ShotCaptureContext): Record<string, unknown> | null;
+	/**
+	 * What Brew has selected for the next shot (REVIEW-CORE H3): call it as
+	 * a part changes. The core freezes a copy when a shot starts, from the app
+	 * or the group head, and the shot records that copy.
+	 */
+	setShotSelections(selections: ShotSelections): void;
 	/**
 	 * Register `listener` to run once when the bridge stops: a call panicked
 	 * after the bridge's last allowed reset (`MAX_PANIC_RECOVERIES` in
@@ -1104,6 +1110,9 @@ async function createCore(): Promise<CremaCore> {
 		takeStoredShot(ctx) {
 			const json = bridge.take_stored_shot(JSON.stringify(ctx));
 			return JSON.parse(json) as Record<string, unknown> | null;
+		},
+		setShotSelections(selections) {
+			bridge.set_shot_selections(JSON.stringify(selections));
 		},
 		panicRecoveries() {
 			return bridge.panic_recoveries();

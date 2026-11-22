@@ -53,18 +53,22 @@ class BrewLogDraftTest {
     )
 
     @Test fun opensOnTheCoresMethodWithLastUsedAndBagGrindPassedThrough() {
-        // Drift bugs 1 + 2: the core gets last-used + the bag's grinder setting.
+        // Drift bugs 1 + 2: the core gets last-used + the bag and the active
+        // grinder, for the bag's saved grind (REVIEW-FINAL S4).
         val core = FakeCore(seeds("aeropress", 14f, 220f, grind = 22f, temp = 90f))
         val history = listOf(brew("a", "pourover", "bean:1", 16f, 260f, grind = 18.5f))
         val d = BrewLogSeeds.open(
             BrewLogOwner.HISTORY, history, activeBeanId = "bean:1",
-            lastUsedMethod = "aeropress", grinderOf = { "22 clicks" }, seedsJson = core::call,
+            lastUsedMethod = "aeropress", bagOf = { coffee.crema.core.Bean(id = it, name = "Bag", metadata = kotlinx.serialization.json.JsonNull, createdAt = 0L, updatedAt = 0L) },
+            grinder = coffee.crema.core.Grinder(id = "grinder:niche", name = "Niche Zero", scale = coffee.crema.core.GrindScale(0f, 50f, 1f, ""), updatedAt = 1L),
+            seedsJson = core::call,
         )
         val input = core.inputs.single()
         assertNull(input.method)
         assertEquals("aeropress", input.lastUsedMethod)
         assertEquals("bean:1", input.beanId)
-        assertEquals("22 clicks", input.beanGrinderSetting)
+        assertEquals("bean:1", input.bag?.id)
+        assertEquals("grinder:niche", input.grinder?.id)
         assertEquals("pourover", input.rows.single().brewMethod)
         assertEquals("18.5", input.rows.single().grinderSetting)
         assertEquals(185_000L, input.rows.single().durationMs)
@@ -229,7 +233,7 @@ class BrewLogDraftTest {
         val newer = brew("newer", "pourover", null, 15f, 250f).copy(completedAtMs = 2_000)
         val backdated = brew("backdated", "pourover", null, 30f, 500f).copy(completedAtMs = 1_000)
         BrewLogSeeds.seeds(
-            historyWith(listOf(backdated).rows(), rowsForTest(listOf(newer).rows()), cap = null), "pourover", null, null, null, null,
+            historyWith(listOf(backdated).rows(), rowsForTest(listOf(newer).rows()), cap = null), "pourover", null, null, null, null, null,
             seedsJson = core::call, customMethods = emptyList(),
         )
         assertEquals(listOf(15f, 30f), core.inputs.single().rows.map { it.doseG })

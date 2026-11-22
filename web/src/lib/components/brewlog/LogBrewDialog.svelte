@@ -192,7 +192,8 @@
 		return brewLogSeeds({
 			method: m,
 			beanId,
-			beanGrinderSetting: b?.grinderSetting ?? null,
+			bag: b ?? null,
+			grinder: library.activeGrinder ?? null,
 			prefill: seed,
 			rows: seedRows()
 		});

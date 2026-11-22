@@ -341,11 +341,11 @@ function recordedDose(
 
 /**
  * What only the shell knows about the shot that just completed — the core's
- * `ShotCaptureContext` (F10): the wall clock, the bean snapshot frozen at
- * shot start, the Settings grinder (the core applies bean → Settings), the
- * grind dial, the barista, the bean's tags (a one-shot copy: a later edit to
- * the bean's tags does NOT rewrite history), the machine, and the profile
- * name and id — the fallback a replay's shadow core needs.
+ * `ShotCaptureContext` (F10): the wall clock, the barista, the bean's tags (a
+ * one-shot copy: a later edit to the bean's tags does NOT rewrite history)
+ * and the machine. The bag, profile, grinder and grind are the core's own,
+ * frozen at shot start from `setShotSelections` (REVIEW-CORE H3).
+ * TODO(#488 batch 2 web): hand the selections to the core as they change.
  */
 function captureContext(activeShot: ActiveShotData | null): ShotCaptureContext {
 	const bean = activeShot?.bean ?? null;
@@ -353,35 +353,12 @@ function captureContext(activeShot: ActiveShotData | null): ShotCaptureContext {
 	const settings = getSettingsStore().current;
 	return {
 		completedAt: Date.now(),
-		bean: bean
-			? {
-					beanId: bean.beanId ?? undefined,
-					name: bean.name,
-					roasterName: bean.roasterName ?? undefined,
-					roastedOn: bean.roastedOn ?? undefined,
-					roastLevel: bean.roastLevel ?? undefined,
-					tags: bean.tags,
-					notes: bean.notes,
-					grinderSetting: bean.grinderSetting,
-					grinder: bean.grinder
-				}
-			: undefined,
-		// The active grinder at shot start (#488): its name snapshot and id.
-		settingsGrinder: activeShot?.grinderModel?.trim() || undefined,
-		grinderId: activeShot?.grinderId ?? undefined,
-		// Brew's grind as text (#488 round 2): recorded as Brew showed it, a
-		// fine step (2.25) or a text grind (2.1.3) included.
-		grind: activeShot?.brewParams?.grind ?? undefined,
 		barista: settings.baristaName?.trim() || undefined,
 		tags: liveBean?.tags && liveBean.tags.length > 0 ? [...liveBean.tags] : undefined,
 		// The DE1 this ran on — frozen here so a later upload (Decent shot
 		// history, #84) carries the serial the server verifies, even after
 		// the machine disconnects or another one is paired.
-		machine: liveMachineIdentity() ?? undefined,
-		profileName: activeShot?.profileName ?? undefined,
-		// The profile active at shot start (frozen with the bag, F9): the
-		// core stamps it when it didn't hold the profile it ran itself.
-		profileId: activeShot?.profileId ?? undefined
+		machine: liveMachineIdentity() ?? undefined
 	};
 }
 
