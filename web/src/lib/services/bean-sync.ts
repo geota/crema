@@ -724,14 +724,24 @@ export const BeanSyncLive = Layer.effect(
 						// only keeps its roaster on Visualizer.
 						const remoteRoasterId = bagRoasterRemoteId(local, library.allRoasters);
 						// EF2: `uploadBean` builds `coffeeBagWriteRequest(local, remoteRoasterId)`
-						// and PATCHes (id present) or POSTs (id absent).
-						const res = yield* Effect.result(uploadBean(local, remoteRoasterId));
+						// and PATCHes (id present) or POSTs (id absent). While a first POST
+						// runs, a delete keeps a tombstone, and the returned id binds the bag
+						// or that tombstone (#488 follow-up 41), so the pull never adds the
+						// bag back. Binding keeps `updatedAt`: not a local edit.
+						if (item.create) library.beginFirstUpload(local.id);
+						const res = yield* Effect.result(uploadBean(local, remoteRoasterId)).pipe(
+							Effect.tap((r) =>
+								Effect.sync(() => {
+									if (item.create && r._tag === 'Success') library.bindFirstUpload(local.id, r.success.visualizerId);
+								})
+							),
+							Effect.ensuring(
+								Effect.sync(() => {
+									if (item.create) library.endFirstUpload(local.id);
+								})
+							)
+						);
 						if (res._tag === 'Success') {
-							if (item.create) {
-								// Keeps `updatedAt`: not a local edit, and the row matches the remote.
-								const current = library.getBean(local.id);
-								if (current) library.replaceBean({ ...current, visualizerId: res.success.visualizerId });
-							}
 							result.pushed += 1;
 							log.push({ direction: 'push', kind: 'bean', id: local.id, name: local.name, at: Date.now() });
 						} else if (res.failure._tag === 'VisualizerPremiumGatedError') {

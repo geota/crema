@@ -252,6 +252,25 @@ describe('the Grinder tab', () => {
 		expect(lib.getGrinder(g.id)?.name).toBe('Office grinder');
 	});
 
+	it('refuses a name of control characters and stores a pasted tab as a space (REVIEW-513 1)', () => {
+		const g = typedGrinder();
+		const root = render();
+		click(root, 'Rename');
+		const name = field(root, 'Name');
+		name.value = '\u0007\u0008';
+		name.dispatchEvent(new Event('input', { bubbles: true }));
+		flushSync();
+		click(root, 'Save name');
+		expect(root.textContent).toContain('Enter a name.');
+		expect(lib.getGrinder(g.id)?.name).toBe('Garage Grinder');
+
+		name.value = 'Shop\tgrinder';
+		name.dispatchEvent(new Event('input', { bubbles: true }));
+		flushSync();
+		click(root, 'Save name');
+		expect(lib.getGrinder(g.id)?.name).toBe('Shop grinder');
+	});
+
 	it('shows "Range not set" for a grinder from no verified scale, and Reset to preset for one with', () => {
 		typedGrinder();
 		let root = render();

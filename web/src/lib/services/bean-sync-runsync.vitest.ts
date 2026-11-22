@@ -30,7 +30,7 @@ import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
 import { HttpStatusError } from '../effect/errors.ts';
 import { blankBean, blankRoaster, type Bean, type Roaster } from '#lib/bean/index.js';
-import type { BeanLibraryStore } from '#lib/bean/store.svelte.js';
+import { getBeanStore, type BeanLibraryStore } from '#lib/bean/store.svelte.js';
 import type { TokenSet } from '../visualizer/oauth.ts';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import { readSyncSettings } from '#lib/bean/visualizer-sync.js';
@@ -141,7 +141,13 @@ function mkLibrary(init: { roasters?: Roaster[]; beans?: Bean[] } = {}) {
 		updateBean: (id: string, patch: Partial<Bean>) => {
 			const b = beans.find((x) => x.id === id);
 			if (b) Object.assign(b, patch, { updatedAt: Date.now() });
-		}
+		},
+		beginFirstUpload: () => {},
+		bindFirstUpload: (id: string, visualizerId: string) => {
+			const b = beans.find((x) => x.id === id);
+			if (b && !b.visualizerId) b.visualizerId = visualizerId;
+		},
+		endFirstUpload: () => {}
 	};
 	return lib as unknown as BeanLibraryStore;
 }
@@ -360,6 +366,51 @@ describe('BeanSync.runSync — the baseline', () => {
 		const { layer } = mkHttp((method) => (method === 'POST' ? { ok: true, json: { id: 'vb-9' } } : lists()));
 		await run(lib, layer);
 		expect(lib.getBean(fresh.id)).toMatchObject({ visualizerId: 'vb-9', updatedAt: 3 });
+	});
+});
+
+describe('BeanSync.runSync — a bag deleted while its first upload runs (#488 follow-up 41)', () => {
+	it('keeps a tombstone, binds it, and the next pull never adds the bag back', async () => {
+		localStorage.setItem('crema.beans.sync.v1', JSON.stringify({ lastSyncAt: 0, premium: true }));
+		const store = getBeanStore();
+		store.clearAll();
+		store.upsertBean({ ...blankBean('bean:early'), name: 'Gesha', roastedOn: '2026-09-01' });
+		// The user deletes the bag while its POST is on the wire.
+		const first = mkHttp((method, url) => {
+			if (method === 'POST' && url.includes('/coffee_bags')) {
+				store.deleteBean('bean:early');
+				return { ok: true, json: { id: 'vb-7' } };
+			}
+			return { ok: true, json: { data: [], paging: { pages: 1 } } };
+		});
+		await run(store, first.layer);
+		expect(store.getBean('bean:early')).toBeNull();
+		expect(store.allBeans.find((b) => b.id === 'bean:early')).toMatchObject({ visualizerId: 'vb-7' });
+		expect(store.allBeans.find((b) => b.id === 'bean:early')?.deletedAt).toBeTypeOf('number');
+		// Visualizer lists the bag that POST made, its crema id not round-tripped.
+		const second = mkHttp((method, url) =>
+			method === 'GET' && isList(url, '/coffee_bags')
+				? { ok: true, json: { data: [{ id: 'vb-7', name: 'Gesha', roast_date: '2026-09-01' }], paging: { pages: 1 } } }
+				: { ok: true, json: { data: [], paging: { pages: 1 } } }
+		);
+		await run(store, second.layer);
+		expect(store.beans).toEqual([]);
+		store.clearAll();
+	});
+
+	it('a bag deleted after its upload ended is removed outright when it never bound', async () => {
+		localStorage.setItem('crema.beans.sync.v1', JSON.stringify({ lastSyncAt: 0, premium: true }));
+		const store = getBeanStore();
+		store.clearAll();
+		store.upsertBean({ ...blankBean('bean:refused'), name: 'Gesha' });
+		const refused = mkHttp((method, url) =>
+			method === 'POST' && url.includes('/coffee_bags')
+				? { ok: false, status: 422, body: '{}' }
+				: { ok: true, json: { data: [], paging: { pages: 1 } } }
+		);
+		await run(store, refused.layer);
+		store.deleteBean('bean:refused');
+		expect(store.allBeans).toEqual([]);
 	});
 });
 

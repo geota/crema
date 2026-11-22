@@ -159,6 +159,13 @@ describe('grinders and bag grinds survive the library paths', () => {
 		expect(library.getGrinder(grinder.id)?.scale).toEqual(grinder.scale);
 		expect(library.getBean(bag.id)!.grinds).toEqual(bag.grinds);
 	});
+
+	it('an imported grinder row is stored with a clean name (REVIEW-513 1)', () => {
+		resetAll();
+		const row = { id: 'grinder:pasted', name: ' Niche\nZero\t', updatedAt: 1, scale: { min: 0, max: 50, step: 1, unit: '' } } as Grinder;
+		library.putImportedGrinders([row]);
+		expect(library.getGrinder('grinder:pasted')?.name).toBe('Niche Zero');
+	});
 });
 
 describe('the library migration runs only over a loaded library', () => {
