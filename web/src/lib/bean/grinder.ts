@@ -25,6 +25,8 @@ import type {
 	GrinderLibraryMigration,
 	MigrationGate,
 	GrinderMatch,
+	GrinderPickRow,
+	LastGrindRow,
 	SelectionChange,
 	SelectionState,
 	StagedGrinderPick,
@@ -39,6 +41,7 @@ import type {
 import { ScaleRefusal, ScaleTier } from '#lib/core/crema-core.js';
 import {
 	activeGrinderJson,
+	addAnotherGrinderJson,
 	addGrinderJson,
 	archiveGrinderJson,
 	autoSaveShotGrindJson,
@@ -51,13 +54,17 @@ import {
 	formatGrindJson,
 	grinderCatalogueJson,
 	grindChipsJson,
+	grinderPickRowsJson,
 	grindersForNamesJson,
 	grindNumber as wasmGrindNumber,
 	grindScaleRefusalJson,
 	grindTextJson,
+	lastGrindsFromRowsJson,
 	matchGrindersJson,
 	mergeGrinderEditJson,
 	migrateGrinderLibraryJson,
+	newBagGrindRowJson,
+	newestShotGrindJson,
 	quickControlBoundsForGrinderJson,
 	resolveBagSelectionJson,
 	resolveGrinderSwitchJson,
@@ -77,6 +84,7 @@ export type {
 	Grinder,
 	GrinderAdd,
 	GrinderMatch,
+	GrinderPickRow,
 	GrindChip,
 	GrindSave,
 	GrindScale,
@@ -131,6 +139,17 @@ export function matchGrinders(query: string, grinders: readonly Grinder[], exclu
 /** Add a grinder by catalogue id or typed name (reviving an archived one), or `null` when both are blank. */
 export function addGrinder(grinders: readonly Grinder[], name: string, catalogueId: string, nowMs = Date.now()): GrinderAdd | null {
 	const out = addGrinderJson(JSON.stringify(grinders), name, catalogueId, nowMs);
+	return out === 'null' ? null : (JSON.parse(out) as GrinderAdd);
+}
+
+/**
+ * Add **another** grinder of a model already owned (#488 follow-up 18: two
+ * Niche Zeros), for when {@link addGrinder} answers `existing`: an archived
+ * record of that model comes back, else a new one named "Niche Zero 2" with
+ * its own id. `null` as for {@link addGrinder}.
+ */
+export function addAnotherGrinder(grinders: readonly Grinder[], name: string, catalogueId: string, nowMs = Date.now()): GrinderAdd | null {
+	const out = addAnotherGrinderJson(JSON.stringify(grinders), name, catalogueId, nowMs);
 	return out === 'null' ? null : (JSON.parse(out) as GrinderAdd);
 }
 
@@ -242,12 +261,6 @@ export function shotGrindScale(
 	return DEFAULT_GRIND_SCALE;
 }
 
-/** The bag's saved row for `grinderId` (`NO_GRINDER_ID` for none), if any. */
-export function savedGrindRow(bean: Bean | null, grinderId: string | null): BagGrind | null {
-	const id = grinderId ?? NO_GRINDER_ID;
-	return bean?.grinds?.find((g) => g.grinderId === id) ?? null;
-}
-
 /** The largest grind read as a number; past it a grind stays text (`de1_domain::MAX_GRIND_NUMBER`). */
 export const MAX_GRIND_NUMBER = 1e6;
 
@@ -343,38 +356,64 @@ export function grindChips(scale: GrindScale, around: string | null, count: numb
 	return JSON.parse(grindChipsJson(JSON.stringify(scale), around ?? undefined, count)) as GrindChip[];
 }
 
+/** A shot row as the shell holds it, for {@link lastGrindsFromRows}. */
+export interface ShotGrindRow {
+	completedAt: number;
+	id: string;
+	grinderId?: string | null;
+	grinderModel?: string | null;
+	metadata?: { grinderSetting?: string | number | null } | null;
+}
+
 /**
- * The newest grind per grinder on a bag, newest first, from its rows (the
- * history's `last_grinds_for_bag`, for the in-memory rows): by grinder id,
- * and by name (trimmed, any case) for rows from before grinder ids.
+ * The newest grind per grinder on a bag, newest first, from its rows
+ * (`de1_domain::last_grinds_from_rows`, REVIEW-CORE M1: the grouping the
+ * history's `last_grinds_for_bag` applies): by grinder id, and by name
+ * (trimmed, any case) for rows from before grinder ids. An old numeric grind
+ * reads as its text.
  */
-export function lastGrindsOf(
-	rows: readonly {
-		completedAt: number;
-		id: string;
-		grinderId?: string | null;
-		grinderModel?: string | null;
-		metadata?: { grinderSetting?: string | null } | null;
-	}[]
-): LastGrind[] {
-	const key = (n: string) => n.trim().toLowerCase();
-	const sorted = [...rows].sort((a, b) => b.completedAt - a.completedAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
-	const out: LastGrind[] = [];
-	for (const s of sorted) {
-		const id = typeof s.grinderId === 'string' && s.grinderId.trim() !== '' ? s.grinderId : undefined;
-		const name = typeof s.grinderModel === 'string' ? s.grinderModel : '';
-		if (id === undefined && typeof s.grinderModel !== 'string') continue;
-		const raw = s.metadata?.grinderSetting;
-		const grind = typeof raw === 'number' ? String(raw) : typeof raw === 'string' && raw.trim() !== '' ? raw : null;
-		if (grind === null) continue;
-		const seen =
-			id !== undefined
-				? out.some((l) => l.grinderId === id)
-				: key(name) === '' || out.some((l) => l.grinderId === undefined && key(l.grinder) === key(name));
-		if (seen) continue;
-		out.push({ grinderId: id, grinder: name, grind, completedAt: s.completedAt });
-	}
-	return out;
+export function lastGrindsFromRows(rows: readonly ShotGrindRow[]): LastGrind[] {
+	const core: LastGrindRow[] = rows.map((s) => {
+		const grind = s.metadata?.grinderSetting;
+		return {
+			completedAt: s.completedAt,
+			id: s.id,
+			grinderId: typeof s.grinderId === 'string' ? s.grinderId : undefined,
+			grinderModel: typeof s.grinderModel === 'string' ? s.grinderModel : undefined,
+			// The core reads a stored number as its text.
+			grind: (typeof grind === 'string' || typeof grind === 'number' ? grind : undefined) as string | undefined
+		};
+	});
+	return JSON.parse(lastGrindsFromRowsJson(JSON.stringify(core))) as LastGrind[];
+}
+
+/**
+ * The newest shot grind on a bag for `grinder` among its `lastGrinds`
+ * (`de1_domain::newest_shot_grind`): a row stamped with its id, or an older
+ * row by name through the catalogue's aliases ("Niche" finds the Niche
+ * Zero). `null` when none.
+ */
+export function newestShotGrind(lastGrinds: readonly LastGrind[], grinder: Grinder): LastGrind | null {
+	return JSON.parse(newestShotGrindJson(JSON.stringify({ lastGrinds, grinder }))) as LastGrind | null;
+}
+
+/**
+ * Brew's grinder picker rows for `grinders` with `bag` selected (`null` = no
+ * bag), from the bag's `lastGrinds` (`de1_domain::grinder_pick_rows`): the
+ * same lookups selecting the bag uses, so a row never says "Nothing saved"
+ * where selecting the bag loads a grind.
+ */
+export function grinderPickRows(grinders: readonly Grinder[], bag: Bean | null, lastGrinds: readonly LastGrind[]): GrinderPickRow[] {
+	return JSON.parse(grinderPickRowsJson(JSON.stringify({ grinders, bag, lastGrinds }))) as GrinderPickRow[];
+}
+
+/**
+ * The bag editor's new row for `grinder` (`de1_domain::new_bag_grind_row`):
+ * its grind starts as the newest shot grind on the bag with that grinder,
+ * else empty. Not starred.
+ */
+export function newBagGrindRow(grinder: Grinder, lastGrinds: readonly LastGrind[]): BagGrind {
+	return JSON.parse(newBagGrindRowJson(JSON.stringify({ grinder, lastGrinds }))) as BagGrind;
 }
 
 // ── The bag editor's Add box (FINAL S7): staged in the draft until Save ──

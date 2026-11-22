@@ -252,6 +252,24 @@ describe('Grind per grinder', () => {
 		expect(library.activeGrinderId, 'with none active, the saved one becomes it').toBe(niche!.id);
 	});
 
+	it('an old shot stamped "Niche" seeds the Niche Zero row: the core\'s alias-aware lookup (REVIEW-CORE M1)', async () => {
+		setup(() => []);
+		setHistoryReadsForTest({
+			answer: async () => [{ grinder: 'Niche', grind: '15', completedAt: 1 }]
+		} as unknown as HistoryReads);
+		const root = mountComp(BeanEditPage as Component<Record<string, unknown>>, { bean: library.getBean('bean:a')! });
+		const box = root.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+		box.focus();
+		box.value = 'niche';
+		box.dispatchEvent(new Event('input', { bubbles: true }));
+		flushSync();
+		box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+		flushSync();
+		for (let i = 0; i < 5; i++) await tick();
+		flushSync();
+		expect(root.querySelector('button[aria-label^="Niche"][aria-label*=" grind: 15"]')).not.toBeNull();
+	});
+
 	it('Cancel after "+ Create" on a typo writes no grinder and leaves Brew as it was', async () => {
 		setup(() => []);
 		library.setActiveGrinder(null);

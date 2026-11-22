@@ -34,6 +34,7 @@
 		grindStartFromBlank,
 		grindText,
 		isLiveGrinder,
+		newBagGrindRow,
 		sameGrind,
 		type BagGrind,
 		type Grinder,
@@ -208,27 +209,27 @@
 		if (grinds.some((r) => r.grinderId === g.id)) return;
 		if (pick.kind === 'revived') toast.info(`${g.name} is back: Save returns it to Devices, with its saved grinds.`);
 		onChange([...grinds, { grinderId: g.id, grinderName: g.name, grind: '', starred: false }]);
-		void seedFromLastShot(g.id, g.name);
+		void seedFromLastShot(g);
 	}
 
-	/** A new row's grind starts as the newest shot on this bag with that grinder, else empty. */
-	async function seedFromLastShot(grinderId: string, name: string): Promise<void> {
-		let found: string | null = null;
+	/**
+	 * A new row's grind starts as the newest shot on this bag with that
+	 * grinder, else empty: the core's `new_bag_grind_row` (REVIEW-CORE M1),
+	 * so an old shot stamped "Niche" seeds the Niche Zero's row.
+	 */
+	async function seedFromLastShot(g: Grinder): Promise<void> {
+		let found: string;
 		try {
-			const key = name.trim().toLowerCase();
 			const last = await getHistoryReads().answer(lastGrinds(beanId));
-			const hit =
-				last.find((l) => l.grinderId === grinderId) ??
-				last.find((l) => l.grinderId === undefined && l.grinder.trim().toLowerCase() === key);
-			found = hit?.grind?.trim() || null;
+			found = newBagGrindRow(g, last).grind.trim();
 		} catch {
 			return;
 		}
-		if (found === null) return;
+		if (found === '') return;
 		// Only into the row as it was added: still there, still empty.
-		const row = grinds.find((r) => r.grinderId === grinderId);
+		const row = grinds.find((r) => r.grinderId === g.id);
 		if (!row || row.grind.trim() !== '') return;
-		update(grinderId, { grind: found });
+		update(g.id, { grind: found });
 	}
 </script>
 
