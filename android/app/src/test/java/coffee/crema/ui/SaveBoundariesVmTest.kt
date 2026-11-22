@@ -281,7 +281,10 @@ class SaveBoundariesVmTest {
 
     @Test
     fun `a bag on Visualizer deleted here stays as a hidden tombstone`() {
-        val vm = vmWith(listOf(bag("a").copy(visualizerId = "b1", imageRef = "bean:a"), bag("b")), active = "a")
+        val vm = vmWith(
+            listOf(bag("a", linked = "custom-a").copy(visualizerId = "b1", imageRef = "bean:a", notes = "lovely", tags = listOf("washed")), bag("b")),
+            active = "a",
+        )
         vm.deleteBean("a")
         VmHarness.idle()
         val s = VmHarness.ownState(vm)
@@ -291,6 +294,12 @@ class SaveBoundariesVmTest {
         assertNotNull(tomb.deletedAt)
         assertEquals("b1", tomb.visualizerId, "the pull matches it by its Visualizer id")
         assertNull(tomb.imageRef)
+        // Only what matching needs (REVIEW-512): nothing the user wrote.
+        assertEquals("Bag a", tomb.name)
+        assertTrue(tomb.notes.isNullOrEmpty())
+        assertTrue(tomb.tags.isNullOrEmpty())
+        assertNull(tomb.linkedProfileId)
+        assertEquals(0f, tomb.remaining ?: 0f)
         assertTrue(s.libraryFile().beans.any { it.id == "a" && it.deletedAt != null }, "saved and synced")
     }
 

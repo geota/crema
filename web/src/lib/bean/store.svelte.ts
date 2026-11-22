@@ -57,6 +57,7 @@ import type { RoasterDeletePlan } from '#lib/core/crema-core.js';
 import {
 	type Bean,
 	type Roaster,
+	beanTombstone,
 	blankBean,
 	blankRoaster,
 	coerceBean,
@@ -410,7 +411,7 @@ export class BeanLibraryStore {
 		if (doomed.length === 0) return;
 		const now = Date.now();
 		const beans = this.envelope.beans.flatMap((b) =>
-			b.id !== id ? [b] : b.visualizerId ? [{ ...b, deletedAt: now, imageRef: null }] : []
+			b.id !== id ? [b] : b.visualizerId ? [beanTombstone(b, now)] : []
 		);
 		this.envelope = { ...this.envelope, beans };
 		this.persist();
@@ -658,7 +659,7 @@ export class BeanLibraryStore {
 		const now = Date.now();
 		const doomed = this.envelope.beans.filter((b) => gone.has(b.id));
 		const beans = this.envelope.beans.flatMap((b) =>
-			!gone.has(b.id) ? [b] : kept.has(b.id) ? [{ ...b, deletedAt: now, imageRef: null }] : []
+			!gone.has(b.id) ? [b] : kept.has(b.id) ? [beanTombstone(b, now)] : []
 		);
 		const roasters = this.envelope.roasters.filter((r) => r.id !== id);
 		this.envelope = { ...this.envelope, beans, roasters };

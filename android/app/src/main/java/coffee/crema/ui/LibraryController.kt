@@ -3128,7 +3128,7 @@ class LibraryController(
                         rows.beans.mapNotNull { b ->
                             when {
                                 b.id != id -> b
-                                !b.visualizerId.isNullOrEmpty() && b.deletedAt == null -> b.copy(deletedAt = now, imageRef = null)
+                                !b.visualizerId.isNullOrEmpty() && b.deletedAt == null -> coffee.crema.beans.beanTombstone(b, now)
                                 b.deletedAt != null -> b
                                 else -> null
                             }

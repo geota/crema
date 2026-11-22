@@ -967,6 +967,36 @@ pub fn duplicate_bean_json(bean_json: &str, new_id: &str, now_ms: i64) -> Result
     serde_json::to_string(&duplicate_bean(&bean, new_id, now_ms)).map_err(|e| e.to_string())
 }
 
+/// The row a bag deleted on this device leaves (#488 review S5): what a
+/// Visualizer pull, a restore and an import match it by, and nothing else.
+/// Kept: `id` (a pushed bag's `crema_id`), `visualizer_id`, the signature
+/// fields (`name`, `roaster_id`, `roasted_on`), `created_at`, `updated_at`,
+/// and `deleted_at` (now, or the earlier stamp of a row already deleted).
+/// Everything the user wrote (notes, tasting, cost, photo ref, grinds, tags,
+/// links, stock, dates) goes, in the shells and in backups alike.
+#[must_use]
+pub fn bean_tombstone(bean: &Bean, now_ms: i64) -> Bean {
+    let mut t = Bean::new(bean.id.clone(), bean.name.clone(), bean.created_at);
+    t.roaster_id.clone_from(&bean.roaster_id);
+    t.roasted_on.clone_from(&bean.roasted_on);
+    t.visualizer_id.clone_from(&bean.visualizer_id);
+    // Migrated, with nothing saved: the grinder migration leaves it alone.
+    t.grinds = Some(Vec::new());
+    t.metadata = serde_json::json!({});
+    t.updated_at = bean.updated_at;
+    t.deleted_at = Some(bean.deleted_at.unwrap_or(now_ms));
+    t
+}
+
+/// JSON-bridged [`bean_tombstone`]: a [`Bean`] JSON in, its tombstone out.
+///
+/// # Errors
+/// The JSON parse error string on a malformed `bean_json`.
+pub fn bean_tombstone_json(bean_json: &str, now_ms: i64) -> Result<String, String> {
+    let bean: Bean = serde_json::from_str(bean_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&bean_tombstone(&bean, now_ms)).map_err(|e| e.to_string())
+}
+
 /// The UTC calendar date of `now_ms` as ISO `yyyy-mm-dd`.
 #[allow(clippy::cast_sign_loss)]
 fn iso_date_from_ms(now_ms: i64) -> String {
@@ -2422,5 +2452,37 @@ mod tests {
         assert_eq!(brews_remaining_estimate(-5.0, &[18.0]), 0);
         assert_eq!(brews_remaining_estimate(f32::NAN, &[18.0]), 0);
         assert_eq!(brews_remaining_estimate(17.9, &[18.0]), 0);
+    }
+
+    /// #488 review S5: a tombstone keeps what matching needs, nothing more.
+    #[test]
+    fn a_tombstone_keeps_only_what_matching_needs() {
+        let mut b = Bean::new("bean:a".into(), "Yirg".into(), 10);
+        b.roaster_id = Some("roaster:x".into());
+        b.roasted_on = Some("2026-11-01".into());
+        b.visualizer_id = Some("vz-a".into());
+        b.notes = "lovely".into();
+        b.tasting_notes = "jasmine".into();
+        b.cost = Some(18.0);
+        b.image_ref = Some("bean:a".into());
+        b.tags = vec!["washed".into()];
+        b.linked_profile_id = Some("custom-a".into());
+        b.favourite = true;
+        b.remaining = 120.0;
+        b.metadata = serde_json::json!({ "note": "mine" });
+        b.updated_at = 20;
+        let t = bean_tombstone(&b, 99);
+        let mut want = Bean::new("bean:a".into(), "Yirg".into(), 10);
+        want.roaster_id = b.roaster_id.clone();
+        want.roasted_on = b.roasted_on.clone();
+        want.visualizer_id = b.visualizer_id.clone();
+        want.grinds = Some(Vec::new());
+        want.metadata = serde_json::json!({});
+        want.updated_at = 20;
+        want.deleted_at = Some(99);
+        assert_eq!(t, want);
+        // An older tombstone keeps its stamp.
+        assert_eq!(bean_tombstone(&t, 500).deleted_at, Some(99));
+        assert!(bean_tombstone_json("nope", 1).is_err());
     }
 }

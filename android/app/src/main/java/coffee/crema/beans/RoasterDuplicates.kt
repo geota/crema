@@ -102,7 +102,7 @@ fun applyRoasterDelete(library: BeanLibrary, plan: coffee.crema.core.RoasterDele
         beans = library.beans
             .mapNotNull { b ->
                 when {
-                    b.id in tombstoned -> b.copy(deletedAt = nowMs, imageRef = null)
+                    b.id in tombstoned -> beanTombstone(b, nowMs)
                     b.id in deleted -> null
                     b.id in detached -> b.copy(roasterId = null, updatedAt = nowMs)
                     else -> b

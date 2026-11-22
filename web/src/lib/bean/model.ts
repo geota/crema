@@ -22,6 +22,7 @@ import {
 	roast_freshness as wasmRoastFreshness,
 	coerceBean as wasmCoerceBean,
 	coerceRoaster as wasmCoerceRoaster,
+	beanTombstoneJson as wasmBeanTombstoneJson,
 	duplicateBeanJson as wasmDuplicateBeanJson,
 	setBeanFrozenJson as wasmSetBeanFrozenJson,
 	mergeBeanEditJson as wasmMergeBeanEditJson,
@@ -573,6 +574,15 @@ export function coerceBean(raw: unknown): Bean | null {
  */
 export function duplicateBean(src: Bean, newId: string = mintBeanId(), nowMs = Date.now()): Bean {
 	return JSON.parse(wasmDuplicateBeanJson(JSON.stringify(src), newId, nowMs)) as Bean;
+}
+
+/**
+ * The row a bag deleted on this device leaves (#488 review S5) —
+ * `de1_domain::bean_tombstone`, as Android: its id, Visualizer id, the
+ * signature fields and the stamps, nothing the user wrote.
+ */
+export function beanTombstone(bean: Bean, nowMs = Date.now()): Bean {
+	return JSON.parse(wasmBeanTombstoneJson(JSON.stringify(bean), nowMs)) as Bean;
 }
 
 /**

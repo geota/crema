@@ -1171,6 +1171,13 @@ pub fn resettled_bag_debit(
     de1_domain::resettled_bag_debit(remaining, bag_size, bag_debit, old_dose, new_dose)
 }
 
+/// The row a bag deleted on this device leaves (`Bean` JSON in and out):
+/// only what matching needs. See `de1_domain::bean_tombstone`.
+#[wasm_bindgen(js_name = beanTombstoneJson)]
+pub fn bean_tombstone_json(bean_json: &str, now_ms: f64) -> Result<String, String> {
+    de1_domain::bean_tombstone_json(bean_json, f64_to_ms(now_ms))
+}
+
 /// A new bag copied from a bean (`Bean` JSON in and out): `new_id`,
 /// "<name> (copy)", `now_ms` stamps, and no Visualizer id, Beanconqueror
 /// id, photo ref, tombstone, archive or pin. See
