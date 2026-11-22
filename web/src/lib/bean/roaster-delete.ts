@@ -5,7 +5,9 @@
  * (delete them too), plus the Visualizer ids an "also delete on Visualizer"
  * sends — every synced deleted bag, then the roaster — and what the
  * active-bag pointer becomes (cleared when the cascade deletes the active
- * bag; no other bag is made active, REVIEW-CORE M3).
+ * bag; no other bag is made active, REVIEW-CORE M3). A roaster on Visualizer
+ * leaves a tombstone, and `localOnly` ("from this device only") keeps its bags
+ * filed under it (#488 review SF1).
  */
 
 import type { RoasterDeletePlan } from '#lib/core/crema-core.js';
@@ -18,11 +20,12 @@ export function planRoasterDelete(
 	beans: readonly Bean[],
 	roasterId: string,
 	cascade: boolean,
-	activeBeanId: string | null = null
+	activeBeanId: string | null = null,
+	localOnly = false
 ): RoasterDeletePlan | null {
 	return JSON.parse(
 		wasmPlanRoasterDelete(
-			JSON.stringify({ roasters, beans, roasterId, cascade, activeBeanId: activeBeanId ?? undefined })
+			JSON.stringify({ roasters, beans, roasterId, cascade, activeBeanId: activeBeanId ?? undefined, localOnly })
 		)
 	) as RoasterDeletePlan | null;
 }

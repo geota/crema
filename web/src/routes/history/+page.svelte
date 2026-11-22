@@ -397,6 +397,8 @@
 	function pipFor(shot: AnyShot): { pip: 'uploaded' | 'partial' | 'pending' | 'local'; title: string } {
 		// Brew Log rows are local-only (issue #10): no destination, no pip state.
 		if (isBrewLog(shot)) return { pip: 'local', title: 'Brew Log — stays on this device' };
+		// A replay is recorded, never uploaded (core `upload_refused_shot`, #488 batch 6).
+		if (shot.replay) return { pip: 'local', title: 'Replay — never uploaded' };
 		const enabled = uploadTargetsFor(shot).filter((t) => t.enabled);
 		if (pendingShotIds.has(shot.id)) return { pip: 'pending', title: 'Upload pending — will retry' };
 		if (enabled.length === 0) {

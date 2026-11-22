@@ -27,6 +27,7 @@
 	 * (`duplicateProfile`); saving creates a new library entry. The top bar
 	 * shows this with a "Duplicate" heading.
 	 */
+	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -34,6 +35,7 @@
 		getProfileStore,
 		blankProfile,
 		duplicateProfile,
+		mergeProfileEdit,
 		uid,
 		newProfileId,
 		ratioLabel,
@@ -52,6 +54,7 @@
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import { guardUnsavedChanges } from '#lib/beans/unsaved-guard.js';
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import { usePhoneBar } from '#lib/shell/phone-bar.svelte.js';
@@ -112,10 +115,13 @@
 	const appCtx = getCremaAppContext();
 	const app = $derived(appCtx().app);
 
+	/** Whether the draft differs from its loaded baseline (dirty flag). */
+	let dirty = $state(false);
+
 	/**
-	 * The **loaded baseline** — the profile the editor opens on, before any
-	 * edits. Derived (not synchronised through `$effect`) so it tracks the
-	 * route inputs cleanly:
+	 * The profile as the library holds it now, as the editor would open on it.
+	 * Derived (not synchronised through `$effect`) so it tracks the route
+	 * inputs cleanly:
 	 *
 	 *  - `new` mode: a fresh blank custom profile.
 	 *  - `edit` mode, library not yet loaded: `undefined` (the grid shows a
@@ -124,10 +130,10 @@
 	 *    `?duplicate=1` arrival is forked into a fresh custom copy.
 	 *  - `edit` mode, unknown id: a blank custom profile (treated as a create).
 	 *
-	 * Keyed off `store.loaded`, `sourceId` and `duplicateFlag` — change any and
-	 * the baseline (and, when not yet edited, the `draft` below) recomputes.
+	 * Keyed off `store.loaded`, `sourceId` and `duplicateFlag`, and the stored
+	 * row itself.
 	 */
-	const baseline = $derived.by<CremaProfile | undefined>(() => {
+	const stored = $derived.by<CremaProfile | undefined>(() => {
 		if (mode === 'new') return blankProfile();
 		if (!store.loaded) return undefined;
 		const src = sourceId ? store.get(sourceId) : undefined;
@@ -139,13 +145,30 @@
 	});
 
 	/**
-	 * Whether the source id in `edit` mode resolved to a profile already in the
-	 * library. False for `/profiles/new` and for an unknown id — both of which
-	 * are saving a brand-new entry.
+	 * The **loaded baseline** — the profile the draft was copied from, before
+	 * any edits: {@link stored} while the draft is untouched, then held. So a
+	 * write elsewhere meanwhile (a pin, an in-place Quick Save, another tab)
+	 * never replaces the edits, and Save merges them onto the stored row field
+	 * by field from this base (core `merge_profile_edit`, REVIEW-FINAL-2 N2).
 	 */
-	const sourceResolved = $derived(
-		mode === 'edit' && store.loaded && sourceId != null && store.get(sourceId) != null
-	);
+	let baseline = $state.raw<CremaProfile | undefined>(untrack(() => stored));
+	/**
+	 * Whether {@link baseline} is the stored custom row itself, so Save updates
+	 * it in place (not a fork of a built-in, a `?duplicate=1` copy or a blank).
+	 * Held with the baseline: a profile deleted elsewhere while it is being
+	 * edited is still an in-place edit, which Save then refuses rather than
+	 * adding the profile back.
+	 */
+	const storedInPlace = $derived(stored != null && sourceId != null && stored.id === sourceId);
+	let inPlace = $state(untrack(() => storedInPlace));
+	$effect.pre(() => {
+		const next = stored;
+		const here = storedInPlace;
+		if (!dirty) {
+			baseline = next;
+			inPlace = here;
+		}
+	});
 
 	/**
 	 * Whether the editor is saving a *new* library entry rather than updating
@@ -157,9 +180,8 @@
 	 * local override wins until the route inputs change.
 	 */
 	let isCreateOverride = $state<boolean | null>(null);
-	const isCreate = $derived(
-		isCreateOverride ?? (!sourceResolved || baseline?.source !== 'custom')
-	);
+	const GONE_MESSAGE = 'This profile was deleted on another tab or device, so these changes can’t be saved.';
+	const isCreate = $derived(isCreateOverride ?? !inPlace);
 
 	/**
 	 * The editable draft profile. It starts as a `$derived` mirror of the
@@ -178,8 +200,6 @@
 	const activeSegId = $derived(
 		selectedSegId ?? draft.segments[1]?.id ?? draft.segments[0]?.id ?? null
 	);
-	/** Whether the draft differs from its loaded baseline (dirty flag). */
-	let dirty = $state(false);
 	/** Set once the loaded baseline is resolved, so the grid does not flash. */
 	const ready = $derived(baseline != null);
 
@@ -307,6 +327,12 @@
 	 *    it on the DE1.
 	 */
 	function save(): void {
+		// Deleted elsewhere while open (another tab or device): Save doesn't add
+		// it back, as the bag editor refuses for a deleted bag.
+		if (!isCreate && !store.get(draft.id)) {
+			toast.error(GONE_MESSAGE);
+			return;
+		}
 		const toSave: CremaProfile = isCreate
 			? {
 					...draft,
@@ -318,7 +344,7 @@
 					id: draft.id || newProfileId(),
 					source: 'custom'
 				}
-			: draft;
+			: merged(draft);
 		store.save(toSave);
 		if (cameFromBrew) {
 			// User was on the brew page editing the loaded profile —
@@ -331,6 +357,23 @@
 		if (app && store.activeId === toSave.id) void app.setDesiredProfile(toSave);
 		dirty = false;
 		void goto(returnPath);
+	}
+
+	/**
+	 * An in-place Save: the user's changes (the draft against its
+	 * {@link baseline}) onto the profile as stored now, field by field (core
+	 * `merge_profile_edit`), so a change made elsewhere meanwhile survives.
+	 */
+	function merged(edited: CremaProfile): CremaProfile {
+		const current = store.get(edited.id);
+		if (!current || current.source !== 'custom' || !baseline) return edited;
+		try {
+			return mergeProfileEdit(baseline, edited, current);
+		} catch (e) {
+			// A row the core can't read: the whole draft, as before the merge.
+			console.warn('[Crema] profile merge failed; saving the draft as is', e);
+			return edited;
+		}
 	}
 
 	/** Discard edits — revert the draft to its loaded baseline. */

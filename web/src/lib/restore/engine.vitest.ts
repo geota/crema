@@ -4,7 +4,7 @@
  * and the marker that owns its deletes.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { blankBean, getBeanStore } from '#lib/bean/index.js';
+import { blankBean, blankRoaster, getBeanStore } from '#lib/bean/index.js';
 import { getHistoryStore, type StoredShot } from '#lib/history/index.js';
 import { getProfileStore } from '#lib/profiles/index.js';
 import { getSettingsStore } from '#lib/settings/index.js';
@@ -293,6 +293,33 @@ describe('the plan, written per store', () => {
 		const after = getBeanStore();
 		expect(after.beans.map((b) => b.id)).toEqual(['b1']);
 		expect(after.allBeans.filter((b) => b.deletedAt != null).map((b) => b.id).sort()).toEqual(['b2', 'b3']);
+	});
+
+	it('a roaster deleted here stays deleted through Replace, and no report counts its tombstone (#488 review SF1)', async () => {
+		resetAll();
+		const beans = getBeanStore();
+		beans.bulkAdd([], [
+			{ ...blankRoaster('Kept'), id: 'roaster:1' },
+			{ ...blankRoaster('Gone there'), id: 'roaster:2', visualizerId: 'v2' }
+		]);
+		beans.deleteRoaster('roaster:2', { localOnly: true });
+		const built = (await buildBackupJsonl())!;
+		resetAll();
+		const prepared = await prepareBackup(built.jsonl, 'test backup');
+		getBeanStore().bulkAdd([], [{ ...blankRoaster('Gone here'), id: 'roaster:3', visualizerId: 'v3' }]);
+		getBeanStore().deleteRoaster('roaster:3', { localOnly: true });
+		captureMessages(new FakeLocks());
+		const merge = await planNow(prepared, 'merge', false, new FakeLocks());
+		expect(merge.roasterCounts?.add).toBe(1);
+		expect(confirmText(merge).message).toContain('1 roaster');
+		expect(confirmText(merge).message).not.toContain('2 roasters');
+		const plan = await planNow(prepared, 'wipe', false, new FakeLocks());
+		expect(plan.roasters.remove).toEqual([]);
+		const out = await runRestore(prepared, 'wipe', { expected: plan }, deps(new FakeLocks()));
+		expect(out.kind).toBe('done');
+		const after = getBeanStore();
+		expect(after.roasters.map((r) => r.id)).toEqual(['roaster:1']);
+		expect(after.allRoasters.filter((r) => r.deletedAt != null).map((r) => r.id).sort()).toEqual(['roaster:2', 'roaster:3']);
 	});
 
 	it('a shot from elsewhere on a bean already here pays nothing from this bag', async () => {

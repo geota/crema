@@ -16,7 +16,6 @@
 	 * the bags-before-roaster order) live in that helper.
 	 */
 	import { getBeanStore } from '#lib/bean/index.js';
-	import { planRoasterDelete } from '#lib/bean/roaster-delete.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { bestEffortRemoteDelete } from '#lib/visualizer/index.js';
 	import { useVisualizerConnection } from '#lib/visualizer/useVisualizerConnection.svelte.js';
@@ -68,10 +67,11 @@
 			? `Delete "${roasterName}" (and its Visualizer copy)? Linked bags are kept and detached.`
 			: `Delete "${roasterName}" from this device? Linked bags are kept and detached.`;
 		if (!(await confirmDialog({ message: msg, confirmLabel: 'Delete', danger: true }))) return;
-		// Detach deletes only the roaster remotely; bags are kept (detached).
-		// The plan (core `plan_roaster_delete`) is taken BEFORE the local delete.
-		const plan = planRoasterDelete(library.roasters, library.beans, roasterId, false);
-		library.deleteRoaster(roasterId);
+		// Detach deletes only the roaster remotely; bags are kept. The store
+		// deletes by the core's plan (`plan_roaster_delete`): a roaster on
+		// Visualizer stays as a tombstone, and "from this device only" leaves
+		// its bags filed under it, so Visualizer's bags keep their roaster.
+		const plan = library.deleteRoaster(roasterId, { localOnly: !remote });
 		if (remote && plan) {
 			void bestEffortRemoteDelete(appCtx().services, plan.remoteBeanIds, plan.remoteRoasterId ?? null);
 		}
@@ -85,7 +85,7 @@
 		// The store deletes by the core's plan (`plan_roaster_delete`), taken
 		// before the rows go: the roaster's + every synced linked bag's remote
 		// id, and the active-bag pointer afterwards. Then the remote DELETEs.
-		const plan = library.deleteRoasterAndBeans(roasterId);
+		const plan = library.deleteRoasterAndBeans(roasterId, { localOnly: !remote });
 		if (remote && plan) {
 			void bestEffortRemoteDelete(appCtx().services, plan.remoteBeanIds, plan.remoteRoasterId ?? null);
 		}

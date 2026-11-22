@@ -30,7 +30,8 @@ export {
 	defaultSegments,
 	blankProfile,
 	builtinCremaProfiles,
-	duplicateProfile
+	duplicateProfile,
+	mergeProfileEdit
 } from './model';
 
 export { ProfileStore, getProfileStore } from './store.svelte';

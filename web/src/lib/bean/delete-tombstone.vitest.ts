@@ -7,6 +7,7 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { blankBean, blankRoaster, getBeanStore, type Bean } from './index';
+import { bagRoasterRemoteId } from './visualizer-sync';
 
 const library = getBeanStore();
 
@@ -73,7 +74,7 @@ describe('deleting a roaster with its bags', () => {
 		library.upsertRoaster({ ...blankRoaster('X'), id: 'roaster:x' });
 		bag('bean:a', { roasterId: 'roaster:x', visualizerId: 'b1' });
 		bag('bean:b', { roasterId: 'roaster:x' });
-		const plan = library.deleteRoasterAndBeans('roaster:x');
+		const plan = library.deleteRoasterAndBeans('roaster:x', { localOnly: true });
 		expect(plan?.remoteBeanIds).toEqual(['b1']);
 		expect(library.beans).toEqual([]);
 		expect(library.allBeans.map((b) => [b.id, b.deletedAt != null])).toEqual([['bean:a', true]]);
@@ -84,8 +85,68 @@ describe('deleting a roaster with its bags', () => {
 		bag('bean:old', { roasterId: 'roaster:x', visualizerId: 'b0' });
 		library.deleteBean('bean:old');
 		const before = library.allBeans[0];
-		const plan = library.deleteRoasterAndBeans('roaster:x');
+		const plan = library.deleteRoasterAndBeans('roaster:x', { localOnly: true });
 		expect(plan?.remoteBeanIds).toEqual([]);
 		expect(library.allBeans).toEqual([before]);
+	});
+});
+
+describe('deleting a roaster on this device (#488 review SF1)', () => {
+	function roaster(visualizerId: string | null): void {
+		library.upsertRoaster({ ...blankRoaster('X'), id: 'roaster:x', visualizerId, website: 'x.coffee' });
+	}
+
+	it('keeps a hidden tombstone for a roaster on Visualizer, and its bags stay filed under it', () => {
+		roaster('r1');
+		const before = bag('bean:a', { roasterId: 'roaster:x' });
+		const stamp = library.getBean('bean:a')!.updatedAt;
+		const plan = library.deleteRoaster('roaster:x', { localOnly: true });
+		expect(plan?.tombstoneRoaster).toBe(true);
+		expect(library.roasters).toEqual([]);
+		expect(library.getRoaster('roaster:x')).toBeNull();
+		expect(library.findRoasterByName('X')).toBeNull();
+		const [tomb] = library.allRoasters;
+		expect(tomb).toMatchObject({ id: 'roaster:x', name: 'X', visualizerId: 'r1' });
+		expect(tomb.deletedAt).not.toBeNull();
+		expect(tomb.website).toBeFalsy();
+		// Not detached: the push never sends the bag with no roaster.
+		expect(library.getBean('bean:a')).toMatchObject({ roasterId: before.roasterId, updatedAt: stamp });
+		// The bag's push still names the roaster's Visualizer id (core `bag_roaster_remote_id`).
+		expect(bagRoasterRemoteId(library.getBean('bean:a')!, library.allRoasters)).toBe('r1');
+		expect(bagRoasterRemoteId(library.getBean('bean:a')!, library.roasters), 'live rows only would unfile it').toBeNull();
+	});
+
+	it('with "also on Visualizer" keeps the tombstone and detaches the bags', () => {
+		roaster('r1');
+		bag('bean:a', { roasterId: 'roaster:x' });
+		const plan = library.deleteRoaster('roaster:x', { localOnly: false });
+		expect(plan?.remoteRoasterId).toBe('r1');
+		expect(library.allRoasters.map((r) => [r.id, r.deletedAt != null])).toEqual([['roaster:x', true]]);
+		expect(library.getBean('bean:a')?.roasterId).toBeNull();
+	});
+
+	it('removes a roaster never on Visualizer, detaching its bags', () => {
+		roaster(null);
+		bag('bean:a', { roasterId: 'roaster:x' });
+		library.deleteRoaster('roaster:x', { localOnly: true });
+		expect(library.allRoasters).toEqual([]);
+		expect(library.getBean('bean:a')?.roasterId).toBeNull();
+	});
+
+	it('a cascade keeps the tombstone too', () => {
+		roaster('r1');
+		bag('bean:a', { roasterId: 'roaster:x' });
+		library.deleteRoasterAndBeans('roaster:x', { localOnly: true });
+		expect(library.beans).toEqual([]);
+		expect(library.allRoasters.map((r) => [r.id, r.deletedAt != null])).toEqual([['roaster:x', true]]);
+	});
+
+	it('a tombstone can\'t be deleted again', () => {
+		roaster('r1');
+		library.deleteRoaster('roaster:x', { localOnly: true });
+		const first = library.allRoasters[0];
+		expect(library.deleteRoaster('roaster:x', { localOnly: true })).toBeNull();
+		expect(library.deleteRoasterAndBeans('roaster:x', { localOnly: true })).toBeNull();
+		expect(library.allRoasters).toEqual([first]);
 	});
 });

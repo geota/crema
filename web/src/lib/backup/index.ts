@@ -325,7 +325,8 @@ async function backupParts(): Promise<BackupParts | null> {
 	const customProfiles = storedCustomProfiles();
 	// Tombstones too (#488 review S5): a restore keeps a bag deleted here deleted.
 	const beans = beanStore.allBeans;
-	const roasters = beanStore.roasters;
+	// Tombstones too (#488 review SF1): a roaster deleted here stays deleted.
+	const roasters = beanStore.allRoasters;
 	// Every live shot, the ones past the view too, each whole (#310 P3w), as
 	// the source reads them: a snapshot, or the walk (R1w).
 	const shots = await history.exportShots();

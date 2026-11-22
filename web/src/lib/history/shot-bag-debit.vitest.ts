@@ -54,7 +54,11 @@ function complete(
 		lastNotificationAtMs: null,
 		sliceJsonl: async () => '',
 		fireWebhook,
-		takeStoredShot: () => captured(id, 18, recordedBeanId),
+		// As the core does: the capture context's replay flag becomes the row's mark.
+		takeStoredShot: (c: { replay?: boolean }) => ({
+			...captured(id, 18, recordedBeanId),
+			...(c.replay ? { replay: true } : {})
+		}),
 		runtime: null
 	} as unknown as Parameters<typeof commitShotCompletion>[1]);
 }
@@ -137,6 +141,18 @@ describe('commitShotCompletion', () => {
 		complete('shot:1', 'DiscardAborted', 'live', { inFlightBeanId: 'b', recordedBeanId: 'a' });
 		expect(remaining('a')).toBe(82);
 		expect(remaining('b')).toBe(100);
+	});
+
+	it('a replay row keeps its replay mark; a live one has none (#488 batch 6)', () => {
+		complete('shot:1', 'Record', 'replay');
+		complete('shot:2', 'Record', 'live');
+		expect(getHistoryStore().get('shot:1')?.replay).toBe(true);
+		expect(getHistoryStore().get('shot:2')?.replay).toBeUndefined();
+	});
+
+	it('a shot on a bag this library doesn\'t hold records 0, never "not recorded" (MF1)', () => {
+		complete('shot:1', 'Record', 'live', { recordedBeanId: 'gone' });
+		expect(getHistoryStore().get('shot:1')?.bagDebit).toBe(0);
 	});
 
 	it('a replay fires no webhook (shot_effects)', () => {

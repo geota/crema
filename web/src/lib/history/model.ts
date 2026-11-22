@@ -38,7 +38,8 @@ import {
 	historyStats as wasmHistoryStats,
 	brewHistoryStats as wasmBrewHistoryStats,
 	ratioForMethod as wasmRatioForMethod,
-	uploadRefusedNoSamples as wasmUploadRefusedNoSamples
+	uploadRefusedNoSamples as wasmUploadRefusedNoSamples,
+	uploadRefusedShot as wasmUploadRefusedShot
 } from '#lib/wasm/de1_wasm.js';
 import type { TelemetrySample } from '#lib/state/index.js';
 import { filenameStamp } from '#lib/utils/download.js';
@@ -405,6 +406,12 @@ export interface StoredShot {
 	 * the field and on a row with no bag. Core `StoredShot::bag_debit`.
 	 */
 	bagDebit?: number | null;
+	/**
+	 * The shot is a replay of a capture, not a live pull (#488 batch 6): it is
+	 * recorded and marked in History, but never uploaded and never debits a
+	 * bag. Core `StoredShot::replay`; absent when false.
+	 */
+	replay?: boolean;
 }
 
 /**
@@ -492,6 +499,20 @@ export function refusedNoSamples(shot: AnyShot, sampleCount: number | null = sam
 	// asked about a count only when there is one.
 	if (sampleCount == null) return false;
 	return wasmUploadRefusedNoSamples(isBrewLog(shot), sampleCount);
+}
+
+/**
+ * Whether every upload (Visualizer or the Decent account; automatic, manual or
+ * a bulk sweep) must refuse this row (core `upload_refused_shot`): a replay
+ * (#488 batch 6: recorded, never uploaded), or a machine shot with no
+ * telemetry. `sampleCount` as {@link refusedNoSamples}.
+ */
+export function uploadRefused(shot: AnyShot, sampleCount: number | null = sampleCountOf(shot)): boolean {
+	const replay = shot.replay === true;
+	// Unknown (a series that couldn't be read) is not "none": a replay is
+	// refused either way.
+	if (sampleCount == null) return replay;
+	return wasmUploadRefusedShot(isBrewLog(shot), sampleCount, replay);
 }
 
 /**

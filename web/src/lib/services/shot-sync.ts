@@ -38,6 +38,7 @@ import {
 	NetworkError,
 	NotAuthenticatedError,
 	ResponseDecodeError,
+	ShotReplayError,
 	ShotWithoutSeriesError,
 	VisualizerNotFoundError
 } from '../effect/errors.ts';
@@ -95,6 +96,7 @@ import {
 	isBrewLog,
 	refusedNoSamples,
 	sampleCountOf,
+	uploadRefused,
 	type AnyShot,
 	type ShotBean,
 	type StoredShot
@@ -712,7 +714,11 @@ export const ShotSyncLive = Layer.effect(
 		 */
 		const uploadShot = Effect.fn('ShotSync.uploadShot')(function* (shot: StoredShot) {
 			yield* requireConnected;
-			if (refusedNoSamples(shot)) return yield* new ShotWithoutSeriesError({ shotId: shot.id });
+			// The core's refusal (`upload_refused_shot`): a replay, or no telemetry.
+			if (uploadRefused(shot)) {
+				if (shot.replay === true) return yield* new ShotReplayError({ shotId: shot.id });
+				return yield* new ShotWithoutSeriesError({ shotId: shot.id });
+			}
 			const body = buildShotPayload(shot);
 			// Stored first: a kill mid-POST must leave a delete able to see it.
 			markUploadAttempted(shot.id);
@@ -1335,10 +1341,13 @@ export const ShotSyncLive = Layer.effect(
 			const backlog = liveSyncRows(history).filter(
 				(s) => !s.visualizerId && !isBrewLog(s) && !excludedFromUpload(s, config)
 			);
-			const list = backlog.filter((s) => !refusedNoSamples(s));
-			if (list.length < backlog.length) {
-				// One line for the pass: these would otherwise fill the log on every sync.
-				const n = backlog.length - list.length;
+			// The core's refusal (`upload_refused_shot`): a replay is never
+			// uploaded (#488 batch 6), nor a shot with no telemetry.
+			const list = backlog.filter((s) => !uploadRefused(s));
+			// One line for the pass about the shots with no telemetry (these would
+			// otherwise fill the log on every sync); replays say nothing.
+			const n = backlog.filter((s) => s.replay !== true && refusedNoSamples(s)).length;
+			if (n > 0) {
 				appendSyncLog({
 					direction: 'skip',
 					entity: 'shot',

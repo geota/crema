@@ -44,11 +44,13 @@ import type {
 	NetworkError,
 	NotAuthenticatedError,
 	ResponseDecodeError,
+	ShotReplayError,
 	ShotWithoutSeriesError,
 	TokenRefreshFailedError,
 	VisualizerNotFoundError,
 	VisualizerPremiumGatedError
 } from '#lib/effect/errors.js';
+import { REPLAY_NOT_UPLOADED } from '#lib/effect/errors.js';
 import { ShotSync } from '#lib/services/shot-sync.js';
 import {
 	describeRefusal,
@@ -188,7 +190,7 @@ export function commitShotCompletion(
 		// An aborted pull: the dose was physically ground, so the debit and
 		// the webhook run now; the row, its auto-save and uploads wait for
 		// the Undo.
-		const bagDebit = effects.debit ? debitShotBag(beanId, dose) : untouchedBag(beanId);
+		const bagDebit = debitShotBag(beanId, dose, effects.debit);
 		if (effects.webhook) fireShotWebhook(event, activeShot, dose, ctx.snapshot, ctx.fireWebhook);
 		// Freeze everything the undo needs — by the time the user taps it
 		// the active-shot store is cleared and a new shot may be underway.
@@ -226,8 +228,7 @@ export function commitShotCompletion(
 	const record = captured ? getHistoryStore().recordCaptured(captured) : null;
 
 	if (record) {
-		const bagDebit = effects.debit ? debitShotBag(beanId, dose) : untouchedBag(beanId);
-		getHistoryStore().setBagDebit(record.id, bagDebit);
+		getHistoryStore().setBagDebit(record.id, debitShotBag(beanId, dose, effects.debit));
 		if (effects.webhook) fireShotWebhook(event, activeShot, dose, ctx.snapshot, ctx.fireWebhook);
 		if (effects.autoSave) autoSaveGrind(record);
 		// Visualizer push — fire-and-forget; recoverable failures land in the
@@ -315,13 +316,7 @@ function commitFrozenShotsNow(runtime: AppRuntime | null): void {
 		const record = getHistoryStore().recordCaptured(shot.captured);
 		done.push(id);
 		if (!record) continue;
-		let bagDebit: number | null = shot.beanId ? 0 : null;
-		if (shot.live && shot.beanId && shot.dose) {
-			const debit = getBeanStore().debitBean(shot.beanId, shot.dose);
-			bagDebit = debit.taken;
-			if (debit.emptied) void promptBagEmpty(shot.beanId);
-		}
-		getHistoryStore().setBagDebit(record.id, bagDebit);
+		getHistoryStore().setBagDebit(record.id, debitShotBag(shot.beanId, shot.dose, shot.live));
 		if (shot.live) autoSaveGrind(record);
 		if (runtime) {
 			registerUploadBatch(record.id, autoUploadDestinations());
@@ -414,20 +409,17 @@ export function autoSaveGrind(shot: StoredShot): void {
 	toast.info(`Grind ${formatGrind(String(raw), grinder?.scale ?? DEFAULT_GRIND_SCALE)} saved to ${where}`);
 }
 
-/** The `bagDebit` of a row whose bag wasn't debited: 0 with a bag, else `null`. */
-function untouchedBag(beanId: string | null): number | null {
-	return beanId ? 0 : null;
-}
-
 /**
- * Take the shot's dose from the bag it recorded (`beanId`). Returns the grams
- * taken, 0 with a bag and no dose, `null` for a shot with no bag.
+ * The shot's bag change and its row's `bagDebit`, by the core's rule
+ * (`shot_debit`, REVIEW-FINAL-2 MF1): with `debit` the dose comes off the bag
+ * the shot recorded (`beanId`). The row records the grams taken, 0 with a bag
+ * that wasn't debited (a replay, no dose, an empty or unheld bag), `null` for a
+ * shot with no bag.
  */
-function debitShotBag(beanId: string | null, dose: number | null): number | null {
-	if (!beanId || !dose) return untouchedBag(beanId);
-	const debit = getBeanStore().debitBean(beanId, dose);
-	if (debit.emptied) void promptBagEmpty(beanId);
-	return debit.taken;
+function debitShotBag(beanId: string | null, dose: number | null, debit: boolean): number | null {
+	const out = getBeanStore().shotDebit(beanId, dose, debit);
+	if (out.emptied && beanId) void promptBagEmpty(beanId);
+	return out.bagDebit ?? null;
 }
 
 /** The `shotCompleted` webhook (gated by the user's settings inside `fireWebhook`). */
@@ -572,6 +564,7 @@ type ShotPushError =
 	| VisualizerPremiumGatedError
 	| VisualizerNotFoundError
 	| ShotWithoutSeriesError
+	| ShotReplayError
 	| ResponseDecodeError;
 
 /**
@@ -603,6 +596,8 @@ function describePushError(e: ShotPushError): string {
 			return 'Unexpected Visualizer response.';
 		case 'ShotWithoutSeriesError':
 			return 'This shot has no telemetry to upload.';
+		case 'ShotReplayError':
+			return REPLAY_NOT_UPLOADED;
 	}
 }
 

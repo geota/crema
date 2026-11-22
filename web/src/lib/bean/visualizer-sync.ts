@@ -35,6 +35,7 @@ import { readJson, writeJson } from '#lib/utils/storage.js';
 import { updateSyncConfig } from '#lib/visualizer/sync-config.js';
 import type { components } from '#lib/visualizer/openapi.js';
 import {
+	bagRoasterRemoteId as wasmBagRoasterRemoteId,
 	beanFromWire as wasmBeanFromWire,
 	beanToWire as wasmBeanToWire,
 	coffeeBagWriteRequest as wasmCoffeeBagWriteRequest,
@@ -243,6 +244,17 @@ export function coffeeBagWriteRequest(
 	return JSON.parse(
 		wasmCoffeeBagWriteRequest(JSON.stringify(bean), roasterRemoteId ?? undefined)
 	) as CoffeeBagWriteRequest;
+}
+
+/**
+ * The Visualizer id a bag's push sends as its `roaster_id` (core
+ * `bag_roaster_remote_id`): its roaster's, **tombstones included** (#488
+ * review SF1), so a bag a "this device only" delete left filed under the
+ * roaster's tombstone keeps that roaster on Visualizer. `roasters` is every
+ * row (`allRoasters`). `null` with no roaster, or one not on Visualizer.
+ */
+export function bagRoasterRemoteId(bean: Bean, roasters: readonly Roaster[]): string | null {
+	return wasmBagRoasterRemoteId(JSON.stringify({ bean, roasters })) ?? null;
 }
 
 /** The `RoasterWriteRequest` body for a roaster (its catalogue link, never the dedup pointer). */

@@ -109,7 +109,7 @@
 	<span class="psr-main">
 		<span class="psr-top">
 			<span class="psr-name">
-				{shotTitle(shot)}{#if isManualLog(shot)}<span class="psr-logged"> · logged</span>{/if}{#if shot.pinned}<span class="psr-pin" title="Pinned"
+				{shotTitle(shot)}{#if isManualLog(shot)}<span class="psr-logged"> · logged</span>{/if}{#if shot.replay}<span class="psr-logged" title="A replay of a capture: never uploaded"> · replay</span>{/if}{#if shot.pinned}<span class="psr-pin" title="Pinned"
 						><PushPinIcon weight="fill" aria-label="Pinned" /></span
 					>{/if}
 			</span>

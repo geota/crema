@@ -7,7 +7,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import type { TimedSample } from '#lib/core/index.js';
-import { refusedNoSamples, type StoredShot } from './model';
+import { refusedNoSamples, uploadRefused, type StoredShot } from './model';
 
 const series = vi.hoisted(() => ({
 	load: (): Promise<Map<string, unknown[]>> => Promise.resolve(new Map())
@@ -147,6 +147,14 @@ describe('the Visualizer backlog', () => {
 		expect(store.withoutTelemetry.map((s) => s.id)).toEqual(['s1']);
 	});
 
+	it('leaves out a replay: it is never uploaded (#488 batch 6)', async () => {
+		const replay = row({ id: 's5', replay: true, record: { duration: 1, samples: [sample] } as never });
+		localStorage.setItem('crema.history.v2', JSON.stringify([withCurve, replay]));
+		const store = new HistoryStore();
+		await store.seriesReady();
+		expect(store.visualizerBacklog.map((s) => s.id)).toEqual(['s2']);
+	});
+
 	it('leaves out the shots the user kept off this account', async () => {
 		const store = new HistoryStore();
 		await store.seriesReady();
@@ -169,5 +177,20 @@ describe('refusedNoSamples', () => {
 
 	it('leaves a brew log to its own rule', () => {
 		expect(refusedNoSamples(row({ brewMethod: 'pourover' }))).toBe(false);
+	});
+});
+
+describe('uploadRefused (core upload_refused_shot)', () => {
+	it('refuses a replay, with a curve or an unknown one (#488 batch 6)', () => {
+		const curve = { record: { duration: 1, samples: [sample] } as never };
+		expect(uploadRefused(row({ ...curve, replay: true }))).toBe(true);
+		expect(uploadRefused(row({ replay: true }), null)).toBe(true);
+		expect(uploadRefused(row(curve))).toBe(false);
+	});
+
+	it('refuses a machine shot with no telemetry, as refusedNoSamples', () => {
+		expect(uploadRefused(row())).toBe(true);
+		expect(uploadRefused(row(), 12)).toBe(false);
+		expect(uploadRefused(row(), null)).toBe(false);
 	});
 });

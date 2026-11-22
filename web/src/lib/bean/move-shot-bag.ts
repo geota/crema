@@ -2,9 +2,10 @@
  * `#lib/bean/move-shot-bag.js` — moving a logged shot between bags.
  *
  * The grounds came from the bag the user now names, so the debit moves with the
- * attribution: the old bag gets back what the row took, the new bag is debited,
- * and the row records what it took this time. Android's `setShotBean` is the
- * same flow.
+ * attribution. The core plans it (`shot_bag_move`, REVIEW-FINAL-2 MF1): the old
+ * bag gets back only what the row took, the new bag is debited where a recorded
+ * shot would be (a replay never debits), and the row records what it took. The
+ * shell only writes the plan. Android's `setShotBean` runs the same plan.
  */
 
 import { getHistoryStore } from '#lib/history/store.svelte.js';
@@ -13,16 +14,14 @@ import { promptBagEmpty } from './bag-empty-prompt';
 import { getBeanStore } from './store.svelte';
 
 export function moveShotBag(shot: AnyShot, newBeanId: string | null): void {
-	const oldBeanId = shot.bean?.beanId ?? null;
-	if (oldBeanId === newBeanId) return;
-	const library = getBeanStore();
-	const dose = shot.metadata?.dose ?? 0;
-	if (oldBeanId) library.creditShotDebit(oldBeanId, shot.bagDebit ?? null, dose);
-	if (!newBeanId) {
-		getHistoryStore().setBagDebit(shot.id, null);
-		return;
-	}
-	const debit = library.debitBean(newBeanId, dose);
-	getHistoryStore().setBagDebit(shot.id, debit.taken);
-	if (debit.emptied) void promptBagEmpty(newBeanId);
+	const plan = getBeanStore().moveShotDebit({
+		fromBagId: shot.bean?.beanId ?? null,
+		toBagId: newBeanId,
+		bagDebit: shot.bagDebit ?? null,
+		doseG: shot.metadata?.dose ?? null,
+		replay: shot.replay === true
+	});
+	if (!plan.moves) return;
+	getHistoryStore().setBagDebit(shot.id, plan.bagDebit ?? null);
+	if (plan.toEmptied && newBeanId) void promptBagEmpty(newBeanId);
 }

@@ -34,6 +34,10 @@ describe('uploadMenuEntry', () => {
 		expect(e.title).toBe('Re-upload to Visualizer');
 		expect(e.targets.map((t) => t.id)).toEqual(['visualizer']);
 	});
+	it('is one dimmed row for a replay, which says why (#488 batch 6)', () => {
+		const e = uploadMenuEntry([viz(), dec()], { replay: true });
+		expect(e).toMatchObject({ enabled: false, sub: 'A replay is never uploaded.', targets: [] });
+	});
 	it('lists a View row only for destinations that hold the shot', () => {
 		expect(viewableTargets([viz({ uploaded: true, viewUrl: 'v' }), dec({ uploaded: true, viewUrl: null }), dec()]).map((t) => t.id)).toEqual(['visualizer']);
 	});

@@ -185,6 +185,21 @@ describe('ShotSync.uploadShot — the no-telemetry guard (#330)', () => {
 	});
 });
 
+describe('ShotSync.uploadShot — a replay (#488 batch 6)', () => {
+	it('refuses a replay before any request, telemetry and all', async () => {
+		const { layer, calls } = mkHttp(() => ({ ok: true, json: { id: 'viz-1' } }));
+		const out = await run(
+			ShotSync.pipe(
+				Effect.flatMap((s) => s.uploadShot(shot({ replay: true } as Partial<StoredShot>))),
+				Effect.flip
+			),
+			layer
+		);
+		expect(out).toMatchObject({ _tag: 'Success', value: { _tag: 'ShotReplayError' } });
+		expect(calls).toEqual([]);
+	});
+});
+
 describe('ShotSync.uploadShot — post-upload PATCH', () => {
 	it('fires a follow-up PATCH carrying tag_list when the shot has tags (premium)', async () => {
 		setPremium(true);

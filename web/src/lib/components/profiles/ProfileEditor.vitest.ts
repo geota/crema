@@ -132,3 +132,91 @@ describe('ProfileEditor leave guard (FINAL S6)', () => {
 		expect(leave().cancel, 'Back already asked').not.toHaveBeenCalled();
 	});
 });
+
+describe('ProfileEditor Save merges field by field (REVIEW-FINAL-2 N2)', () => {
+	let component: ReturnType<typeof mount> | null = null;
+
+	afterEach(() => {
+		if (component) unmount(component);
+		component = null;
+		document.body.innerHTML = '';
+	});
+
+	it('a pin made elsewhere while editing survives the Save, and so does the edit', async () => {
+		const store = getProfileStore();
+		await store.ensureLoaded();
+		const { blankProfile } = await import('#lib/profiles/index.js');
+		const mine = { ...blankProfile(), name: 'Mine', pinned: false };
+		store.save(mine);
+		const before = store.get(mine.id)!;
+		const target = document.createElement('div');
+		document.body.appendChild(target);
+		component = mount(WithAppContext, {
+			target,
+			props: { app: null, component: ProfileEditor, props: { mode: 'edit', sourceId: mine.id } }
+		});
+		flushSync();
+		await tick();
+		(target.querySelector('button[aria-label="Increase Brew temp"]') as HTMLButtonElement).click();
+		flushSync();
+		// Another tab (or Profiles) pins it meanwhile.
+		store.togglePin(mine.id);
+		flushSync();
+		await tick();
+		expect(store.get(mine.id)?.pinned).toBe(true);
+
+		const save = [...target.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Save profile') as HTMLButtonElement;
+		save.click();
+		flushSync();
+		await tick();
+
+		const after = store.get(mine.id)!;
+		expect(after.pinned, 'the pin made meanwhile').toBe(true);
+		expect(after.brewTemp, 'the edit').toBeGreaterThan(before.brewTemp);
+		expect(after.name).toBe('Mine');
+	});
+});
+
+describe('ProfileEditor Save of a profile deleted elsewhere', () => {
+	let component: ReturnType<typeof mount> | null = null;
+
+	afterEach(() => {
+		if (component) unmount(component);
+		component = null;
+		document.body.innerHTML = '';
+	});
+
+	it('refuses with a message and does not add it back', async () => {
+		const store = getProfileStore();
+		await store.ensureLoaded();
+		const { blankProfile } = await import('#lib/profiles/index.js');
+		const { getToasts } = await import('#lib/components/shared/toast.svelte.js');
+		const mine = { ...blankProfile(), name: 'Doomed' };
+		store.save(mine);
+		const target = document.createElement('div');
+		document.body.appendChild(target);
+		component = mount(WithAppContext, {
+			target,
+			props: { app: null, component: ProfileEditor, props: { mode: 'edit', sourceId: mine.id } }
+		});
+		flushSync();
+		await tick();
+		(target.querySelector('button[aria-label="Increase Brew temp"]') as HTMLButtonElement).click();
+		flushSync();
+		// Deleted on another tab meanwhile.
+		store.delete(mine.id);
+		flushSync();
+		await tick();
+
+		const save = [...target.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Save profile') as HTMLButtonElement;
+		save.click();
+		flushSync();
+		await tick();
+
+		expect(store.get(mine.id), 'not added back').toBeUndefined();
+		expect(store.all.some((p) => p.name === 'Doomed')).toBe(false);
+		expect(getToasts().map((t) => t.message)).toContain(
+			'This profile was deleted on another tab or device, so these changes can’t be saved.'
+		);
+	});
+});

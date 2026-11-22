@@ -12,6 +12,12 @@ function bags(plan: RestorePlan): BagCounts {
 	return plan.bagCounts ?? { add: b.add.length, overwrite: b.overwrite.length, keep: b.keep, remove: b.remove.length };
 }
 
+/** The roasters a report counts: the plan's roasters without tombstones (#488 review SF1). */
+function roasterRows(plan: RestorePlan): BagCounts {
+	const r = plan.roasters;
+	return plan.roasterCounts ?? { add: r.add.length, overwrite: r.overwrite.length, keep: r.keep, remove: r.remove.length };
+}
+
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
 /** "12 shots, 2 beans and 1 profile", or `null` when it's all zeros. */
@@ -138,7 +144,7 @@ export function confirmText(plan: RestorePlan): { title: string; message: string
 	const adds = counts([
 		[plan.shots.add.length + plan.shots.revive.length, 'shot'],
 		[bags(plan).add, 'bean'],
-		[plan.roasters.add.length, 'roaster'],
+		[roasterRows(plan).add, 'roaster'],
 		[plan.profiles.add.length, 'profile'],
 		[plan.recipes.add.length, 'recipe']
 	]);

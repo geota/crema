@@ -459,7 +459,8 @@
 			plan.roasters,
 			// Tombstones too: an older copy of a bag deleted here doesn't revive it.
 			library.allBeans,
-			library.roasters,
+			// Tombstones too (#488 review SF1): an import doesn't revive a roaster deleted here.
+			library.allRoasters,
 			plan.grinders ?? [],
 			library.allGrinders
 		);
