@@ -28,6 +28,18 @@ vi.mock('$app/navigation', () => ({
 vi.mock('#lib/shell/app-context.js', () => ({
 	getCremaAppContext: () => () => ({ services: null, app: null })
 }));
+// The core merge, as it is, unless a test makes it refuse the stored row.
+const merge = vi.hoisted(() => ({ fail: false }));
+vi.mock('#lib/bean/index.js', async (importOriginal) => {
+	const real = await importOriginal<typeof import('#lib/bean/index.js')>();
+	return {
+		...real,
+		mergeBeanEdit: (...args: Parameters<typeof real.mergeBeanEdit>) => {
+			if (merge.fail) throw new Error('a row the core cannot read');
+			return real.mergeBeanEdit(...args);
+		}
+	};
+});
 
 import {
 	beanImageRefFor,
@@ -38,6 +50,7 @@ import {
 	type Bean
 } from '#lib/bean/index.js';
 import { dismissConfirm, getActiveDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+import { getToasts } from '#lib/components/shared/toast.svelte.js';
 import BeanEditPage from './BeanEditPage.svelte';
 import RoasterEditor from './RoasterEditor.svelte';
 
@@ -101,6 +114,7 @@ function navigation(over: Partial<Nav> = {}): Nav {
 beforeEach(() => {
 	localStorage.clear();
 	library.clearAll();
+	merge.fail = false;
 	nav.hooks.length = 0;
 	nav.goto.mockClear();
 });
@@ -237,6 +251,101 @@ describe('the bag editor keeps a draft', () => {
 		await tick();
 		await tick();
 		expect(library.getBean('bean:a')!.remaining).toBe(201);
+	});
+});
+
+describe('the bag editor over changes made elsewhere (REVIEW-497 probes)', () => {
+	it('P1: a debit during the edit, then Cancel: the debit stands and the name stays', async () => {
+		const root = mountEditor(BeanEditPage, { bean: bag() });
+		type(inputWith(root, 'Guji'), 'Renamed');
+		library.debitBean('bean:a', 18);
+		button(root, 'Cancel').click();
+		await tick();
+		answer(true);
+		await tick();
+		const now = library.getBean('bean:a')!;
+		expect(now.remaining).toBe(182);
+		expect(now.name).toBe('Guji');
+	});
+
+	it('P2: a pull rewrites notes, roast date and tags and a debit lands during the edit; Save keeps them and applies the rename', async () => {
+		library.upsertRoaster({ ...blankRoaster('Sey'), id: 'roaster:sey' });
+		const root = mountEditor(BeanEditPage, { bean: bag() });
+		type(inputWith(root, 'Guji'), 'Guji Natural');
+		// A Visualizer-style pull, the roaster included, and a shot's debit.
+		library.updateBean('bean:a', { notes: 'from Visualizer', roastedOn: '2026-11-05', tags: ['washed'], roasterId: 'roaster:sey' });
+		library.debitBean('bean:a', 18);
+		button(root, 'Save').click();
+		await tick();
+		await tick();
+		expect(library.getBean('bean:a')).toMatchObject({
+			name: 'Guji Natural',
+			notes: 'from Visualizer',
+			roastedOn: '2026-11-05',
+			tags: ['washed'],
+			remaining: 182,
+			roasterId: 'roaster:sey'
+		});
+	});
+
+	it('P3: a new bag size on a half-used bag with a debit mid-edit keeps the debit (GEN2)', async () => {
+		const root = mountEditor(BeanEditPage, { bean: bag() });
+		button(root, '340g').click();
+		flushSync();
+		library.debitBean('bean:a', 18);
+		button(root, 'Save').click();
+		await tick();
+		await tick();
+		expect(library.getBean('bean:a')).toMatchObject({ bagSize: 340, remaining: 182 });
+	});
+
+	it('a bag deleted elsewhere while it is open: the editor says so, and Save writes nothing and stays (follow-up 10)', async () => {
+		const root = mountEditor(BeanEditPage, { bean: bag() });
+		type(inputWith(root, 'Guji'), 'Renamed');
+		expect(root.querySelector('[role=alert].be-gone')).toBeNull();
+		library.deleteBean('bean:a');
+		flushSync();
+		const note = root.querySelector('[role=alert].be-gone');
+		expect(note?.textContent).toContain('deleted on another tab or device');
+		button(root, 'Save').click();
+		await tick();
+		await tick();
+		expect(library.getBean('bean:a'), 'not written back').toBeNull();
+		expect(nav.goto, 'the editor stays, with the draft').not.toHaveBeenCalled();
+		expect(getToasts().map((t) => t.message)).toContain(
+			'This bag was deleted on another tab or device, so these changes can’t be saved.'
+		);
+		expect(inputWith(root, 'Renamed')).toBeTruthy();
+	});
+
+	it('deleting the bag from its own editor shows no "deleted elsewhere" note', async () => {
+		const root = mountEditor(BeanEditPage, { bean: bag() });
+		button(root, 'Delete bean').click();
+		await tick();
+		answer(true);
+		await tick();
+		flushSync();
+		expect(library.getBean('bean:a')).toBeNull();
+		expect(root.querySelector('.be-gone')).toBeNull();
+	});
+
+	it('a typed roaster is created only once the bag merge succeeds (follow-up 11)', async () => {
+		const root = mountEditor(BeanEditPage, { bean: bag() });
+		type(inputWith(root, 'Onyx'), 'Brand New Roasters');
+		merge.fail = true;
+		button(root, 'Save').click();
+		await tick();
+		await tick();
+		expect(library.findRoasterByName('Brand New Roasters'), 'no roaster for a Save that failed').toBeNull();
+		expect(library.getBean('bean:a')!.roasterId).toBe('roaster:onyx');
+
+		merge.fail = false;
+		button(root, 'Save').click();
+		await tick();
+		await tick();
+		const made = library.findRoasterByName('Brand New Roasters');
+		expect(made).not.toBeNull();
+		expect(library.getBean('bean:a')!.roasterId).toBe(made!.id);
 	});
 });
 

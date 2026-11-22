@@ -97,6 +97,16 @@
 
 	const library = getBeanStore();
 
+	/** The editor deleted this bag itself (its own exit navigates). */
+	let deletedHere = false;
+	/**
+	 * The bag was deleted elsewhere (another tab, a sync) while it is open
+	 * (REVIEW-497 P4): the draft stays on screen, a note says it can't be
+	 * saved, and Save says so instead of leaving without a word.
+	 */
+	const gone = $derived(!isNew && library.getBean(bean.id) == null && !deletedHere);
+	const GONE_MESSAGE = 'This bag was deleted on another tab or device, so these changes can’t be saved.';
+
 	// ── Draft state (both modes) ───────────────────────────────────────
 	/** The bag as the editor opened on it: what Save measures the edits from. */
 	const base: Bean = untrack(() => JSON.parse(JSON.stringify(bean)) as Bean);
@@ -501,26 +511,32 @@
 			// The fields changed here, onto the bag as it is now: a debit or a
 			// sync since the editor opened stands (core three-way merge).
 			const stored = library.getBean(base.id);
-			if (stored) {
-				const edited: Bean = {
-					...draftRecord,
-					remaining: shownRemaining,
-					roasterId: roasterTouched ? (roasterForSave()?.id ?? null) : draftRecord.roasterId,
-					name: draftRecord.name === base.name ? base.name : draftRecord.name.trim()
-				};
-				let merged: Bean;
-				try {
-					merged = mergeBeanEdit(base, edited, stored);
-				} catch (e) {
-					toast.error(`Could not save the bag: ${e instanceof Error ? e.message : String(e)}`);
-					return;
-				}
-				if (!sameRecord(merged, stored)) library.saveEditedBean(merged);
-				saveStaged(merged);
-				saved = true;
-				// The photos this Save replaced or removed, and those picked and dropped.
-				dropUnusedPhotos([...pickedPhotoRefs, base.imageRef, stored.imageRef]);
+			if (!stored) {
+				toast.error(GONE_MESSAGE);
+				return;
 			}
+			const edited = (roasterId: string | null): Bean => ({
+				...draftRecord,
+				remaining: shownRemaining,
+				roasterId,
+				name: draftRecord.name === base.name ? base.name : draftRecord.name.trim()
+			});
+			let merged: Bean;
+			try {
+				// The merge first, with the roaster as it was: a typed or picked
+				// roaster is created only once the bag can be saved (REVIEW-497
+				// follow-up 2), then merged in.
+				merged = mergeBeanEdit(base, edited(draftRecord.roasterId), stored);
+				if (roasterTouched) merged = mergeBeanEdit(base, edited(roasterForSave()?.id ?? null), stored);
+			} catch (e) {
+				toast.error(`Could not save the bag: ${e instanceof Error ? e.message : String(e)}`);
+				return;
+			}
+			if (!sameRecord(merged, stored)) library.saveEditedBean(merged);
+			saveStaged(merged);
+			saved = true;
+			// The photos this Save replaced or removed, and those picked and dropped.
+			dropUnusedPhotos([...pickedPhotoRefs, base.imageRef, stored.imageRef]);
 			if (activate && !isActive) activateBean(current.id);
 			guard.release();
 			leaveEditor(returnTo());
@@ -571,6 +587,7 @@
 	}
 
 	function onDeleted(): void {
+		deletedHere = true;
 		guard.release();
 		leaveEditor(returnTo());
 	}
@@ -645,6 +662,10 @@
 			</button>
 		</div>
 	</header>
+	{/if}
+
+	{#if gone}
+		<p class="be-gone" role="alert">{GONE_MESSAGE}</p>
 	{/if}
 
 	<div class="be-body">
@@ -1570,6 +1591,15 @@
 	}
 
 	/* Top bar */
+	.be-gone {
+		margin: 12px var(--page-pad-x, 24px) 0;
+		padding: 10px 14px;
+		border: 1px solid var(--danger);
+		border-radius: 10px;
+		color: var(--danger);
+		font-family: var(--font-sans);
+		font-size: 14px;
+	}
 	.be-bar {
 		display: flex;
 		align-items: center;

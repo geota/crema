@@ -54,4 +54,24 @@ describe('deleting a bag deletes its photo', () => {
 		expect(await images.get(bean.imageRef!)).toBeNull();
 		expect(await images.get(other.imageRef!)).not.toBeNull();
 	});
+
+	// REVIEW-497 P5.
+	it('a bag whose photo is already gone deletes without an error', async () => {
+		const bean = await bagWithPhoto('bean:a');
+		await images.delete(bean.imageRef!);
+		expect(() => library.deleteBean(bean.id)).not.toThrow();
+		await settled();
+		expect(library.getBean(bean.id)).toBeNull();
+	});
+
+	it("deleting a roaster's bags keeps a photo a remaining bag shares", async () => {
+		library.upsertRoaster({ ...blankRoaster('X'), id: 'roaster:x' });
+		const ref = beanImageRefFor('bean:a');
+		await bagWithPhoto('bean:a', ref, 'roaster:x');
+		await bagWithPhoto('bean:b', ref);
+		library.deleteRoasterAndBeans('roaster:x');
+		await settled();
+		expect(library.getBean('bean:a')).toBeNull();
+		expect(await images.get(ref)).not.toBeNull();
+	});
 });
