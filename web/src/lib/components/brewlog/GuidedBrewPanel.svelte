@@ -1,7 +1,9 @@
 <script lang="ts">
 	/**
-	 * `GuidedBrewPanel` — the Scale page's Brew segment (issue #10
-	 * Phase 2): pick a method + recipe, run the guided session against
+	 * `GuidedBrewPanel` — the phone Scale page's Brew segment (issue #10
+	 * Phase 2), until the phone's Profile dropdown picks recipes (brew modes
+	 * §2; wide screens run guided brews from Brew's Manual mode): pick a
+	 * method + recipe, run the guided session against
 	 * the core's `BrewSessionMonitor`, and land the finished brew in the
 	 * Log-brew form with the measured numbers + weight curve attached.
 	 *
@@ -52,6 +54,7 @@
 	import RecipeEditor from './RecipeEditor.svelte';
 	import CustomMethodDialog from './CustomMethodDialog.svelte';
 	import { isCustomMethodId } from '#lib/brew/custom-methods.svelte.js';
+	import { kindLabel, stepLabel, stepNote, stepSpec } from '#lib/brew/guided-run.svelte.js';
 
 	let {
 		connected = false,
@@ -188,42 +191,7 @@
 	/** "m:ss", or "h:mm:ss" from an hour (the cold brew's 12 h steep). */
 	const clock = brewClock;
 
-	// ── Step presentation ────────────────────────────────────────
-	const KIND_LABEL: Record<string, string> = {
-		[BrewStepKind.Bloom]: 'Bloom',
-		[BrewStepKind.Pour]: 'Pour',
-		[BrewStepKind.Wait]: 'Wait',
-		[BrewStepKind.Steep]: 'Steep',
-		[BrewStepKind.Stir]: 'Stir',
-		[BrewStepKind.Press]: 'Press',
-		[BrewStepKind.Drawdown]: 'Drawdown',
-		[BrewStepKind.Other]: 'Step'
-	};
-
-	function stepLabel(step: BrewStep | undefined): string {
-		if (!step) return '';
-		return step.label?.trim() || kindLabel(step);
-	}
-
-	function kindLabel(step: BrewStep | undefined): string {
-		return step ? (KIND_LABEL[step.kind] ?? 'Step') : '';
-	}
-
-	/** The step's own instruction, when it has one. */
-	function stepNote(step: BrewStep | undefined): string | null {
-		return step?.label?.trim() || null;
-	}
-
-	function stepSpec(step: BrewStep | undefined): string {
-		if (!step) return '';
-		const parts: string[] = [];
-		if (step.targetWaterG != null) parts.push(`to ${Math.round(step.targetWaterG)} g`);
-		// A drawdown's expected time is guidance: "about 0:55 · until you tap".
-		if (hasExpectedDuration(step)) parts.push(`about ${clock((step.durationS ?? 0) * 1000)}`, 'until you tap');
-		else if (step.durationS != null) parts.push(clock(step.durationS * 1000));
-		if (parts.length === 0) parts.push('until you tap');
-		return parts.join(' · ');
-	}
+	// ── Step presentation: shared with Brew's Manual page (`guided-run`). ──
 
 	const liveRecipe = $derived<BrewRecipe | null>(session.recipe ?? recipe);
 	const steps = $derived(liveRecipe?.steps ?? []);

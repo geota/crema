@@ -1,5 +1,27 @@
+<script lang="ts" module>
+	import type { PickerTab } from './HeaderPicker.svelte';
+
+	/** What the Profile block shows in Manual. */
+	export type RecipeHeader = {
+		/** "Recipe · V60". */
+		eyebrow: string;
+		name: string;
+		/** "15 g · 250 g water · 100 °C · ~3:00". */
+		meta: string;
+		/** A built-in: Duplicate to edit; your own: Edit recipe. */
+		builtin: boolean;
+	};
+
+	const MODE_TABS: readonly PickerTab[] = [
+		{ id: 'espresso', label: 'Espresso' },
+		{ id: 'manual', label: 'Manual' }
+	];
+</script>
+
 <script lang="ts">
 	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
+	import CopyIcon from 'phosphor-svelte/lib/CopyIcon';
+	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
 	import SlidersHorizontalIcon from 'phosphor-svelte/lib/SlidersHorizontalIcon';
 	/**
 	 * `BrewHeader` — the brew dashboard's top strip. The bean lives as a second
@@ -16,10 +38,17 @@
 	 * Open-library / Add (+) / Edit (✎). Presentational + callbacks — all data +
 	 * wiring lives in `BrewDashboard.svelte`. Errors and maintenance are not
 	 * here: they are `BrewStatusCard`, at the foot of the left column.
+	 *
+	 * Brew modes (§2): the Profile picker has Espresso | Manual tabs and opens
+	 * on the current mode's. In Manual (`recipe` set) the Profile block shows
+	 * the recipe ("Recipe · V60", its name, dose · water · temp · time) and
+	 * Quick Controls gives way to Duplicate to edit (Edit recipe for your own).
+	 * While a shot or guided brew runs (`pickLock`) the rows are disabled.
 	 */
 	import StarIcon from 'phosphor-svelte/lib/StarIcon';
 	import HeaderBlock from './HeaderBlock.svelte';
 	import HeaderPicker, { type PickerItem } from './HeaderPicker.svelte';
+	import type { BrewPickLock } from '#lib/core/crema-core.js';
 	import GrinderPicker, { type GrinderPickRow } from '#lib/components/grinders/GrinderPicker.svelte';
 	import GrindMarker from '#lib/components/grinders/GrindMarker.svelte';
 	import type { Grinder, GrinderChoice } from '#lib/bean/grinder.js';
@@ -61,6 +90,15 @@
 		onDevices,
 		// Right cluster
 		quickSheetOpen = false,
+		// Manual mode
+		recipe = null,
+		recipeItems = [],
+		activeRecipeId = null,
+		pickLock = null,
+		onSelectRecipe,
+		onAddRecipe,
+		onRecipeLibrary,
+		onEditRecipe,
 		// Callbacks
 		onEditProfile,
 		onSelectProfile,
@@ -117,6 +155,18 @@
 		onEditBagGrinds?: () => void;
 		onDevices: () => void;
 		quickSheetOpen?: boolean;
+		/** Set in Manual: the Profile block shows this recipe. */
+		recipe?: RecipeHeader | null;
+		/** The picker's Manual tab rows. */
+		recipeItems?: PickerItem[];
+		activeRecipeId?: string | null;
+		/** The picker lock (§4), or null. */
+		pickLock?: BrewPickLock | null;
+		onSelectRecipe?: (id: string) => void;
+		onAddRecipe?: () => void;
+		onRecipeLibrary?: () => void;
+		/** Duplicate (a built-in) or edit the selected recipe; omitted while a brew runs. */
+		onEditRecipe?: () => void;
 		onEditProfile?: () => void;
 		onSelectProfile: (id: string) => void;
 		onAddProfile?: () => void;
@@ -133,8 +183,13 @@
 	let grinderBlockEl = $state<HTMLElement | null>(null);
 	let beanBlockEl = $state<HTMLElement | null>(null);
 
+	/** The Profile picker's tab; it opens on the current mode's. */
+	let pickerTab = $state<'espresso' | 'manual'>('espresso');
+	const onManualTab = $derived(pickerTab === 'manual');
+
 	function toggle(which: 'profile' | 'grinder' | 'bean'): void {
 		openPicker = openPicker === which ? null : which;
+		if (openPicker === 'profile') pickerTab = recipe ? 'manual' : 'espresso';
 	}
 	// Close the open picker on any click outside its block (the tap target + the
 	// panel both live inside the block, so opening / in-panel clicks don't self-close).
@@ -154,39 +209,44 @@
 	<HeaderBlock
 		cls="bh-block-profile"
 		variant="profile"
-		eyebrow="Profile"
-		title={profileName}
-		meta={profileMeta}
-		spec={profileSpec}
-		tags={profileTags}
+		eyebrow={recipe ? recipe.eyebrow : 'Profile'}
+		title={recipe ? recipe.name : profileName}
+		meta={recipe ? recipe.meta : profileMeta}
+		spec={recipe ? '' : profileSpec}
+		tags={recipe ? '' : profileTags}
+		tapLabel={recipe ? `${recipe.eyebrow}: ${recipe.name}. Choose profile or recipe` : undefined}
 		open={openPicker === 'profile'}
 		onTap={() => toggle('profile')}
 		bind:el={profileBlockEl}
 	>
 		{#snippet titleExtra()}
-			{#if syncLabel}
+			{#if syncLabel && !recipe}
 				<span class="bh-sync" title={syncTitle}>
 					<ArrowsClockwiseIcon aria-hidden="true" />{syncLabel}
 				</span>
 			{/if}
 		{/snippet}
 		{#snippet footer()}
-			{#if loadedSubline}<span class="bh-loaded">{loadedSubline}</span>{/if}
+			{#if loadedSubline && !recipe}<span class="bh-loaded">{loadedSubline}</span>{/if}
 		{/snippet}
 		{#snippet picker()}
 			<HeaderPicker
 				open={openPicker === 'profile'}
-				label="Choose profile"
-				items={profileItems}
-				activeId={activeProfileId}
-				searchPlaceholder="Search profiles…"
-				addLabel="Add profile"
-				canEdit={canEditProfile}
-				onSelect={onSelectProfile}
-				onAdd={onAddProfile}
-				onEdit={onEditProfile}
-				onLibrary={onProfileLibrary}
+				label={onManualTab ? 'Choose recipe' : 'Choose profile'}
+				items={onManualTab ? recipeItems : profileItems}
+				activeId={onManualTab ? activeRecipeId : activeProfileId}
+				searchPlaceholder={onManualTab ? 'Search recipes…' : 'Search profiles…'}
+				addLabel={onManualTab ? 'Add recipe' : 'Add profile'}
+				canEdit={onManualTab ? activeRecipeId != null && onEditRecipe != null : canEditProfile}
+				onSelect={(id) => (onManualTab ? onSelectRecipe?.(id) : onSelectProfile(id))}
+				onAdd={onManualTab ? onAddRecipe : onAddProfile}
+				onEdit={onManualTab ? onEditRecipe : onEditProfile}
+				onLibrary={onManualTab ? onRecipeLibrary : onProfileLibrary}
 				onClose={() => (openPicker = null)}
+				tabs={MODE_TABS}
+				tab={pickerTab}
+				onTab={(id) => (pickerTab = id === 'manual' ? 'manual' : 'espresso')}
+				locked={pickLock && (!onManualTab || pickLock.recipesLocked) ? pickLock.note : null}
 			/>
 		{/snippet}
 	</HeaderBlock>
@@ -266,16 +326,24 @@
 	<div class="crema-dash-head-r bh-actions">
 		<!-- Stays mounted while the sheet is open (it sits under the sheet's
 		     scrim) so the sheet can hand focus back to it on close. -->
-		<button
-			type="button"
-			class="qcpill is-dark"
-			aria-haspopup="dialog"
-			aria-expanded={quickSheetOpen}
-			onclick={onOpenQuick}
-		>
-			<SlidersHorizontalIcon aria-hidden="true" />
-			<span>Quick Controls</span>
-		</button>
+		{#if recipe}
+			<!-- Manual: the recipe's own edit door in Quick Controls' place. -->
+			<button type="button" class="qcpill is-dark" disabled={!onEditRecipe} onclick={onEditRecipe}>
+				{#if recipe.builtin}<CopyIcon aria-hidden="true" />{:else}<PencilSimpleIcon aria-hidden="true" />{/if}
+				<span>{recipe.builtin ? 'Duplicate to edit' : 'Edit recipe'}</span>
+			</button>
+		{:else}
+			<button
+				type="button"
+				class="qcpill is-dark"
+				aria-haspopup="dialog"
+				aria-expanded={quickSheetOpen}
+				onclick={onOpenQuick}
+			>
+				<SlidersHorizontalIcon aria-hidden="true" />
+				<span>Quick Controls</span>
+			</button>
+		{/if}
 	</div>
 </div>
 

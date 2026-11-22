@@ -14,7 +14,7 @@
  *   can reconcile.
  *
  * The per-method default is a pointer (`lastUsed`, kept under its original
- * key): the recipe the Scale page's Brew setup opens on. Unset, a method
+ * key): the recipe the phone Scale page's Brew setup opens on. Unset, a method
  * opens on its default built-in (`default_builtin_recipe_id`); methods
  * without one (espresso, drip, free text) open with no recipe.
  */

@@ -29,7 +29,12 @@
 		search?: string;
 		/** Bean rows: has a linked profile (renders a small link glyph). */
 		linked?: boolean;
+		/** Recipe rows: the brew method, drawn as its mark. */
+		method?: string;
 	};
+
+	/** One of the picker's tabs (Brew's Espresso | Manual). */
+	export type PickerTab = { id: string; label: string };
 </script>
 
 <script lang="ts">
@@ -38,7 +43,13 @@
 	 * scrollable all-items list (pinned/favourites first, the active one marked),
 	 * and a `[+ Add] [Open library]` footer. Presentational; the parent owns the
 	 * data + the activate/route handlers and the open state.
+	 *
+	 * With `tabs`, a segmented tab row sits beside the search box (Brew's
+	 * Espresso | Manual, brew modes §2): the parent swaps `items` per tab, so
+	 * the picker keeps its height. `locked` disables the rows, with its note
+	 * above them; the tabs still browse (§4).
 	 */
+	import MethodMark from '#lib/components/brewlog/MethodMark.svelte';
 	import ProfilePreview from '#lib/components/profiles/ProfilePreview.svelte';
 	import { restoreFocus } from '#lib/a11y/focus.js';
 
@@ -55,7 +66,11 @@
 		onEdit,
 		onLibrary,
 		onClose,
-		rank
+		rank,
+		tabs,
+		tab,
+		onTab,
+		locked = null
 	}: {
 		open?: boolean;
 		/** Dialog name, e.g. "Choose profile" (final review 07 N5). */
@@ -81,7 +96,28 @@
 		onEdit?: () => void;
 		onLibrary?: () => void;
 		onClose?: () => void;
+		/** Tabs beside the search box; omit for a plain picker. */
+		tabs?: readonly PickerTab[];
+		/** The tab on show. */
+		tab?: string;
+		onTab?: (id: string) => void;
+		/** Rows disabled, with this note above them (`null` = enabled). */
+		locked?: string | null;
 	} = $props();
+
+	const listId = $props.id();
+
+	/** Arrow keys move between the tabs (the WAI-ARIA tabs pattern). */
+	function onTabKeydown(e: KeyboardEvent): void {
+		if (!tabs || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+		e.preventDefault();
+		const i = tabs.findIndex((t) => t.id === tab);
+		const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+		onTab?.(next.id);
+		(e.currentTarget as HTMLElement).parentElement
+			?.querySelector<HTMLElement>(`[data-tab="${next.id}"]`)
+			?.focus();
+	}
 
 	let query = $state('');
 	let inputEl = $state<HTMLInputElement | null>(null);
@@ -135,6 +171,7 @@
 	});
 
 	function choose(id: string): void {
+		if (locked) return;
 		onSelect(id);
 		onClose?.();
 	}
@@ -150,6 +187,23 @@
 		onkeydown={onPanelKeydown}
 	>
 		<div class="hpick-search">
+			{#if tabs}
+				<div class="hpick-tabs" role="tablist" aria-label="Brew mode">
+					{#each tabs as t (t.id)}
+						<button
+							type="button"
+							role="tab"
+							class={['hpick-tab', { 'is-on': t.id === tab }]}
+							data-tab={t.id}
+							aria-selected={t.id === tab}
+							aria-controls={listId}
+							tabindex={t.id === tab ? 0 : -1}
+							onclick={() => onTab?.(t.id)}
+							onkeydown={onTabKeydown}>{t.label}</button
+						>
+					{/each}
+				</div>
+			{/if}
 			<MagnifyingGlassIcon aria-hidden="true" />
 			<input
 				bind:this={inputEl}
@@ -160,15 +214,19 @@
 			/>
 		</div>
 
-		<div class="hpick-list">
+		{#if locked}<div class="hpick-locked" role="note">{locked}</div>{/if}
+		<div class="hpick-list" id={listId} role={tabs ? 'tabpanel' : undefined}>
 			{#each filtered as it (it.id)}
 				<button
 					type="button"
 					class="hpick-item"
 					class:is-active={it.id === activeId}
+					disabled={locked != null}
 					onclick={() => choose(it.id)}
 				>
-					{#if it.segments}
+					{#if it.method}
+						<span class="hpick-graph hpick-method"><MethodMark method={it.method} size={18} /></span>
+					{:else if it.segments}
 						<span class="hpick-graph">
 							<ProfilePreview segments={it.segments} active={it.id === activeId} compact />
 						</span>

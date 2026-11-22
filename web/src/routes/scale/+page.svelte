@@ -75,7 +75,9 @@
 		void goto(devicesHref(next), { replaceState: true, reset: false });
 	}
 
-	// ── Weigh | Brew segment (issue #10 Phase 2) ─────────────────────────
+	// ── Weigh | Brew segment (issue #10 Phase 2), phone only ─────────────
+	// Wide screens run guided brews from Brew's Manual mode (brew modes §3);
+	// the phone keeps this segment until its Profile dropdown picks recipes.
 	// Weigh is the classic standalone weighing surface; Brew is the guided
 	// session. A live session pins the page to Brew on entry so navigating
 	// away and back mid-pourover lands on the running clock.
@@ -919,19 +921,10 @@
 		     now, alongside the Grinder peripheral row. The Scale page hero
 		     stays focused on the live readout; pairing is a setup-once
 		     action that belongs in settings. -->
-		<div class="sc-head-r">
-			<!-- Weigh | Brew segment (issue #10): the scale is the
-			     instrument for both; guided brews live here rather than
-			     on the machine's Brew dashboard. -->
-			{@render modeTabs()}
-		</div>
 	</div>
 
 	{@render deviceTabs()}
 
-	{#if mode === 'brew'}
-		<GuidedBrewPanel {connected} {weightG} flowGs={deviceFlow} />
-	{:else}
 	<!-- Live readout hero -->
 	<div class="sc-hero">
 		<div class="sc-readout">
@@ -1018,7 +1011,6 @@
 		{@render activityLog()}
 	</div>
 	{/if}
-	{/if}
 </div>
 
 <style>
@@ -1092,7 +1084,7 @@
 	.dv-tab-dot.is-on {
 		background: var(--success);
 	}
-	/* Weigh | Brew segment (issue #10). */
+	/* Weigh | Brew segment (issue #10), phone only. */
 	.sc-mode {
 		display: inline-flex;
 		border: 1px solid rgba(var(--tint-rgb), 0.14);
@@ -1146,10 +1138,6 @@
 	}
 	.sc-sep {
 		color: var(--fg-muted);
-	}
-	.sc-head-r {
-		display: flex;
-		gap: 8px;
 	}
 	.sc-dot {
 		width: 8px;

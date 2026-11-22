@@ -198,7 +198,7 @@ export function lastUsedMethod(): string | null {
 }
 
 /**
- * The method a fresh surface (the Scale page's Brew setup) opens on — the
+ * The method a fresh surface (the phone Scale page's Brew setup) opens on — the
  * core's seeding rule with nothing prefilled: last-used, else pourover.
  */
 export function openingMethod(): string {
