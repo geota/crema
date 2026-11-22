@@ -679,6 +679,37 @@ fn emit<T: Serialize>(v: &T) -> Result<String, String> {
     serde_json::to_string(v).map_err(|e| e.to_string())
 }
 
+/// The Visualizer id to send as a bag's `roaster_id` on a push: its roaster's,
+/// **tombstones included** (#488 review SF1). A bag a "this device only"
+/// roaster delete left filed under the roaster's tombstone keeps that roaster
+/// on Visualizer; a lookup over live roasters only would send `null` and
+/// unfile it there. `None` when the bag has no roaster, or it isn't bound.
+#[must_use]
+pub fn bag_roaster_remote_id(bean: &Bean, roasters: &[Roaster]) -> Option<String> {
+    let id = bean.roaster_id.as_deref()?;
+    roasters
+        .iter()
+        .find(|r| r.id == id)
+        .and_then(|r| non_empty(r.visualizer_id.as_ref()).cloned())
+}
+
+/// JSON-bridged [`bag_roaster_remote_id`]. Input: `{"bean": Bean,
+/// "roasters": Roaster[]}` (every roaster, tombstones included). Output: the
+/// id, or `None`.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+pub fn bag_roaster_remote_id_json(payload: &str) -> Result<Option<String>, String> {
+    #[derive(Deserialize)]
+    struct In {
+        bean: Bean,
+        #[serde(default)]
+        roasters: Vec<Roaster>,
+    }
+    let inp: In = parse(payload)?;
+    Ok(bag_roaster_remote_id(&inp.bean, &inp.roasters))
+}
+
 /// JSON-bridged [`coffee_bag_write_request`]. Input: a `Bean` JSON + the
 /// roaster's remote id. Output: the `{"coffee_bag": {...}}` JSON.
 ///
@@ -1520,6 +1551,35 @@ mod tests {
             plan_roaster_delete(&roasters, &beans, "roaster:1", false, None, false).unwrap();
         assert!(detach.tombstoned_bean_ids.is_empty());
         assert_eq!(detach.detached_bean_ids, vec!["bean:a", "bean:b"]);
+    }
+
+    /// #488 review SF1 / REVIEW-518: a bag filed under a roaster tombstone
+    /// still pushes that roaster's Visualizer id.
+    #[test]
+    fn a_bag_under_a_roaster_tombstone_pushes_its_roaster() {
+        let mut bound = roaster("roaster:1", "Sey", 1);
+        bound.visualizer_id = Some("vz-r".into());
+        let gone = crate::roaster_tombstone(&bound, 9);
+        let b = bean("bean:a", Some("roaster:1"));
+        let rid = bag_roaster_remote_id(&b, std::slice::from_ref(&gone));
+        assert_eq!(rid.as_deref(), Some("vz-r"));
+        let req = coffee_bag_write_request(&b, rid.as_deref());
+        assert_eq!(req["coffee_bag"]["roaster_id"], "vz-r");
+        assert_eq!(
+            bag_roaster_remote_id(&bean("bean:b", None), std::slice::from_ref(&gone)),
+            None
+        );
+        assert_eq!(
+            bag_roaster_remote_id(&b, &[roaster("roaster:1", "Sey", 1)]),
+            None,
+            "unbound"
+        );
+        let payload = json!({ "bean": b, "roasters": [gone] }).to_string();
+        assert_eq!(
+            bag_roaster_remote_id_json(&payload).unwrap().as_deref(),
+            Some("vz-r")
+        );
+        assert!(bag_roaster_remote_id_json("{").is_err());
     }
 
     /// #488 review SF1: a roaster on Visualizer leaves a tombstone, and a

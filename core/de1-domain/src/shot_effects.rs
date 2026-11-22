@@ -184,6 +184,12 @@ pub struct ShotBagMoveInput {
     /// The row is a replay ([`StoredShot::replay`](crate::StoredShot::replay)):
     /// it never debits.
     pub replay: bool,
+    /// The row is a remote's mirror copy of the hub's shot: recorded
+    /// elsewhere, never debited here. Its `bag_debit` of `None` (what Android
+    /// wrote for these rows from #506 until `shot_debit`) then means nothing
+    /// was taken, not "a row from before the field". `false` for a row this
+    /// device recorded, so a legacy local row keeps the dose rule.
+    pub mirror_row: bool,
 }
 
 /// A logged shot's bag move, planned.
@@ -212,8 +218,9 @@ pub struct ShotBagMove {
 /// - The old bag gets back **only what the row took**
 ///   ([`crate::credit_shot_debit`]): a recorded `bag_debit` says how much, so
 ///   a row that was never debited (`Some(0)`: a mirror shot, a replay)
-///   credits nothing. A row from before the field (`None`) took its dose if
-///   the bag still holds grams.
+///   credits nothing, and neither does a remote's mirror row with `None`
+///   ([`ShotBagMoveInput::mirror_row`]). A row this device recorded before
+///   the field (`None`) took its dose if the bag still holds grams.
 /// - The new bag is debited by the dose **only where a recorded shot would
 ///   debit it** ([`shot_effects`]: not on a remote, not for a replay); the
 ///   row records what it took ([`shot_debit`]), 0 when nothing.
@@ -230,9 +237,16 @@ pub fn shot_bag_move(input: &ShotBagMoveInput) -> ShotBagMove {
         return ShotBagMove::default();
     }
     let dose = input.dose_g.unwrap_or(0.0);
-    let from_remaining = from.as_ref().and(input.from_bag).and_then(|bag| {
-        crate::credit_shot_debit(bag.remaining, bag.bag_size, input.bag_debit, dose)
-    });
+    // A mirror row took nothing here unless it says otherwise.
+    let taken = if input.mirror_row {
+        Some(input.bag_debit.unwrap_or(0.0))
+    } else {
+        input.bag_debit
+    };
+    let from_remaining = from
+        .as_ref()
+        .and(input.from_bag)
+        .and_then(|bag| crate::credit_shot_debit(bag.remaining, bag.bag_size, taken, dose));
     let debit = shot_effects(&ShotEffectsInput {
         disposition: ShotDisposition::Record,
         recorded_here: !input.remote,
@@ -453,7 +467,27 @@ mod tests {
             dose_g: Some(18.0),
             remote,
             replay,
+            mirror_row: false,
         }
+    }
+
+    #[test]
+    fn a_mirror_row_with_no_recorded_debit_credits_nothing() {
+        // REVIEW-518: Android wrote None on a remote's mirror rows from #506.
+        let mut input = mv(None, true, false);
+        input.mirror_row = true;
+        let plan = shot_bag_move(&input);
+        assert_eq!(
+            (plan.from_remaining, plan.to_remaining, plan.bag_debit),
+            (None, None, Some(0.0))
+        );
+        // A recorded debit on a mirror row still says what it took.
+        input.bag_debit = Some(5.0);
+        assert_eq!(shot_bag_move(&input).from_remaining, Some(305.0));
+        // A legacy row this device recorded keeps the dose rule.
+        let legacy = shot_bag_move(&mv(None, true, false));
+        assert_eq!(legacy.from_remaining, Some(318.0));
+        assert_eq!(legacy.to_remaining, None, "a remote still never debits");
     }
 
     #[test]
