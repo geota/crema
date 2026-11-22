@@ -17,7 +17,7 @@ describe('nav items', () => {
 	});
 
 	it('orders the tabs as Android does, without Settings', () => {
-		expect(PHONE_TABS.map((t) => t.label)).toEqual(['Brew', 'Scale', 'Profiles', 'Beans', 'History']);
+		expect(PHONE_TABS.map((t) => t.label)).toEqual(['Brew', 'Devices', 'Profiles', 'Beans', 'History']);
 	});
 
 	it('lights a tab on its pushed routes, and Brew only on /', () => {
@@ -68,7 +68,7 @@ describe('PhoneTabBar', () => {
 		const links = [...target.querySelectorAll('a')];
 		expect(links.map((a) => a.textContent?.trim())).toEqual([
 			'Brew',
-			'Scale',
+			'Devices',
 			'Profiles',
 			'Beans',
 			'History'

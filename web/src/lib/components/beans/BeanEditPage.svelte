@@ -57,6 +57,8 @@
 		type Roaster, activateBean } from '#lib/bean/index.js';
 	import BeanImage from './BeanImage.svelte';
 	import BeanDeleteSplit from './BeanDeleteSplit.svelte';
+	import BagGrindsEditor from './BagGrindsEditor.svelte';
+	import { bagGrindsToFix } from '#lib/bean/grinder.js';
 	import QuickStepper from '#lib/components/brew/QuickStepper.svelte';
 	import StToggle from '#lib/components/settings/StToggle.svelte';
 	import RoasterAutocomplete from './RoasterAutocomplete.svelte';
@@ -74,7 +76,6 @@
 	import { useVisualizerConnection } from '#lib/visualizer/useVisualizerConnection.svelte.js';
 	import TagInput from '#lib/components/profiles/TagInput.svelte';
 	import RoastSlider from './RoastSlider.svelte';
-	import { getSettingsStore } from '#lib/settings/index.js';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import { DISCARD_CHANGES, guardUnsavedChanges, sameRecord } from '#lib/beans/unsaved-guard.js';
@@ -94,14 +95,6 @@
 	const uid = $props.id();
 
 	const library = getBeanStore();
-	/**
-	 * Equipment-level grinder default from Settings → Machine. Surfaced
-	 * as a small "default" chip below the bean's Grinder field when no
-	 * per-bag override is set, so the user understands the value the
-	 * brew card will fall back to.
-	 */
-	const settings = getSettingsStore();
-	const defaultGrinder = $derived(settings.current.grinderModel?.trim() ?? '');
 
 	// ── Draft state (both modes) ───────────────────────────────────────
 	/** The bag as the editor opened on it: what Save measures the edits from. */
@@ -443,6 +436,13 @@
 			el?.focus();
 			return;
 		}
+		// A saved grind can't be empty: "Enter a grind or remove this row".
+		grindsToFix = bagGrindsToFix(draftRecord);
+		if (grindsToFix.length > 0) {
+			const el = document.getElementById('be-bag');
+			el?.scrollIntoView?.({ behavior: scrollBehavior(), block: 'start' });
+			return;
+		}
 		if (isNew) {
 			if (isNameMissing) {
 				nameInputEl?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
@@ -594,15 +594,11 @@
 		patch({ rating: current.rating === n ? 0 : n });
 	}
 
-	// Grinder setting — string in storage, number in UI for the stepper.
-	const grindNum = $derived.by<number>(() => {
-		const n = Number(current.grinderSetting);
-		return Number.isFinite(n) ? n : 0;
-	});
-	function setGrind(n: number): void {
-		const rounded = Math.round(n * 100) / 100;
-		patch({ grinderSetting: rounded.toString() });
-	}
+	// ── Grind per grinder (#488) ─────────────────────────────────────
+	// The old `grinder` / `grinderSetting` fields stay stored, untouched: the
+	// UI edits only `grinds`, in the draft, written at Save.
+	/** The rows Save refused for an empty grind (shown until filled). */
+	let grindsToFix = $state<string[]>([]);
 </script>
 
 <div class="be-page">
@@ -1121,8 +1117,8 @@
 					<div>
 						<h2 class="be-block-title">Bag & Grind</h2>
 						<div class="be-block-sub">
-							Bag size auto-debits per shot. Grinder is bean-scoped — surfaced
-							at brew time when you swap to this bean.
+							Bag size auto-debits per shot. Grind is saved per grinder; ★ is the
+							grinder Brew switches to when you pick this bag.
 						</div>
 					</div>
 				</header>
@@ -1175,53 +1171,13 @@
 							</div>
 						</div>
 					</div>
-					<div class="be-grid2">
-						<div class="be-frow be-frow-stack">
-							<div class="be-frow-l">
-								<label class="be-frow-label" for={`${uid}-grinder`}>Grinder</label>
-							</div>
-							<div class="be-frow-r">
-								<input
-									id={`${uid}-grinder`}
-									class="be-input"
-									value={current.grinder}
-									placeholder="e.g. Niche Zero"
-									oninput={(e) =>
-										patch({
-											grinder: (e.currentTarget as HTMLInputElement).value
-										})}
-								/>
-								{#if defaultGrinder && current.grinder.trim() === ''}
-									<button
-										type="button"
-										class="be-default-chip"
-										title="Use the equipment-level default from Settings → Machine"
-										onclick={() => patch({ grinder: defaultGrinder })}
-									>
-										<span class="be-default-chip-tag">default</span>
-										<span>{defaultGrinder}</span>
-									</button>
-								{/if}
-							</div>
-						</div>
-						<div class="be-frow be-frow-stack">
-							<div class="be-frow-l">
-								<div class="be-frow-label" id={`${uid}-grind-label`}>Grind</div>
-							</div>
-							<div class="be-frow-r">
-								<QuickStepper
-									label=""
-									name="Grind"
-									value={grindNum}
-									unit=""
-									min={0}
-									max={100}
-									step={0.1}
-									onChange={setGrind}
-								/>
-							</div>
-						</div>
-					</div>
+					<BagGrindsEditor
+						grinds={current.grinds ?? []}
+						baseGrinds={base.grinds ?? []}
+						beanId={current.id}
+						toFix={grindsToFix}
+						onChange={(next) => patch({ grinds: next })}
+					/>
 				</div>
 			</section>
 
@@ -1913,7 +1869,7 @@
 		gap: 12px;
 		/* Don't stretch cells to row height. When one cell has extra
 		   content beneath the primary control (e.g. Bag size's presets
-		   row, or a default-grinder chip), the sibling cell stays at its
+		   row), the sibling cell stays at its
 		   natural height so its label + control stay glued at the top of
 		   the row — keeping all steppers aligned across the grid. */
 		align-items: start;
@@ -2007,41 +1963,6 @@
 	   long blank gutter. */
 	.be-frow-r-end {
 		align-items: flex-end;
-	}
-
-	/* "Default" chip — same pattern as the brew bean card. Appears
-	   below the Grinder input when the per-bag override is empty and a
-	   Settings → Machine default exists. Tappable to copy the default
-	   into the field, then disappears. */
-	.be-default-chip {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		align-self: flex-start;
-		padding: 3px 8px 3px 4px;
-		background: rgba(var(--tint-rgb), 0.04);
-		border: 1px solid rgba(var(--tint-rgb), 0.1);
-		border-radius: 999px;
-		color: rgba(var(--tint-rgb), 0.7);
-		font-family: var(--font-sans);
-		font-size: 11px;
-		cursor: pointer;
-		transition: all var(--dur-1) var(--ease);
-	}
-	.be-default-chip:hover {
-		background: rgba(var(--tint-rgb), 0.08);
-		border-color: rgba(var(--copper-rgb), 0.32);
-		color: var(--fg-accent);
-	}
-	.be-default-chip-tag {
-		font-size: 9px;
-		font-weight: 600;
-		letter-spacing: var(--track-allcaps, 0.06em);
-		text-transform: uppercase;
-		color: var(--fg-accent);
-		background: rgba(var(--copper-rgb), 0.12);
-		border-radius: 999px;
-		padding: 2px 6px;
 	}
 
 	/* Segmented (Mix). `.be-seg-sm` matches the `.st-segment` from the

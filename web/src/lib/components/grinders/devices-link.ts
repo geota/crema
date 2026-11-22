@@ -12,3 +12,8 @@ export function devicesHref(tab: DevicesTab = 'scale'): string {
 	const base = resolve('/scale');
 	return tab === 'grinder' ? `${base}?tab=grinder` : base;
 }
+
+/** The tab a Devices URL names: `?tab=grinder`, else Scale. */
+export function devicesTabOf(params: { get(name: string): string | null }): DevicesTab {
+	return params.get('tab') === 'grinder' ? 'grinder' : 'scale';
+}

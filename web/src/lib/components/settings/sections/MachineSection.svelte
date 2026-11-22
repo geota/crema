@@ -58,6 +58,7 @@
 	import StStatusDot from '../StStatusDot.svelte';
 	import { firmwareBuildReport, firmwareCardCopy } from '#lib/firmware/build-copy.js';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { devicesHref } from '#lib/components/grinders/devices-link.js';
 
 	let {
 		app,
@@ -631,7 +632,7 @@
 	     scale's live state lives on the Scale page. Faithful UI only. The
 	     "Weight-aware tamper" entry was removed — there is no BLE-smart
 	     tamper product Crema would ever pair with, so it was dead UI. -->
-	<StRow title="Scale" sub="Used for stop-on-weight and auto-tare. Manage on the Scale page.">
+	<StRow title="Scale" sub="Used for stop-on-weight and auto-tare. Manage on the Devices page.">
 		{#snippet control()}
 			<span
 				class="st-diag-dot"
@@ -669,31 +670,15 @@
 		{/snippet}
 	</StRow>
 	<!--
-		Equipment-level grinder model — free-text default that flows into
-		the Brew page's bean card (bean-level `grinder` overrides it) and
-		rides on Visualizer uploads (`grinder_model`). Captured into each
-		shot at completion; per-shot edit lives on the History detail
-		panel. Sits under the Pair row because conceptually it's "the
-		other half" of the grinder relationship: pair when we can talk
-		to it, name it when we can't.
+		Owned grinders and their grind scales live on Devices → Grinder
+		(#488). The old free-text `grinderModel` setting stays stored (the
+		grinder migration reads it) but is no longer edited here.
 	-->
-	<StRow
-		title="Grinder model"
-		sub="Used as the default on the Brew bean card and on Visualizer uploads. Free text — beans can override per-bag; shots can override per-shot."
-	>
+	<StRow title="Your grinders" sub="Add grinders and set their grind scales on the Devices page.">
 		{#snippet control()}
-			<input
-				type="text"
-				aria-label="Grinder model"
-				class="mc-grinder-model"
-				placeholder="e.g. Niche Zero"
-				value={prefs.grinderModel}
-				oninput={(e) =>
-					settings.set(
-						'grinderModel',
-						(e.currentTarget as HTMLInputElement).value
-					)}
-			/>
+			<a class="st-btn st-btn-secondary mc-devices-link" href={devicesHref('grinder')}>
+				<span>Devices → Grinder</span>
+			</a>
 		{/snippet}
 	</StRow>
 </StGroup>
@@ -756,23 +741,12 @@
 		gap: 8px;
 		flex-wrap: wrap;
 	}
-	/* Free-text grinder-model input under Peripherals → Grinder. Mirrors
-	   the Advanced webhook-URL field's metrics so the two single-line
-	   text inputs in Settings look like the same control. */
-	.mc-grinder-model {
-		width: 280px;
-		max-width: 100%;
-		padding: 6px 10px;
-		font-family: var(--font-sans);
-		font-size: 12px;
-		color: var(--fg-1);
-		background: rgba(var(--tint-rgb), 0.06);
-		border: 1px solid rgba(var(--tint-rgb), 0.12);
-		border-radius: 6px;
-		outline: none;
-	}
-	.mc-grinder-model:focus {
-		border-color: rgba(var(--tint-rgb), 0.4);
+	/* The Devices → Grinder link: an anchor in the settings-kit button look,
+	   at least 44 px tall. */
+	.mc-devices-link {
+		min-height: 44px;
+		box-sizing: border-box;
+		text-decoration: none;
 	}
 	/* Phone width: the state line, as Android's Machine card leads with it. The
 	   card's arrangement is in the Settings route, beside its other rules. */
