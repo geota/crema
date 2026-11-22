@@ -13,7 +13,7 @@
  */
 
 import { followOtherTabs, readJson, writeJson } from '#lib/utils/storage.js';
-import { grindText, type GrindScale } from '#lib/bean/grinder.js';
+import { DEFAULT_GRIND_SCALE, grindText, type GrindScale } from '#lib/bean/grinder.js';
 
 /** The storage key: one value per device. */
 export const BREW_GRIND_KEY = 'crema.brew.grind.v1';
@@ -22,9 +22,14 @@ export const BREW_GRIND_KEY = 'crema.brew.grind.v1';
 const isStored = (v: unknown): boolean =>
 	v === null || typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v));
 
-/** A stored value as Brew's grind: blank is none; an older number reads as its text. */
+/**
+ * A stored value as Brew's grind: blank is none; an older number reads as
+ * the core writes a dial (`grind_text` on the default scale: whole numbers
+ * bare, off-step values to four decimals), so float noise such as
+ * 0.30000000000000004 never becomes the grind (REVIEW-503, follow-up 27).
+ */
 function fromStored(v: unknown): string | null {
-	const text = typeof v === 'number' ? String(v) : typeof v === 'string' ? v.trim() : '';
+	const text = typeof v === 'number' ? grindText(v, DEFAULT_GRIND_SCALE) : typeof v === 'string' ? v.trim() : '';
 	return text === '' ? null : text;
 }
 
