@@ -3,6 +3,7 @@ import java.util.Properties
 import javax.inject.Inject
 import net.mullvad.androidrust.CargoBuildTask
 import org.gradle.process.ExecOperations
+import org.gradle.process.ExecOutput
 
 plugins {
     id("com.android.application")
@@ -24,15 +25,17 @@ val localProps: Properties = Properties().apply {
 }
 
 // Short git SHA stamped into BuildConfig.GIT_SHA so a crash report names the
-// exact build that failed (debug builds all share versionName "0.1"). Best-effort.
+// exact build that failed (debug builds all share versionName "0.1"). Best-effort:
+// "unknown" when git is missing or this is not a git checkout (a source tarball).
+// Run through providers.exec, which Gradle tracks for the configuration cache.
+val gitShaExec: ExecOutput = providers.exec {
+    workingDir = rootProject.projectDir
+    commandLine("git", "rev-parse", "--short", "HEAD")
+    isIgnoreExitValue = true
+}
 val gitSha: String = runCatching {
-    ProcessBuilder("git", "rev-parse", "--short", "HEAD")
-        .directory(rootProject.projectDir)
-        .redirectErrorStream(true)
-        .start()
-        .inputStream.bufferedReader().use { it.readText().trim() }
-        .ifEmpty { "unknown" }
-}.getOrDefault("unknown")
+    if (gitShaExec.result.get().exitValue == 0) gitShaExec.standardOutput.asText.get().trim() else ""
+}.getOrDefault("").ifEmpty { "unknown" }
 
 // Release signing — from CI env (the release workflow base64-decodes the keystore to
 // a file and exports KEYSTORE_FILE / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD) or
