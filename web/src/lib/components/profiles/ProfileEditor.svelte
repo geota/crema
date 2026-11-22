@@ -27,6 +27,7 @@
 	 * (`duplicateProfile`); saving creates a new library entry. The top bar
 	 * shows this with a "Duplicate" heading.
 	 */
+	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -34,6 +35,7 @@
 		getProfileStore,
 		blankProfile,
 		duplicateProfile,
+		mergeProfileEdit,
 		uid,
 		newProfileId,
 		ratioLabel,
@@ -112,10 +114,13 @@
 	const appCtx = getCremaAppContext();
 	const app = $derived(appCtx().app);
 
+	/** Whether the draft differs from its loaded baseline (dirty flag). */
+	let dirty = $state(false);
+
 	/**
-	 * The **loaded baseline** — the profile the editor opens on, before any
-	 * edits. Derived (not synchronised through `$effect`) so it tracks the
-	 * route inputs cleanly:
+	 * The profile as the library holds it now, as the editor would open on it.
+	 * Derived (not synchronised through `$effect`) so it tracks the route
+	 * inputs cleanly:
 	 *
 	 *  - `new` mode: a fresh blank custom profile.
 	 *  - `edit` mode, library not yet loaded: `undefined` (the grid shows a
@@ -124,10 +129,10 @@
 	 *    `?duplicate=1` arrival is forked into a fresh custom copy.
 	 *  - `edit` mode, unknown id: a blank custom profile (treated as a create).
 	 *
-	 * Keyed off `store.loaded`, `sourceId` and `duplicateFlag` — change any and
-	 * the baseline (and, when not yet edited, the `draft` below) recomputes.
+	 * Keyed off `store.loaded`, `sourceId` and `duplicateFlag`, and the stored
+	 * row itself.
 	 */
-	const baseline = $derived.by<CremaProfile | undefined>(() => {
+	const stored = $derived.by<CremaProfile | undefined>(() => {
 		if (mode === 'new') return blankProfile();
 		if (!store.loaded) return undefined;
 		const src = sourceId ? store.get(sourceId) : undefined;
@@ -136,6 +141,19 @@
 		return duplicating
 			? duplicateProfile(src)
 			: { ...src, segments: src.segments.map((s) => ({ ...s })) };
+	});
+
+	/**
+	 * The **loaded baseline** — the profile the draft was copied from, before
+	 * any edits: {@link stored} while the draft is untouched, then held. So a
+	 * write elsewhere meanwhile (a pin, an in-place Quick Save, another tab)
+	 * never replaces the edits, and Save merges them onto the stored row field
+	 * by field from this base (core `merge_profile_edit`, REVIEW-FINAL-2 N2).
+	 */
+	let baseline = $state.raw<CremaProfile | undefined>(untrack(() => stored));
+	$effect.pre(() => {
+		const next = stored;
+		if (!dirty) baseline = next;
 	});
 
 	/**
@@ -178,8 +196,6 @@
 	const activeSegId = $derived(
 		selectedSegId ?? draft.segments[1]?.id ?? draft.segments[0]?.id ?? null
 	);
-	/** Whether the draft differs from its loaded baseline (dirty flag). */
-	let dirty = $state(false);
 	/** Set once the loaded baseline is resolved, so the grid does not flash. */
 	const ready = $derived(baseline != null);
 
@@ -318,7 +334,7 @@
 					id: draft.id || newProfileId(),
 					source: 'custom'
 				}
-			: draft;
+			: merged(draft);
 		store.save(toSave);
 		if (cameFromBrew) {
 			// User was on the brew page editing the loaded profile —
@@ -331,6 +347,24 @@
 		if (app && store.activeId === toSave.id) void app.setDesiredProfile(toSave);
 		dirty = false;
 		void goto(returnPath);
+	}
+
+	/**
+	 * An in-place Save: the user's changes (the draft against its
+	 * {@link baseline}) onto the profile as stored now, field by field (core
+	 * `merge_profile_edit`), so a change made elsewhere meanwhile survives. A
+	 * profile gone meanwhile saves as the draft.
+	 */
+	function merged(edited: CremaProfile): CremaProfile {
+		const current = store.get(edited.id);
+		if (!current || current.source !== 'custom' || !baseline) return edited;
+		try {
+			return mergeProfileEdit(baseline, edited, current);
+		} catch (e) {
+			// A row the core can't read: the whole draft, as before the merge.
+			console.warn('[Crema] profile merge failed; saving the draft as is', e);
+			return edited;
+		}
 	}
 
 	/** Discard edits — revert the draft to its loaded baseline. */

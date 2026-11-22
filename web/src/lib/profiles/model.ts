@@ -34,7 +34,8 @@ import {
 	builtinCremaProfiles as wasmBuiltinCremaProfiles,
 	cremaProfileFromWire,
 	cremaProfileToWire,
-	defaultProfileSegments
+	defaultProfileSegments,
+	mergeProfileEditJson as wasmMergeProfileEditJson
 } from '#lib/wasm/de1_wasm.js';
 import { formatRatio } from '#lib/utils/ratio.js';
 import { relativeAgo } from '#lib/utils/relative-time.js';
@@ -340,6 +341,21 @@ export function blankProfile(): CremaProfile {
 		preinfusionS: prefs.defaultPreinfusionS
 	});
 	return JSON.parse(blankCremaProfile(defaults)) as CremaProfile;
+}
+
+/**
+ * A profile editor's Save, field by field (core `merge_profile_edit`,
+ * REVIEW-FINAL S6, REVIEW-FINAL-2 N2): the fields the user changed (`edited`
+ * against `base`, the profile the editor opened on) onto `current`, the
+ * profile as stored now. A pin, an in-place Quick Save or a rename written
+ * meanwhile (another tab) stays unless the user changed that field too. The
+ * body (segments + preinfusion count) moves as one piece; `brewTemp` is
+ * derived again; `id` and `source` are the stored row's.
+ */
+export function mergeProfileEdit(base: CremaProfile, edited: CremaProfile, current: CremaProfile): CremaProfile {
+	return JSON.parse(
+		wasmMergeProfileEditJson(JSON.stringify(base), JSON.stringify(edited), JSON.stringify(current))
+	) as CremaProfile;
 }
 
 /**
