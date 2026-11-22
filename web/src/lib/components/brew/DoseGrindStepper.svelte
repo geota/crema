@@ -60,6 +60,12 @@
 	const ringed = $derived(grind?.marker ? grindNumber(grind.saved) : null);
 	const brewGrind = getBrewGrind();
 	const setGrind = (v: number): void => brewGrind.setDial(v, gs);
+	/**
+	 * A typed grind that isn't a plain number ("6 + a tooth") is Brew's grind
+	 * as typed (#28, the core's text-grind rule): it shows and records as
+	 * text, with no dial and no chips; the first ± goes to the scale's start.
+	 */
+	const setGrindText = (t: string): void => brewGrind.set(t);
 </script>
 
 {#snippet rangeWarning()}
@@ -115,6 +121,7 @@
 			onChange={setGrind}
 			fmt={grindFmt}
 			parse={grindNumber}
+			onText={setGrindText}
 			inputmode={grindInputMode(gs)}
 			sub={outOfRange ? rangeWarning : undefined}
 		/>

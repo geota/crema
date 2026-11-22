@@ -75,6 +75,18 @@ export interface UseStepperOptions {
 	 * ("4⅓").
 	 */
 	editText?: () => ((display: number) => string) | undefined;
+	/**
+	 * Takes a typed draft that {@link parse} doesn't read as a number
+	 * (trimmed, never blank), reactive. Without it such a draft is no edit.
+	 * Brew's grind keeps it as typed: "6 + a tooth" is its text grind (#28,
+	 * the core's text-grind rule: no dial, no chips).
+	 */
+	commitText?: () => ((text: string) => void) | undefined;
+	/**
+	 * Click-to-type's starting text while {@link blank}: empty by default;
+	 * Brew's text grind starts from itself (reactive).
+	 */
+	blankDraft?: () => string;
 }
 
 export interface Stepper {
@@ -168,7 +180,7 @@ export function useStepper(opts: UseStepperOptions): Stepper {
 		const shown = toDisplay(opts.value());
 		const editText = opts.editText?.();
 		draft = opts.blank?.()
-			? ''
+			? (opts.blankDraft?.() ?? '')
 			: editText
 				? editText(shown)
 				: String(Number(shown.toFixed(effectiveDecimals)));
@@ -182,10 +194,14 @@ export function useStepper(opts: UseStepperOptions): Stepper {
 		if (!editing) return;
 		editing = false;
 		// An emptied field is no edit (not 0).
-		if (String(draft).trim() === '') return;
+		const text = String(draft).trim();
+		if (text === '') return;
 		const parse = opts.parse?.();
-		const n = parse ? parse(String(draft)) : Number(draft);
-		if (n === null || !Number.isFinite(n)) return;
+		const n = parse ? parse(text) : Number(draft);
+		if (n === null || !Number.isFinite(n)) {
+			opts.commitText?.()?.(text);
+			return;
+		}
 		const typed = fromDisplay(n);
 		const next = opts.clampTyped?.() === false ? typed : clamp(typed);
 		if (opts.blank?.() || next !== opts.value()) opts.commit(next);

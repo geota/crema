@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { LIBRARY_IMPORT_RULE } from '#lib/bean/import-rules.js';
 	import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircleIcon';
 	import InfoIcon from 'phosphor-svelte/lib/InfoIcon';
 	import SpinnerGapIcon from 'phosphor-svelte/lib/SpinnerGapIcon';
@@ -734,6 +735,7 @@
 					AeroPress / French-press brews import as Brew Log entries.
 				{/snippet}
 			</FileDropZone>
+			<p class="bd-rule">{LIBRARY_IMPORT_RULE}</p>
 		</div>
 	{:else if step === 'parsing'}
 		<div class="bd-status">
@@ -932,6 +934,13 @@
 	}
 	.bd-drop-wrap {
 		margin: 20px;
+	}
+	.bd-rule {
+		margin: 10px 2px 0;
+		font-family: var(--font-sans);
+		font-size: 12px;
+		line-height: 1.45;
+		color: var(--fg-3);
 	}
 	.bd-status {
 		padding: 24px;

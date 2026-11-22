@@ -35,6 +35,7 @@
 		blankText = '',
 		precision = 2,
 		parse,
+		onText,
 		inputmode = 'decimal'
 	}: {
 		/** Optional caption above the stepper row. */
@@ -114,6 +115,13 @@
 		 */
 		parse?: (text: string) => number | null;
 		/**
+		 * Takes a typed value {@link parse} doesn't read as a number (trimmed):
+		 * Brew's grind keeps "6 + a tooth" as its text grind (#28). Without it
+		 * such a value is no edit. Editing a text value starts from
+		 * {@link blankText}.
+		 */
+		onText?: (text: string) => void;
+		/**
 		 * The keyboard the text box opens with {@link parse}: the decimal
 		 * number pad (default), or the full keyboard for a thirds scale
 		 * ("4 1/3", `grindInputMode`).
@@ -140,7 +148,9 @@
 		clampTyped: () => clampTyped,
 		blank: () => value === null,
 		parse: () => parse,
-		editText: () => (parse ? format : undefined)
+		editText: () => (parse ? format : undefined),
+		commitText: () => onText,
+		blankDraft: () => (onText ? blankText : '')
 	});
 
 	/** Format a value (already in display units) — the supplied `fmt`, or step-aware default. */

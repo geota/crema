@@ -60,6 +60,8 @@
 	} from '#lib/profiles/library-filter.js';
 	import { downloadBlob, filenameStamp } from '#lib/utils/download.js';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { getBeanStore } from '#lib/bean/index.js';
+	import { bagsPreferring, profileDeleteMessage } from '#lib/profiles/delete-confirm.js';
 	import CustomMethodDialog from '#lib/components/brewlog/CustomMethodDialog.svelte';
 	import type { CustomBrewMethod } from '#lib/core/crema-core.js';
 	import {
@@ -441,7 +443,9 @@
 			}
 			return;
 		}
-		if (await confirmDialog({ message: `Delete "${profile.name}"? This cannot be undone.`, confirmLabel: 'Delete', danger: true })) {
+		// Deleting clears every bag's preference for it (REVIEW-FINAL-2 N3): say how many.
+		const message = profileDeleteMessage(profile.name, bagsPreferring(getBeanStore().allBeans, id));
+		if (await confirmDialog({ message, confirmLabel: 'Delete', danger: true })) {
 			store.delete(id);
 		}
 	}
