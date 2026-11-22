@@ -1057,13 +1057,15 @@ enum class BrewPickLockReason(val string: String) {
 	GuidedBrew("guidedBrew"),
 }
 
-/// The picker is locked: every row (profiles and recipes) is disabled, the
-/// tabs still browse. The hub refuses a remote's `setActiveProfile` with
-/// [`note`](Self::note).
+/// The picker is locked: the profile rows are disabled, and the recipe rows
+/// too when [`recipes_locked`](Self::recipes_locked). The tabs still browse.
+/// The hub refuses a remote's `setActiveProfile` with [`note`](Self::note).
 @Serializable
 data class BrewPickLock (
 	val reason: BrewPickLockReason,
-	/// The note under the rows, and the hub's refusal.
+	/// The recipe rows are disabled as well (a guided brew runs here).
+	val recipesLocked: Boolean,
+	/// The note under the disabled rows, and the hub's refusal.
 	val note: String
 )
 
@@ -4120,6 +4122,13 @@ data class HotWaterTarget (
 	/// Volume and ratio modes with an operational scale: the weight to stop
 	/// at, g.
 	val stopWeightG: Float? = null
+)
+
+/// [`follow_hub_profile`]'s input, for the JSON bridges.
+@Serializable
+data class HubProfileInput (
+	val stored: StoredBrewSelection,
+	val hubProfileId: String? = null
 )
 
 /// An unbound local row, or unbound tombstone, a remote row may be the upload of.

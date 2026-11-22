@@ -811,10 +811,26 @@ pub fn pick_brew_selection_json(input_json: String) -> Result<String, CremaError
     de1_domain::pick_brew_selection_json(&input_json).map_err(CremaError::from)
 }
 
+/// What a remote stores when the hub's active profile reaches it: a
+/// `HubProfileInput` JSON (`stored`, `hubProfileId`) in, a
+/// `StoredBrewSelection` JSON out. The profile follows the hub; the recipe,
+/// and so Manual, stays. See [`de1_domain::follow_hub_profile`]. Android
+/// only: the web has no remote.
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the input JSON is malformed.
+#[uniffi::export]
+pub fn follow_hub_profile_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::follow_hub_profile_json(&input_json).map_err(CremaError::from)
+}
+
 /// The picker lock (brew modes §4): a `BrewPickLockInput` JSON
 /// (`shotRunning`, `guidedBrewRunning`) in, a `BrewPickLock` JSON (`reason`,
-/// `note`) out, or `null` when the rows are enabled. The hub refuses a
-/// remote's `setActiveProfile` with the note. See [`de1_domain::brew_pick_lock`].
+/// `recipesLocked`, `note`) out, or `null` when the rows are enabled. A lock
+/// always disables the profile rows; a shot leaves the recipe rows open, a
+/// guided brew here closes them too. The hub refuses a remote's
+/// `setActiveProfile` with the note. See [`de1_domain::brew_pick_lock`].
 ///
 /// # Errors
 ///

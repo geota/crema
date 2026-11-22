@@ -244,10 +244,11 @@ pub use brew_custom::{
 };
 pub use brew_selection::{
     BrewMode, BrewPickInput, BrewPickLock, BrewPickLockInput, BrewPickLockReason, BrewSelection,
-    BrewSelectionInput, BrewSelectionKind, BrewSelectionView, LOCK_NOTE_BREW, LOCK_NOTE_SHOT,
-    MAX_SELECTION_ID_CHARS, RecipeSummary, StoredBrewSelection, brew_mode, brew_pick_lock,
-    brew_pick_lock_json, brew_selection, brew_selection_view, brew_selection_view_json,
-    pick_brew_selection, pick_brew_selection_json, recipe_summary, recipe_summary_json,
+    BrewSelectionInput, BrewSelectionKind, BrewSelectionView, HubProfileInput, LOCK_NOTE_BREW,
+    LOCK_NOTE_SHOT, MAX_SELECTION_ID_CHARS, RecipeSummary, StoredBrewSelection, brew_mode,
+    brew_pick_lock, brew_pick_lock_json, brew_selection, brew_selection_view,
+    brew_selection_view_json, follow_hub_profile, follow_hub_profile_json, pick_brew_selection,
+    pick_brew_selection_json, recipe_summary, recipe_summary_json,
 };
 pub use brew_session::{
     APPROACH_LEAD, BREW_SAMPLE_MIN_INTERVAL, BrewCue, BrewSessionEvent, BrewSessionMonitor,

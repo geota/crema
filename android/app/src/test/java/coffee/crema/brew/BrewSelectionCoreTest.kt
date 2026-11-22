@@ -54,13 +54,13 @@ class BrewSelectionCoreTest {
     }
 
     @Test
-    fun aShotOrAGuidedBrewLocksThePicker() {
+    fun aShotLocksProfilesAndAGuidedBrewLocksEverything() {
         fun lock(shot: Boolean, brew: Boolean): BrewPickLock? =
             brewPickLockJson(coreJson.encodeToString(BrewPickLockInput.serializer(), BrewPickLockInput(shot, brew)))
                 ?.let { coreJson.decodeFromString(it) }
         assertNull(lock(shot = false, brew = false))
-        assertEquals(BrewPickLock(BrewPickLockReason.Shot, "Finish the current shot first"), lock(shot = true, brew = false))
-        assertEquals(BrewPickLockReason.GuidedBrew, lock(shot = false, brew = true)?.reason)
+        assertEquals(BrewPickLock(BrewPickLockReason.Shot, recipesLocked = false, "Finish the current shot first"), lock(shot = true, brew = false))
+        assertEquals(BrewPickLock(BrewPickLockReason.GuidedBrew, recipesLocked = true, "Finish the current brew first"), lock(shot = true, brew = true))
     }
 
     @Test

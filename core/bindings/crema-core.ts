@@ -1197,13 +1197,15 @@ export enum BrewPickLockReason {
 }
 
 /**
- * The picker is locked: every row (profiles and recipes) is disabled, the
- * tabs still browse. The hub refuses a remote's `setActiveProfile` with
- * [`note`](Self::note).
+ * The picker is locked: the profile rows are disabled, and the recipe rows
+ * too when [`recipes_locked`](Self::recipes_locked). The tabs still browse.
+ * The hub refuses a remote's `setActiveProfile` with [`note`](Self::note).
  */
 export interface BrewPickLock {
 	reason: BrewPickLockReason;
-	/** The note under the rows, and the hub's refusal. */
+	/** The recipe rows are disabled as well (a guided brew runs here). */
+	recipesLocked: boolean;
+	/** The note under the disabled rows, and the hub's refusal. */
 	note: string;
 }
 
@@ -4082,6 +4084,12 @@ export interface HotWaterTarget {
 	 * at, g.
 	 */
 	stopWeightG?: number;
+}
+
+/** [`follow_hub_profile`]'s input, for the JSON bridges. */
+export interface HubProfileInput {
+	stored: StoredBrewSelection;
+	hubProfileId?: string;
 }
 
 /** An unbound local row, or unbound tombstone, a remote row may be the upload of. */

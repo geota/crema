@@ -16,13 +16,13 @@
 //!
 //! **Remotes** (spec §5 as chosen): recipes are per device. A remote's
 //! profile pick still goes to the hub (`setActiveProfile`), and the hub's
-//! active profile still lands in the remote's profile key. Neither touches the
-//! recipe key, so a hub profile change never pulls a remote out of Manual,
+//! active profile still lands in the remote's profile key
+//! ([`follow_hub_profile`]). Neither touches the recipe key, so a hub profile change never pulls a remote out of Manual,
 //! and nothing new travels over the relay.
 //!
-//! **The lock** ([`brew_pick_lock`], §4): while a DE1 shot or a guided brew
-//! runs, the picker's rows are disabled. The hub runs the same check on a
-//! remote's `setActiveProfile`.
+//! **The lock** ([`brew_pick_lock`], §4): while a DE1 shot runs, the profile
+//! rows are disabled; while this device runs a guided brew, every row is. The
+//! hub refuses a remote's `setActiveProfile` by the same rule.
 
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
@@ -213,7 +213,7 @@ pub fn brew_selection_view_json(input_json: &str) -> Result<String, String> {
 ///   again when the user picks a profile, and which stays the DE1's.
 ///
 /// Only a pick on this device comes here. The hub's active profile reaching
-/// a remote sets `active_profile_id` alone (as today), so it never changes a
+/// a remote goes through [`follow_hub_profile`] instead, which never changes a
 /// remote's recipe or mode.
 #[must_use]
 pub fn pick_brew_selection(
@@ -230,6 +230,46 @@ pub fn pick_brew_selection(
             active_recipe_id: Some(pick.id.trim().to_owned()),
         },
     }
+}
+
+/// What a remote stores when the hub's active profile reaches it (the
+/// relayed `activeProfileId`): the profile only. A remote in Espresso shows
+/// the hub's profile; one in Manual stays there, and leaves Manual when its
+/// user picks a profile. `None` (the hub has none) leaves the stored profile.
+#[must_use]
+pub fn follow_hub_profile(
+    stored: &StoredBrewSelection,
+    hub_profile_id: Option<&str>,
+) -> StoredBrewSelection {
+    StoredBrewSelection {
+        active_profile_id: usable_id(hub_profile_id)
+            .map(str::to_owned)
+            .or_else(|| stored.active_profile_id.clone()),
+        active_recipe_id: stored.active_recipe_id.clone(),
+    }
+}
+
+/// [`follow_hub_profile`]'s input, for the JSON bridges.
+#[typeshare]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct HubProfileInput {
+    pub stored: StoredBrewSelection,
+    pub hub_profile_id: Option<String>,
+}
+
+/// JSON-bridged [`follow_hub_profile`]: a [`HubProfileInput`] JSON in, the
+/// [`StoredBrewSelection`] JSON to store out.
+///
+/// # Errors
+/// The JSON parse error string on a malformed `input_json`.
+pub fn follow_hub_profile_json(input_json: &str) -> Result<String, String> {
+    let input: HubProfileInput = serde_json::from_str(input_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&follow_hub_profile(
+        &input.stored,
+        input.hub_profile_id.as_deref(),
+    ))
+    .map_err(|e| e.to_string())
 }
 
 /// [`pick_brew_selection`]'s input, for the JSON bridges.
@@ -278,15 +318,17 @@ pub enum BrewPickLockReason {
     GuidedBrew,
 }
 
-/// The picker is locked: every row (profiles and recipes) is disabled, the
-/// tabs still browse. The hub refuses a remote's `setActiveProfile` with
-/// [`note`](Self::note).
+/// The picker is locked: the profile rows are disabled, and the recipe rows
+/// too when [`recipes_locked`](Self::recipes_locked). The tabs still browse.
+/// The hub refuses a remote's `setActiveProfile` with [`note`](Self::note).
 #[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrewPickLock {
     pub reason: BrewPickLockReason,
-    /// The note under the rows, and the hub's refusal.
+    /// The recipe rows are disabled as well (a guided brew runs here).
+    pub recipes_locked: bool,
+    /// The note under the disabled rows, and the hub's refusal.
     pub note: String,
 }
 
@@ -295,21 +337,27 @@ pub const LOCK_NOTE_SHOT: &str = "Finish the current shot first";
 /// The note while a guided brew runs.
 pub const LOCK_NOTE_BREW: &str = "Finish the current brew first";
 
-/// Whether Brew's selection may change now (§4), or why not. A shot and a
-/// guided brew both lock every row: a recipe pick mid-shot would take the
-/// dashboard away, and a profile pick would change the targets the running
-/// shot stops on. A shot is named first when both run.
+/// Whether Brew's selection may change now (§4), or why not.
+///
+/// - A DE1 shot locks the profile rows: a profile pick would change the
+///   targets the running shot stops on. Recipe rows stay open, since a
+///   recipe pick is local and leaves the shot alone.
+/// - A guided brew on this device locks every row: the brew runs on the
+///   recipe it started with, and the page must not switch under it.
+///
+/// With both running, the guided brew is named, as it locks more.
 #[must_use]
 pub fn brew_pick_lock(input: BrewPickLockInput) -> Option<BrewPickLock> {
-    let (reason, note) = if input.shot_running {
-        (BrewPickLockReason::Shot, LOCK_NOTE_SHOT)
-    } else if input.guided_brew_running {
-        (BrewPickLockReason::GuidedBrew, LOCK_NOTE_BREW)
+    let (reason, recipes_locked, note) = if input.guided_brew_running {
+        (BrewPickLockReason::GuidedBrew, true, LOCK_NOTE_BREW)
+    } else if input.shot_running {
+        (BrewPickLockReason::Shot, false, LOCK_NOTE_SHOT)
     } else {
         return None;
     };
     Some(BrewPickLock {
         reason,
+        recipes_locked,
         note: note.to_owned(),
     })
 }
@@ -482,11 +530,30 @@ mod tests {
     #[test]
     fn the_hubs_profile_reaching_a_remote_leaves_it_in_manual() {
         // A remote in Manual; the hub's snapshot sets only the profile key.
-        let mut remote = stored(Some("p1"), Some("recipe:a"));
-        remote.active_profile_id = Some("hub-profile".to_owned());
+        let remote = follow_hub_profile(&stored(Some("p1"), Some("recipe:a")), Some("hub-p"));
+        assert_eq!(remote, stored(Some("hub-p"), Some("recipe:a")));
         assert_eq!(
             brew_selection(&remote, true),
             Some(BrewSelection::recipe("recipe:a"))
+        );
+        // The user leaves Manual by picking a profile.
+        let back = pick_brew_selection(&remote, &BrewSelection::profile("hub-p"));
+        assert_eq!(
+            brew_mode(brew_selection(&back, true).as_ref()),
+            BrewMode::Espresso
+        );
+        // A remote in Espresso shows the hub's profile.
+        let espresso = follow_hub_profile(&stored(Some("p1"), None), Some("hub-p"));
+        assert_eq!(
+            brew_selection(&espresso, false),
+            Some(BrewSelection::profile("hub-p"))
+        );
+        // No hub profile keeps the stored one.
+        assert_eq!(follow_hub_profile(&espresso, None), espresso);
+        assert_eq!(
+            follow_hub_profile_json(r#"{"stored":{"activeRecipeId":"r"},"hubProfileId":"h"}"#)
+                .unwrap(),
+            r#"{"activeProfileId":"h","activeRecipeId":"r"}"#
         );
     }
 
@@ -516,36 +583,38 @@ mod tests {
     }
 
     #[test]
-    fn a_shot_or_a_guided_brew_locks_the_rows() {
+    fn a_shot_locks_the_profile_rows_only() {
         let shot = brew_pick_lock(BrewPickLockInput {
             shot_running: true,
             guided_brew_running: false,
         })
         .unwrap();
         assert_eq!(shot.reason, BrewPickLockReason::Shot);
+        assert!(!shot.recipes_locked, "a recipe pick is local");
         assert_eq!(shot.note, LOCK_NOTE_SHOT);
-        let brew = brew_pick_lock(BrewPickLockInput {
-            shot_running: false,
-            guided_brew_running: true,
-        })
-        .unwrap();
-        assert_eq!(brew.reason, BrewPickLockReason::GuidedBrew);
-        assert_eq!(brew.note, LOCK_NOTE_BREW);
-        let both = brew_pick_lock(BrewPickLockInput {
-            shot_running: true,
-            guided_brew_running: true,
-        })
-        .unwrap();
-        assert_eq!(
-            both.reason,
-            BrewPickLockReason::Shot,
-            "the shot is named first"
-        );
+    }
+
+    #[test]
+    fn a_guided_brew_locks_every_row() {
+        for shot_running in [false, true] {
+            let brew = brew_pick_lock(BrewPickLockInput {
+                shot_running,
+                guided_brew_running: true,
+            })
+            .unwrap();
+            assert_eq!(
+                brew.reason,
+                BrewPickLockReason::GuidedBrew,
+                "shot {shot_running}"
+            );
+            assert!(brew.recipes_locked);
+            assert_eq!(brew.note, LOCK_NOTE_BREW);
+        }
         assert_eq!(
             brew_pick_lock_json(r#"{"guidedBrewRunning":true}"#)
                 .unwrap()
                 .unwrap(),
-            r#"{"reason":"guidedBrew","note":"Finish the current brew first"}"#
+            r#"{"reason":"guidedBrew","recipesLocked":true,"note":"Finish the current brew first"}"#
         );
     }
 

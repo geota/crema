@@ -680,8 +680,10 @@ pub fn pick_brew_selection_json(input_json: &str) -> Result<String, String> {
 }
 
 /// The picker lock (brew modes §4): a `BrewPickLockInput` JSON
-/// (`shotRunning`, `guidedBrewRunning`) in, a `BrewPickLock` JSON out, or
-/// `undefined` when the rows are enabled. See `de1_domain::brew_pick_lock`.
+/// (`shotRunning`, `guidedBrewRunning`) in, a `BrewPickLock` JSON (`reason`,
+/// `recipesLocked`, `note`) out, or `undefined` when the rows are enabled. A
+/// lock always disables the profile rows; `recipesLocked` the recipe rows
+/// too. See `de1_domain::brew_pick_lock`.
 #[wasm_bindgen(js_name = brewPickLockJson)]
 pub fn brew_pick_lock_json(input_json: &str) -> Result<Option<String>, String> {
     de1_domain::brew_pick_lock_json(input_json)
