@@ -414,7 +414,8 @@ data class MainUiState(
     val waterWarnMl: Float? = null,
     /** The bean library — user bean bags, persisted via [LibraryStore]. */
     val beans: BeanView = rowViewOf(),
-    /** The roaster directory (FK target for [beans]). */
+    /** The roaster directory (FK target for [beans]). Reads leave tombstones out
+     *  ([roasterViewOf], #488 review SF1); [withTombstones] has every row. */
     val roasters: RoasterView = rowViewOf(),
     /** The active bean id — the Brew bean block + burn-down, or null. */
     val activeBeanId: String? = null,

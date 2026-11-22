@@ -1888,9 +1888,9 @@ class LibraryController(
                 // Bag tombstones too, named, so Replace keeps them (#488 review S5).
                 beans = s.beans.withTombstones().map { it.id },
                 deletedBeans = s.beans.withTombstones().filter { it.deletedAt != null }.map { it.id },
-                roasters = s.roasters.map { it.id },
-                // Roaster tombstones too (#488 review SF1).
-                deletedRoasters = s.roasters.filter { it.deletedAt != null }.map { it.id },
+                // Roaster tombstones too, named, so Replace keeps them (#488 review SF1).
+                roasters = s.roasters.withTombstones().map { it.id },
+                deletedRoasters = s.roasters.withTombstones().filter { it.deletedAt != null }.map { it.id },
                 // #488: grinder records, archived and tombstones included, and the device's pointer.
                 grinders = s.grinders.map { it.id },
                 activeGrinderId = s.activeGrinderId,
@@ -2373,7 +2373,8 @@ class LibraryController(
     ): Pair<String?, List<Roaster>> {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return null to roasters
-        val existing = roasters.firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
+        // A tombstone (#488 review SF1) is deleted: a bag is never filed under it by name.
+        val existing = roasters.firstOrNull { it.deletedAt == null && it.name.equals(trimmed, ignoreCase = true) }
         return if (existing != null) {
             existing.id to roasters
         } else {
@@ -2727,7 +2728,7 @@ class LibraryController(
                 // the typed name (find-or-create) as before.
                 val (roasterId, roasters) = if (roasterPick != null) {
                     val row = coffee.crema.beans.pickedRoasterRow(roasterPick) { name -> newRoaster(name, now) }
-                    val held = rows.roasters.firstOrNull { it.id == row.id }
+                    val held = rows.roasters.firstOrNull { it.id == row.id && it.deletedAt == null }
                     if (held == null) {
                         // A seed is created; a matched row that vanished since → by name.
                         if (roasterPick.isNew) row.id to (rows.roasters + row) else resolveRoaster(roasterName, rows.roasters, now)
@@ -2743,8 +2744,16 @@ class LibraryController(
                     // The name it already files under: keep that roaster, rather than
                     // whichever row of that name comes first.
                     val filed = current?.roasterId?.let { rid -> rows.roasters.firstOrNull { it.id == rid } }
-                    if (filed != null && filed.name.equals(roasterName.trim(), ignoreCase = true)) filed.id to rows.roasters.toList()
-                    else resolveRoaster(roasterName, rows.roasters, now)
+                    when {
+                        // A bag a "this device only" delete left under a roaster
+                        // tombstone shows no roaster here; left blank, it keeps
+                        // that link, so the push never clears it on Visualizer
+                        // (#488 review SF1).
+                        filed != null && filed.deletedAt != null && roasterName.isBlank() -> filed.id to rows.roasters.toList()
+                        filed != null && filed.deletedAt == null && filed.name.equals(roasterName.trim(), ignoreCase = true) ->
+                            filed.id to rows.roasters.toList()
+                        else -> resolveRoaster(roasterName, rows.roasters, now)
+                    }
                 }
                 // The form holds what the bag was when it opened: only what the user
                 // changed lands, so a debit or a sync since then stands.
@@ -3374,7 +3383,8 @@ class LibraryController(
         val now = System.currentTimeMillis()
         editRoasters { rows ->
             rows.mapped {
-                if (it.id == id) it.copy(
+                // A tombstone stays as the delete left it (#488 review SF1).
+                if (it.id == id && it.deletedAt == null) it.copy(
                     name = name.trim(),
                     website = website?.takeIf { w -> w.isNotBlank() },
                     city = city?.takeIf { c -> c.isNotBlank() },
@@ -3393,12 +3403,18 @@ class LibraryController(
      * bags (roaster cleared), true deletes them too. The core's
      * `plan_roaster_delete` decides which bags go and the Visualizer ids;
      * [alsoOnVisualizer] then deletes those remote copies (bags first, then the
-     * roaster). Persisted.
+     * roaster). A roaster on Visualizer stays as a tombstone, and "this device
+     * only" ([alsoOnVisualizer] off) leaves its bags filed under it, so the next
+     * pull doesn't add it back and Visualizer's bags keep their roaster (#488
+     * review SF1). Persisted.
      */
     fun deleteRoaster(id: String, alsoOnVisualizer: Boolean = false, cascade: Boolean = false) {
         val s = uiState()
         val plan = runCatching {
-            coffee.crema.beans.planRoasterDelete(json, s.roasters, s.beans, id, cascade, s.activeBeanId)
+            coffee.crema.beans.planRoasterDelete(
+                json, s.roasters.withTombstones(), s.beans.withTombstones(), id, cascade, s.activeBeanId,
+                localOnly = !alsoOnVisualizer,
+            )
         }.getOrNull() ?: return
         val name = s.roasters.firstOrNull { it.id == id }?.name.orEmpty()
         val now = System.currentTimeMillis()
@@ -3457,7 +3473,7 @@ class LibraryController(
     /** Un-merge a tagged duplicate: clear its duplicate-of pointer (its bags stay where they are). Persisted. */
     fun unmergeRoaster(id: String) {
         val now = System.currentTimeMillis()
-        editRoasters { rows -> rows.mapped { if (it.id == id) it.copy(canonicalRoasterId = null, updatedAt = now) else it } }
+        editRoasters { rows -> rows.mapped { if (it.id == id && it.deletedAt == null) it.copy(canonicalRoasterId = null, updatedAt = now) else it } }
         persistLibrary()
     }
 

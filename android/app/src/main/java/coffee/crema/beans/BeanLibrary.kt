@@ -7,6 +7,7 @@ import coffee.crema.core.Grinder
 import coffee.crema.core.Roaster
 import coffee.crema.core.beanTombstoneJson
 import coffee.crema.core.duplicateBeanJson
+import coffee.crema.core.roasterTombstoneJson
 import coffee.crema.core.setBeanFrozenJson
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.inSaveOrder
@@ -147,6 +148,22 @@ fun beanTombstone(
 ): Bean = coreBeanJson.decodeFromString(
     Bean.serializer(),
     core(coreBeanJson.encodeToString(Bean.serializer(), source), nowMs),
+)
+
+/**
+ * The row a roaster on Visualizer deleted on this device leaves (#488 review
+ * SF1): the core's `roaster_tombstone`, as web: its id, name, Visualizer id
+ * and the stamps, nothing else. Kept so the next pull doesn't add it back, and
+ * so the bags still filed under it keep their link on Visualizer. [core] is
+ * the UniFFI `roasterTombstoneJson`.
+ */
+fun roasterTombstone(
+    source: Roaster,
+    nowMs: Long,
+    core: (roasterJson: String, nowMs: Long) -> String = ::roasterTombstoneJson,
+): Roaster = coreBeanJson.decodeFromString(
+    Roaster.serializer(),
+    core(coreBeanJson.encodeToString(Roaster.serializer(), source), nowMs),
 )
 
 /**

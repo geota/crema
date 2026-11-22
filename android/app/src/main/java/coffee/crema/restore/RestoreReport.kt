@@ -10,6 +10,11 @@ private fun bags(plan: RestorePlan): coffee.crema.core.BagCounts = plan.bagCount
     coffee.crema.core.BagCounts(it.add.size.toUInt(), it.overwrite.size.toUInt(), it.keep, it.remove.size.toUInt())
 }
 
+/** The roasters a report counts: the plan's roasters without tombstones (#488 review SF1). */
+private fun roasters(plan: RestorePlan): coffee.crema.core.BagCounts = plan.roasterCounts ?: plan.roasters.let {
+    coffee.crema.core.BagCounts(it.add.size.toUInt(), it.overwrite.size.toUInt(), it.keep, it.remove.size.toUInt())
+}
+
 /*
  * A restore plan in words (restore-safety design, "User-visible changes"),
  * worded as the web words it: the refusal, the report before a restore that
@@ -103,7 +108,7 @@ fun confirmText(plan: RestorePlan): Pair<String, String> {
     }
     val adds = counts(
         plan.shots.add.size + plan.shots.revive.size to "shot", bags(plan).add.toInt() to "bean",
-        plan.roasters.add.size to "roaster", plan.profiles.add.size to "profile", plan.recipes.add.size to "recipe",
+        roasters(plan).add.toInt() to "roaster", plan.profiles.add.size to "profile", plan.recipes.add.size to "recipe",
     )
     val keeps = counts(plan.shots.keep.toInt() to "shot", bags(plan).keep.toInt() to "bean")
     val deleted = plan.shots.deletedHere.size

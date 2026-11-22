@@ -59,6 +59,43 @@ class RoasterDeleteTest {
         assertNull(out.activeBeanId)
     }
 
+    /** #488 review SF1: a roaster on Visualizer deleted from this device only stays a tombstone, its bags still under it. */
+    @Test
+    fun `a local-only delete of a roaster on Visualizer keeps a tombstone and its bags' link`() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val withNotes = lib.copy(roasters = lib.roasters.map { if (it.id == sey.id) it.copy(notes = "great", website = "https://sey.coffee") else it })
+        val plan = planRoasterDelete(json, withNotes.roasters, withNotes.beans, sey.id, cascade = false, activeBeanId = a.id, localOnly = true)!!
+        assertEquals(true, plan.tombstoneRoaster)
+        assertTrue("the bags stay filed under the tombstone", plan.detachedBeanIds.isEmpty())
+        val out = applyRoasterDelete(withNotes, plan, nowMs = 99)
+        assertEquals(listOf(sey.id, onyx.id), out.roasters.map { it.id })
+        val tomb = out.roasters.single { it.id == sey.id }
+        assertEquals(99L, tomb.deletedAt)
+        assertEquals("vz-r", tomb.visualizerId)
+        assertEquals("Sey", tomb.name)
+        assertTrue("nothing the user wrote stays", tomb.notes.isEmpty() && tomb.website == null)
+        assertEquals(lib.beans, out.beans)
+        assertEquals(a.id, out.activeBeanId)
+    }
+
+    @Test
+    fun `a delete that also goes to Visualizer keeps the tombstone and detaches the bags`() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val plan = planRoasterDelete(json, lib.roasters, lib.beans, sey.id, cascade = false, activeBeanId = a.id, localOnly = false)!!
+        val out = applyRoasterDelete(lib, plan, nowMs = 99)
+        assertEquals(99L, out.roasters.single { it.id == sey.id }.deletedAt)
+        assertTrue(out.beans.filter { it.id != c.id }.all { it.roasterId == null && it.updatedAt == 99L })
+    }
+
+    @Test
+    fun `a roaster never on Visualizer is removed outright`() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val plan = planRoasterDelete(json, lib.roasters, lib.beans, onyx.id, cascade = false, activeBeanId = null, localOnly = true)!!
+        val out = applyRoasterDelete(lib, plan, nowMs = 99)
+        assertEquals(listOf(sey.id), out.roasters.map { it.id })
+        assertNull(out.beans.single { it.id == c.id }.roasterId)
+    }
+
     @Test
     fun `the Visualizer option shows only when the chosen scope has a synced copy`() {
         // Sey is synced itself.
