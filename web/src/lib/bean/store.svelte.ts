@@ -40,8 +40,10 @@ import {
 } from '#lib/wasm/de1_wasm.js';
 import {
 	type Grinder,
+	type GrinderAdd,
 	type GrinderChoice,
 	type GrindSave,
+	addAnotherGrinder as coreAddAnotherGrinder,
 	addGrinder as coreAddGrinder,
 	archiveGrinder as coreArchiveGrinder,
 	activeGrinder as coreActiveGrinder,
@@ -725,6 +727,29 @@ export class BeanLibraryStore {
 		const add = coreAddGrinder(this.allGrinders, name, catalogueId);
 		if (!add) return null;
 		if (add.kind !== 'existing') this.putGrinders([add.grinder]);
+		return add.grinder;
+	}
+
+	/**
+	 * What adding `name` / `catalogueId` would answer, without storing
+	 * anything: `existing` when a live record already is that model (Devices
+	 * then offers "Add another").
+	 */
+	grinderAddKind(name: string, catalogueId = ''): GrinderAdd['kind'] | null {
+		return coreAddGrinder(this.allGrinders, name, catalogueId)?.kind ?? null;
+	}
+
+	/**
+	 * Add **another** grinder of a model already owned (#488 follow-up 18):
+	 * an archived record of that model comes back, else a new one ("Niche
+	 * Zero 2", its own id, the same preset). With no grinder active it
+	 * becomes the active one, as an add does.
+	 */
+	addAnotherGrinder(name: string, catalogueId = ''): Grinder | null {
+		const add = coreAddAnotherGrinder(this.allGrinders, name, catalogueId);
+		if (!add) return null;
+		if (add.kind !== 'existing') this.putGrinders([add.grinder]);
+		if (this.activeGrinder === null) this.setActiveGrinder(add.grinder.id);
 		return add.grinder;
 	}
 
