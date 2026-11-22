@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.beans.BeanLibrary
+import coffee.crema.beans.activeGrinder
 import coffee.crema.beans.newBean
 import coffee.crema.beans.savedGrind
 import coffee.crema.core.BagGrind
@@ -593,5 +594,45 @@ class GrinderLibraryVmTest {
         assertNull(vm.ui.value.addAnotherOffer)
         assertNull(vm.addAnotherGrinder(offer.seq), "the offer is used up")
         assertTrue("Added Niche Zero 2" in vm.ui.value.userMessages, "${vm.ui.value.userMessages}")
+    }
+
+    // ── Batch 7 (REVIEW-FINAL-2 N6, N7) ──────────────────────────────────────
+
+    /** N7: History changes a shot's grinder (web's setGrinderModel); the id follows the name through the core's grinder_named. */
+    @Test
+    fun `History changes a shot's grinder and its id follows the name`() {
+        val df64 = Grinder(id = "grinder:df64", name = "DF64", scale = GrindScale(0f, 90f, 1f, ""), updatedAt = 1L)
+        writeLibraryAfter = BeanLibrary(emptyList(), emptyList(), null, listOf(niche, df64), niche.id)
+        val shot = coffee.crema.history.StoredShot(id = "shot:1", completedAtMs = 1L, durationMs = 1L, grinderModel = "DF64", grinderId = df64.id)
+        kotlinx.coroutines.runBlocking { coffee.crema.history.HistoryStore(app, coreJson).save(listOf(shot)) }
+        val vm = vm()
+        VmHarness.idleUntil("the row") { VmHarness.rows(vm).isNotEmpty() }
+        fun row() = VmHarness.rows(vm).single { it.id == "shot:1" }
+        vm.setShotGrinder("shot:1", " Niche ")
+        VmHarness.idle()
+        assertEquals("Niche", row().grinderModel, "the name as typed, trimmed")
+        assertEquals(niche.id, row().grinderId, "a catalogue alias names the owned Niche Zero")
+        vm.setShotGrinder("shot:1", "EK43")
+        VmHarness.idle()
+        assertEquals("EK43", row().grinderModel)
+        assertNull(row().grinderId, "no grinder of that name: no id, never the old one")
+        vm.setShotGrinder("shot:1", "  ")
+        VmHarness.idle()
+        assertNull(row().grinderModel, "blank clears it")
+        assertNull(row().grinderId)
+    }
+
+    /** N6: an id-less shot's grind scale, and Brew's active grinder, come from the core. */
+    @Test
+    fun `an old shot's grind scale finds its grinder through the catalogue`() {
+        val old = coffee.crema.history.StoredShot(id = "old", completedAtMs = 1L, durationMs = 1L, grinderModel = "Niche")
+        val row = old.toRow(coffee.crema.history.unknownSeriesSummary(old))
+        assertEquals(niche.scale, shotGrindScale(row, listOf(niche)), "\"Niche\" is the owned Niche Zero")
+        assertEquals(coffee.crema.beans.DEFAULT_GRIND_SCALE, shotGrindScale(row, emptyList()))
+        val stamped = old.copy(grinderId = "grinder:gone", grinderModel = "Niche Zero")
+        assertEquals(coffee.crema.beans.DEFAULT_GRIND_SCALE, shotGrindScale(stamped.toRow(coffee.crema.history.unknownSeriesSummary(stamped)), listOf(niche)), "an id is never re-read by name")
+        assertEquals(niche, listOf(niche).activeGrinder(niche.id))
+        assertNull(listOf(niche.copy(archivedAt = 2L)).activeGrinder(niche.id), "archived isn't active")
+        assertNull(listOf(niche).activeGrinder(""), "no pointer")
     }
 }

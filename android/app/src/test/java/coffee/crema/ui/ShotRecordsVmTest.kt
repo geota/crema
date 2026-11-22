@@ -121,6 +121,23 @@ class ShotRecordsVmTest {
         assertEquals(emptyList(), offered, "the hub uploads its own row")
     }
 
+    /** REVIEW-FINAL-2 N5: the mirror copy names the hub's bag as the hub's
+     *  snapshot does, never this device's own copy of it (an old name here),
+     *  and a bag this device doesn't hold at all. */
+    @Test
+    fun `a remote's mirror shot names the hub's bag, not its own copy`() {
+        val library = BeanLibrary(listOf(bag(RemoteFixture.BEAN_P), bag(RemoteFixture.BEAN_S)), emptyList(), RemoteFixture.BEAN_P)
+        val vm = fixture.start(library = library)
+        fixture.push(RemoteFixture.S.copy(activeBagName = "S bag, renamed on the hub"))
+        VmHarness.idleUntil("the hub's bag") { vm.ui.value.mirroredBag?.name == "S bag, renamed on the hub" }
+        pour(vm)
+        VmHarness.idleUntil("the mirror copy to be recorded", 5_000) { VmHarness.rows(vm).isNotEmpty() }
+        val shot = VmHarness.whole(vm, VmHarness.rows(vm).first().id)
+        assertEquals(RemoteFixture.BEAN_S, shot.bean?.beanId)
+        assertEquals("S bag, renamed on the hub", shot.bean?.name, "the hub's name, not this device's \"Bag ${RemoteFixture.BEAN_S}\"")
+        assertNull(shot.bean?.notes, "nothing from this device's own copy")
+    }
+
     /** REVIEW-FINAL-2 MF1 repro: a remote moves its mirror copy of the hub's
      *  18 g shot to another bag in History. The bag it named gets back nothing
      *  it never lost, and the new bag isn't debited on a remote (core

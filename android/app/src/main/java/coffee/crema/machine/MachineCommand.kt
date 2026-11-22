@@ -140,12 +140,15 @@ sealed interface MachineCommand {
      * formatted on the active grinder's scale, or a recorded grind as it is
      * ("2.1.3", "4⅓", a "Start from this shot" grind). Grind never reaches
      * the machine: it is recorded onto the next shot. A typed grind outside
-     * the active scale is kept; [refusal] is a sanity bound only.
+     * the active scale is kept; [refusal] is a sanity bound only. A number
+     * is what the core's `grind_number` reads (REVIEW-513 follow-up 2): a
+     * plain decimal or thirds, never an exponent, so "1e3" is a text grind,
+     * kept as typed, as the core and the other shell read it.
      */
     data class SetGrind(val grind: String) : Config {
         override fun refusal(): String? {
             val text = grind.trim()
-            val number = text.replace(',', '.').toDoubleOrNull()
+            val number = coffee.crema.beans.grindNumber(text)
             return when {
                 text.isEmpty() -> "a grind is required"
                 text.length > MAX_GRIND_LENGTH || text.any { it.isISOControl() } -> "malformed grind"

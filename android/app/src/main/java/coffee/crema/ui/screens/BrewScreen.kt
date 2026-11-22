@@ -513,6 +513,7 @@ fun BrewScreen(
                     grindView = ui.brewGrindView(),
                     unsavedGrindExplanation = ui.unsavedGrindExplanation(),
                     onGrind = { vm.setQcGrind(it.toFloat()) },
+                    onGrindText = vm::setQcGrindText,
                     onToggleChannel = vm::toggleChartChannel,
                     onDismiss = { quickOpen = false },
                     gate = ui::gate,

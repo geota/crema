@@ -2307,6 +2307,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setShotPinned(id: String, pinned: Boolean) = library.setShotPinned(id, pinned)
     fun setShotPerson(id: String, field: String, name: String?) = library.setShotPerson(id, field, name)
 
+    /** Change or clear the grinder a stored shot names; its id follows through the core (N7). */
+    fun setShotGrinder(id: String, name: String?) = library.setShotGrinder(id, name)
+
     /**
      * Prefill Brew from a logged shot — "start from this shot". Re-activates
      * the shot's bag (while it still exists un-archived), loads its profile
@@ -2879,6 +2882,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // As text on the active grinder's scale (on a remote, the hub's), the
         // core's grind_text: no one-decimal rounding (#488 round 2).
         machine.execute(MachineCommand.SetGrind(coffee.crema.beans.grindText(clicks.toDouble(), effectiveState().activeGrindScale())))
+
+    /**
+     * A typed grind that isn't a plain number ("2.1.3", "6 + a tooth", #28):
+     * Brew's grind as typed, trimmed (the core's text-grind rule, N2), on a
+     * remote relayed as text. Blank changes nothing.
+     */
+    fun setQcGrindText(text: String) {
+        val grind = text.trim().takeIf { it.isNotEmpty() } ?: return
+        machine.execute(MachineCommand.SetGrind(grind))
+    }
 
     /** Brew's grind, set by a bag or grinder pick on the device that owns
      *  the session (#488, review F9): persisted and pushed to remotes. Text

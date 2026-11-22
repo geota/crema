@@ -1132,6 +1132,25 @@ fun CremaValueUnit(
  * tolerant for es-ES and other comma-decimal locales), clamps to [min]..[max], and
  * commits via [onCommit]. Used by [CremaStepper] and the phone Quick-Controls cell.
  */
+/** What a tap-to-edit field commits ([typedValue]). */
+internal sealed interface TypedValue {
+    data class Number(val value: Double) : TypedValue
+    data class Text(val text: String) : TypedValue
+}
+
+/**
+ * What typed [text] commits: the number [parse] reads (default: a
+ * comma-tolerant decimal), else, with [acceptText], the trimmed text (a text
+ * grind, "2.1.3", the core's rule that a grind that isn't a plain number is
+ * Brew's grind as typed, #28); null for blank or nothing to take.
+ */
+internal fun typedValue(text: String, parse: ((String) -> Double?)?, acceptText: Boolean = false): TypedValue? {
+    val number = if (parse != null) parse(text) else text.trim().replace(',', '.').toDoubleOrNull()
+    if (number != null && number.isFinite()) return TypedValue.Number(number)
+    val trimmed = text.trim()
+    return if (acceptText && parse != null && trimmed.isNotEmpty()) TypedValue.Text(trimmed) else null
+}
+
 @Composable
 fun TapToEditValue(
     value: Double,
@@ -1152,6 +1171,10 @@ fun TapToEditValue(
     editText: ((Double) -> String)? = null,
     /** The full keyboard instead of the decimal pad (a thirds scale: "4 1/3", [editKeyboardType]). */
     fullKeyboard: Boolean = false,
+    /** The field's starting text when it isn't [editText]'s of [value] (a text grind as it is, "2.1.3"). */
+    initialText: String? = null,
+    /** Takes typed text [parse] doesn't read as a number (Brew's text grind, #28); null drops it. */
+    onText: ((String) -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     var editing by remember { mutableStateOf(false) }
@@ -1173,6 +1196,7 @@ fun TapToEditValue(
     var text by remember {
         mutableStateOf(
             when {
+                parse != null && initialText != null -> initialText
                 parse != null && editText != null -> editText(value)
                 value == kotlin.math.floor(value) -> fmt("%.0f", value)
                 else -> (kotlin.math.round(value * 100) / 100.0).toString()
@@ -1182,8 +1206,11 @@ fun TapToEditValue(
     fun commit() {
         if (!editing) return
         editing = false
-        val typed = if (parse != null) parse(text) else text.trim().replace(',', '.').toDoubleOrNull()
-        typed?.takeIf { it.isFinite() }?.let { onCommit(if (clampTyped) it.coerceIn(min, max) else it) }
+        when (val typed = typedValue(text, parse, acceptText = onText != null)) {
+            is TypedValue.Number -> onCommit(if (clampTyped) typed.value.coerceIn(min, max) else typed.value)
+            is TypedValue.Text -> onText?.invoke(typed.text)
+            null -> Unit
+        }
     }
     BasicTextField(
         value = text,
@@ -2049,6 +2076,8 @@ fun CremaStepper(
     parse: ((String) -> Double?)? = null,
     // The full keyboard for typing (a thirds scale's "4 1/3"); else the decimal pad.
     fullKeyboard: Boolean = false,
+    // Takes typed text [parse] doesn't read as a number (Brew's text grind, #28).
+    onText: ((String) -> Unit)? = null,
 ) {
     val chipLabel = gate.fmt(chipFmt ?: fmt)
     val fmtRaw = fmt
@@ -2082,6 +2111,8 @@ fun CremaStepper(
                         parse = parse,
                         editText = fmtRaw,
                         fullKeyboard = fullKeyboard,
+                        initialText = blank?.editText,
+                        onText = onText,
                         editStyle = CremaTheme.readout.readoutSm,
                         enabled = enabled,
                     ) {
@@ -2143,6 +2174,8 @@ fun CremaStepper(
                         parse = parse,
                         editText = fmtRaw,
                         fullKeyboard = fullKeyboard,
+                        initialText = blank?.editText,
+                        onText = onText,
                         editStyle = TextStyle(fontFamily = JetBrainsMono, fontSize = style.valueSize),
                         enabled = enabled,
                     ) {
@@ -2174,8 +2207,9 @@ fun CremaStepper(
 
 /** A stepper with no number to show ([CremaStepper]'s `blank`): [text] in
  *  the value's place ("—", or a grind like "2.1.3"), and where the first + or
- *  − goes ([start], the middle of a grind scale on its step). */
-data class StepperBlank(val text: String, val start: Double)
+ *  − goes ([start], the middle of a grind scale on its step). [editText] is
+ *  what typing starts from: a text grind as it is, null for "—" (the start's). */
+data class StepperBlank(val text: String, val start: Double, val editText: String? = null)
 
 // Small circular −/+ button (surfaceContainerHighest) used by every compact stepper.
 @Composable

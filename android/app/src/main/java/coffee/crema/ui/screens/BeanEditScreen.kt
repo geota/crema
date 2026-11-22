@@ -62,6 +62,7 @@ import coffee.crema.beans.subline
 import coffee.crema.core.CatalogueCoffeeBag
 import coffee.crema.core.CataloguePickRoaster
 import coffee.crema.ui.components.CatalogueClashDialog
+import coffee.crema.ui.remoteBagGrindsNote
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import coffee.crema.beans.applyBeanEdits
@@ -408,6 +409,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         lastGrinds = lastGrinds,
                         onStage = vm::stageGrinderPick,
                         toFix = grindsToFix,
+                    remoteNote = ui.remoteBagGrindsNote(),
                     )
                     // Linked profile — auto-loads when this bean is activated on
                     // Brew/Beans (web BeanEditPage parity). "(missing profile)"

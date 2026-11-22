@@ -269,3 +269,39 @@ internal fun lastConnected(lastSeenMs: Long, nowMs: Long): String {
     }
     return "Last connected $ago"
 }
+
+/*
+ * A remote's own library (REVIEW-FINAL-2 N4): libraries aren't synced, so on
+ * a remote Brew reads the hub's grinder, scale and bag grinds and the hub's
+ * auto-save setting decides. The controls that edit this device's own copy
+ * say so; null when this device isn't a remote.
+ */
+
+/** Devices → Grinder on a remote: its grinders and their scales are this device's own. */
+internal fun MainUiState.remoteGrindersNote(): String? =
+    mirror?.let { "Brew uses ${remoteHubLabel()}’s grinder and grind scale. These grinders are this device’s own." }
+
+/** "Save each shot's grind to its bag" on a remote: off here, the hub's setting decides. */
+internal fun MainUiState.remoteAutoSaveNote(): String? =
+    mirror?.let { "Brew uses ${remoteHubLabel()}’s setting: ${remoteHubLabel()} saves its shots’ grinds, this device never does." }
+
+/** A bag's saved grinds on a remote (Devices' "Saved on bags", the bag editor): this device's own copy. */
+internal fun MainUiState.remoteBagGrindsNote(): String? =
+    mirror?.let { "Brew uses ${remoteHubLabel()}’s saved grinds. These are this device’s own." }
+
+/**
+ * What a remote's Undo of its relayed bag pick can't send back to [hub]
+ * (#50, REVIEW-521 follow-up 2): "no profile" and "no grind" have no relay
+ * command, so where the Undo would clear them they stay as the hub has
+ * them, and the message says so. Null when every part went back.
+ */
+internal fun relayedUndoLeftover(change: coffee.crema.core.SelectionChange, hub: String): String? {
+    val profile = change.profileId != null && change.profileId.value == null
+    val grind = change.grind != null && change.grind.value == null
+    return when {
+        profile && grind -> "$hub keeps its profile and grind: a remote’s Undo can’t clear them."
+        profile -> "$hub keeps its profile: a remote’s Undo can’t clear it."
+        grind -> "$hub keeps its grind: a remote’s Undo can’t clear it."
+        else -> null
+    }
+}

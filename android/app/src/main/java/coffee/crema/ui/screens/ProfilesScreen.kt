@@ -59,6 +59,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coffee.crema.ui.preferringProfileCount
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
@@ -298,6 +299,7 @@ fun ProfilesScreen(
                         onDuplicate = { vm.duplicateProfile(profile.id); onNav("profile-edit") },
                         onExport = { vm.exportProfile(profile.id) },
                         onDelete = { vm.deleteProfile(profile.id) },
+                        linkedBags = ui.beans.preferringProfileCount(profile.id),
                         isHidden = profile.id in ui.hiddenProfileIds,
                         onArchive = { vm.archiveBuiltinProfile(profile.id) },
                         onUnarchive = { vm.unarchiveBuiltinProfile(profile.id) },
@@ -397,6 +399,8 @@ private fun ProfileCard(
     onDuplicate: () -> Unit,
     onExport: () -> Unit,
     onDelete: () -> Unit,
+    /** The bags that prefer this profile: the delete clears their link (N3). */
+    linkedBags: Int = 0,
     isHidden: Boolean = false,
     onArchive: () -> Unit = {},
     onUnarchive: () -> Unit = {},
@@ -512,7 +516,7 @@ private fun ProfileCard(
     if (confirmDelete) {
         CremaConfirmDialog(
             title = "Delete profile?",
-            body = "“${profile.name}” will be removed. This can’t be undone.",
+            body = coffee.crema.ui.profileDeleteBody(profile.name, linkedBags),
             confirmLabel = "Delete",
             icon = "trash",
             danger = true,

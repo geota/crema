@@ -214,6 +214,8 @@ fun PhoneQuickSheet(
                                 fullKeyboard = doseGrindMode == DoseGrindMode.Grind && coffee.crema.beans.grindFullKeyboard(grindScale),
                                 fmt = if (doseGrindMode == DoseGrindMode.Dose) ({ fmt("%.1f", it) }) else ({ v -> coffee.crema.beans.grindText(v, grindScale) }),
                                 onChange = { if (doseGrindMode == DoseGrindMode.Dose) vm.quickAdjustBrew(it, yieldOut, brewTemp, preinfOverride) else vm.setQcGrind(it.toFloat()) },
+                                // A typed text grind is Brew's grind as typed (#28).
+                                onText = if (doseGrindMode == DoseGrindMode.Grind) vm::setQcGrindText else null,
                                 gate = if (doseGrindMode == DoseGrindMode.Dose) brewGate else ui.gate(Setting.QC_GRIND),
                             )
                             // Yield | Ratio.
@@ -477,6 +479,8 @@ private fun QcCell(
     parse: ((String) -> Double?)? = null,
     /** The full keyboard for typing (a thirds scale's "4 1/3"). */
     fullKeyboard: Boolean = false,
+    /** Takes typed text [parse] doesn't read as a number (Brew's text grind, #28). */
+    onText: ((String) -> Unit)? = null,
 ) {
     val presetLabel = gate.fmt(presetFmt ?: fmt)
     val fmt = gate.fmt(fmt)
@@ -505,6 +509,8 @@ private fun QcCell(
                         parse = parse,
                         editText = fmt,
                         fullKeyboard = fullKeyboard,
+                        initialText = blank?.editText,
+                        onText = onText,
                     ) {
                         Text(
                             blank?.text ?: fmt(value),

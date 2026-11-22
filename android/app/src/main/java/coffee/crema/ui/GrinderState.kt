@@ -4,6 +4,7 @@ import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.DEFAULT_GRIND_SCALE
 import coffee.crema.beans.activeGrinder
 import coffee.crema.beans.formatGrind
+import coffee.crema.beans.grinderNamed
 import coffee.crema.beans.isLive
 import coffee.crema.beans.savedGrind
 import coffee.crema.core.BagGrind
@@ -108,7 +109,7 @@ fun BrewGrindView.headerText(): String = "Grind $display"
 
 /** The stepper's blank state ([coffee.crema.ui.components.StepperBlank]): the grind isn't set ("—") or isn't a plain number ("2.1.3"). */
 fun BrewGrindView.stepperBlank(): coffee.crema.ui.components.StepperBlank? =
-    if (dial != null) null else coffee.crema.ui.components.StepperBlank(value ?: "—", startFromBlank)
+    if (dial != null) null else coffee.crema.ui.components.StepperBlank(value ?: "—", startFromBlank, editText = value)
 
 /** A scale bound or step as Devices and the pickers show it: "999", "0.1". */
 fun scaleNumber(v: Float): String = if (v % 1f == 0f) String.format(java.util.Locale.ROOT, "%.0f", v) else v.toString()
@@ -142,12 +143,17 @@ fun grindersSettingsLine(activeGrinder: String?): String =
 fun scaleRangeText(scale: GrindScale): String =
     "${scaleNumber(scale.min)}–${scaleNumber(scale.max)}" + scale.unit.trim().takeIf { it.isNotEmpty() }?.let { " $it" }.orEmpty()
 
-/** The scale a stored shot's grind is on: its grinder's by id, an older row's by name, else the default. */
-fun shotGrindScale(shot: coffee.crema.history.ShotMeta, grinders: List<Grinder>): GrindScale =
-    grinders.firstOrNull { g -> !shot.grinderId.isNullOrEmpty() && g.id == shot.grinderId }?.scale
-        ?: shot.grinderModel?.trim()?.takeIf { shot.grinderId.isNullOrEmpty() && it.isNotEmpty() }
-            ?.let { name -> grinders.firstOrNull { it.name.trim().equals(name, ignoreCase = true) }?.scale }
-        ?: DEFAULT_GRIND_SCALE
+/**
+ * The scale a stored shot's grind is on: its grinder's by id, else, for a
+ * row from before grinder ids, the grinder its name names through the core
+ * (`grinder_named`, REVIEW-FINAL-2 N6: an old "Niche" shot is on the owned
+ * Niche Zero's scale), else the default.
+ */
+fun shotGrindScale(shot: coffee.crema.history.ShotMeta, grinders: List<Grinder>): GrindScale {
+    val id = shot.grinderId
+    if (!id.isNullOrEmpty()) return grinders.firstOrNull { it.id == id }?.scale ?: DEFAULT_GRIND_SCALE
+    return grinders.grinderNamed(shot.grinderModel)?.scale ?: DEFAULT_GRIND_SCALE
+}
 
 /** One grinder row in the Brew pickers (wide header, phone swap section). */
 data class GrinderPickRow(val grinder: Grinder, val starred: Boolean, val meta: String)

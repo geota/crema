@@ -58,6 +58,23 @@ fun ShotPeopleFields(
     }
 }
 
+/**
+ * The grinder a shot names (REVIEW-FINAL-2 N7, web History's grinder
+ * field): free text, with chips for the grinders on Devices that start with
+ * what's typed. Commits like a person field (after a pause, on a chip tap,
+ * on leaving); blank clears it. The id follows the name in the store.
+ */
+@Composable
+fun ShotGrinderField(
+    shotId: String,
+    grinderName: String?,
+    grinderNames: List<String>,
+    onChange: (String?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    PersonField(shotId, "Grinder", "No grinder", grinderName, grinderNames, onChange, modifier.fillMaxWidth())
+}
+
 @Composable
 private fun PersonField(
     shotId: String,

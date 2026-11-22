@@ -59,6 +59,9 @@ import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.liveGrinders
 import coffee.crema.beans.newestShotGrind
 import coffee.crema.ui.presetLabel
+import coffee.crema.ui.remoteAutoSaveNote
+import coffee.crema.ui.remoteBagGrindsNote
+import coffee.crema.ui.remoteGrindersNote
 import coffee.crema.ui.scaleFieldNumber
 import coffee.crema.ui.scaleNumber
 import coffee.crema.ui.scaleRangeText
@@ -105,6 +108,8 @@ fun DevicesGrinderContent(vm: MainViewModel, ui: MainUiState, wide: Boolean, mod
                     },
                 )
             }
+            // A remote's grinders are its own; Brew reads the hub's (N4).
+            ui.remoteGrindersNote()?.let { RemoteNote(it) }
             if (live.isEmpty()) {
                 Text(
                     "No grinders yet. Add yours to give Brew its grind range and unit; with none, Brew uses 0–20 in steps of 0.1.",
@@ -139,16 +144,18 @@ fun DevicesGrinderContent(vm: MainViewModel, ui: MainUiState, wide: Boolean, mod
                 }
             }
             // "Save each shot's grind to its bag" (board WideDevicesAutoSave): personal, per device.
+            // A remote never auto-saves: the hub's setting decides, so it's off here (N4).
+            val autoSaveRemote = ui.remoteAutoSaveNote()
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Column(Modifier.weight(1f)) {
                     Text("Save each shot's grind to its bag", style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        "Off: grinds are saved only when you tap Save. On: every kept shot also saves its grind for that bag and grinder.",
+                        autoSaveRemote ?: "Off: grinds are saved only when you tap Save. On: every kept shot also saves its grind for that bag and grinder.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                CremaSwitch(ui.grindAutoSave == true, vm::setGrindAutoSave)
+                CremaSwitch(ui.grindAutoSave == true, vm::setGrindAutoSave, enabled = autoSaveRemote == null)
             }
             val archived = ui.archivedGrinders
             if (archived.isNotEmpty()) {
@@ -256,7 +263,8 @@ private fun GrinderSettings(vm: MainViewModel, ui: MainUiState, g: Grinder, wide
         }
         if (changed) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(refusal ?: "Changes apply to Brew once saved.", style = MaterialTheme.typography.bodySmall, color = if (refusal != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                // On a remote Brew reads the hub's scale, so saving this one doesn't change Brew (N4).
+                Text(refusal ?: ui.remoteGrindersNote() ?: "Changes apply to Brew once saved.", style = MaterialTheme.typography.bodySmall, color = if (refusal != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                 CremaButton(onClick = { lo = scaleNumber(g.scale.min); hi = scaleNumber(g.scale.max); step = scaleStepField(g.scale); unit = g.scale.unit }, variant = CremaButtonVariant.Text, label = "Cancel")
                 CremaButton(
                     onClick = { vm.saveGrinderEdit(g, g.copy(scale = g.scale.copy(min = num(lo)!!, max = num(hi)!!, step = num(step)!!, unit = unit.trim()))) },
@@ -352,6 +360,7 @@ private fun SavedOnBags(vm: MainViewModel, ui: MainUiState, g: Grinder) {
     Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainerLowest, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Eyebrow("Saved on bags")
+            ui.remoteBagGrindsNote()?.let { RemoteNote(it) }
             if (saved.isEmpty() && shotOnly.isEmpty()) {
                 Text("No grinds saved for it yet", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -370,4 +379,10 @@ private fun SavedOnBags(vm: MainViewModel, ui: MainUiState, g: Grinder) {
             }
         }
     }
+}
+
+/** What a remote's own-library control doesn't drive (N4): Brew uses the hub's. */
+@Composable
+internal fun RemoteNote(text: String) {
+    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
 }

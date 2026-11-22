@@ -673,6 +673,7 @@ fun HistoryScreen(
                             roasters = ui.roasters,
                             onGrindChange = { g, scale -> vm.setShotGrind(selected.id, g, scale) },
                             grinders = ui.grinders,
+                            onGrinderChange = { name -> vm.setShotGrinder(selected.id, name) },
                             onBeanChange = { bid -> vm.setShotBean(selected.id, bid) },
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
@@ -992,6 +993,8 @@ private fun ShotDetail(
     onGrindChange: (Double, coffee.crema.core.GrindScale) -> Unit = { _, _ -> },
     /** The grinders, for the shot's grind scale (#488). */
     grinders: List<coffee.crema.core.Grinder> = emptyList(),
+    /** Change or clear the grinder this shot names (N7); null clears. */
+    onGrinderChange: (String?) -> Unit = {},
     /** Re-attribute this shot to another bean; null = no bean (issue #16). */
     onBeanChange: (String?) -> Unit = {},
     /** Edit the forward-looking "next time" plan (local-only). */
@@ -1411,6 +1414,9 @@ private fun ShotDetail(
                 coffee.crema.ui.components.ShotGrindStepper(shot, grinders, onGrindChange)
             }
         }
+        // The grinder the shot names (N7): its id follows the name through the core.
+        val grinderNames = remember(grinders) { grinders.filter { it.archivedAt == null && it.deletedAt == null }.map { it.name } }
+        coffee.crema.ui.components.ShotGrinderField(shot.id, shot.grinderModel, grinderNames, onGrinderChange)
         ShotPeopleFields(
             shotId = shot.id,
             barista = shot.barista,

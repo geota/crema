@@ -24,6 +24,7 @@ import coffee.crema.profiles.effectiveProfileFilter
 import coffee.crema.profiles.filterAndSortProfiles
 import coffee.crema.profiles.profileChipCounts
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.preferringProfileCount
 import coffee.crema.ui.profilesListKey
 import coffee.crema.ui.rememberListBool
 import coffee.crema.ui.rememberListOptString
@@ -308,7 +309,7 @@ fun PhoneProfilesScreen(
     confirmDelete?.let { p ->
         CremaConfirmDialog(
             title = "Delete profile?",
-            body = "“${p.name}” will be removed. This can’t be undone.",
+            body = coffee.crema.ui.profileDeleteBody(p.name, ui.beans.preferringProfileCount(p.id)),
             confirmLabel = "Delete",
             icon = "trash",
             danger = true,

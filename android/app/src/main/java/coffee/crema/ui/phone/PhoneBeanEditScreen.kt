@@ -32,6 +32,7 @@ import coffee.crema.beans.subline
 import coffee.crema.core.CatalogueCoffeeBag
 import coffee.crema.core.CataloguePickRoaster
 import coffee.crema.ui.components.CatalogueClashDialog
+import coffee.crema.ui.remoteBagGrindsNote
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import coffee.crema.beans.applyBeanEdits
@@ -386,6 +387,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     lastGrinds = lastGrinds,
                     onStage = vm::stageGrinderPick,
                     toFix = grindsToFix,
+                    remoteNote = ui.remoteBagGrindsNote(),
                     compact = true,
                 )
                 // Linked profile — bean → profile auto-load (feature parity with web/tablet).

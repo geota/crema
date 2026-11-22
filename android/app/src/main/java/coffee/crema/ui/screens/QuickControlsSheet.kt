@@ -156,6 +156,8 @@ fun QuickControlsSheet(
      *  gets a copper ring) and "● Bag 4.2" while the grind differs. */
     grindView: coffee.crema.core.BrewGrindView,
     onGrind: (Double) -> Unit,
+    /** A typed text grind ("2.1.3"), Brew's grind as typed (#28). */
+    onGrindText: (String) -> Unit = {},
     unsavedGrindExplanation: String? = null,
     onToggleChannel: (String, Boolean) -> Unit,
     onDismiss: () -> Unit,
@@ -317,6 +319,7 @@ fun QuickControlsSheet(
                         parse = if (doseGrindMode == DoseGrindMode.Grind) ({ t: String -> coffee.crema.beans.grindNumber(t) }) else null,
                         fullKeyboard = doseGrindMode == DoseGrindMode.Grind && coffee.crema.beans.grindFullKeyboard(grindScale),
                         onChange = { if (doseGrindMode == DoseGrindMode.Dose) onAdjustBrew(it, yieldOut, brewTemp, preinfOverride) else onGrind(it) },
+                        onText = if (doseGrindMode == DoseGrindMode.Grind) onGrindText else null,
                         style = CremaStepperStyle.Boxed,
                         gate = doseGrindGate,
                         header = {

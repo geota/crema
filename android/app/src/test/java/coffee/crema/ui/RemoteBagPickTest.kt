@@ -81,6 +81,30 @@ class RemoteBagPickTest {
         assertNull(vm.ui.value.bagSelectUndo)
     }
 
+    /** #50: "no profile" and "no grind" don't relay, so the Undo says the hub keeps them. */
+    @Test
+    fun `an Undo that can't clear the hub's profile and grind says so`() {
+        val vm = fixture.start()
+        fixture.push(S.copy(rev = 1))
+        val selection = BagSelection(
+            change = SelectionChange(profileId = SetTo(PROFILE_P), grind = SetTo("18")),
+            undo = SelectionChange(profileId = SetTo(null), grind = SetTo(null)),
+            changed = true,
+            message = "P bag: Blooming profile, grind 18",
+        )
+        hubAnswers(selection, after = S.copy(activeBeanId = BEAN_P, activeProfileId = PROFILE_P, qcGrind = "18", rev = 2))
+        vm.setActiveBean(BEAN_P)
+        VmHarness.idleUntil("the hub's answer") { vm.ui.value.bagSelectUndo != null }
+        val undo = assertNotNull(vm.ui.value.bagSelectUndo)
+        val before = fixture.handled.size
+        vm.undoBagSelection(undo.seq)
+        VmHarness.idle()
+        assertEquals(emptyList(), fixture.handled.drop(before), "nothing it could send")
+        val said = vm.ui.value.userMessages.filter { "Undo can’t clear" in it }
+        assertEquals(1, said.size, "${vm.ui.value.userMessages}")
+        assertTrue("keeps its profile and grind" in said.single(), said.single())
+    }
+
     @Test
     fun `a pick that changed nothing shows the hub's notice and no Undo`() {
         val vm = fixture.start()

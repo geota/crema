@@ -100,7 +100,18 @@ class MachineCommandCodecTest {
         for (text in listOf("14.5", "15", "0", "2.1.3", "4⅓", "1 turn + 3", "14,5")) {
             assertEquals(MachineCommand.SetGrind(text), ok("setQcGrind", text).command, text)
         }
-        for (bad in listOf("NaN", "Infinity", "-Infinity", "1e9", "-1", "", "  ", "a\nb", "x".repeat(65))) refused("setQcGrind", bad)
+        for (bad in listOf("-1", "-0.5", "20000", "", "  ", "a\nb", "x".repeat(65))) refused("setQcGrind", bad)
+    }
+
+    /** REVIEW-513 follow-up 2: a number is what the core's grind_number reads, so an exponent is text, not a number to range-check. */
+    @Test
+    fun `the relayed grind reads numbers through the core, so an exponent is text`() {
+        for (text in listOf("1e3", "1e9", "2E1", "NaN", "Infinity")) {
+            assertEquals(MachineCommand.SetGrind(text), ok("setQcGrind", text).command, text)
+        }
+        // Thirds and a decimal comma are numbers, range-checked.
+        assertEquals(null, MachineCommand.SetGrind("4 1/3").refusal())
+        assertNotNull(MachineCommand.SetGrind("10000,5").refusal())
     }
 
     /** Follow-up 19: a grinder pick carries the record's name, and a bare id (no name) is refused. */

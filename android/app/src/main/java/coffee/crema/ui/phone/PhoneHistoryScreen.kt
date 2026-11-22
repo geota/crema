@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.liveGrinders
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -1045,6 +1046,10 @@ private fun PhoneShotDetail(
                         val grinders by remember { vm.ui.map { it.grinders }.distinctUntilChanged() }.collectAsStateWithLifecycle(emptyList())
                         coffee.crema.ui.components.ShotGrindStepper(shot, grinders, { g, scale -> vm.setShotGrind(shot.id, g, scale) })
                     }
+                    // The grinder the shot names (N7): its id follows the name through the core.
+                    val grinderNames by remember(vm) { vm.ui.map { s -> s.liveGrinders.map { it.name } }.distinctUntilChanged() }
+                        .collectAsStateWithLifecycle(emptyList())
+                    coffee.crema.ui.components.ShotGrinderField(shot.id, shot.grinderModel, grinderNames, { name -> vm.setShotGrinder(shot.id, name) })
                     // Only the name lists, recomputed when the history list changes
                     // — not a second collect of the whole UI state, which ticks
                     // with live telemetry and re-sorted the history each time.
