@@ -50,7 +50,9 @@
 		onToggleStopOnWeight,
 		yieldTargetOn,
 		onToggleYieldTarget,
-		onSavePreset,
+		onSave,
+		saveEnabled = false,
+		onSaveAsNew,
 		onToggleSteamEco
 	}: {
 		/** The shared Quick Sheet parameter store. */
@@ -98,7 +100,12 @@
 		 * the ProfileStore. `undefined` when no active profile (the
 		 * button is hidden in that case).
 		 */
-		onSavePreset?: () => void;
+		/** Save: each changed part to its owner (`#lib/brew/quick-save.js`). */
+		onSave?: () => void;
+		/** Save has something to write; off otherwise. */
+		saveEnabled?: boolean;
+		/** "Save as new…": set when Save would update a custom profile in place. */
+		onSaveAsNew?: () => void;
 		/**
 		 * Toggle steam eco mode. Parent owns the `settings.set` +
 		 * `app.applySteamEcoMode` pair so the BLE write fires at the
@@ -182,8 +189,11 @@
 			<h2 class="qsheet-v2-title" id={titleId}>Quick Controls</h2>
 		</div>
 		<div class="qsheet-v2-actions">
-			{#if onSavePreset}
-				<button class="qsheet-cta" onclick={onSavePreset}>
+			{#if onSaveAsNew}
+				<button class="qsheet-cta" onclick={onSaveAsNew}>Save as new…</button>
+			{/if}
+			{#if onSave}
+				<button class="qsheet-cta" onclick={onSave} disabled={!saveEnabled}>
 					<BookmarkSimpleIcon aria-hidden="true" /> Save
 				</button>
 			{/if}

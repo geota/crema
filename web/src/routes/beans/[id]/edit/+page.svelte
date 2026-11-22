@@ -3,8 +3,8 @@
 	 * `/beans/[id]/edit` — edit an existing bean in the full editor.
 	 *
 	 * Reads `id` from the route, resolves it via the library store, and
-	 * passes the live record to {@link BeanEditPage} (which writes each
-	 * patch through to the store). If the id is unknown the user is
+	 * passes the record to {@link BeanEditPage}, which edits a draft and
+	 * merges it onto the stored bag on Save. If the id is unknown the user is
 	 * bounced back to `/beans` (only on arrival, not after a delete here).
 	 */
 	import { page } from '$app/state';

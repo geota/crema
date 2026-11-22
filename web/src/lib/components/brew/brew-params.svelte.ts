@@ -146,9 +146,24 @@ export class BrewParamState {
 			// The app-level overrides for this profile (read untracked: the
 			// dial writes them as it moves, which must not re-seed it), so a
 			// remounted dial shows what it was left at.
-			...untrack(() => this.overrides?.() ?? {})
+			...untrack(() => this.overrides?.() ?? {}),
+			...this.keptGrind()
 		};
 	});
+
+	/**
+	 * The grind dial as last set. The grind is the bag's, not the profile's
+	 * (it has no profile default), so neither a re-seed (another profile, the
+	 * profile saved by Quick Controls' Save) nor Reset puts it back to the
+	 * 4.2 placeholder: Save would then offer that as a change to the bag
+	 * (save-boundaries review F1). A plain field, so the seed `$derived`
+	 * doesn't track it.
+	 */
+	private grindDial: number | null = null;
+
+	private keptGrind(): Partial<BrewParams> {
+		return this.grindDial === null ? {} : { grind: this.grindDial };
+	}
 
 	/**
 	 * @param seed A getter for the current brew-target seed. Read inside the
@@ -233,12 +248,14 @@ export class BrewParamState {
 		// through `onWrite` to push the value onto the DE1. Reassigning the
 		// `$derived` overrides the seed with a local edit either way.
 		this.current = { ...this.current, [key]: value };
+		if (key === 'grind') this.grindDial = value as number;
 		this.onWrite?.(key, value);
 	}
 
-	/** Restore the params to the current seed — the sheet's "Reset" action. */
+	/** Restore the params to the current seed — the sheet's "Reset" action.
+	 *  The grind dial stays: it is the bag's, not the profile's. */
 	reset(): void {
-		this.current = { ...DEFAULT_BREW_PARAMS, ...this.qcSeed?.(), ...this.seed() };
+		this.current = { ...DEFAULT_BREW_PARAMS, ...this.qcSeed?.(), ...this.seed(), ...this.keptGrind() };
 	}
 
 	/**

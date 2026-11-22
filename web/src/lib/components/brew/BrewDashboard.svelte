@@ -101,7 +101,18 @@
 	import { scoreMap, searchBeans } from '#lib/bean/search.js';
 	import BeanPicker from '#lib/components/history/BeanPicker.svelte';
 	import { getMaintenanceStore } from '#lib/maintenance/index.js';
-	import { toast } from '#lib/components/shared/toast.svelte.js';
+	import { dismissToast, toast } from '#lib/components/shared/toast.svelte.js';
+	import {
+		copyNameSeed,
+		needsName,
+		offersSaveAsNew,
+		quickSavePlan,
+		runQuickSave,
+		saveEnabled,
+		undoQuickSave,
+		type QuickSaveDeps,
+		type QuickSaveUndo
+	} from '#lib/brew/quick-save.js';
 	import { keepToastsAbove } from '#lib/components/shared/toast-inset.svelte.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { getActiveShotStore, getBrewContext, getMachineReadout } from '#lib/state/index.js';
@@ -496,55 +507,6 @@
 	 * all agree; the steppers may then edit it locally. On Start the live
 	 * snapshot is frozen onto the orchestrator and drives the actual shot.
 	 */
-	/**
-	 * Save the current QC dial values as a new custom profile, cloned
-	 * from the active profile. Prompts for a name; clamps blanks to a
-	 * timestamped default. The new profile is persisted via
-	 * ProfileStore and (per #83 wiring) activated + eagerly uploaded to
-	 * the DE1 if connected.
-	 */
-	async function savePreset(): Promise<void> {
-		// Scope-aware Save (issue #16): the grind dial writes back to the
-		// active bean first — one button, each dirty part to its owner.
-		const bean = beanLibrary.activeBean;
-		const dial = params.current.grind;
-		if (bean && Number.isFinite(dial)) {
-			const fmt = Number.isInteger(dial) ? String(dial) : dial.toFixed(1);
-			if ((bean.grinderSetting ?? '') !== fmt) {
-				beanLibrary.updateBean(bean.id, { grinderSetting: fmt });
-				toast.info(`Grind ${fmt} saved to ${bean.name}`);
-			}
-		}
-		const base = activeProfile;
-		if (!base) return;
-		const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
-		const suggested = `${base.name} — profile ${stamp}`;
-		const name = (
-			await promptDialog({
-				title: 'Save profile',
-				message: 'Name for the new profile:',
-				initialValue: suggested,
-				confirmLabel: 'Save'
-			})
-		)?.trim();
-		if (!name) return;
-		// The dial values that genuinely affect the recipe, baked in by the
-		// core exactly as a shot would run them: brew temp shifts every
-		// segment, pre-infusion rescales the leading segments, dose / yield
-		// replace. Steam / hot-water / flush fields on BrewParams are
-		// session-only UI; they aren't part of the profile model.
-		const cloned: CremaProfile = {
-			...effectiveCremaProfile(base, params.qcOverrides()),
-			source: 'custom',
-			id: newProfileId(),
-			name,
-			pinned: false,
-			lastUsed: null
-		};
-		profileStore.save(cloned);
-		profileStore.setActive(cloned.id);
-	}
-
 	// Quick Sheet steam / hot-water key → its persisted Settings field (issue
 	// 14). These three share the cuuid_0B packet with the hot-water dose (which
 	// the Hot water card stores itself); the rest persist via literal keys in
@@ -615,6 +577,82 @@
 	function effectiveOverrides(): ProfileFingerprintOverrides {
 		const qc = params.qcOverrides();
 		return activeProfile ? normalizeBrewOverrides(activeProfile, qc) : qc;
+	}
+
+	/**
+	 * Quick Controls' Save (save-boundaries review F1, Android parity): each
+	 * changed part to its owner — the grind to the active bag, the recipe
+	 * dials to a custom profile in place (Undo in the message) or, for a
+	 * built-in, to a named copy made active. Nothing is written until the
+	 * user confirms; cancelling the name prompt writes nothing. See
+	 * `#lib/brew/quick-save.js`.
+	 */
+	const quickSave = $derived(
+		quickSavePlan({
+			bean: beanLibrary.activeBean,
+			dial: params.current.grind,
+			dialDefault: DEFAULT_BREW_PARAMS.grind,
+			profile: activeProfile ?? null,
+			overrides: activeProfile ? effectiveOverrides() : {}
+		})
+	);
+	const quickSaveDeps: QuickSaveDeps = {
+		beans: beanLibrary,
+		profiles: profileStore,
+		bake: effectiveCremaProfile,
+		newId: newProfileId
+	};
+	/** The last Save's message: a newer Save replaces it, so an older Undo can't linger. */
+	let quickSaveToast: number | null = null;
+
+	async function runSave(asNew: boolean): Promise<void> {
+		let copyName: string | null = null;
+		if (needsName(quickSave) || (asNew && offersSaveAsNew(quickSave))) {
+			copyName =
+				(
+					await promptDialog({
+						title: asNew ? 'Save as new profile' : 'Save a copy',
+						message: 'Profile name:',
+						initialValue: copyNameSeed(quickSave),
+						confirmLabel: 'Save'
+					})
+				)?.trim() || null;
+			if (!copyName) return;
+		}
+		const profile = activeProfile ?? null;
+		// The dial the Save folds into the profile, for its Undo.
+		const dialled = params.qcOverrides();
+		const result = runQuickSave(quickSave, quickSaveDeps, {
+			profile,
+			overrides: profile ? effectiveOverrides() : {},
+			copyName,
+			asNew
+		});
+		if (!result) return;
+		if (quickSaveToast !== null) dismissToast(quickSaveToast);
+		quickSaveToast = null;
+		const undo = result.undo;
+		if (undo) {
+			quickSaveToast = toast.action(result.message, 'Undo', () => void undoSave(undo, dialled));
+		} else {
+			toast.success(result.message);
+		}
+	}
+
+	/** Undo an in-place Save: the profile (if unchanged since) and the dial it folded in. */
+	async function undoSave(u: QuickSaveUndo, dialled: Partial<BrewParamSeed>): Promise<void> {
+		quickSaveToast = null;
+		const r = undoQuickSave(u, quickSaveDeps);
+		if (r.profileRestored && profileStore.activeId === u.profileId) {
+			await tick();
+			// The dial comes back only if it wasn't moved since the Save.
+			if (Object.keys(params.qcOverrides()).length === 0) {
+				for (const [key, value] of Object.entries(dialled)) {
+					params.set(key as keyof BrewParamSeed, value);
+				}
+			}
+		}
+		toast.info(r.message);
 	}
 	/**
 	 * The dial is part of what the DE1 should hold: every change of the active
@@ -2039,7 +2077,9 @@
 			onToggleStopOnWeight={toggleStopOnWeight}
 			onToggleAutoTare={toggleAutoTare}
 			onToggleSteamEco={toggleSteamEco}
-			onSavePreset={activeProfile ? savePreset : undefined}
+			onSave={() => void runSave(false)}
+			saveEnabled={saveEnabled(quickSave)}
+			onSaveAsNew={offersSaveAsNew(quickSave) ? () => void runSave(true) : undefined}
 		/>
 		<PhoneOverflowSheet
 			open={overflowOpen}
@@ -2280,7 +2320,9 @@
 				onToggleStopOnWeight={toggleStopOnWeight}
 				yieldTargetOn={yieldTargetOn}
 				onToggleYieldTarget={onToggleYieldTarget}
-				onSavePreset={activeProfile ? savePreset : undefined}
+				onSave={() => void runSave(false)}
+				saveEnabled={saveEnabled(quickSave)}
+				onSaveAsNew={offersSaveAsNew(quickSave) ? () => void runSave(true) : undefined}
 				onToggleSteamEco={toggleSteamEco}
 			/>
 		</div>

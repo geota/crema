@@ -27,11 +27,15 @@
 	 * - `TagInput`    (the one used by /profiles) for tags.
 	 * - `RoasterAutocomplete` for roaster (existing component, kept).
 	 *
-	 * Both create and edit flows go through this one component. Create-
-	 * mode (`isNew={true}`) holds a local draft and writes to the store
-	 * on Save; edit-mode commits each patch immediately.
+	 * Both create and edit flows go through this one component, and both
+	 * hold a local draft: nothing reaches the library until Save, and Cancel
+	 * discards it (save-boundaries review F2, Android parity). An existing
+	 * bag's Save applies only the fields the user changed onto the bag as it
+	 * is now (`mergeBeanEdit`, the core's three-way merge), so a shot's debit
+	 * or a sync during the edit stands. Leaving with unsaved changes asks
+	 * first. The Active switch is a selection, not a field: it applies at once.
 	 */
-	import { tick, untrack } from 'svelte';
+	import { onDestroy, tick, untrack } from 'svelte';
 	import { getProfileStore } from '#lib/profiles/index.js';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -42,7 +46,8 @@
 	import {
 		getBeanStore,
 		getBeanImageStore,
-		beanImageRefFor,
+		beanImageDraftRefFor,
+		mergeBeanEdit,
 		daysOffRoast,
 		roastBand5,
 		roasterMarkTone,
@@ -71,6 +76,8 @@
 	import RoastSlider from './RoastSlider.svelte';
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { toast } from '#lib/components/shared/toast.svelte.js';
+	import { DISCARD_CHANGES, guardUnsavedChanges, sameRecord } from '#lib/beans/unsaved-guard.js';
 
 	let {
 		bean,
@@ -96,12 +103,13 @@
 	const settings = getSettingsStore();
 	const defaultGrinder = $derived(settings.current.grinderModel?.trim() ?? '');
 
-	// ── Draft state (new mode only) ────────────────────────────────────
-	const live = $derived(!isNew);
+	// ── Draft state (both modes) ───────────────────────────────────────
+	/** The bag as the editor opened on it: what Save measures the edits from. */
+	const base: Bean = untrack(() => JSON.parse(JSON.stringify(bean)) as Bean);
 	let draftRecord = $state<Bean>(
 		untrack(() => ({ ...bean, origin: { ...bean.origin }, tags: [...bean.tags] }))
 	);
-	const current: Bean = $derived(live ? bean : draftRecord);
+	const current: Bean = $derived(draftRecord);
 
 	// ── Linked profile (bean → profile auto-load) ────────────────────────
 	const profileStore = getProfileStore();
@@ -122,16 +130,12 @@
 	const initialRoaster = untrack(() =>
 		bean.roasterId ? library.getRoaster(bean.roasterId) : null
 	);
+	const initialRoasterName = initialRoaster?.name ?? '';
 	let resolvedRoaster = $state<Roaster | null>(initialRoaster);
-	let roasterName = $state(initialRoaster?.name ?? '');
-	$effect(() => {
-		if (!live) return;
-		const r = current.roasterId ? library.getRoaster(current.roasterId) : null;
-		if ((r?.id ?? null) !== (resolvedRoaster?.id ?? null)) {
-			resolvedRoaster = r;
-			roasterName = r?.name ?? '';
-		}
-	});
+	let roasterName = $state(initialRoasterName);
+	/** A catalogue pick's roaster, written at Save (as a typed name is) if
+	 *  the roaster input still names it. */
+	let pendingRoaster = $state<CataloguePickRoaster | null>(null);
 
 	const mt = $derived(roasterMarkTone(resolvedRoaster));
 
@@ -144,6 +148,24 @@
 	const hasPhoto = $derived(current.imageRef != null);
 	let photoUploading = $state(false);
 	let photoError = $state<string | null>(null);
+	/** Photos picked here, each under its own ref: the bag's photo stays as it
+	 *  is until Save, and the ones nothing points at are dropped after. */
+	const pickedPhotoRefs: string[] = [];
+	/** Save stored the draft: the teardown leaves its photo alone. */
+	let saved = false;
+
+	/** Delete the blobs among `refs` no bag in the library points at. */
+	function dropUnusedPhotos(refs: readonly (string | null | undefined)[]): void {
+		for (const ref of new Set(refs)) {
+			if (ref == null || library.beans.some((b) => b.imageRef === ref)) continue;
+			void imageStore.delete(ref).catch(() => {});
+		}
+	}
+
+	// Left without Save (Cancel, Back, Delete): the photos picked here go.
+	onDestroy(() => {
+		if (!saved) dropUnusedPhotos(pickedPhotoRefs);
+	});
 
 	async function onPhotoPicked(event: Event): Promise<void> {
 		const input = event.currentTarget as HTMLInputElement;
@@ -153,8 +175,9 @@
 		photoError = null;
 		photoUploading = true;
 		try {
-			const ref = beanImageRefFor(current.id);
+			const ref = beanImageDraftRefFor(current.id);
 			await imageStore.put(ref, file);
+			pickedPhotoRefs.push(ref);
 			patch({ imageRef: ref });
 		} catch (e) {
 			photoError =
@@ -164,15 +187,10 @@
 		}
 	}
 
-	async function removePhoto(): Promise<void> {
-		const ref = current.imageRef;
-		if (!ref) return;
+	function removePhoto(): void {
+		if (!current.imageRef) return;
 		photoError = null;
-		try {
-			await imageStore.delete(ref);
-		} catch {
-			// Non-fatal — clearing the ref is the source of truth.
-		}
+		// The blob goes at Save (or stays, on Cancel).
 		patch({ imageRef: null });
 	}
 
@@ -180,23 +198,20 @@
 	const days = $derived(daysOffRoast(current.roastedOn));
 	const isActive = $derived(library.activeBeanId === current.id);
 
-	// ── Patch + commit ────────────────────────────────────────────────
+	// ── Patch the draft ───────────────────────────────────────────────
 	function patch(p: Partial<Bean>): void {
 		// Bumping bag size re-seeds `remaining` — but ONLY for a brand-new bean
-		// (the draft path) or one that's already empty. On the live path with
-		// burn-down in progress, reseeding would silently discard the
-		// remaining-grams the user has been tracking (GEN2): editing the bag size
-		// of a half-finished bag must not reset it to full.
+		// or one that's already empty. On a bag with burn-down in progress,
+		// reseeding would silently discard the remaining-grams the user has
+		// been tracking (GEN2): editing the bag size of a half-finished bag
+		// must not reset it to full. Save then leaves `remaining` to the
+		// stored bag's (its debits) unless it was changed here.
 		if (Object.prototype.hasOwnProperty.call(p, 'bagSize') && p.bagSize != null) {
 			if (isNew || current.remaining === 0) {
 				(p as Partial<Bean>).remaining = p.bagSize;
 			}
 		}
-		if (live) {
-			library.updateBean(bean.id, p);
-		} else {
-			draftRecord = { ...draftRecord, ...p };
-		}
+		draftRecord = { ...draftRecord, ...p };
 	}
 
 	function setOrigin(field: keyof Bean['origin'], value: string): void {
@@ -210,16 +225,35 @@
 
 	function setRoasterNameInput(v: string): void {
 		roasterName = v;
-		if (live && !v.trim()) {
-			patch({ roasterId: null });
-			resolvedRoaster = null;
-		}
+		if (!v.trim()) resolvedRoaster = null;
 	}
 
 	function onRoasterResolve(r: Roaster | null): void {
 		resolvedRoaster = r;
-		if (live) patch({ roasterId: r?.id ?? null });
 	}
+
+	/** The roaster the editor names now differs from the one it opened on. */
+	const roasterTouched = $derived(
+		pendingRoaster !== null ||
+			roasterName !== initialRoasterName ||
+			(resolvedRoaster?.id ?? null) !== (initialRoaster?.id ?? null)
+	);
+
+	/** At Save: the roaster the input names — the held catalogue pick, the
+	 *  picked row, or one found or created by name; `null` for none. */
+	function roasterForSave(): Roaster | null {
+		const picked = commitPendingRoaster();
+		if (picked) return picked;
+		const typed = roasterName.trim();
+		if (!typed) return null;
+		if (resolvedRoaster && resolvedRoaster.name.trim().toLowerCase() === typed.toLowerCase()) {
+			return resolvedRoaster;
+		}
+		return resolveRoasterOrCreate(typed);
+	}
+
+	/** Anything here Save would write (Cancel and leaving ask only then). */
+	const dirty = $derived(!sameRecord(draftRecord, base) || roasterTouched);
 
 	function resolveRoasterOrCreate(name: string): Roaster | null {
 		const trimmed = name.trim();
@@ -244,9 +278,6 @@
 	/** The picked entry's display label (session-only — the bean stores ids). */
 	let pickedLabel = $state<string | null>(null);
 	let catalogueStatus = $state<string | null>(null);
-	/** New bag only: the picked roaster, written at Save (as a typed name is)
-	 *  if the roaster input still names it. */
-	let pendingRoaster = $state<CataloguePickRoaster | null>(null);
 
 	const catalogueLinkLabel = $derived(current.canonicalCoffeeBagId ? pickedLabel ?? 'Visualizer catalogue' : null);
 
@@ -326,22 +357,15 @@
 		return library.getRoaster(row.id) ?? row;
 	}
 
-	/** File the bag under the pick's roaster: written now in edit mode; for a
-	 *  new bag, held until Save. */
+	/** File the bag under the pick's roaster, held until Save. */
 	function applyPickedRoaster(picked: CataloguePickRoaster): void {
 		roasterName = picked.name;
-		if (live) {
-			const row = writePickedRoaster(picked);
-			resolvedRoaster = row;
-			patch({ roasterId: row.id });
-		} else {
-			pendingRoaster = picked;
-			resolvedRoaster = picked.isNew ? null : library.getRoaster(picked.roaster.id) ?? null;
-		}
+		pendingRoaster = picked;
+		resolvedRoaster = picked.isNew ? null : library.getRoaster(picked.roaster.id) ?? null;
 	}
 
-	/** New bag, at Save: write the held roaster pick if the input still names
-	 *  it; `null` = resolve the typed name as usual. */
+	/** At Save: write the held roaster pick if the input still names it;
+	 *  `null` = resolve the typed name as usual. */
 	function commitPendingRoaster(): Roaster | null {
 		const picked = pendingRoaster;
 		pendingRoaster = null;
@@ -399,7 +423,7 @@
 		attempted = true;
 		urlTouched = true;
 		await tick();
-		// URL validity is enforced for both new and live edits — an invalid
+		// URL validity is enforced for both new bags and edits — an invalid
 		// `https://…` survives in storage until the next save anyway, so
 		// the easiest place to catch it is at the same gate as the required
 		// fields. Scroll the URL field into view + bounce out.
@@ -409,7 +433,7 @@
 			el?.focus();
 			return;
 		}
-		// Opened-before-roasted is invalid for both new bags and live edits.
+		// Opened-before-roasted is invalid for both new bags and edits.
 		if (isOpenedBeforeRoasted) {
 			const el = document.getElementById('be-opened-input') as HTMLInputElement | null;
 			el?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
@@ -432,7 +456,7 @@
 				roastedDateInputEl?.focus();
 				return;
 			}
-			const roaster = commitPendingRoaster() ?? resolveRoasterOrCreate(roasterName);
+			const roaster = roasterForSave();
 			const remaining =
 				draftRecord.remaining > 0 ? draftRecord.remaining : draftRecord.bagSize;
 			const persisted: Bean = {
@@ -443,20 +467,35 @@
 				updatedAt: Date.now()
 			};
 			library.upsertBean(persisted);
+			saved = true;
+			dropUnusedPhotos(pickedPhotoRefs);
 			if (activate) activateBean(persisted.id);
+			guard.release();
 			leaveEditor(returnTo());
 		} else {
-			// Live mode — already saved every patch. Just commit any pending
-			// roaster name change and bounce back.
-			if (roasterName.trim() && resolvedRoaster?.name.trim().toLowerCase() !==
-				roasterName.trim().toLowerCase()) {
-				const r = resolveRoasterOrCreate(roasterName);
-				if (r) {
-					resolvedRoaster = r;
-					patch({ roasterId: r.id });
+			// The fields changed here, onto the bag as it is now: a debit or a
+			// sync since the editor opened stands (core three-way merge).
+			const stored = library.getBean(base.id);
+			if (stored) {
+				const edited: Bean = {
+					...draftRecord,
+					roasterId: roasterTouched ? (roasterForSave()?.id ?? null) : draftRecord.roasterId,
+					name: draftRecord.name === base.name ? base.name : draftRecord.name.trim()
+				};
+				let merged: Bean;
+				try {
+					merged = mergeBeanEdit(base, edited, stored);
+				} catch (e) {
+					toast.error(`Could not save the bag: ${e instanceof Error ? e.message : String(e)}`);
+					return;
 				}
+				if (!sameRecord(merged, stored)) library.saveEditedBean(merged);
+				saved = true;
+				// The photos this Save replaced or removed, and those picked and dropped.
+				dropUnusedPhotos([...pickedPhotoRefs, base.imageRef, stored.imageRef]);
 			}
 			if (activate && !isActive) activateBean(current.id);
+			guard.release();
 			leaveEditor(returnTo());
 		}
 	}
@@ -487,14 +526,19 @@
 			: {}
 	);
 
+	// Leaving any other way than Save / Cancel / Delete asks first.
+	const guard = guardUnsavedChanges(() => dirty);
+
+	/** Cancel: drop the draft (asking first when there is one) and leave. */
 	async function discard(): Promise<void> {
-		if (!await confirmDialog({ message: 'Discard changes?', confirmLabel: 'Discard' })) return;
-		if (isNew) {
-			back();
-		} else {
-			// In live mode we can't undo; just bounce back.
-			back();
-		}
+		if (dirty && !(await confirmDialog(DISCARD_CHANGES))) return;
+		guard.release();
+		back();
+	}
+
+	function onDeleted(): void {
+		guard.release();
+		leaveEditor(returnTo());
 	}
 
 	// ── Helpers for the date hints ─────────────────────────────────────
@@ -711,15 +755,6 @@
 									onRoasterResolve(r);
 									if (r) roasterName = r.name;
 								}}
-								onCommitTyped={live
-									? (typed) => {
-										const r = resolveRoasterOrCreate(typed);
-										if (r) {
-											resolvedRoaster = r;
-											patch({ roasterId: r.id });
-										}
-									}
-									: undefined}
 							/>
 							{#if attempted && isRoasterMissing}
 								<div class="be-required" id={`${uid}-roaster-err`}>Required</div>
@@ -1519,7 +1554,7 @@
 							beanName={current.name || 'this bag'}
 							label="Delete bean"
 							size="md"
-							onDeleted={() => leaveEditor(returnTo())}
+							{onDeleted}
 						/>
 					</div>
 				{/if}
