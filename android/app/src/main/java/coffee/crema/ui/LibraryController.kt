@@ -2746,6 +2746,7 @@ class LibraryController(
             library = coffee.crema.persist.Stores.health(java.io.File(app.filesDir, LibraryStore.FILE_NAME)),
             settings = coffee.crema.persist.Stores.health(settingsFile),
             settingsKeptAside = coffee.crema.persist.SafeFile.keptAside(settingsFile).isNotEmpty(),
+            grinderModel = s.grinderModel,
         )
         val out = runCatching { coffee.crema.beans.migrateGrinderLibrary(s.grinders, s.beans, s.grinderModel, gate, now) }.getOrElse {
             appendLog("Grinder migration failed (runs again next load): ${it.message}")

@@ -4203,12 +4203,14 @@ data class MigrationGate (
 	/// couldn't be read: `grinder_model` would look blank and every bag's
 	/// old grind would land under "no grinder" for good.
 	val settings: Boolean,
-	/// The settings read as absent because a damaged copy was kept aside
-	/// (quarantined on an earlier load), with `settings` true. Their
-	/// `grinder_model` is then unknown, not blank (PLAN follow-up 40): only
-	/// the bags that name their own grinder migrate, and the rest wait for a
-	/// load whose settings read. Settings that are absent because they were
-	/// never written are not this: they read, with no settings grinder.
+	/// A damaged settings copy was kept aside (quarantined on an earlier
+	/// load) and the settings `grinder_model` is blank now, whether the
+	/// settings read as absent or were written again since (REVIEW-514): the
+	/// grinder the old settings named is unknown, not blank (PLAN follow-up
+	/// 40). Only the bags that name their own grinder migrate; the rest wait
+	/// until a settings grinder is known (picked, or restored). Settings
+	/// never written, with nothing kept aside, are not this: they read, with
+	/// no settings grinder.
 	val settingsQuarantined: Boolean? = null
 )
 

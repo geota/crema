@@ -226,6 +226,10 @@ describe('the library migration runs only over a loaded library', () => {
 		twoBags();
 		localStorage.removeItem('crema.settings.v1');
 		localStorage.setItem('crema.settings.v1.corrupt', '{not json');
+		const settings = getSettingsStore();
+		const model = settings.current.grinderModel;
+		// As the quarantine left them: no settings grinder in memory.
+		settings.current = { ...settings.current, grinderModel: '' };
 		try {
 			const lib = reloaded();
 			runGrinderMigration(lib);
@@ -233,6 +237,29 @@ describe('the library migration runs only over a loaded library', () => {
 			expect(lib.getBean('bean:own')!.grinds).toHaveLength(1);
 		} finally {
 			localStorage.removeItem('crema.settings.v1.corrupt');
+			settings.current = { ...settings.current, grinderModel: model };
+		}
+	});
+
+	it('a settings write after the quarantine keeps the bags waiting until a grinder is known (REVIEW-514)', () => {
+		twoBags();
+		localStorage.setItem('crema.settings.v1.corrupt', '{not json');
+		const settings = getSettingsStore();
+		const model = settings.current.grinderModel;
+		try {
+			// Launch 3: the settings were written since (they read), with no grinder.
+			settings.set('grinderModel', '');
+			const lib = reloaded();
+			runGrinderMigration(lib);
+			expect(lib.getBean('bean:none')!.grinds ?? null, 'not filed under "no grinder"').toBeNull();
+			expect(lib.getBean('bean:own')!.grinds).toHaveLength(1);
+			// A settings grinder becomes known: the waiting bag migrates under it.
+			settings.set('grinderModel', 'EK43');
+			runGrinderMigration(lib);
+			expect(lib.getBean('bean:none')!.grinds?.map((g) => g.grind)).toEqual(['14']);
+		} finally {
+			localStorage.removeItem('crema.settings.v1.corrupt');
+			settings.set('grinderModel', model);
 		}
 	});
 });
