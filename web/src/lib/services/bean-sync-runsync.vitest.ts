@@ -113,7 +113,6 @@ function mkLibrary(init: { roasters?: Roaster[]; beans?: Bean[] } = {}) {
 		findRoasterByName: (n: string) =>
 			roasters.find((r) => r.deletedAt == null && r.name.toLowerCase() === n.toLowerCase()),
 		getRoaster: (id: string) => roasters.find((r) => r.id === id && r.deletedAt == null),
-		getRoasterRow: (id: string) => roasters.find((r) => r.id === id),
 		getBean: (id: string) => beans.find((b) => b.id === id) ?? null,
 		updateRoaster: (id: string, patch: Partial<Roaster>) => {
 			const r = roasters.find((x) => x.id === id);

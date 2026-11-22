@@ -7,6 +7,7 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { blankBean, blankRoaster, getBeanStore, type Bean } from './index';
+import { bagRoasterRemoteId } from './visualizer-sync';
 
 const library = getBeanStore();
 
@@ -110,7 +111,9 @@ describe('deleting a roaster on this device (#488 review SF1)', () => {
 		expect(tomb.website).toBeFalsy();
 		// Not detached: the push never sends the bag with no roaster.
 		expect(library.getBean('bean:a')).toMatchObject({ roasterId: before.roasterId, updatedAt: stamp });
-		expect(library.getRoasterRow('roaster:x')?.visualizerId).toBe('r1');
+		// The bag's push still names the roaster's Visualizer id (core `bag_roaster_remote_id`).
+		expect(bagRoasterRemoteId(library.getBean('bean:a')!, library.allRoasters)).toBe('r1');
+		expect(bagRoasterRemoteId(library.getBean('bean:a')!, library.roasters), 'live rows only would unfile it').toBeNull();
 	});
 
 	it('with "also on Visualizer" keeps the tombstone and detaches the bags', () => {

@@ -321,15 +321,6 @@ export class BeanLibraryStore {
 	}
 
 	/**
-	 * Look up a roaster row by id, tombstones included: what a bag push and
-	 * pull resolve a bag's roaster with, so a bag filed under a roaster
-	 * deleted here keeps its link on Visualizer (#488 review SF1).
-	 */
-	getRoasterRow(id: string): Roaster | null {
-		return this.envelope.roasters.find((r) => r.id === id) ?? null;
-	}
-
-	/**
 	 * Find a roaster by case-insensitive name match. Used by import +
 	 * inline-create to dedup `"Onyx Coffee Lab"` vs `"onyx coffee lab"`.
 	 */
@@ -586,8 +577,10 @@ export class BeanLibraryStore {
 					toBag: to ? bagWeight(to) : undefined,
 					bagDebit: input.bagDebit ?? undefined,
 					doseG: input.doseG ?? undefined,
-					// The web is never a remote: it records every shot it sees.
+					// The web is never a remote: it records every shot it sees, so it
+					// holds no mirror rows either.
 					remote: false,
+					mirrorRow: false,
 					replay: input.replay
 				} satisfies ShotBagMoveInput)
 			)

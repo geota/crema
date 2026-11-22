@@ -42,6 +42,7 @@ import {
 import type { Bean, Roaster } from '#lib/bean/index.js';
 import type { BeanLibraryStore } from '#lib/bean/store.svelte.js';
 import {
+	bagRoasterRemoteId,
 	beanFromWire,
 	coffeeBagWriteRequest,
 	readSyncSettings,
@@ -718,11 +719,10 @@ export const BeanSyncLive = Layer.effect(
 							}
 							continue;
 						}
-						const remoteRoasterId = local.roasterId
-							? // Tombstones too (#488 review SF1): a bag filed under a roaster
-								// deleted on this device only keeps its roaster on Visualizer.
-								(library.getRoasterRow(local.roasterId)?.visualizerId ?? null)
-							: null;
+						// The core resolves it over every roaster, tombstones included (#488
+						// review SF1): a bag filed under a roaster deleted on this device
+						// only keeps its roaster on Visualizer.
+						const remoteRoasterId = bagRoasterRemoteId(local, library.allRoasters);
 						// EF2: `uploadBean` builds `coffeeBagWriteRequest(local, remoteRoasterId)`
 						// and PATCHes (id present) or POSTs (id absent).
 						const res = yield* Effect.result(uploadBean(local, remoteRoasterId));
