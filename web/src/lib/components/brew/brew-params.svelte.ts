@@ -18,7 +18,9 @@
  *     the core's desired profile on every change (Reset included), and the
  *     core takes the SAW target and the hot-water ratio's basis from there
  *     (`DESIGN.md` §3.10).
- *   - `grind` — log-only; never reaches the machine or a profile.
+ *   - the grind is not here: it is the bag's, not the profile's, and lives
+ *     in `#lib/brew/grind-session` (#488), read through the core's
+ *     `brew_grind_view`.
  *   - steam (`steamTime` / `steamFlow` / `steamTemp`), hot water
  *     (`waterTemp`; the hot-water dose lives in the settings store —
  *     `hotWaterDose()` — not here), flush (`flushTime` / `flushTemp`) —
@@ -41,8 +43,6 @@ export interface BrewParams {
 	doseGrindMode: 'dose' | 'grind';
 	/** Dose, grams in. */
 	dose: number;
-	/** Grinder click setting (log only — never reaches the machine). */
-	grind: number;
 	/** Stop-on-weight yield target, grams. */
 	yield: number;
 	/** Which of Temp / Pre-infuse the Brew bucket is editing. */
@@ -80,7 +80,6 @@ export interface BrewParams {
 export const DEFAULT_BREW_PARAMS: BrewParams = {
 	doseGrindMode: 'dose',
 	dose: 18.0,
-	grind: 4.2,
 	yield: 36.4,
 	brewMode: 'temp',
 	brewTemp: 93.0,
@@ -146,24 +145,9 @@ export class BrewParamState {
 			// The app-level overrides for this profile (read untracked: the
 			// dial writes them as it moves, which must not re-seed it), so a
 			// remounted dial shows what it was left at.
-			...untrack(() => this.overrides?.() ?? {}),
-			...this.keptGrind()
+			...untrack(() => this.overrides?.() ?? {})
 		};
 	});
-
-	/**
-	 * The grind dial as last set. The grind is the bag's, not the profile's
-	 * (it has no profile default), so neither a re-seed (another profile, the
-	 * profile saved by Quick Controls' Save) nor Reset puts it back to the
-	 * 4.2 placeholder: Save would then offer that as a change to the bag
-	 * (save-boundaries review F1). A plain field, so the seed `$derived`
-	 * doesn't track it.
-	 */
-	private grindDial: number | null = null;
-
-	private keptGrind(): Partial<BrewParams> {
-		return this.grindDial === null ? {} : { grind: this.grindDial };
-	}
 
 	/**
 	 * @param seed A getter for the current brew-target seed. Read inside the
@@ -248,25 +232,13 @@ export class BrewParamState {
 		// through `onWrite` to push the value onto the DE1. Reassigning the
 		// `$derived` overrides the seed with a local edit either way.
 		this.current = { ...this.current, [key]: value };
-		if (key === 'grind') this.grindDial = value as number;
 		this.onWrite?.(key, value);
 	}
 
-	/**
-	 * Show `value` on the grind dial without it being a user edit: Brew's
-	 * stored grind (#488, `#lib/brew/grind-session`), or its placeholder when
-	 * there is none. No `onWrite`, so the placeholder never becomes a grind.
-	 */
-	seedGrind(value: number): void {
-		if (this.current.grind === value && this.grindDial === value) return;
-		this.current = { ...this.current, grind: value };
-		this.grindDial = value;
-	}
-
 	/** Restore the params to the current seed — the sheet's "Reset" action.
-	 *  The grind dial stays: it is the bag's, not the profile's. */
+	 *  The grind isn't a param: Reset leaves it (it is the bag's, not the profile's). */
 	reset(): void {
-		this.current = { ...DEFAULT_BREW_PARAMS, ...this.qcSeed?.(), ...this.seed(), ...this.keptGrind() };
+		this.current = { ...DEFAULT_BREW_PARAMS, ...this.qcSeed?.(), ...this.seed() };
 	}
 
 	/**

@@ -25,10 +25,11 @@
 		NO_GRINDER_ID,
 		formatGrind,
 		grindNumber,
-		grindPlaceholder,
+		grindScaleRefusal,
+		grindStartFromBlank,
 		grindText,
 		isLiveGrinder,
-		validScale,
+		sameGrind,
 		type BagGrind,
 		type GrinderChoice,
 		type GrindScale
@@ -77,7 +78,7 @@
 			const none = row.grinderId === NO_GRINDER_ID;
 			const grinder = none ? null : library.getGrinder(row.grinderId);
 			const live = none || (grinder !== null && isLiveGrinder(grinder));
-			const scale = grinder && validScale(grinder.scale) ? grinder.scale : DEFAULT_GRIND_SCALE;
+			const scale = grinder && grindScaleRefusal(grinder.scale) === null ? grinder.scale : DEFAULT_GRIND_SCALE;
 			const base = baseGrinds.find((b) => b.grinderId === row.grinderId) ?? null;
 			const n = grindNumber(row.grind);
 			return {
@@ -88,7 +89,7 @@
 				live,
 				starrable: live && !none,
 				base,
-				changed: base !== null && base.grind.trim() !== row.grind.trim(),
+				changed: base !== null && !sameGrind(base.grind, row.grind),
 				outOfRange: n !== null && (n < scale.min || n > scale.max),
 				needsGrind: row.grind.trim() === '' && toFix.includes(row.grinderId)
 			};
@@ -127,19 +128,20 @@
 	/**
 	 * ± moves by the scale's step. It never moves a value further out of the
 	 * scale, and stops at its ends; a value already outside moves back toward
-	 * it. An empty grind starts at the scale's placeholder.
+	 * it. An empty grind starts at the middle of the scale, on its step (the
+	 * core's start from blank, as on Brew).
 	 */
 	function step(r: Row, dir: 1 | -1): void {
 		const { min, max, step } = r.scale;
 		const n = grindNumber(r.row.grind);
 		if (n === null) {
-			if (r.row.grind.trim() === '') setGrind(r, grindText(grindPlaceholder(r.scale)));
+			if (r.row.grind.trim() === '') setGrind(r, grindText(grindStartFromBlank(r.scale), r.scale));
 			return;
 		}
 		if ((dir > 0 && n >= max) || (dir < 0 && n <= min)) return;
-		let next = Number((n + dir * step).toFixed(4));
+		let next = Number((n + dir * step).toFixed(6));
 		if (n >= min && n <= max) next = Math.min(max, Math.max(min, next));
-		setGrind(r, grindText(next));
+		setGrind(r, grindText(next, r.scale));
 	}
 
 	/** Steppers can't move a typed value that isn't a number ("6 + a tooth"). */

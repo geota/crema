@@ -2335,7 +2335,8 @@ export class CremaApp {
 		preinfuseTarget: number;
 		stopOnWeight: boolean;
 		autoTare: boolean;
-		grind?: number | null;
+		/** Brew's grind as text, or `null` when not set. */
+		grind?: string | null;
 	}): void {
 		this.brewParamsAtShotStart = { ...snapshot };
 	}

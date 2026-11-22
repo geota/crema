@@ -121,7 +121,7 @@ describe('Quick Controls Save on the dashboard', () => {
 			remaining: 200
 		});
 		beans.setActiveBean('bean:a');
-		getBrewGrind().set(Number(grind));
+		getBrewGrind().set(grind);
 	}
 	/** The bag's saved grind for no grinder. */
 	const savedGrind = () => getBeanStore().getBean('bean:a')!.grinds?.find((g) => g.grinderId === '')?.grind;
@@ -137,13 +137,13 @@ describe('Quick Controls Save on the dashboard', () => {
 		expect(save!.disabled, 'nothing changed').toBe(true);
 
 		click(root, 'Grind');
-		click(root, '4.6');
+		click(root, '4.4');
 		expect(buttonIn(root, 'Save')!.disabled).toBe(false);
 		expect(buttonIn(root, 'Save')!.querySelector('.qsave-dot'), 'the dot: Save includes the grind').not.toBeNull();
 		click(root, 'Save');
 		await tick();
 		expect(getActiveDialog(), 'no name prompt for a grind').toBeNull();
-		expect(savedGrind()).toBe('4.6');
+		expect(savedGrind()).toBe('4.4');
 		expect(getBeanStore().getBean('bean:a')!.grinderSetting, 'the old field is never written').toBe('');
 	});
 
@@ -153,14 +153,14 @@ describe('Quick Controls Save on the dashboard', () => {
 		activeBag('4.2');
 		const root = sheet(await render());
 		click(root, 'Grind');
-		click(root, '4.6');
+		click(root, '4.4');
 		getBeanStore().debitBean('bean:a', 18);
 		flushSync();
 		await tick();
 		expect(buttonIn(root, 'Save')!.disabled, 'the unsaved dial is still there').toBe(false);
 		// The bag's saved grind catching up with the dial (another tab's
 		// Save) leaves nothing to save; the dial itself never moves (#488 F9).
-		getBeanStore().saveBagGrind('bean:a', null, '4.6');
+		getBeanStore().saveBagGrind('bean:a', null, '4.4');
 		flushSync();
 		await tick();
 		expect(buttonIn(root, 'Save')!.disabled, 'saved: nothing left to save').toBe(true);
@@ -177,7 +177,7 @@ describe('Quick Controls Save on the dashboard', () => {
 		root.querySelector<HTMLButtonElement>('.qchip[aria-label^="20"]')!.click();
 		flushSync();
 		click(root, 'Grind');
-		click(root, '4.6');
+		click(root, '4.4');
 		click(root, 'Save');
 		await tick();
 		const prompt = getActiveDialog();
@@ -217,10 +217,10 @@ describe('the Grinder block and the unsaved-grind marker', () => {
 		return target;
 	}
 
-	function setup(brew: number) {
+	function setup(brew: string | null, catalogueId = '') {
 		const beans = getBeanStore();
 		beans.clearAll();
-		const g = beans.addGrinder('Mignon Specialita')!;
+		const g = beans.addGrinder(catalogueId ? '' : 'Mignon Specialita', catalogueId)!;
 		beans.setActiveGrinder(g.id);
 		beans.upsertBean({
 			...blankBean('bean:a'),
@@ -233,7 +233,7 @@ describe('the Grinder block and the unsaved-grind marker', () => {
 	}
 
 	it('shows the grinder, the grind and "Bag 4.2" while the grind differs', async () => {
-		setup(4.3);
+		setup('4.3');
 		const root = await render();
 		const block = root.querySelector<HTMLElement>('.bh-block-grinder')!;
 		expect(block.textContent).toContain('Mignon Specialita');
@@ -251,13 +251,57 @@ describe('the Grinder block and the unsaved-grind marker', () => {
 	});
 
 	it('no marker when the grind matches the bag', async () => {
-		setup(4.2);
+		setup('4.2');
 		const root = await render();
 		expect(root.querySelector('.bh-block-grinder .gmark')).toBeNull();
 	});
 
+	it('no grind set is blank: "Grind —", an empty stepper, no marker, no chips, nothing to save (DESIGN)', async () => {
+		setup(null, 'bookoo-motto-80');
+		const root = await render();
+		const block = root.querySelector<HTMLElement>('.bh-block-grinder')!;
+		expect(block.textContent).toContain('Grind —');
+		expect(block.querySelector('.gmark'), 'no marker without a grind').toBeNull();
+		const qc = root.querySelector<HTMLElement>('.qsheet')!;
+		[...qc.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Grind')!.click();
+		flushSync();
+		const value = qc.querySelector<HTMLButtonElement>('[aria-label="Grind: not set, edit"]');
+		expect(value, 'the stepper value is blank').not.toBeNull();
+		expect(value!.textContent?.trim()).toBe('');
+		expect(qc.textContent, 'no 500 placeholder').not.toContain('500');
+		expect(qc.querySelectorAll('[aria-label="Grind presets"] .qchip')).toHaveLength(0);
+		expect(qc.querySelector('.qdg-marker')).toBeNull();
+		expect(getBrewGrind().value).toBeNull();
+	});
+
+	it('the first + from blank goes to the middle of the scale on its step (500 on the Motto 80)', async () => {
+		setup(null, 'bookoo-motto-80');
+		const root = await render();
+		const qc = root.querySelector<HTMLElement>('.qsheet')!;
+		[...qc.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Grind')!.click();
+		flushSync();
+		qc.querySelector<HTMLButtonElement>('[aria-label="Increase Grind"]')!.click();
+		flushSync();
+		expect(getBrewGrind().value, 'the start, not a step from it').toBe('500');
+		expect(root.querySelector('.bh-block-grinder')!.textContent).toContain('Grind 500 μm');
+		qc.querySelector<HTMLButtonElement>('[aria-label="Increase Grind"]')!.click();
+		flushSync();
+		expect(getBrewGrind().value).toBe('501');
+	});
+
+	it('a grind that isn\'t a plain number shows as typed, in the header and the stepper (review N2)', async () => {
+		setup('2.1.3');
+		const root = await render();
+		expect(root.querySelector('.bh-block-grinder')!.textContent).toContain('Grind 2.1.3');
+		const qc = root.querySelector<HTMLElement>('.qsheet')!;
+		[...qc.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Grind')!.click();
+		flushSync();
+		expect(qc.querySelector('[aria-label="Grind: 2.1.3, edit"]')).not.toBeNull();
+		expect(qc.querySelectorAll('[aria-label="Grind presets"] .qchip'), 'no chips around a text grind').toHaveLength(0);
+	});
+
 	it('the picker lists the grinders with what the bag saved, and picks one', async () => {
-		const g = setup(4.2);
+		const g = setup('4.2');
 		const other = getBeanStore().addGrinder('DF64')!;
 		const root = await render();
 		root.querySelector<HTMLElement>('.bh-block-grinder .bh-block-tap')!.click();

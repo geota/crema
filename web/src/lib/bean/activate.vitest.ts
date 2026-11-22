@@ -88,7 +88,9 @@ describe('selecting a bag is one change (#488, review F6)', () => {
 		const { getBrewGrind } = await import('#lib/brew/grind-session.svelte.js');
 		const { getToasts } = await import('#lib/components/shared/toast.svelte.js');
 		const { quickSavePlan, runQuickSave } = await import('#lib/brew/quick-save.js');
-		const { grindUnsaved } = await import('./grinder');
+		const { grindView } = await import('#lib/brew/grind-view.js');
+		const unsaved = (bag: unknown, grinderId: string, brewGrind: string | null) =>
+			grindView({ bag: bag as never, grinder: beans.getGrinder(grinderId), brewGrind }).marker !== null;
 		const { effectiveCremaProfile, newProfileId } = await import('#lib/profiles/index.js');
 		const beans = getBeanStore();
 		const niche = beans.addGrinder('Niche Zero')!;
@@ -103,20 +105,20 @@ describe('selecting a bag is one change (#488, review F6)', () => {
 		});
 		const grind = getBrewGrind();
 		const actions = () => getToasts().filter((x) => x.action);
-		return { ...t, beans, niche, df64, grind, actions, quickSavePlan, runQuickSave, grindUnsaved, effectiveCremaProfile, newProfileId };
+		return { ...t, beans, niche, df64, grind, actions, quickSavePlan, runQuickSave, unsaved, effectiveCremaProfile, newProfileId };
 	}
 
 	it('dial on bag A, select bag B: the grind becomes B\'s, the marker follows B, Save never writes A\'s dial to B', async () => {
 		const t = await grinderSetup();
 		t.beans.upsertBean({ ...t.beans.getBean('bean:b')!, grinds: [{ grinderId: t.niche.id, grinderName: t.niche.name, grind: '14', starred: false }] });
 		await t.activateBean('bean:a');
-		expect(t.grind.value).toBe(10);
-		t.grind.set(11); // dialled on A, not saved
-		expect(t.grindUnsaved(t.beans.activeBean, t.niche.id, t.grind.value)).toBe(true);
+		expect(t.grind.value).toBe('10');
+		t.grind.set('11'); // dialled on A, not saved
+		expect(t.unsaved(t.beans.activeBean, t.niche.id, t.grind.value)).toBe(true);
 
 		await t.activateBean('bean:b');
-		expect(t.grind.value, "B's saved grind for the active grinder").toBe(14);
-		expect(t.grindUnsaved(t.beans.activeBean, t.niche.id, t.grind.value), 'the marker reflects B').toBe(false);
+		expect(t.grind.value, "B's saved grind for the active grinder").toBe('14');
+		expect(t.unsaved(t.beans.activeBean, t.niche.id, t.grind.value), 'the marker reflects B').toBe(false);
 		const plan = t.quickSavePlan({
 			bean: t.beans.activeBean,
 			grinder: t.beans.activeGrinder,
@@ -131,21 +133,21 @@ describe('selecting a bag is one change (#488, review F6)', () => {
 
 	it('a starred bag switches grinder and grind with one message and one Undo', async () => {
 		const t = await grinderSetup();
-		t.grind.set(12);
+		t.grind.set('12');
 		await t.activateBean('bean:b');
 		expect(t.beans.activeGrinder?.id).toBe(t.df64.id);
-		expect(t.grind.value).toBe(30);
+		expect(t.grind.value).toBe('30');
 		const [msg] = t.actions();
 		expect(t.actions()).toHaveLength(1);
 		expect(msg.message).toBe('B: DF64 at 30');
 		msg.action!.run();
 		expect(t.beans.activeGrinder?.id, 'Undo puts the grinder back').toBe(t.niche.id);
-		expect(t.grind.value, 'and the grind').toBe(12);
+		expect(t.grind.value, 'and the grind').toBe('12');
 	});
 
 	it('nothing besides the bag changed: no message', async () => {
 		const t = await grinderSetup();
-		t.grind.set(10);
+		t.grind.set('10');
 		await t.activateBean('bean:a');
 		expect(t.actions()).toEqual([]);
 	});
@@ -154,11 +156,23 @@ describe('selecting a bag is one change (#488, review F6)', () => {
 		const t = await grinderSetup();
 		const { selectGrinder } = await import('./activate');
 		await t.activateBean('bean:a');
-		t.grind.set(9);
+		t.grind.set('9');
 		await selectGrinder(t.df64.id);
-		expect(t.grind.value, 'A has nothing for the DF64: the grind stays').toBe(9);
+		expect(t.grind.value, 'A has nothing for the DF64: the grind stays').toBe('9');
 		t.beans.setActiveBean('bean:b');
 		await selectGrinder(t.df64.id);
-		expect(t.grind.value).toBe(30);
+		expect(t.grind.value).toBe('30');
+	});
+	it('a saved grind that isn\'t a plain number is Brew\'s grind after a pick (review N2)', async () => {
+		const t = await grinderSetup();
+		t.beans.upsertBean({
+			...t.beans.getBean('bean:b')!,
+			grinds: [{ grinderId: t.niche.id, grinderName: t.niche.name, grind: '2.1.3', starred: false }]
+		});
+		t.grind.set('12');
+		await t.activateBean('bean:b');
+		expect(t.grind.value, 'the pick sets the text grind, not a stale number').toBe('2.1.3');
+		expect(t.actions()[0].message).toBe('B: Niche Zero at 2.1.3');
+		expect(t.unsaved(t.beans.activeBean, t.niche.id, t.grind.value), 'it matches the bag: no marker').toBe(false);
 	});
 });

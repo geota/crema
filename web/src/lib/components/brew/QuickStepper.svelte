@@ -30,7 +30,10 @@
 		overridden = false,
 		overriddenTooltip,
 		sub,
-		clampTyped = true
+		clampTyped = true,
+		blankStart = 0,
+		blankText = '',
+		precision = 2
 	}: {
 		/** Optional caption above the stepper row. */
 		label?: string;
@@ -39,8 +42,12 @@
 		 * form row label): names the ± buttons and the value control.
 		 */
 		name?: string;
-		/** Current value (canonical units when `dimension` is set). */
-		value: number;
+		/**
+		 * Current value (canonical units when `dimension` is set); `null` =
+		 * not set (Brew's grind): the value box shows {@link blankText}, and
+		 * the first `±` goes to {@link blankStart}.
+		 */
+		value: number | null;
 		/** Unit shown after the digits. Ignored when `dimension` is set. */
 		unit?: string;
 		/** Lower clamp bound (canonical). */
@@ -92,6 +99,12 @@
 		sub?: Snippet;
 		/** Clamp a typed value into the range (default); false keeps it as typed (the grind, #488). */
 		clampTyped?: boolean;
+		/** Where the first `±` goes from a `null` value. */
+		blankStart?: number;
+		/** What the value box shows for a `null` value (empty; a grind that isn't a number shows as typed). */
+		blankText?: string;
+		/** Decimals that trim float error after a `±` (a grind scale may step finer than 0.01). */
+		precision?: number;
 	} = $props();
 
 	// Numeric core (clamp + canonical↔display + grid-snapped inc + click-to-type)
@@ -100,7 +113,7 @@
 	// `onChange` is absent (`canEdit`). Presentation (`prefix`, the overridden
 	// drift cue, the `fmt` formatter) stays here.
 	const stepper = useStepper({
-		value: () => value,
+		value: () => value ?? blankStart,
 		commit: (n) => onChange?.(n),
 		step: () => step,
 		min: () => min,
@@ -108,15 +121,18 @@
 		dimension: () => dimension,
 		unit: () => unit,
 		decimals: () => (step < 1 ? 1 : 0),
-		incPrecision: 2,
+		incPrecision: () => precision,
 		canEdit: () => !!onChange,
-		clampTyped: () => clampTyped
+		clampTyped: () => clampTyped,
+		blank: () => value === null
 	});
 
 	/** Format a value (already in display units) — the supplied `fmt`, or step-aware default. */
 	const format = (v: number): string => (fmt ? fmt(v) : v.toFixed(stepper.decimals));
 	/** `label=""` (caption rendered elsewhere) must not produce "Decrease ". */
 	const a11yName = $derived(name || label || 'value');
+	/** The value box's text: the formatted value, or {@link blankText} when not set. */
+	const shown = $derived(value === null ? blankText : format(stepper.toDisplay(value)));
 </script>
 
 <div class="qcs">
@@ -143,14 +159,16 @@
 				<button
 					type="button"
 					class="qcs-num qcs-num-btn"
-					aria-label={`${a11yName}: ${format(stepper.toDisplay(value))}${stepper.unit ? ` ${stepper.unit}` : ''}, edit`}
+					aria-label={value === null && shown === ''
+						? `${a11yName}: not set, edit`
+						: `${a11yName}: ${shown}${stepper.unit && value !== null ? ` ${stepper.unit}` : ''}, edit`}
 					onclick={stepper.beginEdit}
 					title={overridden ? overriddenTooltip : undefined}
 				>
-					{format(stepper.toDisplay(value))}
+					{shown}
 				</button>
 			{/if}
-			<span class="qcs-unit">{stepper.unit}</span>
+			<span class="qcs-unit">{value === null ? '' : stepper.unit}</span>
 			{#if sub}<span class="qcs-sub">{@render sub()}</span>{/if}
 		</div>
 		<button class="qcs-btn" onclick={() => stepper.inc(1)} aria-label="Increase {a11yName}">
