@@ -83,6 +83,8 @@ import coffee.crema.ui.remoteBrewCue
 import coffee.crema.ui.activeProfile
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.selectedRecipe
+import coffee.crema.ui.brewPickLock
+import kotlin.math.roundToInt
 import androidx.compose.ui.platform.testTag
 import coffee.crema.ui.effectiveBrew
 import coffee.crema.ui.refillSoon
@@ -181,8 +183,16 @@ fun PhoneBrewScreen(
                     onClick = { swapOpen = true },
                 )
                 if (swapOpen) {
+                    val recentRecipes = remember(ui.brewRecipes, ui.builtinRecipes, ui.hiddenBuiltinRecipes, ui.lastRecipeByMethod, manualRecipe?.id) {
+                        coffee.crema.ui.brewlog.recentBrewRecipes(ui, manualRecipe?.id)
+                    }
                     SwapDropdown(
                         ui = ui,
+                        recipes = recentRecipes,
+                        selectedRecipeId = manualRecipe?.id,
+                        pickLock = ui.brewPickLock(),
+                        onPickRecipe = { vm.pickRecipe(it); swapOpen = false },
+                        onAllRecipes = { swapOpen = false; onNav("profiles") },
                         onSelectProfile = { vm.setActiveProfile(it); swapOpen = false },
                         onSelectBean = { vm.setActiveBean(it); swapOpen = false },
                         onAllProfiles = { swapOpen = false; onNav("profiles") },
@@ -509,6 +519,17 @@ internal fun ProfileStrip(
 }
 
 // ── Swap dropdown (proto .pf-dd) — profiles w/ sparks + beans w/ avatars ─────
+/** How many rows each section of the dropdown shows before its "All …" / "n more" link. */
+private const val DD_RECENT = 3
+
+/**
+ * The strip's dropdown (brew-modes owner revision; boards PhoneSearchSections,
+ * PhoneSearchResults): a search box first, then ESPRESSO PROFILES and MANUAL
+ * RECIPES (three recent each, with "All …"), then Bean and Grinder as before.
+ * Typing searches all four at once, grouped by type, matches highlighted;
+ * ✕ goes back to the sections. Picking a profile is Espresso, a recipe Manual.
+ * The lock (§4) disables rows, the sections stay.
+ */
 @Composable
 private fun SwapDropdown(
     ui: MainUiState,
@@ -520,8 +541,16 @@ private fun SwapDropdown(
     onSelectGrinder: (String?) -> Unit = {},
     onManageGrinders: () -> Unit = {},
     lastGrinds: (String) -> List<coffee.crema.core.LastGrind> = { emptyList() },
+    /** The recipes, most recent first. */
+    recipes: List<coffee.crema.core.BrewRecipe> = emptyList(),
+    selectedRecipeId: String? = null,
+    pickLock: coffee.crema.core.BrewPickLock? = null,
+    onPickRecipe: (String) -> Unit = {},
+    onAllRecipes: () -> Unit = {},
 ) {
     val ddWidth = coffee.crema.ui.windowContentDpSize().width - CremaEdge * 2
+    var query by remember { mutableStateOf("") }
+    val q = query.trim()
     CremaAnchoredPopup(expanded = true, onDismiss = onDismiss) {
         Surface(
             shape = RoundedCornerShape(CremaCardSpec.phoneRadius),
@@ -529,105 +558,274 @@ private fun SwapDropdown(
             shadowElevation = 18.dp,
             modifier = Modifier.width(ddWidth).heightIn(max = 560.dp),
         ) {
-            Column(Modifier.padding(8.dp).verticalScroll(rememberScrollState())) {
-                DdSectionHead("Profile", "All profiles →", onAllProfiles)
-                // Loaded profile leads, then pinned favourites, then store order
-                // (shared rank). Hidden stays hidden; the strip shows the top few.
-                val faves = rankProfilesForPicker(
-                    ui.profiles.filter { it.id !in ui.hiddenProfileIds },
-                    ui.activeProfileId,
-                ).take(4)
-                faves.forEach { p ->
-                    val activeRow = p.id == ui.activeProfileId
-                    DdRow(active = activeRow, onClick = { onSelectProfile(p.id) }) {
-                        Box(
-                            Modifier
-                                .size(width = 44.dp, height = 26.dp)
-                                .clip(RoundedCornerShape(7.dp))
-                                .background(MaterialTheme.colorScheme.surfaceContainerLowest),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            MiniProfileSpark(
-                                profile = p,
-                                active = activeRow,
-                                modifier = Modifier.fillMaxSize().padding(3.dp),
-                            )
-                        }
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                p.name,
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                "${formatRatio(p.dose, p.yieldOut)} · ${formatWeight(p.dose, ui.weightUnit)} · ${formatTemp(p.brewTemp, ui.tempUnit)}",
-                                style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp),
-                                color = if (activeRow) LocalContentColor.current.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        if (activeRow) PhIcon("check-circle", sizeDp = 18, tint = MaterialTheme.colorScheme.primary)
+            Column(Modifier.padding(8.dp)) {
+                DdSearchField(query, onQueryChange = { query = it })
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    if (pickLock != null) {
+                        Text(
+                            pickLock.note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp).testTag("brew-pick-lock"),
+                        )
                     }
-                }
-                HorizontalDivider(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                DdSectionHead("Bean", "All beans →", onAllBeans)
-                // Loaded bean leads, then favourites, then the rest (the core's rank).
-                val beans = remember(ui.beans, ui.activeBeanId) {
-                    rankBeansForPicker(ui.beans.filter { it.archivedAt == null }, ui.activeBeanId).take(3)
-                }
-                beans.forEach { b ->
-                    val activeRow = b.id == ui.activeBeanId
-                    val roaster = ui.roasters.firstOrNull { it.id == b.roasterId }?.name
-                    val days = beanDaysOffRoast(b)
-                    DdRow(active = activeRow, onClick = { onSelectBean(b.id) }) {
-                        RoasterMarkAvatar(name = roaster ?: b.name, sizeDp = 30, cornerDp = 8, fontSize = 13.sp)
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                listOfNotNull(roaster, b.name).joinToString(" · "),
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                listOfNotNull(
-                                    days?.let { "${it}d off roast" },
-                                    b.remaining?.takeIf { (b.bagSize ?: 0f) > 0f }?.let { "${formatWeight(it, ui.weightUnit)} left" },
-                                ).joinToString(" · ").ifEmpty { "—" },
-                                style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp),
-                                color = if (activeRow) LocalContentColor.current.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    val visibleProfiles = rankProfilesForPicker(ui.profiles.filter { it.id !in ui.hiddenProfileIds }, ui.activeProfileId)
+                    val liveBeans = remember(ui.beans, ui.activeBeanId) { rankBeansForPicker(ui.beans.filter { it.archivedAt == null }, ui.activeBeanId) }
+                    val bag = ui.activeBag()
+                    val bagGrinds = remember(bag?.id, ui.history.version) { bag?.let { lastGrinds(it.id) }.orEmpty() }
+                    val grinderRows = coffee.crema.ui.grinderPickRows(ui.liveGrinders, bag, bagGrinds)
+                    val activeGrinder = ui.activeGrinder()
+                    val grinderGate = ui.gate(coffee.crema.settings.Setting.ACTIVE_GRINDER)
+                    val inManual = selectedRecipeId != null
+                    val profileRow: @Composable (CremaProfile) -> Unit = { p ->
+                        DdProfileRow(p, ui, active = p.id == ui.activeProfileId && !inManual, enabled = pickLock == null, query = q) { onSelectProfile(p.id) }
+                    }
+                    val recipeRow: @Composable (coffee.crema.core.BrewRecipe) -> Unit = { r ->
+                        DdRecipeRow(r, active = r.id == selectedRecipeId, enabled = pickLock?.recipesLocked != true, query = q) { onPickRecipe(r.id) }
+                    }
+                    val beanRow: @Composable (coffee.crema.core.Bean) -> Unit = { b ->
+                        DdBeanRow(b, ui, active = b.id == ui.activeBeanId, query = q) { onSelectBean(b.id) }
+                    }
+                    if (q.isEmpty()) {
+                        DdSectionHead("Espresso profiles", "All profiles →", onAllProfiles)
+                        visibleProfiles.take(DD_RECENT).forEach { profileRow(it) }
+                        DdDivider()
+                        DdSectionHead("Manual recipes", "All recipes →", onAllRecipes)
+                        recipes.take(DD_RECENT).forEach { recipeRow(it) }
+                        if (recipes.isEmpty()) DdEmpty("No recipes yet — add one in Profiles.")
+                        DdDivider()
+                        DdSectionHead("Bean", "All beans →", onAllBeans)
+                        liveBeans.take(DD_RECENT).forEach { beanRow(it) }
+                        if (liveBeans.isEmpty()) DdEmpty("No beans yet — add a bag in Beans.")
+                        // Grinder (#488, board PhoneBrew2): the live grinders with what
+                        // each has saved for the bag, under Profile and Bean.
+                        DdDivider()
+                        DdSectionHead("Grinder", "Manage grinders →", onManageGrinders)
+                        grinderRows.forEach { row ->
+                            coffee.crema.ui.components.GrinderPickerRow(row, active = row.grinder.id == activeGrinder?.id, onClick = { if (grinderGate.editable) onSelectGrinder(row.grinder.id) })
+                        }
+                        if (grinderRows.isEmpty()) DdEmpty("No grinders yet — add yours in Devices.")
+                    } else {
+                        // Grouped by type, three each, then "n more …".
+                        val profiles = visibleProfiles.filter { it.name.contains(q, ignoreCase = true) || it.author.contains(q, ignoreCase = true) }
+                        val matchedRecipes = recipes.filter {
+                            it.name.contains(q, ignoreCase = true) || coffee.crema.brew.methodLabel(it.method).contains(q, ignoreCase = true)
+                        }
+                        val beanHits = coffee.crema.beans.searchBeans(ui.beans, ui.roasters, q)
+                        val beans = liveBeans.filter { beanHits.matches(it.id) }.sortedByDescending { beanHits.score(it.id) }
+                        val grinders = grinderRows.filter { it.grinder.name.contains(q, ignoreCase = true) }
+                        val missing = mutableListOf<String>()
+                        var first = true
+                        fun <T> group(label: String, noun: String, plural: String, hits: List<T>, onMore: () -> Unit, row: @Composable (T) -> Unit): (@Composable () -> Unit)? {
+                            if (hits.isEmpty()) { missing += plural; return null }
+                            val divide = !first
+                            first = false
+                            return {
+                                if (divide) DdDivider()
+                                DdGroupHead("$label · ${hits.size}")
+                                hits.take(DD_RECENT).forEach { row(it) }
+                                val more = hits.size - DD_RECENT
+                                if (more > 0) DdMoreLink("$more more ${if (more == 1) noun else plural} →", onMore)
+                            }
+                        }
+                        listOfNotNull(
+                            group("Espresso profiles", "profile", "profiles", profiles, onAllProfiles, profileRow),
+                            group("Manual recipes", "recipe", "recipes", matchedRecipes, onAllRecipes, recipeRow),
+                            group("Beans", "bean", "beans", beans, onAllBeans, beanRow),
+                            group("Grinders", "grinder", "grinders", grinders, onManageGrinders) { row ->
+                                coffee.crema.ui.components.GrinderPickerRow(row, active = row.grinder.id == activeGrinder?.id, onClick = { if (grinderGate.editable) onSelectGrinder(row.grinder.id) })
+                            },
+                        ).forEach { it() }
+                        if (missing.isNotEmpty()) {
+                            if (!first) DdDivider()
+                            DdEmpty(
+                                if (missing.size == 4) "Nothing matches “$q”"
+                                else "No ${missing.joinToString(" or ").let { m -> if (missing.size > 2) missing.dropLast(1).joinToString(", ") + " or " + missing.last() else m }} match “$q”",
                             )
                         }
-                        if (activeRow) PhIcon("check-circle", sizeDp = 18, tint = MaterialTheme.colorScheme.primary)
                     }
-                }
-                if (beans.isEmpty()) {
-                    Text(
-                        "No beans yet — add a bag in Beans.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                    )
-                }
-                // Grinder (#488, board PhoneBrew2): the live grinders with what
-                // each has saved for the bag, under Profile and Bean.
-                HorizontalDivider(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                DdSectionHead("Grinder", "Manage grinders →", onManageGrinders)
-                val bag = ui.activeBag()
-                val bagGrinds = remember(bag?.id, ui.history.version) { bag?.let { lastGrinds(it.id) }.orEmpty() }
-                val rows = coffee.crema.ui.grinderPickRows(ui.liveGrinders, bag, bagGrinds)
-                val activeGrinder = ui.activeGrinder()
-                val gate = ui.gate(coffee.crema.settings.Setting.ACTIVE_GRINDER)
-                rows.forEach { row ->
-                    coffee.crema.ui.components.GrinderPickerRow(row, active = row.grinder.id == activeGrinder?.id, onClick = { if (gate.editable) onSelectGrinder(row.grinder.id) })
-                }
-                if (rows.isEmpty()) {
-                    Text(
-                        "No grinders yet — add yours in Devices.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                    )
                 }
             }
         }
+    }
+}
+
+/** The dropdown's search box, with ✕ back to the sections. */
+@Composable
+private fun DdSearchField(query: String, onQueryChange: (String) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 4.dp)
+            .height(44.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+            .border(
+                1.dp,
+                if (query.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                RoundedCornerShape(10.dp),
+            )
+            .padding(start = 12.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        PhIcon("magnifying-glass", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Box(Modifier.weight(1f)) {
+            if (query.isEmpty()) {
+                Text(
+                    "Search profiles, recipes, beans, grinders",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            androidx.compose.foundation.text.BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                modifier = Modifier.fillMaxWidth().testTag("dd-search"),
+            )
+        }
+        if (query.isNotEmpty()) {
+            IconButton(onClick = { onQueryChange("") }, modifier = Modifier.size(36.dp)) {
+                PhIcon("x", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant, contentDescription = "Clear search")
+            }
+        }
+    }
+}
+
+@Composable
+private fun DdDivider() =
+    HorizontalDivider(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant)
+
+@Composable
+private fun DdEmpty(text: String) = Text(
+    text,
+    style = MaterialTheme.typography.bodySmall,
+    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+)
+
+@Composable
+private fun DdGroupHead(label: String) =
+    Box(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 6.dp)) { Eyebrow(label) }
+
+@Composable
+private fun DdMoreLink(label: String, onClick: () -> Unit) = Text(
+    label,
+    style = MaterialTheme.typography.labelMedium,
+    color = MaterialTheme.colorScheme.primary,
+    modifier = Modifier
+        .padding(start = 63.dp, bottom = 4.dp)
+        .clip(RoundedCornerShape(6.dp))
+        .clickable(onClick = onClick)
+        .padding(4.dp),
+)
+
+/** [text] with every case-insensitive [query] match bold in the primary colour. */
+@Composable
+private fun highlighted(text: String, query: String): androidx.compose.ui.text.AnnotatedString {
+    val accent = MaterialTheme.colorScheme.primary
+    return androidx.compose.ui.text.buildAnnotatedString {
+        append(text)
+        if (query.isEmpty()) return@buildAnnotatedString
+        var from = 0
+        while (true) {
+            val at = text.indexOf(query, from, ignoreCase = true)
+            if (at < 0) break
+            addStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.SemiBold, color = accent), at, at + query.length)
+            from = at + query.length
+        }
+    }
+}
+
+@Composable
+private fun DdProfileRow(p: CremaProfile, ui: MainUiState, active: Boolean, enabled: Boolean, query: String, onClick: () -> Unit) {
+    DdRow(active = active, onClick = onClick, enabled = enabled) {
+        Box(
+            Modifier
+                .size(width = 44.dp, height = 26.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerLowest),
+            contentAlignment = Alignment.Center,
+        ) {
+            MiniProfileSpark(profile = p, active = active, modifier = Modifier.fillMaxSize().padding(3.dp))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                highlighted(p.name, query),
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                "${formatRatio(p.dose, p.yieldOut)} · ${formatWeight(p.dose, ui.weightUnit)} · ${formatTemp(p.brewTemp, ui.tempUnit)}",
+                style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp),
+                color = if (active) LocalContentColor.current.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (active) PhIcon("check-circle", sizeDp = 18, tint = MaterialTheme.colorScheme.primary)
+    }
+}
+
+@Composable
+private fun DdRecipeRow(r: coffee.crema.core.BrewRecipe, active: Boolean, enabled: Boolean, query: String, onClick: () -> Unit) {
+    val summary = remember(r) { coffee.crema.ui.BrewSelectionRules.summary(r) }
+    DdRow(active = active, onClick = onClick, enabled = enabled) {
+        Box(
+            Modifier
+                .size(width = 44.dp, height = 26.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerLowest),
+            contentAlignment = Alignment.Center,
+        ) {
+            PhIcon(coffee.crema.brew.methodIcon(r.method), sizeDp = 16, tint = MaterialTheme.colorScheme.primary)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                highlighted(r.name, query),
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                listOfNotNull(
+                    coffee.crema.brew.methodLabel(r.method),
+                    "${summary.doseG.roundToInt()} g",
+                    "${summary.waterG.roundToInt()} g",
+                    summary.tempC?.let { "${it.roundToInt()} °C" },
+                ).joinToString(" · "),
+                style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp),
+                color = if (active) LocalContentColor.current.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (active) PhIcon("check-circle", sizeDp = 18, tint = MaterialTheme.colorScheme.primary)
+    }
+}
+
+@Composable
+private fun DdBeanRow(b: coffee.crema.core.Bean, ui: MainUiState, active: Boolean, query: String, onClick: () -> Unit) {
+    val roaster = ui.roasters.firstOrNull { it.id == b.roasterId }?.name
+    val days = beanDaysOffRoast(b)
+    DdRow(active = active, onClick = onClick) {
+        RoasterMarkAvatar(name = roaster ?: b.name, sizeDp = 30, cornerDp = 8, fontSize = 13.sp)
+        Column(Modifier.weight(1f)) {
+            Text(
+                highlighted(listOfNotNull(roaster, b.name).joinToString(" · "), query),
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                listOfNotNull(
+                    days?.let { "${it}d off roast" },
+                    b.remaining?.takeIf { (b.bagSize ?: 0f) > 0f }?.let { "${formatWeight(it, ui.weightUnit)} left" },
+                ).joinToString(" · ").ifEmpty { "—" },
+                style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp),
+                color = if (active) LocalContentColor.current.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (active) PhIcon("check-circle", sizeDp = 18, tint = MaterialTheme.colorScheme.primary)
     }
 }
 
@@ -649,16 +847,17 @@ internal fun DdSectionHead(label: String, link: String, onLink: () -> Unit) {
 }
 
 @Composable
-internal fun DdRow(active: Boolean, onClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
+internal fun DdRow(active: Boolean, onClick: () -> Unit, enabled: Boolean = true, content: @Composable RowScope.() -> Unit) {
     val bg = if (active) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
     val fg = if (active) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
     CompositionLocalProvider(LocalContentColor provides fg) {
         Row(
             Modifier
                 .fillMaxWidth()
+                .alpha(if (enabled) 1f else 0.45f)
                 .clip(RoundedCornerShape(12.dp))
                 .background(bg)
-                .clickable(onClick = onClick)
+                .clickable(enabled = enabled, onClick = onClick)
                 .padding(horizontal = 8.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(11.dp),

@@ -9,6 +9,9 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.ui.phone.PhoneBrewScreen
 import coffee.crema.ui.phone.PhoneScaleScreen
@@ -24,11 +27,12 @@ import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
 
 /**
- * Brew's modes on screen (brew-modes spec §2–§4): the tablet picker's
- * Espresso | Manual tabs beside search, opening on the mode's tab; a recipe
- * pick turns Brew into the Manual page (steps, Step tile, Start brew, Hot
- * water kept, Steam and Flush gone, Duplicate to edit); the lock while a
- * guided brew runs; Devices → Scale without Weigh | Brew; the phone's Manual page.
+ * Brew's modes on screen (brew-modes spec §2–§4 and the owner's late
+ * revision): the tablet picker's search over ESPRESSO PROFILES then MANUAL
+ * RECIPES; a recipe pick turns Brew into the Manual page (steps, Step tile,
+ * Start brew, Hot water kept, Steam and Flush gone, Duplicate to edit); the
+ * lock while a guided brew runs; Devices → Scale without Weigh | Brew; the
+ * phone's dropdown (search, sections, grouped results) and Manual page.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35], qualifiers = "w1280dp-h800dp-land")
@@ -65,7 +69,7 @@ class BrewManualScreenTest {
     }
 
     @Test
-    fun `the picker's tabs open on Espresso, and a recipe pick is Manual`() {
+    fun `the picker lists profiles then recipes, and a recipe pick is Manual`() {
         val vm = vm()
         val profile = VmHarness.ownState(vm).profiles.first()
         vm.setActiveProfile(profile.id)
@@ -76,12 +80,18 @@ class BrewManualScreenTest {
         compose.onNodeWithText("Steam").assertExists()
 
         openPicker(vm.ui.value.activeProfile()!!.name)
-        compose.onNodeWithTag("brew-mode-tabs").assertExists()
-        compose.onNodeWithText("Search profiles…").assertExists()
-        compose.onNodeWithText("Manual").performClick()
+        // One list, two sections; no Espresso | Manual tabs (owner revision).
+        compose.onNodeWithText("Search profiles and recipes…").assertExists()
+        compose.onNodeWithTag("pick-section-profiles").assertExists()
+        compose.onNodeWithTag("pick-section-recipes").performScrollTo().assertExists()
+        compose.onNodeWithText("Espresso").assertDoesNotExist()
+        compose.onNodeWithText("Manual").assertDoesNotExist()
+        // The search filters both sections: a recipe's name leaves no profile.
+        compose.onNode(hasSetTextAction()).performTextInput(recipe.name)
         compose.waitForIdle()
-        compose.onNodeWithText("Search recipes…").assertExists()
-        compose.onNode(hasText(recipe.name) and hasClickAction()).performScrollTo().performClick()
+        compose.onNodeWithTag("pick-section-profiles").assertDoesNotExist()
+        compose.onNodeWithTag("pick-section-recipes").assertExists()
+        compose.onNode(hasText(recipe.name) and hasClickAction() and !hasSetTextAction()).performScrollTo().performClick()
         compose.waitForIdle()
 
         assertEquals(recipe.id, vm.ui.value.activeRecipeId)
@@ -97,11 +107,9 @@ class BrewManualScreenTest {
         compose.onNodeWithText("Flush").assertDoesNotExist()
         compose.onNodeWithText("Coffee").assertDoesNotExist()
 
-        // Back on the picker it opens on Manual; a profile turns Brew back.
+        // Back on the picker both sections show; a profile turns Brew back.
         openPicker(recipe.name)
-        compose.onNodeWithText("Search recipes…").assertExists()
-        compose.onNodeWithText("Espresso").performClick()
-        compose.waitForIdle()
+        compose.onNodeWithTag("pick-section-profiles").assertExists()
         compose.onNode(hasText(profile.name) and hasClickAction()).performScrollTo().performClick()
         compose.waitForIdle()
         assertEquals(null, vm.ui.value.activeRecipeId)
@@ -127,9 +135,7 @@ class BrewManualScreenTest {
         compose.onNodeWithText("Finish the current brew first").assertExists()
         val other = VmHarness.ownState(vm).builtinRecipes.first { it.id != recipe.id }
         compose.onNode(hasText(other.name) and hasClickAction()).assertIsNotEnabled()
-        compose.onNodeWithText("Espresso").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Finish the current brew first").assertExists()
+        compose.onNode(hasText(VmHarness.ownState(vm).profiles.first().name) and hasClickAction()).assertIsNotEnabled()
         vm.brewSessionCancel()
     }
 
@@ -160,10 +166,47 @@ class BrewManualScreenTest {
 
     @Test
     @Config(qualifiers = "w411dp-h891dp")
-    fun `the phone's Devices - Scale keeps Weigh and Brew until its picker has the Manual tab`() {
+    fun `the phone's Devices - Scale only weighs`() {
         val vm = vm()
         compose.setContent { CremaTheme { PhoneScaleScreen(vm, onNav = {}, onConnect = {}) } }
         compose.waitForIdle()
-        compose.onNodeWithText("Weigh").assertExists()
+        compose.onNodeWithText("Weigh").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun `the phone dropdown has search, then profiles, recipes, bean and grinder`() {
+        val vm = vm()
+        val profile = VmHarness.ownState(vm).profiles.first()
+        vm.setActiveProfile(profile.id)
+        val recipes = coffee.crema.ui.brewlog.recentBrewRecipes(VmHarness.ownState(vm), null)
+        compose.setContent { CremaTheme { PhoneBrewScreen(vm, onNav = {}, onConnect = {}) } }
+        compose.waitForIdle()
+        compose.onNode(hasText(vm.ui.value.activeProfile()!!.name) and hasClickAction()).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Search profiles, recipes, beans, grinders").assertExists()
+        compose.onNodeWithText("ESPRESSO PROFILES").assertExists()
+        compose.onNodeWithText("All profiles →").assertExists()
+        compose.onNodeWithText("MANUAL RECIPES").assertExists()
+        compose.onNodeWithText("All recipes →").assertExists()
+        compose.onNodeWithText("BEAN").performScrollTo().assertExists()
+        compose.onNodeWithText("GRINDER").performScrollTo().assertExists()
+        // Three recent recipes, not the whole library.
+        recipes.take(3).forEach { compose.onNode(hasText(it.name) and hasClickAction()).assertExists() }
+        recipes.drop(3).forEach { compose.onNode(hasText(it.name) and hasClickAction()).assertDoesNotExist() }
+
+        // Typing searches every type, grouped; ✕ goes back to the sections.
+        compose.onNodeWithTag("dd-search").performTextInput(recipes.first().name)
+        compose.waitForIdle()
+        compose.onNodeWithText("MANUAL RECIPES · ", substring = true).assertExists()
+        compose.onNodeWithText("All recipes →").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Clear search").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("All recipes →").assertExists()
+
+        compose.onNode(hasText(recipes.first().name) and hasClickAction()).performScrollTo().performClick()
+        compose.waitForIdle()
+        assertEquals(recipes.first().id, vm.ui.value.activeRecipeId)
+        compose.onNodeWithTag("manual-phone-step").assertExists()
     }
 }

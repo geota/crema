@@ -99,36 +99,8 @@ fun PhoneScaleScreen(
             return@Scaffold
         }
         val inner = PaddingValues(0.dp)
-        // Weigh | Brew segment (issue #10). The mode is VM-held so it survives
-        // the phone↔tablet host swap; arming a session pins it to Brew.
-        val setup by vm.guidedSetup.collectAsStateWithLifecycle()
-        val scaleMode = setup.scaleMode
-        if (scaleMode == "brew") {
-            // Brew owns its own scrolling: setup scrolls, the live session
-            // never does (clock + Finish / Pause / Skip always on screen).
-            Column(
-                Modifier
-                    .padding(inner)
-                    .fillMaxSize()
-                    .padding(horizontal = CremaEdge),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Spacer(Modifier.height(2.dp))
-                CremaTabSwitch(
-                    options = listOf(TabOption("weigh", "Weigh"), TabOption("brew", "Brew")),
-                    value = scaleMode,
-                    onChange = vm::setScaleMode,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                coffee.crema.ui.brewlog.GuidedBrewPanel(
-                    vm = vm,
-                    onNav = onNav,
-                    phone = true,
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                )
-            }
-            return@Scaffold
-        }
+        // Weighing only (brew-modes §3): the guided brew moved to Brew,
+        // where picking a recipe opens it (Manual).
         Column(
             Modifier
                 .padding(inner)
@@ -138,13 +110,6 @@ fun PhoneScaleScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Spacer(Modifier.height(2.dp))
-
-            CremaTabSwitch(
-                options = listOf(TabOption("weigh", "Weigh"), TabOption("brew", "Brew")),
-                value = scaleMode,
-                onChange = vm::setScaleMode,
-                modifier = Modifier.fillMaxWidth(),
-            )
 
             // ── Header (readout-focused, no pairing buttons) ────────────────
             Column {

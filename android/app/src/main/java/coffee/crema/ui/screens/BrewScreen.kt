@@ -852,79 +852,57 @@ private fun ProfileBlock(
         )
         CremaAnchoredPopup(expanded = open, onDismiss = { open = false }) {
             PopCard {
-                // Type-to-filter (web HeaderPicker "Search profiles…"). State lives in
-                // the popup content, so closing the picker resets the query and
-                // the tab, which opens on the mode Brew is in (brew-modes §2).
+                // Type-to-filter (web HeaderPicker). State lives in the popup
+                // content, so closing the picker resets the query. One list,
+                // two sections (brew-modes owner revision): the DE1 profiles
+                // (Espresso), then the recipes (Manual); the search filters both.
                 var query by remember { mutableStateOf("") }
-                var tab by remember { mutableStateOf(if (recipe != null) PICK_MANUAL else PICK_ESPRESSO) }
-                // Espresso | Manual beside the search box, in the row the
-                // "Switch profile" lead and the search took, so the picker
-                // keeps its height.
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    coffee.crema.ui.components.CremaTabSwitch(
-                        options = listOf(
-                            coffee.crema.ui.components.TabOption(PICK_ESPRESSO, "Espresso"),
-                            coffee.crema.ui.components.TabOption(PICK_MANUAL, "Manual"),
-                        ),
-                        value = tab,
-                        onChange = { tab = it; query = "" },
-                        modifier = Modifier.testTag("brew-mode-tabs"),
-                    )
-                    CremaSearchPill(
-                        query = query,
-                        onQueryChange = { query = it },
-                        placeholder = if (tab == PICK_MANUAL) "Search recipes…" else "Search profiles…",
-                        modifier = Modifier.weight(1f),
-                        compact = true,
-                    )
-                }
-                // §4: the tabs still browse; the locked rows say why.
-                val rowsLocked = pickLock != null && (tab == PICK_ESPRESSO || pickLock.recipesLocked)
-                if (rowsLocked) {
+                CremaSearchPill(
+                    query = query,
+                    onQueryChange = { query = it },
+                    placeholder = "Search profiles and recipes…",
+                    modifier = Modifier.fillMaxWidth(),
+                    compact = true,
+                )
+                // §4: the sections stay; locked rows are disabled, with why.
+                if (pickLock != null) {
                     Text(
-                        pickLock!!.note,
+                        pickLock.note,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(top = 10.dp).testTag("brew-pick-lock"),
                     )
                 }
-                if (tab == PICK_MANUAL) {
-                    RecipePickList(
-                        recipes = recipes,
-                        query = query,
-                        selectedId = recipe?.id,
-                        enabled = !rowsLocked,
-                        onPick = { id -> open = false; onPickRecipe(id) },
-                    )
-                    PickerFootRow(
-                        onOpenLibrary = { open = false; onOpenRecipes() },
-                        onNew = { open = false; onNewRecipe() },
-                        onEdit = { open = false; if (recipe != null) onEditRecipe() else onNewRecipe() },
-                    )
-                    return@PopCard
-                }
                 // Loaded profile first, then pinned, then store order (shared rank).
                 val sorted = rankProfilesForPicker(profiles, active?.id)
-                val shown = sorted.filter {
-                    query.isBlank() || it.name.contains(query, ignoreCase = true) ||
-                        it.author.contains(query, ignoreCase = true)
+                val q = query.trim()
+                val shownProfiles = sorted.filter {
+                    q.isEmpty() || it.name.contains(q, ignoreCase = true) || it.author.contains(q, ignoreCase = true)
                 }
-                if (shown.isEmpty()) {
+                val shownRecipes = recipes.filter {
+                    q.isEmpty() || it.name.contains(q, ignoreCase = true) ||
+                        coffee.crema.brew.methodLabel(it.method).contains(q, ignoreCase = true)
+                }
+                if (shownProfiles.isEmpty() && shownRecipes.isEmpty()) {
                     Text(
-                        "No profiles match “$query”",
+                        "No profiles or recipes match “$q”",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
                     )
                 }
+                val summaries = remember(recipes) { recipes.associate { it.id to coffee.crema.ui.BrewSelectionRules.summary(it) } }
                 PopList {
-                    shown.forEach { p ->
+                    if (shownProfiles.isNotEmpty()) {
+                        PickerSectionHead("Espresso profiles", Modifier.testTag("pick-section-profiles"))
+                    }
+                    shownProfiles.forEach { p ->
                         val isActive = p.id == active?.id
                         PickRow(
                             // In Manual the profile waits for Espresso: no row is "loaded" here.
                             active = isActive && recipe == null,
                             onClick = { open = false; onSelect(p.id) },
-                            enabled = !rowsLocked,
+                            enabled = pickLock == null,
                             leading = {
                                 // 48×32 mini-curve thumbnail (proto .bh-pick-spark).
                                 Box(
@@ -946,12 +924,36 @@ private fun ProfileBlock(
                                 ?: if (p.source == "builtin") "Built-in" else "Custom",
                         )
                     }
+                    if (shownRecipes.isNotEmpty()) {
+                        PickerSectionHead(
+                            "Manual recipes",
+                            Modifier.padding(top = if (shownProfiles.isEmpty()) 0.dp else 8.dp).testTag("pick-section-recipes"),
+                        )
+                    }
+                    shownRecipes.forEach { r ->
+                        RecipePickRow(
+                            recipe = r,
+                            summary = summaries[r.id],
+                            active = r.id == recipe?.id,
+                            enabled = pickLock?.recipesLocked != true,
+                            onClick = { open = false; onPickRecipe(r.id) },
+                        )
+                    }
                 }
-                PickerFootRow(
-                    onOpenLibrary = { open = false; onOpenLibrary() },
-                    onNew = { open = false; onNew() },
-                    onEdit = { open = false; onEdit() },
-                )
+                // The foot acts on the mode Brew is in: profiles, or recipes.
+                if (recipe != null) {
+                    PickerFootRow(
+                        onOpenLibrary = { open = false; onOpenRecipes() },
+                        onNew = { open = false; onNewRecipe() },
+                        onEdit = { open = false; onEditRecipe() },
+                    )
+                } else {
+                    PickerFootRow(
+                        onOpenLibrary = { open = false; onOpenLibrary() },
+                        onNew = { open = false; onNew() },
+                        onEdit = { open = false; onEdit() },
+                    )
+                }
             }
         }
     }
@@ -1357,64 +1359,44 @@ private fun PopFootIcon(icon: String, onClick: () -> Unit) {
     }
 }
 
-/** The picker's tabs (brew-modes §2): Espresso lists DE1 profiles, Manual recipes. */
-private const val PICK_ESPRESSO = "espresso"
-private const val PICK_MANUAL = "manual"
-
-/**
- * The picker's Manual rows: each recipe with its method, dose, water and
- * time under the name; the search filters by name or method.
- */
+/** A section of Brew's picker (brew-modes owner revision): ESPRESSO PROFILES, MANUAL RECIPES. */
 @Composable
-private fun RecipePickList(
-    recipes: List<coffee.crema.core.BrewRecipe>,
-    query: String,
-    selectedId: String?,
+private fun PickerSectionHead(label: String, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxWidth().padding(start = 10.dp, top = 4.dp, bottom = 2.dp)) { PickerLead(label) }
+}
+
+/** A Manual row: the recipe, with its method, dose, water and time under the name. */
+@Composable
+private fun RecipePickRow(
+    recipe: coffee.crema.core.BrewRecipe,
+    summary: coffee.crema.core.RecipeSummary?,
+    active: Boolean,
     enabled: Boolean,
-    onPick: (String) -> Unit,
+    onClick: () -> Unit,
 ) {
-    val summaries = remember(recipes) { recipes.associate { it.id to coffee.crema.ui.BrewSelectionRules.summary(it) } }
-    val q = query.trim()
-    val shown = recipes.filter {
-        q.isEmpty() || it.name.contains(q, ignoreCase = true) ||
-            coffee.crema.brew.methodLabel(it.method).contains(q, ignoreCase = true)
-    }
-    if (shown.isEmpty()) {
-        Text(
-            if (q.isEmpty()) "No recipes yet" else "No recipes match “$q”",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
-        )
-    }
-    PopList {
-        shown.forEach { r ->
-            val sum = summaries[r.id]
-            PickRow(
-                active = r.id == selectedId,
-                onClick = { onPick(r.id) },
-                enabled = enabled,
-                leading = {
-                    Box(
-                        Modifier
-                            .size(width = 48.dp, height = 32.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainerLowest),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        PhIcon(coffee.crema.brew.methodIcon(r.method), sizeDp = 18, tint = MaterialTheme.colorScheme.primary)
-                    }
-                },
-                name = r.name,
-                meta = listOfNotNull(
-                    coffee.crema.brew.methodLabel(r.method),
-                    sum?.let { "${it.doseG.roundToInt()} g" },
-                    sum?.let { "${it.waterG.roundToInt()} g" },
-                    sum?.estimateLabel()?.let { "~$it" },
-                ).joinToString(" · "),
-            )
-        }
-    }
+    PickRow(
+        active = active,
+        onClick = onClick,
+        enabled = enabled,
+        leading = {
+            Box(
+                Modifier
+                    .size(width = 48.dp, height = 32.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerLowest),
+                contentAlignment = Alignment.Center,
+            ) {
+                PhIcon(coffee.crema.brew.methodIcon(recipe.method), sizeDp = 18, tint = MaterialTheme.colorScheme.primary)
+            }
+        },
+        name = recipe.name,
+        meta = listOfNotNull(
+            coffee.crema.brew.methodLabel(recipe.method),
+            summary?.let { "${it.doseG.roundToInt()} g" },
+            summary?.let { "${it.waterG.roundToInt()} g" },
+            summary?.estimateLabel()?.let { "~$it" },
+        ).joinToString(" · "),
+    )
 }
 
 /** Manual's header action in place of Quick Controls: Duplicate to edit, or Edit recipe. */
