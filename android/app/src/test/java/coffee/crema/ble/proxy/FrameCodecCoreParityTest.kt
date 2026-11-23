@@ -10,6 +10,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 /**
  * Relay slice 2: [FrameCodec] is the core's (`de1_relay_app::frame`). [Oracle]
@@ -105,6 +106,25 @@ class FrameCodecCoreParityTest {
             assertSame("""{"type":"event","text":"x","extra":${"[".repeat(n)}${"]".repeat(n)}}""")
             assertSame("""{"type":"event","text":"x","extra":${"{\"a\":".repeat(n)}1${"}".repeat(n)}}""")
         }
+    }
+
+    /** A hostile peer's object with as many distinct keys as fit in one
+     *  64 KiB message, and a duplicate that wins: decoded as kotlinx did, in
+     *  linear time. */
+    @Test
+    fun `an object with thousands of keys decodes as it did, quickly`() {
+        val text = buildString {
+            append("""{"type":"event","text":"first"""")
+            for (i in 0 until 5_000) append(",\"k$i\":$i")
+            append(""","text":"last"}""")
+        }
+        assertTrue(text.length < 65_536, "${text.length}")
+        val start = System.nanoTime()
+        val frame = FrameCodec.decodeTolerant(text)
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000
+        assertTrue(elapsedMs < 2_000, "took $elapsedMs ms")
+        assertEquals(Frame.Event("last"), frame)
+        assertSame(text)
     }
 
     /** Bits of JSON a mutation splices in. */

@@ -22,6 +22,8 @@
 //! quoted number, leading zeros and an integral exponent (`1e3`) are
 //! accepted. [`write_string`] is kotlinx's string quoting.
 
+use std::collections::HashMap;
+
 /// A parsed JSON value, as kotlinx's `JsonElement` holds it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -207,6 +209,9 @@ impl Reader<'_> {
             return fail("unexpected leading comma");
         }
         let mut entries: Vec<(String, Value)> = Vec::new();
+        // Where each key's entry is, so a duplicate replaces it (last wins)
+        // in constant time: a hostile object's thousands of keys stay linear.
+        let mut index: HashMap<String, usize> = HashMap::new();
         let mut last = Token::BeginObj;
         while self.can_consume_value() {
             if self.peek() != Token::Str {
@@ -215,9 +220,12 @@ impl Reader<'_> {
             let key = self.string()?;
             self.expect(Token::Colon)?;
             let value = self.read()?;
-            match entries.iter_mut().find(|(k, _)| *k == key) {
-                Some(entry) => entry.1 = value,
-                None => entries.push((key, value)),
+            match index.get(&key) {
+                Some(&at) => entries[at].1 = value,
+                None => {
+                    index.insert(key.clone(), entries.len());
+                    entries.push((key, value));
+                }
             }
             last = self.next_token();
             match last {
@@ -569,6 +577,40 @@ mod tests {
         let deep = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));
         assert!(parse(&deep(400)).is_ok());
         assert!(parse(&deep(401)).is_err());
+    }
+
+    /// A hostile peer's object with as many distinct keys as fit in a
+    /// 64 KiB message, plus duplicates of each, reads in linear time.
+    #[test]
+    fn thousands_of_keys_read_quickly() {
+        let keys = 5_000;
+        let mut text = String::from("{\"type\":\"event\",\"text\":\"x\"");
+        for i in 0..keys {
+            text.push_str(&format!(",\"k{i}\":{i}"));
+        }
+        for i in 0..keys {
+            text.push_str(&format!(",\"k{i}\":-{i}"));
+        }
+        text.push('}');
+        assert!(text.len() < 2 * 65_536, "{}", text.len());
+        let start = std::time::Instant::now();
+        let Value::Object(entries) = parse(&text).unwrap() else {
+            panic!("object")
+        };
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(1),
+            "{:?}",
+            start.elapsed()
+        );
+        assert_eq!(entries.len(), keys + 2);
+        assert_eq!(entries[2], ("k0".into(), lit("-0", false)));
+        assert_eq!(
+            entries[keys + 1],
+            (
+                format!("k{}", keys - 1),
+                lit(&format!("-{}", keys - 1), false)
+            )
+        );
     }
 
     #[test]
