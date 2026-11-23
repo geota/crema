@@ -692,7 +692,7 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Install NDK + compileSdk platform (pinned to build.gradle.kts)
-        run: sdkmanager "ndk;30.0.14904198" "platforms;android-37.0"
+        run: sdkmanager "ndk;30.0.14904198" "platforms;android-37.1"
 
       # Pinned (not `stable`) to match core/Cargo.toml's rust-version — F-Droid's
       # reproducible-build recipe needs a fixed compiler, not a floating channel.

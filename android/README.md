@@ -88,7 +88,7 @@ model types — the two are complementary and intentionally co-located.
 | Tool | Notes |
 |---|---|
 | **Android Studio** (Ladybug or newer) or the Android command-line tools | Provides the SDK + an APK install path |
-| **Android SDK** API 36 | `compileSdk` / `targetSdk` |
+| **Android SDK** API 37.1 / 36 | `compileSdk` / `targetSdk` |
 | **Android NDK** r26+ | Install via the SDK Manager ("NDK (Side by side)"). Note the version. |
 | **JDK 17** | Required by Android Gradle Plugin 9.x and Gradle 9.x |
 | **Rust** stable (≥ 1.95, edition 2024 — see `core/rust-toolchain`) | `rustup` |
@@ -113,13 +113,12 @@ Create `android/local.properties` — git-ignored, per-machine config:
 # SDK location — Android Studio writes this for you.
 sdk.dir=/Users/<you>/Library/Android/sdk
 
-# Absolute paths to cargo / rustc / python. REQUIRED for IDE builds: a Gradle
+# Absolute paths to cargo / python. REQUIRED for IDE builds: a Gradle
 # build launched from Android Studio does NOT inherit your shell PATH, so it
 # cannot find rustup's ~/.cargo/bin or a pyenv `python`. The
 # net.mullvad.rust-android plugin and the generateUniffiBindings task read
 # these. A CLI `./gradlew` build — which has your shell PATH — can omit them.
 rust.cargoCommand=/Users/<you>/.cargo/bin/cargo
-rust.rustcCommand=/Users/<you>/.cargo/bin/rustc
 rust.pythonCommand=/usr/bin/python3
 ```
 
