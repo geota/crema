@@ -51,7 +51,7 @@ class FrameCodecCoreParityTest {
 
     @Test
     fun `every fixture decodes as it did, and re-encodes to the same bytes`() {
-        assertEquals(52, fixtures.size)
+        assertEquals(53, fixtures.size)
         for (text in fixtures) {
             assertSame(text)
             val frame = Oracle.decodeTolerant(text) ?: continue

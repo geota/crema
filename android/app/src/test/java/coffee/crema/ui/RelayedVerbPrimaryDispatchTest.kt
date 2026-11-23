@@ -187,6 +187,33 @@ class RelayedVerbPrimaryDispatchTest {
         assertTrue(vm.ui.value.userMessages.none { "started a shot" in it }, "${vm.ui.value.userMessages}")
     }
 
+    /** G3b, owner decision 5: while the hub's grinder collar sets the grind,
+     *  a remote's grind dial is refused with the hub's words, and the hub's
+     *  grind stays the collar's. */
+    @Test
+    fun `a remote's grind dial is refused while the hub follows its grinder`() {
+        vm.addGrinder(SAMPLE_GRINDER_NAME)
+        vm.setActiveGrinder(SAMPLE_GRINDER_ID)
+        vm.setQcGrindText("480")
+        VmHarness.idle()
+        VmHarness.applyCoreOutput(
+            vm,
+            """{"events":[{"type":"GrinderFollowChanged","content":{"follow":{"status":"Following","grinder_id":"$SAMPLE_GRINDER_ID","grind":"480"}}}],"commands":[]}""",
+        )
+        VmHarness.idleUntil("following") { vm.ui.value.grinderFollow.status == coffee.crema.core.FollowStatus.Following }
+        val err = assertIs<Frame.ControlErr>(relay(Golden.require("control/setQcGrind.json")))
+        assertTrue(err.reason.startsWith("The grind follows $SAMPLE_GRINDER_NAME on "), err.reason)
+        assertEquals("480", vm.ui.value.qcGrind)
+        // Paused: the dial is the remote's to set again.
+        VmHarness.applyCoreOutput(
+            vm,
+            """{"events":[{"type":"GrinderFollowChanged","content":{"follow":{"status":"Paused","grinder_id":"$SAMPLE_GRINDER_ID","grind":"480"}}}],"commands":[]}""",
+        )
+        VmHarness.idleUntil("paused") { vm.ui.value.grinderFollow.status == coffee.crema.core.FollowStatus.Paused }
+        assertIs<Frame.ControlOk>(relay(Golden.require("control/setQcGrind.json")))
+        assertEquals("14.5", vm.ui.value.qcGrind)
+    }
+
     /** 05 F1: a profile from the secondary's own library is refused with a
      *  reason, and the primary keeps its selection. */
     @Test

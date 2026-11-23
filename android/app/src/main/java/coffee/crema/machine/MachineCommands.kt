@@ -46,6 +46,11 @@ interface MachineCommands {
  * Called on the Main thread.
  */
 interface MachineActions {
+    /** The grinder whose collar sets Brew's grind on this device now (follow
+     *  mode), by name, or null: a peer's grind dial is refused meanwhile
+     *  (grinder-ble owner decision 5). */
+    fun grindFollowedBy(): String? = null
+
     /** Start a shot, or say why not (one already starting or running, no
      *  profile, the step cap, a required scale missing). */
     fun applyStartShot(): CommandOutcome
@@ -135,9 +140,13 @@ class LocalMachine(
             // A peer's profile pick while a shot or guided brew runs here
             // (brew-modes §4): this device's own picker is locked the same way.
             val locked = if (origin != null && cmd is MachineCommand.SetActiveProfile) actions.profilePickLock() else null
+            // A peer's grind dial while this device's grinder collar sets the
+            // grind (owner decision 5): refused with the hub's words.
+            val followed = if (origin != null && cmd is MachineCommand.SetGrind) actions.grindFollowedBy() else null
             when {
                 origin != null && !actions.configReady() -> CommandOutcome.Refused("${hostName()} is starting up")
                 locked != null -> CommandOutcome.Refused(locked)
+                followed != null -> CommandOutcome.Refused(grindFollowsMessage(followed, hostName()))
                 else -> {
                     actions.showConfig(cmd)
                     // A peer's bag pick answers with what it changed (F6).
@@ -182,3 +191,7 @@ class LocalMachine(
         return CommandOutcome.Accepted
     }
 }
+
+/** Owner decision 5's words: "The grind follows Motto 80 on Kitchen tablet". */
+fun grindFollowsMessage(grinder: String, host: String): String = "The grind follows $grinder on $host"
+

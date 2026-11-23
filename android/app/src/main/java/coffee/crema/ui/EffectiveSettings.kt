@@ -253,6 +253,13 @@ fun MainUiState.gate(setting: coffee.crema.settings.Setting): coffee.crema.ui.co
         return coffee.crema.ui.components.RowGate(editable = false, note = FOLLOW_GATE_NOTE)
     }
     if (mirror == null) return coffee.crema.ui.components.RowGate.Open
+    // The hub follows its grinder: its collar sets the grind, and the hub
+    // would refuse this device's dial (owner decision 5).
+    if (setting == coffee.crema.settings.Setting.QC_GRIND) {
+        hubGrinderFollowing()?.let { g ->
+            return coffee.crema.ui.components.RowGate(editable = false, note = coffee.crema.machine.grindFollowsMessage(g, remoteHubLabel()))
+        }
+    }
     val a = availability(setting)
     return coffee.crema.ui.components.RowGate(editable = a.editable, unknown = a == SettingAvailability.UNKNOWN, note = availabilityNote(setting))
 }

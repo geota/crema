@@ -312,6 +312,8 @@ val SNAPSHOT_META: Set<String> = setOf(
     "activeBagName", "activeBagGrind",
     // The hub's resolved hot-water target: a readout of A5 and A22–A25, not a setting.
     "hotWaterTarget",
+    // The hub's connected grinder (grinder-ble §6.2): a readout, never adopted.
+    "grinder",
 )
 
 /** The setting a #203 [MachineCommand.Config] edits. Exhaustive, so a new

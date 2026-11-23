@@ -730,6 +730,41 @@ data class ConfigSnapshot(
     val preFlush: Boolean,
     val steamPurge: Boolean,
     val idleSleepMin: Int,
+    /** The hub's connected grinder, as a summary (grinder-ble §6.2): a remote
+     *  shows it, never connects it. Absent when the hub has no grinder
+     *  connected or linked, and from a hub before G3b. */
+    val grinder: GrinderSnapshot? = null,
+)
+
+/**
+ * The hub's connected grinder in its config snapshot (grinder-ble §6.2):
+ * summaries only, never its raw GATT, and never its serial, Wi-Fi name or
+ * Bluetooth address. A remote shows "480 μm · from Motto 80 on ‹hub›" and,
+ * while [follow] is `Following`, refuses its own grind dial with the hub's
+ * words (owner decision 5).
+ */
+@Serializable
+data class GrinderSnapshot(
+    /** A grinder is linked to the hub now (its readings arriving). */
+    val connected: Boolean = false,
+    /** The model, for display ("Motto 80"). */
+    val model: String? = null,
+    /** What it is doing (`GrinderState`: "Idle", "Grinding", …). */
+    val state: String? = null,
+    /** Follow mode on the hub (`FollowStatus`: "Following", "Paused", …). */
+    val follow: String? = null,
+    /** The dial: the steady value while following, else the latest reading. */
+    val setting: String? = null,
+    /** Grinding speed, rpm. */
+    val grindRpm: Int? = null,
+    /** Bean-feeder speed, rpm. */
+    val feedRpm: Int? = null,
+    /** The hub's grinder record it is linked to, and that record's name. */
+    val grinderId: String? = null,
+    val grinderName: String? = null,
+    /** The last grind on the hub: how long it ran, ms, and at what setting. */
+    val lastGrindMs: Int? = null,
+    val lastGrindSetting: String? = null,
 )
 
 /** Decode `prefs.json`'s text: the nested shape, or a pre-unification FLAT
