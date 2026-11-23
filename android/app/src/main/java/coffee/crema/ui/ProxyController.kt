@@ -31,6 +31,7 @@ import coffee.crema.ble.proxy.SCOPE_MIRROR
 import coffee.crema.ble.proxy.SecureRelayAcceptor
 import coffee.crema.ble.proxy.SwitchableBleTransport
 import coffee.crema.ble.proxy.TappingBleTransport
+import coffee.crema.ble.proxy.stopHosting
 import coffee.crema.core.GateStatus
 import coffee.crema.core.RelayFfiException
 import coffee.crema.core.RelayKeys
@@ -1651,8 +1652,9 @@ class ProxyController(
         delay(150)
         // Hosting stops: every admitted remote gets an authenticated
         // CLOSE(HUB_STOPPED) (spec §2.9) before the server drops the sockets.
-        acceptor?.closeAll(); acceptor = null
-        relayServer?.stop(); relayServer = null; relayHub = null
+        // Bounded: a stuck connection can't hold the switch or the stop.
+        stopHosting(acceptor, relayServer)
+        acceptor = null; relayServer = null; relayHub = null
         // Cancel the previous SECONDARY mode's collectors + ProxyTransport before
         // releasing the link, so nothing leaks across the switch (issue 10).
         secondaryScope?.cancel(); secondaryScope = null

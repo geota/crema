@@ -553,9 +553,10 @@ impl RelayHubConnection {
         self.conn.result(|c| c.send(&message, now_ms))
     }
 
-    /// Closes the session (an authenticated `CLOSE` once established). Named
-    /// `close_session`, not `close`: in Kotlin a `close` would overload
-    /// `AutoCloseable.close()`, which destroys the object without the CLOSE.
+    /// Closes the session (an authenticated `CLOSE` once established). Never
+    /// fails: the Step always carries a close code. Named `close_session`, not
+    /// `close`: in Kotlin a `close` would overload `AutoCloseable.close()`,
+    /// which destroys the object without the CLOSE.
     pub fn close_session(&self, reason: RelayCloseReason, now_ms: u64) -> RelayStep {
         self.conn.step(|c| c.close(reason.into(), now_ms))
     }
@@ -687,7 +688,8 @@ impl RelayRemoteConnection {
     }
 
     /// Closes (an authenticated `CLOSE` once established, `ABORT(CANCELLED)`
-    /// during a pairing). `close_session`, not `close` (see the hub's).
+    /// during a pairing). Never fails: the Step always carries a close code.
+    /// `close_session`, not `close` (see the hub's).
     pub fn close_session(&self, reason: RelayCloseReason, now_ms: u64) -> RelayStep {
         self.conn.step(|c| c.close(reason.into(), now_ms))
     }

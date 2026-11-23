@@ -1179,10 +1179,16 @@ impl HubConnection {
 
     /// Closes the session: an authenticated `CLOSE` record once the transport
     /// exists, `ABORT(CANCELLED)` during a pairing, a plain close otherwise.
+    /// Never fails: the Step always carries a close, so the shell always ends
+    /// the socket (an ended connection returns its held Step, or a plain close).
     pub fn close(&mut self, reason: CloseReason, now_ms: u64) -> Step {
         self.now_ms = self.now_ms.max(now_ms);
         if self.is_terminal() {
-            return core::mem::take(&mut self.pending);
+            let mut step = core::mem::take(&mut self.pending);
+            if step.close.is_none() {
+                step.close_with(ws_close::NORMAL, "closed");
+            }
+            return step;
         }
         let mut step = Step::default();
         if self.pairing_phase() {

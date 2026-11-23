@@ -5,8 +5,8 @@ mod common;
 
 use common::*;
 use de1_relay::{
-    ClientHello, HEARTBEAT_IDLE_MS, HubConnection, Intent, PAIR_FINISH_MS, Phase, RECV_TIMEOUT_MS,
-    RESUME_DEADLINE_MS, RelayEvent, RemoteConnection, Step, WsIn, inner, kind,
+    ClientHello, CloseReason, HEARTBEAT_IDLE_MS, HubConnection, Intent, PAIR_FINISH_MS, Phase,
+    RECV_TIMEOUT_MS, RESUME_DEADLINE_MS, RelayEvent, RemoteConnection, Step, WsIn, inner, kind,
     test_support::test_seed, ws_close,
 };
 
@@ -251,4 +251,55 @@ fn code_lifetime_is_capped_by_the_window() {
     assert_eq!(link.remote.next_deadline_ms(), Some(late + 30_000));
     let s = expire_remote(&mut link.remote);
     assert_timeout(&s, true);
+}
+
+/// `close` never fails: in every phase, live or ended, its Step carries a
+/// close, so the shell always ends the socket. An ended connection sends
+/// nothing more.
+#[test]
+fn close_always_closes() {
+    let ended_close = |s: Step| {
+        assert!(s.close.is_some(), "{s:?}");
+        assert!(s.send.is_empty(), "{s:?}");
+    };
+    // Timed out (Failed).
+    let mut hub = HubConnection::new(
+        &hub_keys(),
+        new_gate(),
+        new_pins(vec![]),
+        "Hub",
+        test_seed("hub-conn", 0),
+        T0,
+    );
+    assert_timeout(&expire_hub(&mut hub), true);
+    ended_close(hub.close(CloseReason::HubStopped, T0 + 6_000));
+    let (r, h) = (remote_keys(), hub_keys());
+    let (mut remote, _) = RemoteConnection::resume(&r, h.public(), test_seed("remote-conn", 0), T0);
+    assert_timeout(&expire_remote(&mut remote), false);
+    ended_close(remote.close(CloseReason::Normal, T0 + 6_000));
+
+    // Established, then closed (Closed), then closed again.
+    for reason in [
+        CloseReason::Normal,
+        CloseReason::Revoked,
+        CloseReason::HubStopped,
+    ] {
+        let mut link = established(&r, &h, 1);
+        assert!(link.hub.close(reason, T0).close.is_some());
+        ended_close(link.hub.close(reason, T0));
+        assert!(link.remote.close(reason, T0).close.is_some());
+        ended_close(link.remote.close(reason, T0));
+    }
+
+    // Before the hello (no transport yet).
+    let mut hub = HubConnection::new(
+        &hub_keys(),
+        new_gate(),
+        new_pins(vec![]),
+        "Hub",
+        test_seed("hub-conn", 1),
+        T0,
+    );
+    assert!(hub.close(CloseReason::HubStopped, T0).close.is_some());
+    ended_close(hub.close(CloseReason::HubStopped, T0));
 }
