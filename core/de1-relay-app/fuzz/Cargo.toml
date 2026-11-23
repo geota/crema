@@ -1,0 +1,36 @@
+# cargo-fuzz project for de1-relay-app. Excluded from the core workspace;
+# builds on nightly with its own lockfile:
+#
+#   cd core/de1-relay-app/fuzz && cargo +nightly fuzz run fuzz_decode_command -- -max_total_time=60
+#
+# The targets are thin wrappers around `de1_relay_app::fuzzing`, whose entry
+# points `tests/fuzz_corpus.rs` also replays on stable over `corpus/`.
+[package]
+name = "de1-relay-app-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+de1-relay-app = { path = ".." }
+
+[[bin]]
+name = "fuzz_decode_command"
+path = "fuzz_targets/fuzz_decode_command.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_number"
+path = "fuzz_targets/fuzz_number.rs"
+test = false
+doc = false
+bench = false
+
+# Its own workspace root, so the core workspace's settings don't apply.
+[workspace]

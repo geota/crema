@@ -34,6 +34,7 @@ uniffi::setup_scaffolding!();
 
 // Relay v4 secure channel (its own module and exports; see relay.rs).
 mod relay;
+mod relay_command;
 
 /// The error every fallible FFI export throws.
 ///

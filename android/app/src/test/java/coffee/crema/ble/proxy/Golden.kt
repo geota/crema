@@ -5,19 +5,24 @@ import kotlin.test.assertEquals
 import kotlin.test.fail
 
 /**
- * The checked-in proxy wire fixtures under `src/test/resources/proxy-golden/v4/`:
- * one file per sample, holding the exact text that crosses the WebSocket.
+ * The relay wire fixtures, shared with the core: one file per sample, holding
+ * the exact text that crosses the WebSocket, under
+ * `core/de1-relay-app/tests/golden/v4/` (a test resource directory here, see
+ * build.gradle.kts; the core's cargo tests read the same files).
  *
  * A wire change fails the golden tests. When the change is intended, rerun
  * them with `CREMA_UPDATE_GOLDEN=1` in the environment: the fixtures are
  * rewritten from the current code, and the diff is the change to review. A
  * protocol bump keeps the old directory as the old-peer fixtures and adds the
- * next version's (`v3/` stays until PR-4 removes the v3 frames).
+ * next version's.
  */
 internal object Golden {
     /** The protocol version these fixtures describe. */
     const val VERSION = 4
-    private const val ROOT = "proxy-golden/v$VERSION"
+    private const val ROOT = "v$VERSION"
+
+    /** The fixtures' directory, from android/app (where Gradle runs the tests). */
+    const val SOURCE_DIR = "../../core/de1-relay-app/tests/golden"
 
     private val updating = System.getenv("CREMA_UPDATE_GOLDEN") == "1"
 
@@ -40,7 +45,7 @@ internal object Golden {
      *  mode, write it instead. */
     fun check(path: String, actual: String) {
         if (updating) {
-            val file = File("src/test/resources/$ROOT/$path")
+            val file = File("$SOURCE_DIR/$ROOT/$path")
             file.parentFile?.mkdirs()
             file.writeText(actual + "\n")
             return

@@ -20,6 +20,8 @@ uniffi = { version = "0.32.0", features = ["cli"] }
 # getrandom(2) syscall on Android; already in the lockfile through uuid), and
 # zeroize for the key and code buffers this bridge owns.
 de1-relay = { path = "../de1-relay" }
+# The relayed-command codec and refusal rules (PLAN 65), above the channel.
+de1-relay-app = { path = "../de1-relay-app" }
 getrandom = "0.4"
 zeroize = "1"
 # The SQLite history store (#310 C3): `HistoryDb` (src/history.rs), with

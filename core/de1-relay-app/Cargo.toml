@@ -1,0 +1,20 @@
+[package]
+name = "de1-relay-app"
+version = "0.1.0"
+description = "The Crema LAN relay's app layer above the secure channel: relayed commands, their wire form and refusal rules"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# Above de1-relay in the stack, but it doesn't depend on it: nothing here
+# touches the secure channel, so no crypto crate is in this tree. The bounds a
+# relayed command is checked against are the domain's own tables.
+[dependencies]
+de1-domain = { path = "../de1-domain" }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

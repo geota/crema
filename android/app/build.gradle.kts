@@ -261,6 +261,9 @@ android {
     sourceSets {
         getByName("release").kotlin.directories.add("src/shipped/java")
         getByName("nightly").kotlin.directories.add("src/shipped/java")
+        // The relay wire fixtures are the core's (PLAN 65): the cargo tests in
+        // core/de1-relay-app and the golden tests here read the same files.
+        getByName("test").resources.directories.add("../../core/de1-relay-app/tests/golden")
     }
 
     compileOptions {

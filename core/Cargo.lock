@@ -362,6 +362,7 @@ dependencies = [
  "de1-history",
  "de1-protocol",
  "de1-relay",
+ "de1-relay-app",
  "getrandom",
  "serde_json",
  "tempfile",
@@ -431,6 +432,14 @@ dependencies = [
  "thiserror",
  "typeshare-annotation",
  "zeroize",
+]
+
+[[package]]
+name = "de1-relay-app"
+version = "0.1.0"
+dependencies = [
+ "de1-domain",
+ "serde_json",
 ]
 
 [[package]]

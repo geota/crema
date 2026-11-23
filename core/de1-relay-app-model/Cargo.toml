@@ -1,0 +1,22 @@
+# Property tests for de1-relay-app's command codec and JVM number rules:
+# every command a sender may build round-trips through its wire form, any
+# control decodes without a panic, and every double prints and parses back.
+# Excluded from the core workspace, with its own lockfile, because proptest
+# fails `cargo deny check bans` there (as de1-model). Dev-only, never shipped.
+#
+#   cd core/de1-relay-app-model && cargo test
+#   PROPTEST_CASES=10000 cargo test
+[package]
+name = "de1-relay-app-model"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.95"
+license = "GPL-3.0-or-later"
+
+[dev-dependencies]
+de1-relay-app = { path = "../de1-relay-app" }
+proptest = "1"
+
+# Its own workspace root, so the core workspace's settings don't apply.
+[workspace]

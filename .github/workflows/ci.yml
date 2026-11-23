@@ -264,6 +264,44 @@ jobs:
         run: cargo test --locked
 
   # ─────────────────────────────────────────────────────────────────────
+  # The relayed-command codec's property tests (PLAN 65): every sendable
+  # command round-trips, any control decodes, every double prints and parses
+  # back. Their own crate and lockfile, as de1-model, because proptest fails
+  # `cargo deny`. 256 cases on PRs, 10k nightly.
+  # ─────────────────────────────────────────────────────────────────────
+  relay-app-model:
+    name: model (de1-relay-app-model)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule' || github.event.schedule == '30 3 * * *'
+    env:
+      PROPTEST_CASES: ${{ github.event_name == 'schedule' && '10000' || '256' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain (rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core/de1-relay-app-model -> target
+
+      - name: cargo fmt --check
+        working-directory: core/de1-relay-app-model
+        run: cargo fmt -- --check
+
+      - name: cargo clippy (-D warnings)
+        working-directory: core/de1-relay-app-model
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: cargo test
+        working-directory: core/de1-relay-app-model
+        run: cargo test --locked
+
+  # ─────────────────────────────────────────────────────────────────────
   # de1-relay fuzzing (relay v4 spec §3.7, AC-21): each cargo-fuzz target for
   # 60 s, nightly only. The seed corpus also replays in `cargo test` on every
   # PR (tests/fuzz_corpus.rs). New inputs go to a scratch corpus; a crash
@@ -278,6 +316,13 @@ jobs:
       fail-fast: false
       matrix:
         target: [fuzz_hub_ws, fuzz_remote_ws, fuzz_transport_records, fuzz_client_hello]
+        crate: [de1-relay]
+        include:
+          # The relayed-command codec (de1-relay-app): its own cargo-fuzz project.
+          - target: fuzz_decode_command
+            crate: de1-relay-app
+          - target: fuzz_number
+            crate: de1-relay-app
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -292,7 +337,7 @@ jobs:
           tool: cargo-fuzz
 
       - name: cargo fuzz run ${{ matrix.target }} (60 s)
-        working-directory: core/de1-relay/fuzz
+        working-directory: core/${{ matrix.crate }}/fuzz
         run: |
           mkdir -p "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/artifacts"
           # The target is explicit: cargo-fuzz defaults to the triple it was built
