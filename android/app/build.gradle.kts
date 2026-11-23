@@ -664,6 +664,15 @@ tasks.withType<Test>().configureEach {
     }
     // A save refused by the load floor fails the test that made it (SaveFloor).
     systemProperty("crema.strictSaves", "true")
+    // A failure prints its whole exception, causes and suppressed ones
+    // included, so CI's log names what leaked into an UncaughtExceptionsBeforeTest
+    // (#530, #532: the leak sits in a suppressed exception of another class).
+    testLogging {
+        events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showCauses = true
+        showStackTraces = true
+    }
     // A hang fails the run instead of holding CI for hours (#310 A5: a store-lock
     // deadlock hung the android job for over two; the suite takes about 21 minutes).
     timeout.set(Duration.ofMinutes(40))
