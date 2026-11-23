@@ -17,6 +17,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * What the hub's pairing ceremony and admission need from the app (the
@@ -64,6 +65,19 @@ interface HubTrust {
 
     /** Whether the hub user turned [address] away in this window (the squat rule, spec §2.5). */
     fun isTurnedAway(address: String): Boolean
+}
+
+/**
+ * Hosting stops (a mode switch): close every session, bounded per session
+ * ([SecureRelayAcceptor.closeAll]), then stop the server, which drops whatever
+ * is left. The stop runs even when the close is cancelled.
+ */
+internal suspend fun stopHosting(acceptor: SecureRelayAcceptor?, server: LanRelayServer?) {
+    try {
+        acceptor?.closeAll()
+    } finally {
+        server?.stop()
+    }
 }
 
 /** What [HubTrust.storePin] did. */
@@ -132,6 +146,8 @@ class SecureRelayAcceptor(
     private val maxUnauth: Int = MAX_UNAUTH,
     private val maxUnauthPerAddress: Int = MAX_UNAUTH_PER_ADDRESS,
     internal val clock: () -> Long = System::currentTimeMillis,
+    /** How long [closeAll] waits for each session's close before cancelling its socket. */
+    private val closeTimeoutMs: Long = CLOSE_ALL_TIMEOUT_MS,
     /** Serves one admitted session: [RelayHub.serve] (tests record or script the link). */
     private val serve: suspend (link: FrameLink, peer: RemotePeer) -> Unit = { link, peer ->
         // Checked again once the session is listed: a Forget that ran between
@@ -174,12 +190,15 @@ class SecureRelayAcceptor(
         }
     }
 
-    /** Close every session because hosting stops: established ones get an authenticated `CLOSE(HUB_STOPPED)`. */
-    suspend fun closeAll() {
-        for (s in sessions) {
-            val link = s.link
-            if (link != null) link.closeWith(RelayCloseReason.HUB_STOPPED) else s.wire?.abort(CLOSE_GOING_AWAY, "hub stopped")
-        }
+    /**
+     * Close every session because hosting stops: established ones get an
+     * authenticated `CLOSE(HUB_STOPPED)`. All at once, each bounded by
+     * [closeTimeoutMs], so this always returns and the server stop after it
+     * runs: a session whose socket write is stuck (a remote that stopped
+     * reading holds its wire's lock) has its socket cancelled without the lock.
+     */
+    suspend fun closeAll(): Unit = coroutineScope {
+        for (s in sessions) launch { s.stop(closeTimeoutMs) }
     }
 
     /** Register [session] under the caps, evicting the oldest unauthenticated session when needed. */
@@ -316,6 +335,25 @@ class SecureRelayAcceptor(
             if (offer(w, code) != Entry.EARLY) dropPending()
         }
 
+        /**
+         * Hosting stops: the close (`CLOSE(HUB_STOPPED)` once admitted) runs in
+         * the connection's own scope, and this waits at most [timeoutMs] for
+         * it. The wait is a join, so it ends on time even when the close is
+         * stuck behind the wire's lock or in a write that ignores
+         * cancellation; then the socket is cancelled without the lock.
+         */
+        internal suspend fun stop(timeoutMs: Long) {
+            val w = wire ?: return
+            val close = scope.launch {
+                val l = link
+                if (l != null) l.closeWith(RelayCloseReason.HUB_STOPPED) else w.abort(CLOSE_GOING_AWAY, "hub stopped")
+            }
+            if (withTimeoutOrNull(timeoutMs) { close.join() } != null) return
+            Log.w(TAG, "A relay session didn't close in ${timeoutMs} ms: cancelling its socket")
+            close.cancel()
+            w.cancelSocket()
+        }
+
         internal suspend fun poke() {
             wire?.call { tick(it) }
         }
@@ -434,6 +472,9 @@ class SecureRelayAcceptor(
     companion object {
         private const val TAG = "SecureRelayAcceptor"
         const val MAX_SESSIONS = 8
+
+        /** [closeAll]'s bound per session: the close record plus the 1 s socket close, with room to spare. */
+        internal const val CLOSE_ALL_TIMEOUT_MS = 2_000L
 
         /** How long a code entered before the remote's PAKE_A waits for it. */
         internal const val PAKE_A_WAIT_MS = 2_000L
