@@ -186,4 +186,46 @@ class RelayGrinderPrivacyTest {
             scope.cancel()
         }
     }
+
+    /** Review #552 S2: a remote that attaches before the hub's DE1 is on the
+     *  roster (a redial to a restarted hub) stays subscribed, hears nothing
+     *  meanwhile, and gets notifies once the roster lists it — no re-attach. */
+    @Test
+    fun `an attach before the roster flows once the roster lists the device`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val roster = java.util.concurrent.atomic.AtomicReference(emptyList<DeviceInfo>())
+            val (clientEnd, serverEnd) = InMemoryFrameLink.pair()
+            val hub = RelayHub(
+                primaryName = "Kitchen tablet",
+                roster = { roster.get() },
+                readSource = { _, _, _ -> byteArrayOf(0x42) },
+                isSnapshotChar = { _, _ -> false },
+            )
+            scope.launch { hub.serve(serverEnd, TEST_PEER) }
+            val proxy = ProxyTransport(clientEnd, scope)
+            val d = Handle(de1, "DE1")
+            withTimeout(2_000) { proxy.connect(d) }
+            val heard = CopyOnWriteArrayList<BleTransport.Notification>()
+            val obs = scope.launch { proxy.observe(d, de1Service, stateChar).collect { heard += it } }
+            delay(100)
+            // Not on the roster yet: nothing flows, state included.
+            hub.onConnState(de1, BleTransport.ConnState.CONNECTED.name)
+            hub.onInbound(de1, de1Service, stateChar, byteArrayOf(1), atMs = 1)
+            delay(200)
+            assertEquals(emptyList(), heard.toList())
+            assertEquals(BleTransport.ConnState.DISCONNECTED, proxy.connectionState(d).value)
+            // The DE1 comes back; the roster lists it.
+            roster.set(listOf(DeviceInfo(de1, "DE1", "de1", "CONNECTED")))
+            hub.pushRoster()
+            hub.onConnState(de1, BleTransport.ConnState.CONNECTED.name)
+            hub.onInbound(de1, de1Service, stateChar, byteArrayOf(2), atMs = 2)
+            withTimeout(2_000) { while (heard.isEmpty()) delay(5) }
+            assertContentEquals(byteArrayOf(2), heard.single().data)
+            withTimeout(2_000) { proxy.connectionState(d).first { it == BleTransport.ConnState.CONNECTED } }
+            obs.cancel()
+        } finally {
+            scope.cancel()
+        }
+    }
 }

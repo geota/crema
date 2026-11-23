@@ -153,10 +153,13 @@ class RelayHub(
         if (snapshot) {
             cache.merge(key, CachedNotify(seq, frame)) { old, new -> if (new.seq > old.seq) new else old }
         }
+        // Delivered only once the roster lists the device (checked lazily: only
+        // when someone is attached to it).
+        val ok by lazy(LazyThreadSafetyMode.NONE) { served(address) }
         // Only snapshot chars race the attach burst; counted sample streams
         // are never cached, so they skip the per-char guard (no map work per
         // sample on the primary's notification path).
-        for (c in clients) if (c.approved && c.isAttached(address)) {
+        for (c in clients) if (c.approved && c.isAttached(address) && ok) {
             if (snapshot) deliverNotify(c, key, seq, frame) else deliver(c, frame)
         }
     }
@@ -186,7 +189,8 @@ class RelayHub(
         if (!isRelayedDevice(address)) return
         connStates[address] = state
         val frame = Frame.State(address, state)
-        for (c in clients) if (c.approved && c.isAttached(address)) deliver(c, frame)
+        val ok by lazy(LazyThreadSafetyMode.NONE) { served(address) }
+        for (c in clients) if (c.approved && c.isAttached(address) && ok) deliver(c, frame)
     }
 
     /** Push [json], the primary's current session config, to every attached
@@ -361,11 +365,10 @@ class RelayHub(
     private suspend fun handle(session: ClientSession, frame: Frame) {
         when (frame) {
             is Frame.Attach -> {
-                // A device the roster never listed (the grinder) looks like one
-                // the hub doesn't hold: nothing attaches, nothing is replayed. The
-                // protocol has no attach error, so the honest answer is
-                // DISCONNECTED.
-                if (!served(frame.address)) {
+                // The grinder is never relayed: nothing attaches, nothing is
+                // replayed. The protocol has no attach error, so the honest
+                // answer is DISCONNECTED.
+                if (!isRelayedDevice(frame.address)) {
                     deliver(session, Frame.Attached(frame.id, frame.address, BleTransport.ConnState.DISCONNECTED.name))
                     return
                 }
@@ -385,7 +388,12 @@ class RelayHub(
                 // primary's transport truth), and only then to an honest
                 // DISCONNECTED — never a fabricated CONNECTED the State stream
                 // would have to walk back.
-                val state = connStates[frame.address]
+                // Any other address attaches, so a remote that redials a restarted
+                // hub before its DE1 is back stays subscribed; but nothing about it
+                // flows (snapshot, state, notifies) until the roster lists it, and
+                // then it flows without a re-attach.
+                val servedNow = served(frame.address)
+                val state = (if (servedNow) connStates[frame.address] else null)
                     ?: rosterNow().firstOrNull { it.address == frame.address }?.state
                     ?: BleTransport.ConnState.DISCONNECTED.name
                 deliver(session, Frame.Attached(frame.id, frame.address, state))
@@ -394,7 +402,7 @@ class RelayHub(
                 // per-client seq guard in [deliverNotify] makes this race-proof
                 // against concurrent live fan-out: a cached value older than one
                 // already delivered live is skipped, never regressing the mirror.
-                for ((key, cached) in cache) if (key.startsWith(prefix)) {
+                if (servedNow) for ((key, cached) in cache) if (key.startsWith(prefix)) {
                     deliverNotify(session, key, cached.seq, cached.frame)
                 }
                 // Config snapshot: the secondary snaps to the primary's session
