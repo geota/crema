@@ -1330,6 +1330,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }.onFailure { notifyUser("Couldn't share the damaged files: ${it.message}") }
     }
 
+    // The restore engine and its marker, declared before the init below:
+    // its startup load reads [restoreEngine], and with tiny store files that
+    // load can finish inside the constructor (#532 CI: an NPE on the lazy's
+    // not-yet-set delegate).
+    private val restoreMarker by lazy {
+        coffee.crema.restore.RestoreMarkerStore(
+            java.io.File(getApplication<Application>().filesDir, coffee.crema.restore.RestoreMarkerStore.FILE_NAME),
+            json,
+        )
+    }
+
+    /** The restore engine, over this ViewModel's stores. */
+    internal val restoreEngine: coffee.crema.restore.RestoreEngine by lazy {
+        coffee.crema.restore.RestoreEngine(
+            library.restoreSink(
+                LibraryController.RestoreDeps(
+                    machineBusy = { _ui.value.shotInProgress || firmware.ui.value.holdsLink || firmware.ui.value.running },
+                    totalLitres = { _ui.value.maintenance.totalLitres },
+                    restoreRecipes = { r, m, d, h -> guided.restoreRecipes(r, m, d, h) },
+                    restoreSettings = { p -> restoreSettingsNow(p) },
+                    restoreMaintenance = { m -> maintenance.restoreNow(m) },
+                ),
+            ),
+            restoreMarker,
+            json,
+        )
+    }
+
     init {
         // Sleep-on-quit (see [PresenceController.installQuitSleep]).
         presence.installQuitSleep()
@@ -1801,29 +1829,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Restore through the core's plan (restore-safety PR7a) ──────────────
 
-    private val restoreMarker by lazy {
-        coffee.crema.restore.RestoreMarkerStore(
-            java.io.File(getApplication<Application>().filesDir, coffee.crema.restore.RestoreMarkerStore.FILE_NAME),
-            json,
-        )
-    }
-
-    /** The restore engine, over this ViewModel's stores. */
-    internal val restoreEngine: coffee.crema.restore.RestoreEngine by lazy {
-        coffee.crema.restore.RestoreEngine(
-            library.restoreSink(
-                LibraryController.RestoreDeps(
-                    machineBusy = { _ui.value.shotInProgress || firmware.ui.value.holdsLink || firmware.ui.value.running },
-                    totalLitres = { _ui.value.maintenance.totalLitres },
-                    restoreRecipes = { r, m, d, h -> guided.restoreRecipes(r, m, d, h) },
-                    restoreSettings = { p -> restoreSettingsNow(p) },
-                    restoreMaintenance = { m -> maintenance.restoreNow(m) },
-                ),
-            ),
-            restoreMarker,
-            json,
-        )
-    }
 
     /** Test seam: [LibraryController.beforeRestoreRemove]. */
     internal var beforeRestoreRemove: (suspend () -> Unit)?
@@ -1866,6 +1871,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Picks whose run is under way, Main thread only (#413). */
     private val picksRunning = HashSet<Int>()
+
+    /** Test seam: a confirmed restore is still running (its singletons save last). */
+    @androidx.annotation.VisibleForTesting
+    internal val restoreRunning: Boolean get() = picksRunning.isNotEmpty()
 
     /**
      * Whether a newer pick has taken over from [pending] (#413, #425): its
