@@ -281,13 +281,11 @@ private fun BrewSessionPlot(
 }
 
 /**
- * The "Bean" field shared by the Log-brew form and the guided Brew setup
- * (issue #10): a pill with the chosen bag and its grams left, opening the
+ * The Log-brew form's "Bean" field (issue #10): a pill with the chosen bag and its grams left, opening the
  * [BeanPickerDialog], plus the quiet "more than the N g left in this bag" note
  * when [doseG] exceeds the chosen bag. Picking never changes the app's active
  * bag. [onPick] gets a bean id or [GuidedBeanRules.NO_BEAN]. [allowArchived]
- * false keeps archived bags out of the picker, for a pick that
- * [GuidedBeanRules.resolve] would replace.
+ * false keeps archived bags out of the picker.
  */
 @Composable
 fun BeanPickField(

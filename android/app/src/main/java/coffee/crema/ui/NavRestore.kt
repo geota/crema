@@ -29,7 +29,7 @@ object NavRestore {
         // The Brew Log form's owner is dynamic (History or Beans — wherever it
         // was opened); this is only the fallback. See [restoreRoute].
         "log-brew" to "history",
-        // Likewise the recipe editor's (Scale's Brew setup or Profiles).
+        // Likewise the recipe editor's (Brew's Manual page or Profiles).
         "recipe-edit" to "profiles",
         // And the brewing-method dialog's (the tab of whatever opened it).
         "method-edit" to "profiles",

@@ -273,7 +273,7 @@ fun BrewScreen(
                 grinderBlock = { GrinderBlock(vm, ui, onNav) },
             )
             EmptyBagBanner(ui, onSelectBag = vm::setActiveBean, Modifier.padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 4.dp))
-            // Manual's page (brew-modes §3), shared engine with the Scale segment.
+            // Manual's page (brew-modes §3), the guided-brew engine.
             val guidedNow = coffee.crema.ui.brewlog.rememberGuidedNow(ui.guidedBrew.phase)
             if (manualRecipe != null) ManualBody(
                 vm = vm,

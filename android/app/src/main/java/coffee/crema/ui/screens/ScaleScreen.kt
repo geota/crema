@@ -171,10 +171,6 @@ fun ScaleScreen(
             }
         }
     }
-    // The guided brew's side sheets on this tab (tablet): the recipe editor
-    // opened in place from the Brew setup, and the finished session's log form.
-    coffee.crema.ui.brewlog.RecipeEditorSheet(vm, owner = coffee.crema.ui.brewlog.RecipeEditOwner.SCALE)
-    coffee.crema.ui.brewlog.LogBrewSheet(vm, owner = coffee.crema.ui.brewlog.BrewLogOwner.SCALE)
 }
 
 @Composable

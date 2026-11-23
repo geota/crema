@@ -17,7 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 
 /**
- * Guided brew sessions (issue #10), the recipe library, the Brew setup's
+ * Guided brew sessions (issue #10), the recipe library, the guided
  * selections, the recipe and custom-method editors, cues and the Brew Log
  * draft — extracted from MainViewModel (breakup step 3).
  *
@@ -386,12 +386,6 @@ internal class GuidedBrewController(
     }
 
 
-    /** A method chip: the method's default recipe (pointer, else its built-in), or none. */
-    fun selectGuidedMethod(method: String) {
-        _guidedSetup.update { it.copy(method = method, recipe = null, methodChosen = true) }
-        resolveGuidedSetup()
-    }
-
     /** The multi-recipe dropdown. */
     fun selectGuidedRecipe(recipe: coffee.crema.core.BrewRecipe) {
         _guidedSetup.update { it.copy(method = recipe.method, recipe = recipe, methodChosen = true) }
@@ -399,21 +393,15 @@ internal class GuidedBrewController(
 
     fun setGuidedStartOnPour(on: Boolean) = _guidedSetup.update { it.copy(startOnPour = on) }
 
-    /**
-     * The setup's bean picker: a bag id or [coffee.crema.ui.brewlog.GuidedBeanRules.NO_BEAN].
-     * Setup-only — the app's active bag is untouched (the log form's rule too).
-     */
-    fun selectGuidedBean(key: String) = _guidedSetup.update { it.copy(beanPick = key) }
-
-    /** The bag the guided brew will debit — the setup's pick, else the active bag. */
+    /** The bag the guided brew will debit: Brew's active bag. */
     fun guidedBeanId(st: MainUiState = effectiveState()): String? =
-        coffee.crema.ui.brewlog.GuidedBeanRules.resolve(_guidedSetup.value.beanPick, st.beans, st.activeBeanId)
+        coffee.crema.ui.brewlog.GuidedBeanRules.brewBag(st.beans, st.activeBeanId)
 
 
     /**
      * The open recipe editor's working copy, or null. VM-held so edits
      * survive rotation: the phone pushes the `recipe-edit` route, the tablet
-     * shows a side sheet on the owning tab (Scale's Brew setup, or Profiles),
+     * shows a side sheet on the owning tab (Brew's Manual page, or Profiles),
      * both over this one draft (see [NavRestore.restoreRoute]).
      */
     val recipeEdit: StateFlow<coffee.crema.ui.brewlog.RecipeEditDraft?> = _recipeEdit.asStateFlow()
@@ -456,7 +444,7 @@ internal class GuidedBrewController(
         if (coffee.crema.brew.RecipeLibraryRules.becomesDefaultOnSave(saved.method, uiState().lastRecipeByMethod)) {
             rememberRecipeUsed(saved)
         }
-        if (d.owner == coffee.crema.ui.brewlog.RecipeEditOwner.SCALE || d.owner == coffee.crema.ui.brewlog.RecipeEditOwner.BREW) {
+        if (d.owner == coffee.crema.ui.brewlog.RecipeEditOwner.BREW) {
             _guidedSetup.update { it.copy(method = saved.method, recipe = saved, methodChosen = true) }
         }
         _recipeEdit.value = null
@@ -482,7 +470,6 @@ internal class GuidedBrewController(
     private fun methodEditOwnerTab(target: String): String = when (target) {
         coffee.crema.ui.brewlog.MethodEditTarget.LOG -> _logBrew.value?.owner ?: "history"
         coffee.crema.ui.brewlog.MethodEditTarget.RECIPE -> _recipeEdit.value?.owner ?: "profiles"
-        coffee.crema.ui.brewlog.MethodEditTarget.SCALE -> "scale"
         else -> "profiles"
     }
 
@@ -521,7 +508,7 @@ internal class GuidedBrewController(
 
     /**
      * Validate + save the dialog's method, then select it where it was asked
-     * for (the log form, the recipe editor, the Brew setup). Returns false —
+     * for (the log form, the recipe editor). Returns false —
      * the dialog stays open with the message — on a bad name.
      */
     fun saveMethodEdit(): Boolean {
@@ -542,7 +529,6 @@ internal class GuidedBrewController(
         when (d.target) {
             coffee.crema.ui.brewlog.MethodEditTarget.LOG -> if (d.isNew) reseedLogBrew(method.id)
             coffee.crema.ui.brewlog.MethodEditTarget.RECIPE -> if (d.isNew) setRecipeEditMethod(method.id)
-            coffee.crema.ui.brewlog.MethodEditTarget.SCALE -> if (d.isNew) selectGuidedMethod(method.id)
             else -> {}
         }
         if (!d.isNew) resolveGuidedSetup()
@@ -616,7 +602,7 @@ internal class GuidedBrewController(
     }
 
     /** The finished session's "Save brew…": the Log-brew form, pre-filled with measured truth. */
-    fun openGuidedLogBrew(owner: String = coffee.crema.ui.brewlog.BrewLogOwner.SCALE) {
+    fun openGuidedLogBrew(owner: String = coffee.crema.ui.brewlog.BrewLogOwner.BREW) {
         val s = effectiveState()
         val session = s.guidedBrew
         val recipe = session.recipe ?: _guidedSetup.value.recipe
@@ -894,9 +880,7 @@ internal class GuidedBrewController(
         }
         _logBrew.value = null
         // A guided session's summary card ends once its brew is saved.
-        // Brew's Manual page owns it now (BREW); SCALE is a draft from before.
-        val guidedOwner = d.owner == coffee.crema.ui.brewlog.BrewLogOwner.BREW || d.owner == coffee.crema.ui.brewlog.BrewLogOwner.SCALE
-        if (guidedOwner && uiState().guidedBrew.phase == "done") {
+        if (d.owner == coffee.crema.ui.brewlog.BrewLogOwner.BREW && uiState().guidedBrew.phase == "done") {
             brewSessionClearSummary()
         }
         return true

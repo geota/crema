@@ -157,7 +157,7 @@ class BrewLogDraftTest {
         // measured weight must travel there, not in water-in.
         val core = FakeCore(seeds("espresso", 18f, 38.4f))
         BrewLogSeeds.open(
-            BrewLogOwner.SCALE, emptyList(), activeBeanId = null,
+            BrewLogOwner.BREW, emptyList(), activeBeanId = null,
             guidedMethod = "espresso", guidedDoseG = 18f, guidedWeightG = 38.4f, seedsJson = core::call,
         )
         val espresso = core.inputs.single().prefill!!
@@ -166,7 +166,7 @@ class BrewLogDraftTest {
 
         val filter = FakeCore(seeds("pourover", 15f, 251f))
         BrewLogSeeds.open(
-            BrewLogOwner.SCALE, emptyList(), activeBeanId = null,
+            BrewLogOwner.BREW, emptyList(), activeBeanId = null,
             guidedMethod = "pourover", guidedDoseG = 15f, guidedWeightG = 251f, seedsJson = filter::call,
         )
         val pour = filter.inputs.single().prefill!!
@@ -177,14 +177,14 @@ class BrewLogDraftTest {
     @Test fun aGuidedPrefillCarriesTheSetupBagNotTheActiveOne() {
         val core = FakeCore(seeds("pourover", 15f, 250f))
         val d = BrewLogSeeds.open(
-            BrewLogOwner.SCALE, emptyList(), activeBeanId = "active",
+            BrewLogOwner.BREW, emptyList(), activeBeanId = "active",
             guidedMethod = "pourover", guidedDoseG = 15f, guidedBeanId = "other", seedsJson = core::call,
         )
         assertEquals("other", d.beanId)
         assertEquals("other", core.inputs.single().beanId)
         // "No bean" from the setup stays no bean — no fallback to the active bag.
         val none = BrewLogSeeds.open(
-            BrewLogOwner.SCALE, emptyList(), activeBeanId = "active",
+            BrewLogOwner.BREW, emptyList(), activeBeanId = "active",
             guidedMethod = "pourover", guidedBeanId = null, seedsJson = FakeCore(seeds("pourover", 15f, 250f))::call,
         )
         assertNull(none.beanId)

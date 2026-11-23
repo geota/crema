@@ -95,10 +95,10 @@ class GuidedBrewSessionVmTest {
         assertFalse(guided.brewTicking, "the tick stops with the session")
         assertTrue(VmHarness.log(vm).any { it.contains("Guided brew completed — Morning V60") }, "${VmHarness.log(vm)}")
 
-        // "Save brew…" opens the log form on the Scale tab, seeded from the summary.
+        // "Save brew…" opens the log form on Brew, seeded from the summary.
         vm.openGuidedLogBrew()
         val draft = assertNotNull(vm.logBrew.value)
-        assertEquals(BrewLogOwner.SCALE, draft.owner)
+        assertEquals(BrewLogOwner.BREW, draft.owner)
         assertEquals("pourover", draft.method)
         assertEquals("Morning V60", draft.recipeName)
         vm.closeLogBrew()

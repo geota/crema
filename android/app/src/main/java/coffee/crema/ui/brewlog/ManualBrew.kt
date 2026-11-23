@@ -138,7 +138,7 @@ private fun advanceTag(step: BrewStep): String = if (step.advance == StepAdvance
 /**
  * The tablet's "Step n of N" tile beside Weight: the step, its target, its
  * note and the next step. At rest it previews the first step. Flashes with
- * the session's visual cues, like the Scale segment's step card.
+ * the session's visual cues.
  */
 @Composable
 internal fun ManualStepTile(m: LiveModel, modifier: Modifier = Modifier) {

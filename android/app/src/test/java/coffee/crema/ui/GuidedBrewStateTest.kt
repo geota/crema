@@ -139,7 +139,7 @@ class GuidedBrewStateTest {
 
     @Test fun draftRoundTripsTheRecipeAndKeepsIdentity() {
         val base = recipe("a")
-        val d = RecipeEditDraft.of(RecipeEditOwner.SCALE, base, isNew = false)
+        val d = RecipeEditDraft.of(RecipeEditOwner.BREW, base, isNew = false)
         assertEquals("Edit recipe", d.heading)
         assertTrue(d.totalMatches(250f))
         val out = d.copy(name = "  Morning V60 ", water = 300.0).addStep().toRecipe()
@@ -152,7 +152,7 @@ class GuidedBrewStateTest {
 
     @Test fun notesRideTheDraftTrimmedAndBlankClears() {
         val base = recipe("a").copy(notes = "Inverted, two rinsed paper filters")
-        val d = RecipeEditDraft.of(RecipeEditOwner.SCALE, base, isNew = false)
+        val d = RecipeEditDraft.of(RecipeEditOwner.BREW, base, isNew = false)
         assertEquals("Inverted, two rinsed paper filters", d.notes)
         assertEquals("Sibarist Fast\nTWW", d.copy(notes = "  Sibarist Fast\nTWW \n").toRecipe().notes)
         assertNull(d.copy(notes = "  \n ").toRecipe().notes)
@@ -170,7 +170,7 @@ class GuidedBrewStateTest {
 
     @Test fun methodSwitchReseedsOnlyANewRecipe() {
         val base = recipe("a")
-        val editing = RecipeEditDraft.of(RecipeEditOwner.SCALE, base, isNew = false).withMethod("aeropress", template)
+        val editing = RecipeEditDraft.of(RecipeEditOwner.BREW, base, isNew = false).withMethod("aeropress", template)
         assertEquals("aeropress", editing.method)
         assertEquals("R a", editing.name)
         val creating = RecipeEditDraft.of(RecipeEditOwner.PROFILES, base, isNew = true).withMethod("aeropress", template)
@@ -179,7 +179,7 @@ class GuidedBrewStateTest {
     }
 
     @Test fun stepEditsAndPlannedTotal() {
-        val d = RecipeEditDraft.of(RecipeEditOwner.SCALE, recipe("a"), false)
+        val d = RecipeEditDraft.of(RecipeEditOwner.BREW, recipe("a"), false)
             .updateStep(1) { it.copy(targetWaterG = 240f, advance = StepAdvance.Manual) }
         // The planned total is the core's; the draft hands it the edited recipe.
         var sent: BrewRecipe? = null
@@ -218,26 +218,12 @@ class GuidedBrewStateTest {
 
     private val bags = listOf(bag("active"), bag("other"), bag("old", archived = 5), bag("tomb", deleted = 9))
 
-    @Test fun beanPickDefaultsToTheActiveBagAndKeepsAChosenOne() {
-        assertEquals("active", GuidedBeanRules.resolve(null, bags, "active"))
-        assertEquals("other", GuidedBeanRules.resolve("other", bags, "active"))
-        assertNull(GuidedBeanRules.resolve(GuidedBeanRules.NO_BEAN, bags, "active"))
-    }
-
-    @Test fun anArchivedOrDeletedPickFallsBackToTheActiveBagElseNone() {
-        assertEquals("active", GuidedBeanRules.resolve("old", bags, "active"))
-        assertEquals("active", GuidedBeanRules.resolve("tomb", bags, "active"))
-        assertEquals("active", GuidedBeanRules.resolve("gone", bags, "active"))
-        assertNull(GuidedBeanRules.resolve("old", bags, null))
-        assertNull(GuidedBeanRules.resolve("gone", bags, "old")) // the active bag itself archived
-    }
-
-    @Test fun changingMethodOrRecipeKeepsTheChosenBean() {
-        val s = GuidedBrewSetup(method = "pourover", recipe = recipe("a"), methodChosen = true, beanPick = "other")
-        val otherMethod = GuidedSetupRules.resolve(s.copy(method = "aeropress", recipe = null), emptyList(), emptyMap(), null, template)
-        assertEquals("other", otherMethod.beanPick)
-        val edited = GuidedSetupRules.resolve(s, listOf(recipe("a", name = "Edited")), emptyMap(), null, template)
-        assertEquals("other", edited.beanPick)
+    @Test fun aGuidedBrewDebitsTheActiveBagWhileItIsPickable() {
+        assertEquals("active", GuidedBeanRules.brewBag(bags, "active"))
+        assertNull(GuidedBeanRules.brewBag(bags, null))
+        assertNull(GuidedBeanRules.brewBag(bags, "old")) // archived
+        assertNull(GuidedBeanRules.brewBag(bags, "tomb")) // deleted
+        assertNull(GuidedBeanRules.brewBag(bags, "gone"))
     }
 
     @Test fun overdrawWarnsOnlyWhenTheDoseExceedsWhatIsLeft() {

@@ -72,7 +72,7 @@ import coffee.crema.ui.phone.components.CremaPhoneBackBar
  * the Profiles "Your methods" list. One body over the VM-held
  * [MainViewModel.methodEdit] draft, two hosts:
  *  • tablet: [MethodEditSheet], a right side sheet over whatever is open
- *    (the Log-brew sheet, the recipe editor, the Brew setup, Profiles);
+ *    (the Log-brew sheet, the recipe editor, Profiles);
  *  • phone: [MethodEditScreen], the pushed `method-edit` route.
  * Saving creates the method AND selects it where it was asked for.
  */
@@ -206,7 +206,7 @@ private fun MethodEditFooter(isNew: Boolean, onCancel: () -> Unit, onSave: () ->
  * Tablet host — a side sheet. [parentRoute] names the sheet it's composed
  * inside (the Log-brew form or the recipe editor render it as a child dialog,
  * so it always stacks on top of them); null = the top-level instance, above
- * the nav host, for drafts opened from a tab (Brew setup, Profiles).
+ * the nav host, for drafts opened from a tab (Profiles).
  */
 @Composable
 fun MethodEditSheet(vm: MainViewModel, parentRoute: String? = null) {

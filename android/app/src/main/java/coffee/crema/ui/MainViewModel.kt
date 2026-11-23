@@ -599,7 +599,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Arm a session for [recipe]; [startOnPour] starts it at the first pour. */
     fun brewSessionArm(recipe: coffee.crema.core.BrewRecipe, startOnPour: Boolean) {
-        // A brew started anywhere (the phone's Scale segment too) selects its
+        // A brew started anywhere selects its
         // recipe, so Brew shows it in Manual on either layout (brew-modes §2).
         if (_ui.value.activeRecipeId != recipe.id) pickRecipe(recipe.id)
         guided.brewSessionArm(recipe, startOnPour)
@@ -628,10 +628,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun defaultBrewRecipeFor(method: String): coffee.crema.core.BrewRecipe? = guided.defaultBrewRecipeFor(method)
 
     // Setup selections + the recipe editor.
-    fun selectGuidedMethod(method: String) = guided.selectGuidedMethod(method)
     fun selectGuidedRecipe(recipe: coffee.crema.core.BrewRecipe) = guided.selectGuidedRecipe(recipe)
     fun setGuidedStartOnPour(on: Boolean) = guided.setGuidedStartOnPour(on)
-    fun selectGuidedBean(key: String) = guided.selectGuidedBean(key)
     fun guidedBeanId(st: MainUiState = effectiveState()): String? = guided.guidedBeanId(st)
     fun openRecipeEdit(owner: String, recipe: coffee.crema.core.BrewRecipe, isNew: Boolean = false) =
         guided.openRecipeEdit(owner, recipe, isNew)
@@ -660,7 +658,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun dismissSaveMethodPrompt() = guided.dismissSaveMethodPrompt()
 
     /** The finished session's "Save brew…": the Log-brew form, pre-filled with measured truth. */
-    fun openGuidedLogBrew(owner: String = coffee.crema.ui.brewlog.BrewLogOwner.SCALE) = guided.openGuidedLogBrew(owner)
+    fun openGuidedLogBrew(owner: String = coffee.crema.ui.brewlog.BrewLogOwner.BREW) = guided.openGuidedLogBrew(owner)
 
     /**
      * What this device does for each [MachineCommand]: the bodies behind the
