@@ -682,6 +682,19 @@ tasks.withType<Test>().configureEach {
         showCauses = true
         showStackTraces = true
     }
+    // testLogging prints no suppressed exceptions, and an UncaughtExceptionsBeforeTest
+    // (a coroutine failure leaked by an earlier test) carries its causes only as
+    // suppressed ones: print them, so the log names the leak.
+    addTestListener(object : TestListener {
+        override fun beforeSuite(suite: TestDescriptor) {}
+        override fun afterSuite(suite: TestDescriptor, result: TestResult) {}
+        override fun beforeTest(testDescriptor: TestDescriptor) {}
+        override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {
+            for (e in result.exceptions) for (s in e.suppressed) {
+                logger.lifecycle("${testDescriptor.className} > ${testDescriptor.name}: suppressed ${s.stackTraceToString().prependIndent("    ")}")
+            }
+        }
+    })
     // A hang fails the run instead of holding CI for hours (#310 A5: a store-lock
     // deadlock hung the android job for over two; the suite takes about 21 minutes).
     timeout.set(Duration.ofMinutes(40))

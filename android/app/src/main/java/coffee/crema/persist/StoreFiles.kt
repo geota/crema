@@ -176,11 +176,23 @@ object SaveFloor {
     /** Test seam: a test of refusal itself turns this off. */
     internal var throwOnRefusal: Boolean = strict
 
+    /**
+     * Test seam: the tests that built the last few ViewModels, newest last
+     * (the unit tests' harness records them). A save that outlives its test is
+     * refused once the next test's ViewModel starts a session, and, thrown
+     * from a coroutine, surfaces in a later test; its message names these so
+     * it says where it came from.
+     */
+    internal val owners = java.util.concurrent.ConcurrentLinkedDeque<String>()
+
     /** Whether a save to [target] may run; refusing tells whoever should know. */
     fun admit(target: File, what: String): Boolean {
         if (SafeFile.savesHeld(target)) return false
         if (SafeFile.savesOpen(target)) return true
-        if (throwOnRefusal) throw AssertionError("saved ${target.name} before it loaded")
+        if (throwOnRefusal) {
+            val built = owners.joinToString(", ").takeIf { it.isNotEmpty() }?.let { "; the last ViewModels were built by $it (newest last)" }.orEmpty()
+            throw AssertionError("saved ${target.name} before it loaded$built")
+        }
         if (noticed.add(target.path)) {
             persistLog("refused a save to ${target.name}: it hasn't loaded")
             _pending.update { it + what }
