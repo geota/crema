@@ -100,3 +100,9 @@ export class ScaleConnectStepFailed extends Data.TaggedError('ScaleConnectStepFa
 	readonly step: string;
 	readonly cause: unknown;
 }> {}
+
+/** A step of the grinder connect program failed (`grinderConnectProgram`). */
+export class GrinderConnectStepFailed extends Data.TaggedError('GrinderConnectStepFailed')<{
+	readonly step: string;
+	readonly cause: unknown;
+}> {}

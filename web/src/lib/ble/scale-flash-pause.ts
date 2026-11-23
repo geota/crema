@@ -20,6 +20,9 @@
  * reload (an erase or verify window) pauses the scale too, and lets go when
  * it ends. Nothing is persisted: a reload outside a running flash starts
  * unpaused.
+ *
+ * The connected grinder (beta) stands down the same way, through its own
+ * instance labelled `Grinder`.
  */
 
 export interface ScaleFlashPausePort {
@@ -37,7 +40,11 @@ export class ScaleFlashPause {
 	/** Bring the scale back when the flash ends. */
 	#bringBack = false;
 
-	constructor(private readonly port: ScaleFlashPausePort) {}
+	constructor(
+		private readonly port: ScaleFlashPausePort,
+		/** The device in the log lines: `Scale`, `Grinder`. */
+		private readonly label = 'Scale'
+	) {}
 
 	/** A flash is running: scale connects are held. */
 	get paused(): boolean {
@@ -51,13 +58,13 @@ export class ScaleFlashPause {
 		if (active) {
 			this.#bringBack = this.port.scaleWanted();
 			this.port.standDown();
-			this.port.log('Scale: Bluetooth paused for the firmware update');
+			this.port.log(`${this.label}: Bluetooth paused for the firmware update`);
 			return;
 		}
 		const restore = this.#bringBack;
 		this.#bringBack = false;
 		if (restore) {
-			this.port.log('Scale: firmware update over — reconnecting');
+			this.port.log(`${this.label}: firmware update over — reconnecting`);
 			this.port.bringBack();
 		}
 	}
@@ -68,7 +75,7 @@ export class ScaleFlashPause {
 	 */
 	holdConnect(): boolean {
 		if (!this.#paused) return false;
-		if (!this.#bringBack) this.port.log('Scale: connect held until the firmware update ends');
+		if (!this.#bringBack) this.port.log(`${this.label}: connect held until the firmware update ends`);
 		this.#bringBack = true;
 		return true;
 	}

@@ -11,7 +11,9 @@
  *
  * A scale alone keeps it ticking too: the lost-scale watchdog (`ScaleStale`,
  * `ScaleLinkDead`) runs on this clock, and a scale-only session (a guided brew,
- * the Scale page) otherwise never noticed a dead scale link.
+ * the Scale page) otherwise never noticed a dead scale link. So does a
+ * connected grinder: its first-reading and silence deadlines
+ * (`GrinderLinkDead`) run on it too.
  *
  * The guided-brew 250 ms tick keeps running beside this one; `on_tick` computes
  * everything from timestamps, so extra calls are harmless. Android's
@@ -44,6 +46,7 @@ export class CoreTicker {
 	#timer: ReturnType<typeof setInterval> | null = null;
 	#de1 = false;
 	#scale = false;
+	#grinder = false;
 
 	constructor(private readonly deps: CoreTickerDeps) {}
 
@@ -64,8 +67,14 @@ export class CoreTicker {
 		this.#follow();
 	}
 
+	/** Follow the grinder link state: tick while it (or another link) is up or recovering. */
+	onGrinderState(state: BleConnectionState): void {
+		this.#grinder = TICKING.has(state);
+		this.#follow();
+	}
+
 	#follow(): void {
-		if (this.#de1 || this.#scale) this.start();
+		if (this.#de1 || this.#scale || this.#grinder) this.start();
 		else this.stop();
 	}
 

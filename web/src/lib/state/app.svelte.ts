@@ -132,6 +132,9 @@ import { installIosBridge, isBridgedBluetooth } from '#lib/ble/ios-bridge.js';
 import { watchBluetoothAvailability } from '#lib/ble/availability.js';
 import { connectBlocker } from '#lib/ble/connect-blocker.js';
 import { readImportText } from '#lib/utils/import-limits.js';
+import { GrinderManager } from '#lib/ble/grinder.js';
+import { getGrinderLinkStore, resolveGrinderLink } from '#lib/grinder/connected-link.svelte.js';
+import { NO_GRINDER, type ConnectedGrinderView } from './ui-state.svelte';
 
 /** `navigator.bluetooth` as it is now (the iOS bridge may install it late). */
 function currentBluetooth(): Bluetooth | undefined {
@@ -143,6 +146,11 @@ function currentBluetooth(): Bluetooth | undefined {
  * Bluetooth, the iOS Home Screen app, Bluetooth off) — otherwise the chooser
  * would just fail. Synchronous: it runs inside the click's user activation.
  */
+/** Whether the connected-grinder beta is on (Settings → Advanced, off by default). */
+function grinderBetaOn(): boolean {
+	return getSettingsStore().current.connectedGrinderBeta === true;
+}
+
 function refuseConnect(): boolean {
 	const blocked = connectBlocker();
 	if (blocked === null) return false;
@@ -305,6 +313,8 @@ export class CremaApp {
 	private readonly ticker: CoreTicker;
 	private readonly de1: De1Manager;
 	private readonly scale: ScaleManager;
+	/** The connected grinder (beta, Devices → Grinder). */
+	private readonly grinder: GrinderManager;
 	/** Reconnect the last DE1 / scale on launch; a user action cancels its wait. */
 	readonly #launch = new LaunchReconnect();
 	/** The scale a firmware flash dropped, to bring back when it ends. */
@@ -347,6 +357,48 @@ export class CremaApp {
 		},
 		log: (line) => this.state.log(line)
 	});
+	/** The grinder a firmware flash dropped, to bring back when it ends. */
+	#grinderBeforeFlash: BluetoothDevice | null = null;
+	/** The grinder stands down during a DE1 firmware flash too (spec §2.6.8). */
+	readonly #grinderFlashPause = new ScaleFlashPause(
+		{
+			scaleWanted: () => {
+				const s = this.state.current.grinder.state;
+				return (
+					s === 'connecting' ||
+					s === 'subscribing' ||
+					s === 'ready' ||
+					s === 'reconnecting' ||
+					this.#launch.isPending('grinder')
+				);
+			},
+			standDown: () => {
+				this.#launch.cancel('grinder');
+				this.grinder.heldForFirmwareFlash = true;
+				const live = this.grinder.bluetoothDevice();
+				if (live === null) return;
+				this.#grinderBeforeFlash = live;
+				// Not a user disconnect: the grinder stays remembered.
+				void this.grinder.disconnect().catch((e: unknown) => {
+					this.state.log(`Grinder: disconnect for the firmware update failed: ${describeError(e)}`);
+				});
+			},
+			bringBack: () => {
+				const device = this.#grinderBeforeFlash;
+				this.#grinderBeforeFlash = null;
+				if (!grinderBetaOn()) return;
+				const reconnect =
+					device !== null
+						? this.grinder.connectKnown(device)
+						: this.reconnectLastOnLaunch(currentBluetooth(), 'grinder');
+				void reconnect.catch((e: unknown) => {
+					this.state.log(`Grinder: reconnect after the firmware update failed: ${describeError(e)}`);
+				});
+			},
+			log: (line) => this.state.log(line)
+		},
+		'Grinder'
+	);
 	/**
 	 * Notices a core reset after a panic (batch 03's bridge recovery) and
 	 * offers a reload: a fresh core has lost the shell's behaviour settings
@@ -363,7 +415,7 @@ export class CremaApp {
 	 * the remembered device behind that choice; a connect that reaches ready
 	 * clears it, and the next app launch starts fresh.
 	 */
-	readonly #userTookOver: Record<DeviceKind, boolean> = { de1: false, scale: false };
+	readonly #userTookOver: Record<DeviceKind, boolean> = { de1: false, scale: false, grinder: false };
 
 	/**
 	 * The fiber running an in-progress capture replay, or `null` when none is
@@ -670,6 +722,32 @@ export class CremaApp {
 				void this.core.queryScaleSettings().then((output) => this.applyCoreOutput(output));
 			}
 		}, runtime);
+		this.grinder = new GrinderManager(core, {
+			onCoreOutput: (output) => this.applyCoreOutput(output),
+			// Connect / reconnect diagnostics: the event log only. The status
+			// line stays the DE1's and the scale's (a beta device shouldn't
+			// talk over them).
+			onStatus: (line) => this.state.log(line),
+			onState: (state) => {
+				const was = this.state.current.grinder.state;
+				// A link that's gone takes its readings with it; a recovering one
+				// keeps the last reading (shown as not live).
+				const gone = state === 'idle' || state === 'disconnected' || state === 'failed';
+				this.#patchGrinder(
+					gone ? { state, reading: null, info: null, lastRun: null } : { state }
+				);
+				this.ticker.onGrinderState(state);
+				if (state === 'ready' && was !== 'ready') this.#rememberConnected('grinder');
+			},
+			onProblem: (problem) => this.#patchGrinder({ problem }),
+			onIdentified: (model, name) => {
+				this.#patchGrinder({ model, name, deviceId: this.grinder.identity()?.id ?? null });
+				void this.core
+					.grinderCapabilities()
+					.then((capabilities) => this.#patchGrinder({ capabilities: capabilities ?? null }))
+					.catch(() => undefined);
+			}
+		}, runtime);
 		this.firmware = new FirmwareUpdateController({
 			core,
 			io: {
@@ -690,6 +768,8 @@ export class CremaApp {
 					// The scale manager's hold lifts first, so the reconnect can run.
 					if (!active) this.scale.heldForFirmwareFlash = false;
 					this.#scaleFlashPause.onFlashActive(active);
+					if (!active) this.grinder.heldForFirmwareFlash = false;
+					this.#grinderFlashPause.onFlashActive(active);
 				}
 			},
 			onRelease: () => this.afterFirmwareRelease(),
@@ -799,6 +879,16 @@ export class CremaApp {
 			}
 			if (event.type === 'MachineRequestDropped') {
 				toast.info(machineRequestDropText(event.content.state, event.content.reason), 6000);
+			}
+			if (event.type === 'GrinderReady') {
+				this.grinder.onReady();
+				this.#linkConnectedGrinder(event.content.info.model);
+			}
+			if (event.type === 'GrinderLinkDead') this.grinder.presumeDead(event.content.reason);
+			if (event.type === 'GrinderUnsupported') {
+				// No retry: launch leaves it alone until the user connects again.
+				markUserDisconnect('grinder');
+				this.grinder.unsupported(event.content.firmware, event.content.minimum);
 			}
 			if (event.type === 'ScaleLinkDead') {
 				// The core presumed the scale link dead (silent past the grace,
@@ -1209,9 +1299,9 @@ export class CremaApp {
 				break;
 			}
 			case 'WriteGrinder':
-				// No grinder transport on web yet (G2b), so nothing connects a
-				// grinder and the core sends none of these.
-				this.state.log('Grinder write dropped: no grinder transport');
+				// The connect program writes the handshake itself; anything else
+				// the core sends goes to the grinder in order.
+				await this.grinder.writeGrinder(new Uint8Array(command.content.data));
 				break;
 			case 'Stop':
 				// The core says this is a stop: the urgent lane, ahead of the
@@ -1411,7 +1501,12 @@ export class CremaApp {
 	/** A device reached ready: remember it for the next launch. */
 	#rememberConnected(kind: DeviceKind): void {
 		this.#userTookOver[kind] = false;
-		const id = kind === 'de1' ? this.de1.identity() : this.scale.identity();
+		const id =
+			kind === 'de1'
+				? this.de1.identity()
+				: kind === 'scale'
+					? this.scale.identity()
+					: this.grinder.identity();
 		if (id !== null) rememberDevice(kind, id);
 	}
 
@@ -1431,17 +1526,27 @@ export class CremaApp {
 			isIdle: (kind) => {
 				if (only !== undefined && kind !== only) return false;
 				if (this.#userTookOver[kind]) return false;
-				// A firmware flash holds scale connects: it reconnects when it ends.
+				// The grinder only with the beta on.
+				if (kind === 'grinder' && !grinderBetaOn()) return false;
+				// A firmware flash holds scale and grinder connects: they reconnect when it ends.
 				if (kind === 'scale' && this.#scaleFlashPause.holdConnect()) return false;
-				const s = kind === 'de1' ? this.state.current.de1State : this.state.current.scaleState;
+				if (kind === 'grinder' && this.#grinderFlashPause.holdConnect()) return false;
+				const s =
+					kind === 'de1'
+						? this.state.current.de1State
+						: kind === 'scale'
+							? this.state.current.scaleState
+							: this.state.current.grinder.state;
 				return s === 'idle' || s === 'disconnected' || s === 'failed';
 			},
 			connect: async (kind, device) => {
 				if (kind === 'de1') {
 					this.state.patch({ ...CLEARED_DE1_READOUT });
 					await this.de1.connectKnown(device);
-				} else {
+				} else if (kind === 'scale') {
 					await this.scale.connectKnown(device);
+				} else {
+					await this.grinder.connectKnown(device);
 				}
 			}
 		});
@@ -1460,8 +1565,10 @@ export class CremaApp {
 	kickReconnect(trigger: ReconnectTrigger): void {
 		const de1 = this.de1.kick(trigger);
 		const scale = this.scale.kick(trigger);
+		const grinder = this.grinder.kick(trigger);
 		if (de1 === 'kicked') this.state.log(`DE1: reconnecting now (${trigger})`);
 		if (scale === 'kicked') this.state.log(`Scale: reconnecting now (${trigger})`);
+		if (grinder === 'kicked') this.state.log(`Grinder: reconnecting now (${trigger})`);
 		// A launch reconnect that gave up (or whose advertisement watch the
 		// browser stopped while the page was hidden) gets another pass. It
 		// skips devices that are connected, connecting, or user-disconnected.
@@ -1492,11 +1599,81 @@ export class CremaApp {
 	}
 
 	/** "Retry now" on a reconnecting device. */
-	retryReconnect(device: 'de1' | 'scale'): void {
-		const result = (device === 'de1' ? this.de1 : this.scale).kick('user-retry');
-		if (result === 'kicked') {
-			this.state.log(`${device === 'de1' ? 'DE1' : 'Scale'}: reconnecting now (user-retry)`);
+	retryReconnect(device: DeviceKind): void {
+		const manager = device === 'de1' ? this.de1 : device === 'scale' ? this.scale : this.grinder;
+		if (manager.kick('user-retry') === 'kicked') {
+			const label = device === 'de1' ? 'DE1' : device === 'scale' ? 'Scale' : 'Grinder';
+			this.state.log(`${label}: reconnecting now (user-retry)`);
 		}
+	}
+
+	// ---- Grinder actions (beta) --------------------------------------------
+
+	/** Connect a grinder (Devices → Grinder) — call from a button handler. */
+	async connectGrinder(): Promise<void> {
+		if (!grinderBetaOn()) return;
+		if (refuseConnect()) return;
+		if (this.#grinderFlashPause.holdConnect()) return;
+		this.#launch.cancel('grinder');
+		this.#userTookOver.grinder = true;
+		await this.grinder.connect();
+	}
+
+	/** Disconnect the grinder. A user action: the next launch won't reconnect it. */
+	async disconnectGrinder(): Promise<void> {
+		this.#launch.cancel('grinder');
+		markUserDisconnect('grinder');
+		await this.grinder.disconnect();
+		this.#patchGrinder({ ...NO_GRINDER, state: this.state.current.grinder.state });
+	}
+
+	/**
+	 * Forget the grinder: disconnect, drop it from launch memory and its
+	 * record link, and revoke this site's Bluetooth permission where the
+	 * browser can.
+	 */
+	async forgetGrinder(): Promise<void> {
+		const live = this.grinder.bluetoothDevice();
+		const id = this.grinder.identity()?.id ?? this.state.current.grinder.deviceId;
+		await this.disconnectGrinder();
+		if (id) getGrinderLinkStore().unlink(id);
+		const revoked = await forgetDevice('grinder', live, currentBluetooth());
+		this.state.log(
+			revoked ? 'Grinder forgotten and its Bluetooth permission revoked' : 'Grinder forgotten'
+		);
+	}
+
+	/** Turn the connected-grinder beta on or off; off disconnects the grinder. */
+	async setConnectedGrinderBeta(on: boolean): Promise<void> {
+		getSettingsStore().set('connectedGrinderBeta', on);
+		if (on) return;
+		this.#launch.cancel('grinder');
+		if (this.state.current.grinder.state !== 'idle') await this.disconnectGrinder();
+	}
+
+	#patchGrinder(patch: Partial<ConnectedGrinderView>): void {
+		this.state.patch({ grinder: { ...this.state.current.grinder, ...patch } });
+	}
+
+	/**
+	 * The grinder answered: find its record (§6.1). One unlinked record of its
+	 * model is linked at once, with a message; the rest (several candidates,
+	 * none, an archived link) is offered on Devices → Grinder.
+	 */
+	#linkConnectedGrinder(model: string): void {
+		const deviceId = this.grinder.identity()?.id;
+		if (!deviceId) return;
+		const links = getGrinderLinkStore();
+		const found = resolveGrinderLink({
+			deviceId,
+			model,
+			grinders: getBeanStore().allGrinders,
+			links: links.links
+		});
+		if (found.kind !== 'auto') return;
+		links.link(deviceId, found.grinder.id);
+		toast.info(`Linked to your ${found.grinder.name}`, 4000);
+		this.state.log(`Grinder linked to ${found.grinder.name}`);
 	}
 
 	// ---- Scale actions ----------------------------------------------------

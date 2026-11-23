@@ -17,6 +17,9 @@
 	 *
 	 * Selecting a grinder here shows its detail; it does not change the
 	 * grinder Brew uses (that is Brew's picker).
+	 *
+	 * With the connected-grinders beta on, a "Connected grinder" card sits
+	 * above the list (`ConnectedGrinderCard`, spec .scratch/grinder-ble §2.8).
 	 */
 	import type { Snippet } from 'svelte';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
@@ -36,6 +39,8 @@
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import { guardUnsavedChanges } from '#lib/beans/unsaved-guard.js';
 	import GrinderTypeOrPick from './GrinderTypeOrPick.svelte';
+	import ConnectedGrinderCard from './ConnectedGrinderCard.svelte';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import {
 		parseScaleDraft,
 		presetChoices,
@@ -90,6 +95,10 @@
 	);
 	const bags = $derived(selected ? savedOnBags(lib.beans, selected.id) : []);
 	const autoSave = $derived(settings.current.grindAutoSave === true);
+	/** Connected grinders (beta, Settings → Advanced): the card above the list. */
+	const connectedBeta = $derived(settings.current.connectedGrinderBeta === true);
+	const appCtx = getCremaAppContext();
+	const app = $derived(appCtx?.().app ?? null);
 
 	let adding = $state(false);
 	let renaming = $state(false);
@@ -258,6 +267,12 @@
 	{/if}
 
 	{@render tabs?.()}
+
+	{#if connectedBeta}
+		<div class="gdv-card gdv-connected">
+			<ConnectedGrinderCard {app} />
+		</div>
+	{/if}
 
 	<div class="gdv-body">
 		<section class="gdv-card gdv-list" aria-labelledby="{uid}-list">
@@ -852,6 +867,9 @@
 	}
 	.gdv.is-phone .gdv-list {
 		width: auto;
+	}
+	.gdv.is-phone .gdv-connected {
+		margin: 0 var(--page-pad-x);
 	}
 	.gdv.is-phone .gdv-card {
 		padding: 16px;
