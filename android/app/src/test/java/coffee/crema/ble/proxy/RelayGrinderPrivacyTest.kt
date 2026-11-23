@@ -168,6 +168,16 @@ class RelayGrinderPrivacyTest {
             assertTrue(e.message!!.contains(NOT_RELAYED), "${e.message}")
             withTimeout(2_000) { proxy.connect(unlisted) }
             assertEquals(BleTransport.ConnState.DISCONNECTED, proxy.connectionState(unlisted).value)
+            // An unknown device the hub IS connected to (a future device, or a
+            // grinder it forgot): its state and traffic are known to the hub,
+            // but it isn't on the roster, so nothing is served.
+            val unknown = Handle("33:44:55:66:77:88", "Something new")
+            hub.onConnState(unknown.address, BleTransport.ConnState.CONNECTED.name)
+            hub.onInbound(unknown.address, deviceInfo, serialChar, byteArrayOf(1), atMs = 1)
+            val e2 = assertFailsWith<IllegalStateException> { withTimeout(2_000) { proxy.read(unknown, deviceInfo, serialChar) } }
+            assertTrue(e2.message!!.contains(NOT_RELAYED), "${e2.message}")
+            withTimeout(2_000) { proxy.connect(unknown) }
+            assertEquals(BleTransport.ConnState.DISCONNECTED, proxy.connectionState(unknown).value, "not the CONNECTED the hub saw")
             // The scale drops out of the roster and is still served.
             roster.set(listOf(DeviceInfo(de1, "DE1", "de1", "CONNECTED")))
             assertContentEquals(byteArrayOf(0x42), withTimeout(2_000) { proxy.read(Handle(scale, "BOOKOO_SC 1"), deviceInfo, serialChar) })
