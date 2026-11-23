@@ -70,10 +70,21 @@ export type GrinderProblem =
 	| { kind: 'not-found' }
 	/** Connected, but no reading came within 5 s of the handshake. */
 	| { kind: 'no-answer' }
+	/**
+	 * It answered before, but {@link NO_DATA_GIVE_UP} reconnects in a row
+	 * came up with no reading: auto-reconnect stopped, the user reconnects.
+	 */
+	| { kind: 'no-data' }
 	/** Its firmware is older than Crema needs. */
 	| { kind: 'firmware'; firmware: string; minimum: string }
 	/** The connect failed at a step. */
 	| { kind: 'failed'; step: string; message: string };
+
+/**
+ * A link that comes back but never streams would otherwise recycle every
+ * 5–6 s forever: after this many `NoFirstReading`s in a row it stops.
+ */
+export const NO_DATA_GIVE_UP = 3;
 
 /** Callbacks the grinder manager reports up to the app. */
 export interface GrinderManagerCallbacks {
@@ -99,6 +110,10 @@ export class GrinderManager {
 	private driverLive = false;
 	/** The grinder answered on this device at least once (a reconnect may retry). */
 	private everReady = false;
+	/** `NoFirstReading`s in a row since the last reading (see {@link NO_DATA_GIVE_UP}). */
+	private silentReconnects = 0;
+	/** The grinder auto-reconnect gave up on, for {@link reconnectStalled}. */
+	private stalled: BluetoothDevice | null = null;
 	private state: BleConnectionState = 'idle';
 
 	/**
@@ -119,6 +134,8 @@ export class GrinderManager {
 	/** Pick a grinder in the chooser and connect it. Call from a click. */
 	async connect(): Promise<void> {
 		if (this.#refuseForFlash()) return;
+		this.stalled = null;
+		this.silentReconnects = 0;
 		this.setState('connecting');
 		this.callbacks.onProblem(null);
 		this.dropDevice();
@@ -154,6 +171,8 @@ export class GrinderManager {
 	/** Connect a grinder this site may already use (the launch reconnect, no chooser). */
 	async connectKnown(known: BluetoothDevice): Promise<void> {
 		if (this.#refuseForFlash()) return;
+		this.stalled = null;
+		this.silentReconnects = 0;
 		this.setState('connecting');
 		this.callbacks.onProblem(null);
 		this.dropDevice();
@@ -362,6 +381,7 @@ export class GrinderManager {
 	onReady(): void {
 		if (this.device === null || this.state === 'ready') return;
 		this.everReady = true;
+		this.silentReconnects = 0;
 		this.callbacks.onProblem(null);
 		this.setState('ready');
 		this.callbacks.onStatus('Ready — receiving grinder readings');
@@ -384,6 +404,19 @@ export class GrinderManager {
 			this.callbacks.onStatus("Grinder didn't answer — disconnected");
 			return;
 		}
+		if (reason === GrinderLinkDeadReason.NoFirstReading) {
+			this.silentReconnects += 1;
+			if (this.silentReconnects >= NO_DATA_GIVE_UP) {
+				this.stalled = device.device;
+				this.dropDevice();
+				this.setState('failed');
+				this.callbacks.onProblem({ kind: 'no-data' });
+				this.callbacks.onStatus(
+					`Grinder not sending data after ${NO_DATA_GIVE_UP} reconnects — stopped reconnecting`
+				);
+				return;
+			}
+		}
 		const why =
 			reason === GrinderLinkDeadReason.Malformed
 				? 'unreadable data'
@@ -394,6 +427,17 @@ export class GrinderManager {
 		this.dropDriver();
 		this.setState('reconnecting');
 		device.recycle();
+	}
+
+	/**
+	 * Reconnect the grinder auto-reconnect gave up on (the card's Reconnect),
+	 * with no chooser. False when there is none.
+	 */
+	async reconnectStalled(): Promise<boolean> {
+		const known = this.stalled;
+		if (known === null) return false;
+		await this.connectKnown(known);
+		return true;
 	}
 
 	/** The core's `GrinderUnsupported`: end the link, no retry (§2.7). */

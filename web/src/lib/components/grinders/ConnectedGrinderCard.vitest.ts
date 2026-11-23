@@ -60,6 +60,7 @@ function fakeApp(view: ConnectedGrinderView) {
 		connectGrinder: vi.fn(async () => undefined),
 		disconnectGrinder: vi.fn(async () => undefined),
 		forgetGrinder: vi.fn(async () => undefined),
+		reconnectGrinder: vi.fn(async () => undefined),
 		retryReconnect: vi.fn()
 	};
 }
@@ -108,6 +109,16 @@ describe('the Connected grinder card', () => {
 		const connect = [...target.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Connect')!;
 		connect.click();
 		expect(app.connectGrinder).toHaveBeenCalledOnce();
+	});
+
+	it('offers Reconnect when the grinder stopped sending data', () => {
+		const { target, app } = render({ ...live({ state: 'failed', reading: null }), problem: { kind: 'no-data' } });
+		expect(target.querySelector('[role="status"]')?.textContent).toBe('Not sending data');
+		expect(target.textContent).toContain('Grinder not sending data');
+		const reconnect = [...target.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Reconnect')!;
+		reconnect.click();
+		expect(app.reconnectGrinder).toHaveBeenCalledOnce();
+		expect(app.connectGrinder).not.toHaveBeenCalled();
 	});
 
 	it('shows the live readout in the grinder’s units, the serial’s last four only', () => {

@@ -35,7 +35,8 @@ export function grinderStatusLine(view: ConnectedGrinderView): string {
 		case 'reconnecting':
 			return 'Reconnecting…';
 		case 'failed':
-			return view.problem?.kind === 'firmware' ? 'Update firmware' : 'Not connected';
+			if (view.problem?.kind === 'firmware') return 'Update firmware';
+			return view.problem?.kind === 'no-data' ? 'Not sending data' : 'Not connected';
 		case 'idle':
 		case 'disconnected':
 			return view.problem?.kind === 'not-found' ? 'Not found' : 'Not connected';
@@ -57,6 +58,8 @@ export function grinderProblemText(
 			return `Can't see your ${entry?.model ?? 'grinder'}. Make sure it's on and not connected to ${vendorApp} or another phone, then try again.`;
 		case 'no-answer':
 			return `The grinder didn't answer. Close ${vendorApp}, turn the grinder off and on, and try again.`;
+		case 'no-data':
+			return 'Grinder not sending data. Crema stopped reconnecting: check it is on and not connected to another app, then reconnect.';
 		case 'firmware':
 			return `Update the grinder in ${vendorApp} (it needs firmware ${problem.minimum} or later, it has ${problem.firmware}), then connect again.`;
 		case 'failed':

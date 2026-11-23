@@ -243,6 +243,67 @@ describe('the connected grinder over Web Bluetooth', () => {
 		expect(t.view().reading?.setting?.value).toBe('500');
 	});
 
+	it('a grinder that reconnects but never streams stops reconnecting after 3 tries, and Reconnect brings it back', async () => {
+		const t = await connectedApp();
+		await t.send(period(), 200);
+		// Silent: dropped into the ladder.
+		await t.tick(5_300);
+		expect(t.grinder.device.recycle).toHaveBeenCalledTimes(1);
+		// Each reconnect handshakes, then nothing comes.
+		let now = 10_000;
+		for (let i = 1; i <= 3; i++) {
+			await vi.advanceTimersByTimeAsync(now - performance.now());
+			t.grinder.recover();
+			await settle();
+			await t.tick(now + 5_100);
+			now += 10_000;
+		}
+		// Two more recycles, then it gives up instead of a third.
+		expect(t.grinder.device.recycle).toHaveBeenCalledTimes(3);
+		expect(t.view().state).toBe('failed');
+		expect(t.view().problem).toEqual({ kind: 'no-data' });
+		expect(t.grinder.device.disconnect).toHaveBeenCalled();
+		expect(readLastDevices().grinder?.auto).toBe(false);
+		// Nothing more happens on its own.
+		for (let n = now; n <= now + 60_000; n += 1_000) await t.tick(n);
+		expect(t.grinder.device.recycle).toHaveBeenCalledTimes(3);
+
+		// Reconnect: the same device, no chooser.
+		const internals = t.app as unknown as { grinder: GrinderManager };
+		const known = vi.spyOn(GrinderManager.prototype, 'connectKnown').mockResolvedValue();
+		expect(await internals.grinder.reconnectStalled()).toBe(true);
+		expect(known).toHaveBeenCalledWith(t.grinder.device.device);
+		known.mockRestore();
+	});
+
+	it('a reading between silent reconnects starts the count over', async () => {
+		const t = await connectedApp();
+		await t.send(period(), 200);
+		await t.tick(5_300);
+		let now = 10_000;
+		const reconnectSilently = async () => {
+			await vi.advanceTimersByTimeAsync(now - performance.now());
+			t.grinder.recover();
+			await settle();
+			await t.tick(now + 5_100);
+			now += 10_000;
+		};
+		await reconnectSilently();
+		await reconnectSilently();
+		// The third reconnect streams, then goes silent again.
+		await vi.advanceTimersByTimeAsync(now - performance.now());
+		t.grinder.recover();
+		await settle();
+		await t.send(period(), now + 200);
+		expect(t.view().state).toBe('ready');
+		await t.tick(now + 5_400);
+		now += 10_000;
+		await reconnectSilently();
+		await reconnectSilently();
+		expect(t.view().state).toBe('reconnecting');
+		expect(t.view().problem).toBeNull();
+	});
+
 	it("a first connect the grinder never answers gives up with the close-the-app message", async () => {
 		const t = await connectedApp();
 		await t.tick(5_100);

@@ -395,7 +395,10 @@ export class CremaApp {
 					this.state.log(`Grinder: reconnect after the firmware update failed: ${describeError(e)}`);
 				});
 			},
-			log: (line) => this.state.log(line)
+			// Quiet with the beta off: no grinder, nothing to say about one.
+			log: (line) => {
+				if (grinderBetaOn()) this.state.log(line);
+			}
 		},
 		'Grinder'
 	);
@@ -739,7 +742,12 @@ export class CremaApp {
 				this.ticker.onGrinderState(state);
 				if (state === 'ready' && was !== 'ready') this.#rememberConnected('grinder');
 			},
-			onProblem: (problem) => this.#patchGrinder({ problem }),
+			onProblem: (problem) => {
+				// Auto-reconnect gave up: launch and tab-return kicks leave it
+				// alone too, until the user reconnects.
+				if (problem?.kind === 'no-data') markUserDisconnect('grinder');
+				this.#patchGrinder({ problem });
+			},
 			onIdentified: (model, name) => {
 				this.#patchGrinder({ model, name, deviceId: this.grinder.identity()?.id ?? null });
 				void this.core
@@ -1617,6 +1625,19 @@ export class CremaApp {
 		this.#launch.cancel('grinder');
 		this.#userTookOver.grinder = true;
 		await this.grinder.connect();
+	}
+
+	/**
+	 * Reconnect the grinder that stopped sending data (the card's Reconnect):
+	 * the same device, no chooser; the chooser if there is none.
+	 */
+	async reconnectGrinder(): Promise<void> {
+		if (!grinderBetaOn()) return;
+		if (refuseConnect()) return;
+		if (this.#grinderFlashPause.holdConnect()) return;
+		this.#launch.cancel('grinder');
+		this.#userTookOver.grinder = true;
+		if (!(await this.grinder.reconnectStalled())) await this.grinder.connect();
 	}
 
 	/** Disconnect the grinder. A user action: the next launch won't reconnect it. */

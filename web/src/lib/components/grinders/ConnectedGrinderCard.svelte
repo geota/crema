@@ -145,6 +145,15 @@
 			<button type="button" class="cgc-btn" onclick={() => void app?.disconnectGrinder()}>
 				Disconnect
 			</button>
+		{:else if view.problem?.kind === 'no-data'}
+			<button
+				type="button"
+				class="cgc-btn cgc-btn-primary"
+				disabled={!app}
+				onclick={() => void app?.reconnectGrinder()}
+			>
+				Reconnect
+			</button>
 		{:else}
 			<button
 				type="button"
