@@ -577,7 +577,11 @@ fn a_repeated_period_info_is_captured_once_a_second() {
     let first = captured(&mut driver, &frames, 0);
     // One frame per 512 bytes, not 21 notifications.
     assert_eq!(first.len(), 1);
-    assert_eq!(first[0][HEADER_LEN..], *PERIOD.as_bytes());
+    let recorded: Value = serde_json::from_slice(&first[0][HEADER_LEN..]).expect("json");
+    assert_eq!(
+        recorded,
+        serde_json::from_str::<Value>(PERIOD).expect("json")
+    );
     assert!(captured(&mut driver, &frames, 200).is_empty());
     assert!(captured(&mut driver, &frames, 999).is_empty());
     assert_eq!(captured(&mut driver, &frames, 1_000).len(), 1);
@@ -585,4 +589,68 @@ fn a_repeated_period_info_is_captured_once_a_second() {
     let grinding = encode(period("GRINDING").as_bytes(), 3, 20);
     assert_eq!(captured(&mut driver, &grinding, 1_100).len(), 1);
     assert_eq!(captured(&mut driver, &frames, 1_200).len(), 1);
+}
+
+#[test]
+fn extreme_numbers_are_out_of_range_not_a_panic() {
+    for bad in [
+        "-9223372036854775808",
+        "9223372036854775807",
+        "18446744073709551615",
+        "-9.3e18",
+        "9.3e18",
+        "-1e308",
+        "9007199254740992",
+        "-9007199254740992.0",
+    ] {
+        let message = PERIOD
+            .replace(r#""bladeGap":500"#, &format!(r#""bladeGap":{bad}"#))
+            .replace(r#""totalGrinds":120"#, &format!(r#""totalGrinds":{bad}"#));
+        let mut driver = connected();
+        let r = readings(&feed(&mut driver, &message, 512, 0))[0].clone();
+        assert_eq!((r.setting, r.total_grinds), (None, None), "{bad}");
+        let mut driver = connected();
+        let events = feed(
+            &mut driver,
+            &base(0).replace(":0,", &format!(":{bad},")),
+            512,
+            0,
+        );
+        assert!(events.is_empty(), "{bad}: {events:?}");
+    }
+    // serde_json refuses a number past f64: the message is unreadable, no panic.
+    let mut driver = connected();
+    let huge = PERIOD.replace(r#""bladeGap":500"#, r#""bladeGap":1e400"#);
+    assert!(feed(&mut driver, &huge, 512, 0).is_empty());
+    assert_eq!(driver.diagnostics().unreadable_messages, 1);
+    assert_eq!(
+        integer(&serde_json::json!(9_007_199_254_740_991_i64)),
+        Some(MAX_SAFE_INTEGER)
+    );
+    assert_eq!(
+        integer(&serde_json::json!(-9_007_199_254_740_991.0)),
+        Some(-MAX_SAFE_INTEGER)
+    );
+}
+
+#[test]
+fn a_duplicate_key_cannot_smuggle_a_serial_into_the_capture() {
+    let mut driver = connected();
+    let probe = format!(
+        r#"{{"broadcast":{{"baseInfo":{{"snCode":"{SERIAL}","wifiName":"{SSID}"}}}},"broadcast":{{"periodInfo":{{"devState":"IDLE"}}}}}}"#
+    );
+    for packet in [20, 512] {
+        let out = captured(
+            &mut driver,
+            &encode(probe.as_bytes(), 1, packet),
+            u64::try_from(packet).unwrap_or(0) * 10_000,
+        );
+        assert!(!leaks(&out), "packet {packet}");
+        assert_eq!(reassembled(&out).len(), 1);
+    }
+    let nested = format!(
+        r#"{{"broadcast":{{"baseInfo":{{"snCode":"{SERIAL}","snCode":"x","wifiName":"{SSID}","wifiName":null}}}}}}"#
+    );
+    let out = captured(&mut driver, &encode(nested.as_bytes(), 1, 20), 50_000);
+    assert!(!leaks(&out));
 }

@@ -78,6 +78,8 @@ const MAX_STATE_LEN: usize = 80;
 const MAX_SERIAL_LEN: usize = 32;
 /// The largest integer JSON's numbers carry exactly (JS `MAX_SAFE_INTEGER`).
 const MAX_SAFE_INTEGER: i64 = (1 << 53) - 1;
+/// [`MAX_SAFE_INTEGER`] as a float (exact: it is below 2^53).
+const MAX_SAFE_FLOAT: f64 = 9_007_199_254_740_991.0;
 
 /// Split one logical JSON message into fragment frames of at most
 /// `max_packet` bytes, every one carrying the same `seq` and total length
@@ -263,13 +265,18 @@ pub fn state_from(raw: &str) -> GrinderState {
 /// counts), within the range JSON numbers carry exactly.
 fn integer(value: &Value) -> Option<i64> {
     if let Some(i) = value.as_i64() {
-        return (i.abs() <= MAX_SAFE_INTEGER).then_some(i);
+        // `unsigned_abs`: `i64::MIN.abs()` overflows.
+        return (i.unsigned_abs() <= MAX_SAFE_INTEGER.unsigned_abs()).then_some(i);
     }
     let f = value.as_f64()?;
-    // A float that is a whole number within ±2^53 converts exactly.
+    // Range first, then the cast: a whole number within ±2^53 converts
+    // exactly. NaN and the infinities fail `fract() == 0.0`.
+    if f.fract() != 0.0 || f.abs() > MAX_SAFE_FLOAT {
+        return None;
+    }
     #[allow(clippy::cast_possible_truncation)]
     let i = f as i64;
-    (f.fract() == 0.0 && i.abs() <= MAX_SAFE_INTEGER).then_some(i)
+    Some(i)
 }
 
 /// Field readers over one JSON object that count values present but unusable.
@@ -656,11 +663,11 @@ impl CaptureShaper {
     fn shape(&mut self, message: &[u8], now_ms: u64) -> Option<Option<Vec<u8>>> {
         let text = std::str::from_utf8(message).ok()?;
         let mut document: Value = serde_json::from_str(text).ok()?;
-        let payload = if redact(&mut document) {
-            serde_json::to_vec(&document).ok()?
-        } else {
-            message.to_vec()
-        };
+        // Always the re-serialized value, never the original bytes: a
+        // duplicate key parses last-wins, so an earlier copy holding a serial
+        // would survive in the raw message even when nothing needed redacting.
+        redact(&mut document);
+        let payload = serde_json::to_vec(&document).ok()?;
         if is_period_only(&document) {
             if let Some((last, at)) = &self.last_period
                 && *last == payload
