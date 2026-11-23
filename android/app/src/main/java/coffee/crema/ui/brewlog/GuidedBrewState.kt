@@ -159,6 +159,9 @@ object GuidedSetupRules {
 object RecipeEditOwner {
     const val SCALE = "scale"
     const val PROFILES = "profiles"
+
+    /** Brew's Manual page (brew-modes §3): Save selects the saved recipe. */
+    const val BREW = "brew"
 }
 
 /** The phone's pushed recipe-editor route (see [coffee.crema.ui.NavRestore]). */

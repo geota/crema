@@ -69,6 +69,11 @@ internal class RecordingMachineActions(
     override fun liveGrinder(id: String) = grinders.firstOrNull { it.id == id }
     override fun configReady() = configLoaded
 
+    /** What [profilePickLock] answers: the lock's note while a shot or guided brew runs here. */
+    var pickLock: String? = null
+
+    override fun profilePickLock() = pickLock
+
     override fun notePeerActivity() {
         maybeThrow("notePeerActivity")
         peerActivity++

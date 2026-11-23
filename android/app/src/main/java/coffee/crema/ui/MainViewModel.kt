@@ -593,7 +593,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     internal val wakePending: Boolean get() = wake.pending
 
     /** Arm a session for [recipe]; [startOnPour] starts it at the first pour. */
-    fun brewSessionArm(recipe: coffee.crema.core.BrewRecipe, startOnPour: Boolean) = guided.brewSessionArm(recipe, startOnPour)
+    fun brewSessionArm(recipe: coffee.crema.core.BrewRecipe, startOnPour: Boolean) {
+        // A brew started anywhere (the phone's Scale segment too) selects its
+        // recipe, so Brew shows it in Manual on either layout (brew-modes §2).
+        if (_ui.value.activeRecipeId != recipe.id) pickRecipe(recipe.id)
+        guided.brewSessionArm(recipe, startOnPour)
+    }
 
     /** Start an armed session's clock (the Start tap). */
     fun brewSessionBegin() = guided.brewSessionBegin()
@@ -630,7 +635,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         guided.updateRecipeEdit(transform)
     fun setRecipeEditMethod(method: String) = guided.setRecipeEditMethod(method)
     fun closeRecipeEdit() = guided.closeRecipeEdit()
-    fun saveRecipeEdit() = guided.saveRecipeEdit()
+    fun saveRecipeEdit() {
+        val owner = guided.recipeEdit.value?.owner
+        val saved = guided.saveRecipeEdit() ?: return
+        // Brew's editor (Duplicate to edit, + New recipe) comes back on the
+        // saved recipe: Manual brews what was just saved.
+        if (owner == coffee.crema.ui.brewlog.RecipeEditOwner.BREW) pickRecipe(saved.id)
+    }
 
     // Your own brewing methods.
     fun openNewMethod(target: String, label: String = "") = guided.openNewMethod(target, label)
@@ -645,7 +656,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun dismissSaveMethodPrompt() = guided.dismissSaveMethodPrompt()
 
     /** The finished session's "Save brew…": the Log-brew form, pre-filled with measured truth. */
-    fun openGuidedLogBrew() = guided.openGuidedLogBrew()
+    fun openGuidedLogBrew(owner: String = coffee.crema.ui.brewlog.BrewLogOwner.SCALE) = guided.openGuidedLogBrew(owner)
 
     /**
      * What this device does for each [MachineCommand]: the bodies behind the
@@ -668,6 +679,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Someone is using Crema on a mirror: that's presence at the machine.
         override fun notePeerActivity() = presence.idleActivity(coffee.crema.core.IdleActivity.Mirror)
         override fun configReady(): Boolean = settings.loaded
+        // A remote's profile pick while this hub runs a shot or a guided
+        // brew (brew-modes §4): the lock's note, else null.
+        override fun profilePickLock(): String? = _ui.value.brewPickLock()?.note
     }
 
     /**
@@ -1540,7 +1554,47 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setActiveProfile(id: String) {
         // Picking a profile resolves "Can't start shot" (web `selectFavorite`).
         _ui.update { it.copy(shotStartError = null) }
-        machine.execute(MachineCommand.SetActiveProfile(id))
+        machine.execute(MachineCommand.SetActiveProfile(id)) { outcome ->
+            // A profile pick is Espresso (brew-modes §2): the core's pick
+            // clears the recipe once the profile took (on a remote, once the
+            // hub took it), so a refusal leaves Manual as it was.
+            if (outcome !is CommandOutcome.Refused) leaveManualFor(id)
+        }
+    }
+
+    /** A profile pick took: store the core's pick, which clears the recipe. */
+    private fun leaveManualFor(profileId: String) {
+        val st = _ui.value
+        if (st.activeRecipeId == null) return
+        val stored = BrewSelectionRules.pick(
+            st.storedBrewSelection(),
+            coffee.crema.core.BrewSelection(coffee.crema.core.BrewSelectionKind.Profile, profileId),
+        )
+        _ui.update { it.copy(activeRecipeId = stored.activeRecipeId) }
+        persistPrefs()
+    }
+
+    /**
+     * Pick recipe [id] in Brew's picker (brew-modes §2): Brew turns to Manual.
+     * Local on every device (recipes are per device, §5), so nothing is
+     * relayed; the profile stays for Espresso. Refused while the lock (§4)
+     * covers recipe rows: a guided brew runs here.
+     */
+    fun pickRecipe(id: String) {
+        val st = _ui.value
+        val recipe = st.builtinRecipes.firstOrNull { it.id == id }
+            ?: st.brewRecipes.firstOrNull { it.id == id && it.deletedAt == null }
+            ?: return
+        effectiveState().brewPickLock()?.takeIf { it.recipesLocked }?.let { notifyUser(it.note); return }
+        val stored = BrewSelectionRules.pick(
+            st.storedBrewSelection(),
+            coffee.crema.core.BrewSelection(coffee.crema.core.BrewSelectionKind.Recipe, id),
+        )
+        _ui.update { it.copy(activeRecipeId = stored.activeRecipeId) }
+        // The guided engine brews the setup's recipe; recents follow the pick.
+        guided.selectGuidedRecipe(recipe)
+        guided.setDefaultBrewRecipe(recipe)
+        persistPrefs()
     }
 
     // ── Library delegates (see [LibraryController]) ──────────────────────────

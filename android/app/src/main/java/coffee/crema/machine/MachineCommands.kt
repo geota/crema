@@ -90,6 +90,10 @@ interface MachineActions {
     /** The config is loaded: a relayed config edit can be applied and kept
      *  (before that, the prefs load would overwrite it after the reply). */
     fun configReady(): Boolean = true
+
+    /** Why a peer may not change this device's profile now (brew-modes §4: a
+     *  shot or a guided brew runs here), worded for the peer; null = it may. */
+    fun profilePickLock(): String? = null
 }
 
 /**
@@ -127,13 +131,20 @@ class LocalMachine(
         }
         // A peer's config edit before this device loaded its config would be
         // overwritten by the load after its reply (review 17).
-        is MachineCommand.Config -> if (origin != null && !actions.configReady()) {
-            CommandOutcome.Refused("${hostName()} is starting up")
-        } else {
-            actions.showConfig(cmd)
-            // A peer's bag pick answers with what it changed (F6).
-            actions.commitConfig(cmd, relayed = origin != null)?.let { CommandOutcome.BagPicked(it) }
-                ?: CommandOutcome.Accepted
+        is MachineCommand.Config -> {
+            // A peer's profile pick while a shot or guided brew runs here
+            // (brew-modes §4): this device's own picker is locked the same way.
+            val locked = if (origin != null && cmd is MachineCommand.SetActiveProfile) actions.profilePickLock() else null
+            when {
+                origin != null && !actions.configReady() -> CommandOutcome.Refused("${hostName()} is starting up")
+                locked != null -> CommandOutcome.Refused(locked)
+                else -> {
+                    actions.showConfig(cmd)
+                    // A peer's bag pick answers with what it changed (F6).
+                    actions.commitConfig(cmd, relayed = origin != null)?.let { CommandOutcome.BagPicked(it) }
+                        ?: CommandOutcome.Accepted
+                }
+            }
         }
         MachineCommand.RawEspresso -> accepted { actions.applyMachineState(MachineRequest.ESPRESSO) }
         is MachineCommand.SetHotWaterDose -> accepted { actions.applyHotWaterDose(cmd.dose) }

@@ -59,7 +59,13 @@ class RelayedVerbPrimaryDispatchTest {
     private class Effect(val prime: (MainViewModel) -> Unit = {}, val applied: (MainUiState) -> Boolean)
 
     private val effects: Map<String, Effect> = mapOf(
-        "setActiveProfile" to Effect(prime = { vm -> vm.setActiveProfile(vm.ui.value.profiles.first { it.id != SAMPLE_PROFILE_ID }.id) }) {
+        "setActiveProfile" to Effect(prime = { vm ->
+            // The startShot fixture left a start pending, which locks a
+            // peer's profile pick (brew-modes §4; its own test is below).
+            vm.stopShot()
+            VmHarness.idleUntil("the pending start cancelled") { !vm.ui.value.shotStarting && !vm.ui.value.shotInProgress }
+            vm.setActiveProfile(vm.ui.value.profiles.first { it.id != SAMPLE_PROFILE_ID }.id)
+        }) {
             it.activeProfileId == SAMPLE_PROFILE_ID
         },
         "setActiveBean.none" to Effect(prime = { it.setActiveBean("bean-2") }) { it.activeBeanId == null },
@@ -192,6 +198,18 @@ class RelayedVerbPrimaryDispatchTest {
 
         val accepted = relay(FrameCodec.encode(Frame.Control(2, "setActiveProfile", SAMPLE_PROFILE_ID)))
         assertEquals(Frame.ControlOk(2), accepted)
+    }
+
+    /** Brew modes §4: while this primary's shot starts or runs, a peer's
+     *  profile pick is refused with the lock's note and changes nothing. */
+    @Test
+    fun `a profile pick during the primary's shot is refused with the lock's note`() {
+        val before = vm.ui.value.activeProfileId
+        assertEquals(Frame.ControlOk(1), relay(Golden.require("control/startShot.json")))
+        VmHarness.idleUntil("the start pending") { vm.ui.value.shotStarting || vm.ui.value.shotInProgress }
+        val err = assertIs<Frame.ControlErr>(relay(FrameCodec.encode(Frame.Control(2, "setActiveProfile", SAMPLE_PROFILE_ID))))
+        assertEquals("Finish the current shot first", err.reason)
+        assertEquals(before, vm.ui.value.activeProfileId)
     }
 
     /** AC-41: a `handoff` control is refused as unknown. The hub stays the

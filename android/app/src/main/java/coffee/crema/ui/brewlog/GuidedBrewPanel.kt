@@ -106,7 +106,7 @@ private val SESSION_COLUMN_WIDTH = 440.dp
 private val STEP_TAG_INLINE_MIN = 360.dp
 
 /** How long the step card flashes after a visual cue. */
-private const val CUE_FLASH_MS = 900L
+internal const val CUE_FLASH_MS = 900L
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -126,18 +126,11 @@ fun GuidedBrewPanel(
     val connected = ui.scaleState == ScaleBleManager.State.READY
     // The setup's bag (issue #10 feedback): its pick, else the active bag.
     val brewBeanId = GuidedBeanRules.resolve(setup.beanPick, ui.beans, ui.activeBeanId)
-    val brewBean = brewBeanId?.let { id -> ui.beans.firstOrNull { it.id == id } }
 
     // The display clock — the shell shares elapsedRealtime with the core,
     // so it renders the session clock locally between events. Derived from
     // VM-held timestamps: a recreated composition resumes, never restarts.
-    var nowRealtime by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
-    LaunchedEffect(session.phase) {
-        while (session.phase == "running" || session.phase == "paused" || session.phase == "armed") {
-            nowRealtime = SystemClock.elapsedRealtime()
-            kotlinx.coroutines.delay(100)
-        }
-    }
+    val nowRealtime = rememberGuidedNow(session.phase)
 
     when (session.phase) {
         "armed", "running", "paused" -> LiveReadouts(vm.live) { live ->
@@ -154,57 +147,9 @@ fun GuidedBrewPanel(
             )
         }
         "done" -> ScrollPane(modifier) {
-            val summary = session.summary
-            if (summary != null) {
-                Column(
-                    Modifier.fillMaxWidth().padding(top = 24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Eyebrow("Brew finished")
-                    Text(summary.recipeName, style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        brewBean?.let { b ->
-                            listOfNotNull(ui.roasters.firstOrNull { it.id == b.roasterId }?.name, b.name).joinToString(" · ")
-                        } ?: "No bean",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("guided-done-bean"),
-                    )
-                    // The setup they brewed with, read-only — never merged into the brew's notes.
-                    (session.recipe ?: setup.recipe)?.let { r ->
-                        RecipeNotesLine(
-                            r,
-                            Modifier.widthIn(max = 460.dp),
-                            label = "Recipe notes",
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        )
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(26.dp)) {
-                        DoneStat(formatClock(summary.durationMs), "time")
-                        summary.finalWeightG?.let { DoneStat("${it.roundToInt()} g", "water") }
-                        DoneStat("${summary.series.stageMarks.size}", "steps")
-                    }
-                    if (summary.series.samples.size >= 2) {
-                        BrewSessionCanvas(summary.series, Modifier.fillMaxWidth().height(160.dp))
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        CremaButton(
-                            onClick = vm::brewSessionClearSummary,
-                            variant = CremaButtonVariant.Outlined,
-                            label = "Discard",
-                        )
-                        CremaButton(
-                            onClick = {
-                                vm.openGuidedLogBrew()
-                                if (phone) onNav(LOG_BREW_ROUTE)
-                            },
-                            icon = "check",
-                            label = "Save brew…",
-                            modifier = Modifier.testTag("guided-save"),
-                        )
-                    }
-                }
+            GuidedDoneSummary(vm) {
+                vm.openGuidedLogBrew()
+                if (phone) onNav(LOG_BREW_ROUTE)
             }
         }
         else -> ScrollPane(modifier) {
@@ -274,6 +219,86 @@ fun GuidedBrewPanel(
             }
         }
     }
+}
+
+/**
+ * A finished session's card: what was brewed, its numbers and curve, and
+ * Discard / "Save brew…" ([onSave] opens the Log-brew form where the caller
+ * hosts it). The Scale segment and Brew's Manual page share it.
+ */
+@Composable
+internal fun GuidedDoneSummary(vm: MainViewModel, onSave: () -> Unit) {
+    val ui by vm.ui.collectAsStateWithLifecycle()
+    val setup by vm.guidedSetup.collectAsStateWithLifecycle()
+    val session = ui.guidedBrew
+    val brewBeanId = GuidedBeanRules.resolve(setup.beanPick, ui.beans, ui.activeBeanId)
+    val brewBean = brewBeanId?.let { id -> ui.beans.firstOrNull { it.id == id } }
+    val summary = session.summary
+    if (summary != null) {
+        Column(
+            Modifier.fillMaxWidth().padding(top = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Eyebrow("Brew finished")
+            Text(summary.recipeName, style = MaterialTheme.typography.headlineSmall)
+            Text(
+                brewBean?.let { b ->
+                    listOfNotNull(ui.roasters.firstOrNull { it.id == b.roasterId }?.name, b.name).joinToString(" · ")
+                } ?: "No bean",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("guided-done-bean"),
+            )
+            // The setup they brewed with, read-only — never merged into the brew's notes.
+            (session.recipe ?: setup.recipe)?.let { r ->
+                RecipeNotesLine(
+                    r,
+                    Modifier.widthIn(max = 460.dp),
+                    label = "Recipe notes",
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(26.dp)) {
+                DoneStat(formatClock(summary.durationMs), "time")
+                summary.finalWeightG?.let { DoneStat("${it.roundToInt()} g", "water") }
+                DoneStat("${summary.series.stageMarks.size}", "steps")
+            }
+            if (summary.series.samples.size >= 2) {
+                BrewSessionCanvas(summary.series, Modifier.fillMaxWidth().height(160.dp))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CremaButton(
+                    onClick = vm::brewSessionClearSummary,
+                    variant = CremaButtonVariant.Outlined,
+                    label = "Discard",
+                )
+                CremaButton(
+                    onClick = onSave,
+                    icon = "check",
+                    label = "Save brew…",
+                    modifier = Modifier.testTag("guided-save"),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The display clock for a live session: the shell shares elapsedRealtime with
+ * the core, so it renders the session clock locally between events. Derived
+ * from VM-held timestamps, so a recreated composition resumes, never restarts.
+ */
+@Composable
+internal fun rememberGuidedNow(phase: String): Long {
+    var nowRealtime by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    LaunchedEffect(phase) {
+        while (phase == "running" || phase == "paused" || phase == "armed") {
+            nowRealtime = SystemClock.elapsedRealtime()
+            kotlinx.coroutines.delay(100)
+        }
+    }
+    return nowRealtime
 }
 
 /**
@@ -448,7 +473,7 @@ private fun SetupCard(
 
 /** One setup step line; on narrow rows the AUTO/TAP tag wraps under the step. */
 @Composable
-private fun SetupStepRow(i: Int, step: BrewStep) {
+internal fun SetupStepRow(i: Int, step: BrewStep) {
     val tag: @Composable () -> Unit = {
         Text(
             if (step.advance == StepAdvance.Manual) "TAP" else "AUTO",
@@ -499,7 +524,7 @@ private fun SetupStepRow(i: Int, step: BrewStep) {
 // ── The live session ────────────────────────────────────────────────────
 
 /** Everything the live layouts render, computed once per frame. */
-private class LiveModel(
+internal class LiveModel(
     val session: GuidedBrewUi,
     val recipe: BrewRecipe?,
     val connected: Boolean,
@@ -664,7 +689,7 @@ private fun BigClock(m: LiveModel, sizeSp: Float, modifier: Modifier) {
  * pour-target approach, a held boundary) — visual cues are always on.
  */
 @Composable
-private fun StepCard(m: LiveModel, labelLines: Int = 3) {
+internal fun StepCard(m: LiveModel, labelLines: Int = 3) {
     val flash = m.flashing
     val border by animateColorAsState(
         if (flash) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
@@ -794,7 +819,7 @@ private fun NextLine(m: LiveModel) {
 }
 
 @Composable
-private fun LiveChart(m: LiveModel, series: BrewSeries, modifier: Modifier) {
+internal fun LiveChart(m: LiveModel, series: BrewSeries, modifier: Modifier) {
     CremaCard(shape = RoundedCornerShape(14.dp), modifier = modifier.testTag("guided-live-chart")) {
         Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -881,7 +906,7 @@ private fun SessionControls(vm: MainViewModel, m: LiveModel, modifier: Modifier)
 }
 
 @Composable
-private fun ProgressTrack(fraction: Float) {
+internal fun ProgressTrack(fraction: Float) {
     Box(
         Modifier.fillMaxWidth().height(6.dp)
             .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(999.dp)),

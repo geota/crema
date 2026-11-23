@@ -82,6 +82,8 @@ import coffee.crema.ui.unsavedGrindExplanation
 import coffee.crema.ui.remoteBrewCue
 import coffee.crema.ui.activeProfile
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.selectedRecipe
+import androidx.compose.ui.platform.testTag
 import coffee.crema.ui.effectiveBrew
 import coffee.crema.ui.refillSoon
 import coffee.crema.ui.components.*
@@ -119,6 +121,8 @@ fun PhoneBrewScreen(
     val activeBean = ui.beans.firstOrNull { it.id == ui.activeBeanId }
     val running = ui.shotInProgress
     val espressoActive = ui.machineStateName == MachineState.Espresso
+    // Brew's mode follows the selection (brew-modes §2): a recipe is Manual.
+    val manualRecipe = ui.selectedRecipe()
 
     var quickOpen by remember { mutableStateOf(false) }
     var devicesOpen by remember { mutableStateOf(false) }
@@ -155,7 +159,9 @@ fun PhoneBrewScreen(
                 val frozen = activeBean?.isFrozen == true
                 val daysOff = activeBean?.let { beanDaysOffRoast(it) }
                 ProfileStrip(
-                    title = active?.name ?: "No profile loaded",
+                    // Manual: "‹recipe› · ‹method›" over the bean line (§2).
+                    title = manualRecipe?.let { "${it.name.trim()} · ${coffee.crema.brew.methodLabel(it.method)}" }
+                        ?: active?.name ?: "No profile loaded",
                     // Remembered (review #37): the lines do list scans + joins,
                     // and this strip recomposes on every UI-state change.
                     beanLine = remember(
@@ -217,7 +223,11 @@ fun PhoneBrewScreen(
                 }
             }
 
-            if (running) {
+            val guidedNow = coffee.crema.ui.brewlog.rememberGuidedNow(ui.guidedBrew.phase)
+            if (manualRecipe != null) {
+                // Manual (§3): the current step, the steps and the scale's status.
+                PhoneManualBody(vm, ui, manualRecipe, guidedNow, scaleConnected, onNav, Modifier.weight(1f))
+            } else if (running) {
                 LiveReadouts(vm.live) { live ->
                     RunningBody(ui = ui, live = live, active = active, modifier = Modifier.weight(1f))
                 }
@@ -255,7 +265,19 @@ fun PhoneBrewScreen(
             }
 
             // ── Foot: mode cluster + Coffee/Stop ─────────────────────────────
-            LiveReadouts(vm.live) { live ->
+            // Manual: Steam, Water and Flush go, and Start brew takes Coffee's place (§3).
+            if (manualRecipe != null) LiveReadouts(vm.live) { live ->
+                val setup by vm.guidedSetup.collectAsStateWithLifecycle()
+                coffee.crema.ui.brewlog.ManualControls(
+                    vm = vm,
+                    m = coffee.crema.ui.brewlog.manualModel(ui.guidedBrew, manualRecipe, scaleConnected, live.scaleWeightG, live.scaleFlowGPerS, guidedNow),
+                    recipe = manualRecipe,
+                    startOnPour = setup.startOnPour,
+                    summaryOpen = ui.guidedBrew.phase == "done",
+                    modifier = Modifier.fillMaxWidth().messageAnchor(MessageAnchorSlot.Controls),
+                    fill = true,
+                )
+            } else LiveReadouts(vm.live) { live ->
                 ModeCluster(
                     // A temporary message's card sits just above this row.
                     modifier = Modifier.messageAnchor(MessageAnchorSlot.Controls),
@@ -276,7 +298,7 @@ fun PhoneBrewScreen(
             }
             // Stop also cancels a start still pending (05 F2).
             val stoppable = espressoActive || ui.shotStarting
-            CoffeeCta(
+            if (manualRecipe == null) CoffeeCta(
                 running = stoppable,
                 uploading = ui.profileUploading,
                 enabled = connected,
@@ -344,6 +366,46 @@ fun PhoneBrewScreen(
                 )
             },
             onDismiss = { menuOpen = false },
+        )
+    }
+}
+
+/**
+ * The phone's Manual page (brew-modes §3, board PhoneModePourOver): the
+ * current step's card (step n of N, the clock, weight against the target,
+ * the note), then the recipe's steps with the scale's status. A finished
+ * brew shows its summary until it is saved (the pushed log form) or discarded.
+ */
+@Composable
+private fun PhoneManualBody(
+    vm: MainViewModel,
+    ui: MainUiState,
+    recipe: coffee.crema.core.BrewRecipe,
+    nowRealtime: Long,
+    scaleConnected: Boolean,
+    onNav: (String) -> Unit,
+    modifier: Modifier,
+) {
+    val setup by vm.guidedSetup.collectAsStateWithLifecycle()
+    Column(modifier.verticalScroll(rememberScrollState()).testTag("manual-page"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (ui.guidedBrew.phase == "done") {
+            coffee.crema.ui.brewlog.GuidedDoneSummary(vm) {
+                vm.openGuidedLogBrew(coffee.crema.ui.brewlog.BrewLogOwner.BREW)
+                onNav(coffee.crema.ui.brewlog.LOG_BREW_ROUTE)
+            }
+            return@Column
+        }
+        LiveReadouts(vm.live) { live ->
+            val m = coffee.crema.ui.brewlog.manualModel(ui.guidedBrew, recipe, scaleConnected, live.scaleWeightG, live.scaleFlowGPerS, nowRealtime)
+            coffee.crema.ui.brewlog.ManualPhoneStepCard(m)
+        }
+        val m = coffee.crema.ui.brewlog.manualModel(ui.guidedBrew, recipe, scaleConnected, null, null, nowRealtime)
+        coffee.crema.ui.brewlog.ManualStepsCard(
+            vm = vm,
+            m = m,
+            startOnPour = setup.startOnPour,
+            soundOn = coffee.crema.ui.brewlog.BrewCueDefaults.soundOn(ui.brewCueSound),
+            scrollSteps = false,
         )
     }
 }

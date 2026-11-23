@@ -277,6 +277,10 @@ data class AppPrefs(
      *  profile is picked on launch. Absent/false is a fresh install's or a
      *  kept selection, which seeds the first profile (PLAN follow-up 5). */
     val profileCleared: Boolean = false,
+    /** The recipe Brew has selected (brew-modes §2; web
+     *  `crema.brew.recipeId`): set means Manual. Absent in a file from before
+     *  brew modes, which reads as the profile alone (Espresso). Per device. */
+    val activeRecipeId: String? = null,
     // ── Connection (auto-connect is per-device = a remembered address) ───────
     /** Remembered DE1 Bluetooth address — the auto-connect target (reconnect on
      *  an unexpected drop + connect on launch). Non-null ⟺ the DE1's
@@ -523,6 +527,7 @@ private data class PersistedPrefs(
     val qcGrind: String? = null,
     val activeProfileId: String? = null,
     val profileCleared: Boolean = false,
+    val activeRecipeId: String? = null,
     val de1Address: String? = null,
     val scaleAddress: String? = null,
     val scaleName: String? = null,
@@ -553,6 +558,7 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     qcGrind = qcGrind,
     activeProfileId = activeProfileId,
     profileCleared = profileCleared,
+    activeRecipeId = activeRecipeId,
     de1Address = de1Address,
     scaleAddress = scaleAddress,
     scaleName = scaleName,
@@ -582,6 +588,7 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     qcGrind = qcGrind,
     activeProfileId = activeProfileId,
     profileCleared = profileCleared,
+    activeRecipeId = activeRecipeId,
     de1Address = de1Address,
     scaleAddress = scaleAddress,
     scaleName = scaleName,

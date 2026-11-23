@@ -255,6 +255,9 @@ val NOT_SETTINGS: Map<String, String> = mapOf(
     // The active profile's cleared state (PLAN follow-up 5): part of the
     // ACTIVE_PROFILE selection (its "none", told from a fresh install), not a setting.
     "AppPrefs.profileCleared" to "selection state (the active profile's none)",
+    // Brew's recipe selection (brew-modes §2): per device, never relayed or
+    // backed up; with ACTIVE_PROFILE it decides the Brew mode.
+    "AppPrefs.activeRecipeId" to "selection state (Brew's recipe, per device)",
     // Setters of library data, drafts and screen state.
     "$VM.setBuiltinRecipeHidden(String, Boolean)" to "library data (recipe organisation)",
     "$VM.setDefaultBrewRecipe(BrewRecipe)" to "library pointer (lastRecipeByMethod)",

@@ -125,6 +125,11 @@ import androidx.compose.ui.semantics.contentDescription
 import coffee.crema.core.steamAtTemperature
 import coffee.crema.core.groupAtTemperature
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.brewPickLock
+import coffee.crema.ui.estimateLabel
+import coffee.crema.ui.headerLine
+import coffee.crema.ui.selectedRecipe
+import androidx.compose.ui.platform.testTag
 import coffee.crema.ui.StopTargetsView
 import coffee.crema.ui.components.CremaAnchoredPopup
 import coffee.crema.ui.components.CremaCard
@@ -181,6 +186,25 @@ fun BrewScreen(
     val running = ui.shotInProgress
     val espressoActive = ui.machineStateName == MachineState.Espresso
     var quickOpen by remember { mutableStateOf(false) }
+    // Brew's mode follows the selection (brew-modes §2): a recipe is Manual.
+    val manualRecipe = ui.selectedRecipe()
+    val pickLock = ui.brewPickLock()
+    val pickRecipes = remember(ui.brewRecipes, ui.builtinRecipes, ui.hiddenBuiltinRecipes) {
+        coffee.crema.ui.brewlog.visibleBrewRecipes(ui.brewRecipes, "", ui.builtinRecipes, ui.hiddenBuiltinRecipes)
+    }
+    // Manual's "Duplicate to edit" (a built-in) or "Edit recipe" (the user's
+    // own), here and in the picker's foot: the editor opens over Brew and
+    // Save comes back with the saved recipe selected.
+    val editRecipe: (coffee.crema.core.BrewRecipe) -> Unit = { r ->
+        if (vm.isBuiltinRecipe(r.id)) {
+            vm.duplicateBrewRecipe(r.id)?.let { copy ->
+                vm.pickRecipe(copy.id)
+                vm.openRecipeEdit(coffee.crema.ui.brewlog.RecipeEditOwner.BREW, copy)
+            }
+        } else {
+            vm.openRecipeEdit(coffee.crema.ui.brewlog.RecipeEditOwner.BREW, r)
+        }
+    }
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CremaNavigationRail(
@@ -196,6 +220,20 @@ fun BrewScreen(
                 brewParams = ui.brewParams,
                 profiles = ui.profiles,
                 onSelectProfile = vm::setActiveProfile,
+                recipe = manualRecipe,
+                recipes = pickRecipes,
+                onPickRecipe = vm::pickRecipe,
+                pickLock = pickLock,
+                onOpenRecipes = { onNav("profiles") },
+                onNewRecipe = {
+                    vm.openRecipeEdit(
+                        coffee.crema.ui.brewlog.RecipeEditOwner.BREW,
+                        coffee.crema.brew.newRecipeFor(manualRecipe?.method ?: "pourover", System.currentTimeMillis()),
+                        isNew = true,
+                    )
+                },
+                onEditRecipe = { manualRecipe?.let(editRecipe) },
+                recipeEditIsCopy = manualRecipe?.let { vm.isBuiltinRecipe(it.id) } ?: false,
                 uploading = ui.profileUploading,
                 uploadProgress = ui.profileUploadProgress,
                 weightUnit = ui.weightUnit,
@@ -230,7 +268,16 @@ fun BrewScreen(
                 grinderBlock = { GrinderBlock(vm, ui, onNav) },
             )
             EmptyBagBanner(ui, onSelectBag = vm::setActiveBean, Modifier.padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 4.dp))
-            Row(
+            // Manual's page (brew-modes §3), shared engine with the Scale segment.
+            val guidedNow = coffee.crema.ui.brewlog.rememberGuidedNow(ui.guidedBrew.phase)
+            if (manualRecipe != null) ManualBody(
+                vm = vm,
+                ui = ui,
+                recipe = manualRecipe,
+                nowRealtime = guidedNow,
+                scaleConnected = scaleConnected,
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+            ) else Row(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
@@ -459,6 +506,22 @@ fun BrewScreen(
                     // then Espresso (vm.startShot). Stop is a direct Idle request,
                     // and also cancels a start still pending (05 F2).
                     onCoffee = { if (espressoActive || ui.shotStarting) vm.stopShot() else vm.startShot() },
+                    // Manual (§3): Steam and Flush go, Hot water stays, and
+                    // Coffee becomes Start brew (the session's controls while it runs).
+                    manualControls = manualRecipe?.let { r ->
+                        {
+                            val setup by vm.guidedSetup.collectAsStateWithLifecycle()
+                            coffee.crema.ui.brewlog.ManualControls(
+                                vm = vm,
+                                m = coffee.crema.ui.brewlog.manualModel(
+                                    ui.guidedBrew, r, scaleConnected, live.scaleWeightG, live.scaleFlowGPerS, guidedNow,
+                                ),
+                                recipe = r,
+                                startOnPour = setup.startOnPour,
+                                summaryOpen = ui.guidedBrew.phase == "done",
+                            )
+                        }
+                    },
                     // A temporary message's strip sits on top of this bar.
                     modifier = Modifier.messageAnchor(MessageAnchorSlot.Controls),
                 )
@@ -521,6 +584,89 @@ fun BrewScreen(
             }
         }
     }
+    // Manual's side sheets on this tab (brew-modes §3): the recipe editor
+    // (Duplicate to edit, + New recipe) and the finished brew's log form.
+    coffee.crema.ui.brewlog.RecipeEditorSheet(vm, owner = coffee.crema.ui.brewlog.RecipeEditOwner.BREW)
+    coffee.crema.ui.brewlog.LogBrewSheet(vm, owner = coffee.crema.ui.brewlog.BrewLogOwner.BREW)
+}
+
+/**
+ * Brew's Manual page on the tablet (brew-modes §3, board WideModePourOver):
+ * the left column is today's timer card over the recipe's steps; the right
+ * has the Weight tile beside a "Step n of N" tile, over the weight chart
+ * against the step targets. A finished brew's summary takes the chart's
+ * place until it is saved or discarded.
+ */
+@Composable
+private fun ManualBody(
+    vm: MainViewModel,
+    ui: coffee.crema.ui.MainUiState,
+    recipe: coffee.crema.core.BrewRecipe,
+    nowRealtime: Long,
+    scaleConnected: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val setup by vm.guidedSetup.collectAsStateWithLifecycle()
+    val series by vm.liveBrewSeries.collectAsStateWithLifecycle()
+    val session = ui.guidedBrew
+    Row(modifier.testTag("manual-page"), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.width(248.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val m = coffee.crema.ui.brewlog.manualModel(session, recipe, scaleConnected, null, null, nowRealtime)
+            TimerCard(
+                running = m.elapsedMs > 0 || session.phase == "running",
+                elapsedMs = m.elapsedMs,
+                phase = null,
+                modeLabel = when (session.phase) {
+                    "armed" -> "Pour to start"
+                    "running" -> "Brewing"
+                    "paused" -> "Paused"
+                    "done" -> "Brewed"
+                    else -> null
+                },
+            )
+            coffee.crema.ui.brewlog.ManualStepsCard(
+                vm = vm,
+                m = m,
+                startOnPour = setup.startOnPour,
+                soundOn = coffee.crema.ui.brewlog.BrewCueDefaults.soundOn(ui.brewCueSound),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
+        }
+        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LiveReadouts(vm.live) { live ->
+                val m = coffee.crema.ui.brewlog.manualModel(session, recipe, scaleConnected, live.scaleWeightG, live.scaleFlowGPerS, nowRealtime)
+                val weight = convertWeight(live.scaleWeightG?.coerceAtLeast(0f), ui.weightUnit)
+                Row(Modifier.fillMaxWidth().height(94.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                    ChannelCard(
+                        Modifier.weight(1f).fillMaxHeight(),
+                        primLabel = "Weight", primIcon = "scales", primColor = CremaTheme.telemetry.weight,
+                        primValue = weight.value, primUnit = weight.unit,
+                        secLabel = "Flow", secColor = CremaTheme.telemetry.weight2,
+                        secValue = fmt(live.scaleFlowGPerS), secUnit = "g/s",
+                        target = "water ${formatWeight(recipe.waterG, ui.weightUnit)}",
+                        // Tap-to-tare, as on Espresso, but not mid-brew.
+                        onTap = if (scaleConnected && session.phase != "running") vm::tareScale else null,
+                    )
+                    coffee.crema.ui.brewlog.ManualStepTile(m, Modifier.weight(3f).fillMaxHeight())
+                }
+                if (session.phase == "done") {
+                    Surface(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                    ) {
+                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+                            coffee.crema.ui.brewlog.GuidedDoneSummary(vm) {
+                                vm.openGuidedLogBrew(coffee.crema.ui.brewlog.BrewLogOwner.BREW)
+                            }
+                        }
+                    }
+                } else {
+                    coffee.crema.ui.brewlog.ManualChart(m, series, Modifier.weight(1f).fillMaxWidth())
+                }
+            }
+        }
+    }
 }
 
 // Which weight feeds the Ratio card: the live scale weight while running (floored
@@ -537,6 +683,19 @@ private fun BrewHeader(
     brewParams: BrewParams?,
     profiles: List<CremaProfile>,
     onSelectProfile: (String) -> Unit,
+    /** The selected recipe: Manual (brew-modes §2). Null = Espresso. */
+    recipe: coffee.crema.core.BrewRecipe?,
+    /** The Manual tab's rows. */
+    recipes: List<coffee.crema.core.BrewRecipe>,
+    onPickRecipe: (String) -> Unit,
+    /** The picker lock while a shot or guided brew runs (§4). */
+    pickLock: coffee.crema.core.BrewPickLock?,
+    onOpenRecipes: () -> Unit,
+    onNewRecipe: () -> Unit,
+    /** Duplicate (a built-in) or edit the selected recipe. */
+    onEditRecipe: () -> Unit,
+    /** The selected recipe is a built-in: editing makes a copy. */
+    recipeEditIsCopy: Boolean,
     uploading: Boolean,
     uploadProgress: String?,
     weightUnit: String,
@@ -568,6 +727,13 @@ private fun BrewHeader(
             brewParams = brewParams,
             profiles = profiles,
             onSelect = onSelectProfile,
+            recipe = recipe,
+            recipes = recipes,
+            onPickRecipe = onPickRecipe,
+            pickLock = pickLock,
+            onOpenRecipes = onOpenRecipes,
+            onNewRecipe = onNewRecipe,
+            onEditRecipe = onEditRecipe,
             uploading = uploading,
             uploadProgress = uploadProgress,
             weightUnit = weightUnit,
@@ -588,7 +754,18 @@ private fun BrewHeader(
             onNew = onNewBean,
             onEdit = onEditBean,
         )
-        QuickControlsPill(onClick = onOpenQuick)
+        if (recipe != null) {
+            // Manual: Quick Controls (the DE1's) gives way to the recipe's editor (§3).
+            RecipeEditPill(
+                label = if (recipeEditIsCopy) "Duplicate to edit" else "Edit recipe",
+                icon = if (recipeEditIsCopy) "copy" else "pencil-simple",
+                // A copy becomes the selection, which a guided brew locks.
+                enabled = !(recipeEditIsCopy && pickLock?.recipesLocked == true),
+                onClick = onEditRecipe,
+            )
+        } else {
+            QuickControlsPill(onClick = onOpenQuick)
+        }
     }
 }
 
@@ -598,6 +775,13 @@ private fun ProfileBlock(
     brewParams: BrewParams?,
     profiles: List<CremaProfile>,
     onSelect: (String) -> Unit,
+    recipe: coffee.crema.core.BrewRecipe?,
+    recipes: List<coffee.crema.core.BrewRecipe>,
+    onPickRecipe: (String) -> Unit,
+    pickLock: coffee.crema.core.BrewPickLock?,
+    onOpenRecipes: () -> Unit,
+    onNewRecipe: () -> Unit,
+    onEditRecipe: () -> Unit,
     uploading: Boolean,
     uploadProgress: String?,
     weightUnit: String,
@@ -612,7 +796,17 @@ private fun ProfileBlock(
     Box {
         // The block anatomy is the shared CremaHeaderBlock (issue #16 round 4:
         // the History detail renders the SAME component over a shot snapshot).
-        CremaHeaderBlock(
+        val summary = remember(recipe) { recipe?.let(coffee.crema.ui.BrewSelectionRules::summary) }
+        if (recipe != null && summary != null) {
+            // Manual (§2): "RECIPE · V60", the recipe, dose · water · temp · time.
+            CremaHeaderBlock(
+                eyebrow = "Recipe · ${coffee.crema.brew.methodLabel(recipe.method)}",
+                title = summary.name,
+                openTint = open,
+                onClick = { open = !open },
+                lines = listOf(HeaderBlockLine(summary.headerLine())),
+            )
+        } else CremaHeaderBlock(
             eyebrow = "Profile",
             eyebrowTrailing = if (uploading) {
                 {
@@ -658,17 +852,57 @@ private fun ProfileBlock(
         )
         CremaAnchoredPopup(expanded = open, onDismiss = { open = false }) {
             PopCard {
-                PickerLead("Switch profile · pinned")
                 // Type-to-filter (web HeaderPicker "Search profiles…"). State lives in
-                // the popup content, so closing the picker resets the query.
+                // the popup content, so closing the picker resets the query and
+                // the tab, which opens on the mode Brew is in (brew-modes §2).
                 var query by remember { mutableStateOf("") }
-                CremaSearchPill(
-                    query = query,
-                    onQueryChange = { query = it },
-                    placeholder = "Search profiles…",
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                    compact = true,
-                )
+                var tab by remember { mutableStateOf(if (recipe != null) PICK_MANUAL else PICK_ESPRESSO) }
+                // Espresso | Manual beside the search box, in the row the
+                // "Switch profile" lead and the search took, so the picker
+                // keeps its height.
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    coffee.crema.ui.components.CremaTabSwitch(
+                        options = listOf(
+                            coffee.crema.ui.components.TabOption(PICK_ESPRESSO, "Espresso"),
+                            coffee.crema.ui.components.TabOption(PICK_MANUAL, "Manual"),
+                        ),
+                        value = tab,
+                        onChange = { tab = it; query = "" },
+                        modifier = Modifier.testTag("brew-mode-tabs"),
+                    )
+                    CremaSearchPill(
+                        query = query,
+                        onQueryChange = { query = it },
+                        placeholder = if (tab == PICK_MANUAL) "Search recipes…" else "Search profiles…",
+                        modifier = Modifier.weight(1f),
+                        compact = true,
+                    )
+                }
+                // §4: the tabs still browse; the locked rows say why.
+                val rowsLocked = pickLock != null && (tab == PICK_ESPRESSO || pickLock.recipesLocked)
+                if (rowsLocked) {
+                    Text(
+                        pickLock!!.note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 10.dp).testTag("brew-pick-lock"),
+                    )
+                }
+                if (tab == PICK_MANUAL) {
+                    RecipePickList(
+                        recipes = recipes,
+                        query = query,
+                        selectedId = recipe?.id,
+                        enabled = !rowsLocked,
+                        onPick = { id -> open = false; onPickRecipe(id) },
+                    )
+                    PickerFootRow(
+                        onOpenLibrary = { open = false; onOpenRecipes() },
+                        onNew = { open = false; onNewRecipe() },
+                        onEdit = { open = false; if (recipe != null) onEditRecipe() else onNewRecipe() },
+                    )
+                    return@PopCard
+                }
                 // Loaded profile first, then pinned, then store order (shared rank).
                 val sorted = rankProfilesForPicker(profiles, active?.id)
                 val shown = sorted.filter {
@@ -687,8 +921,10 @@ private fun ProfileBlock(
                     shown.forEach { p ->
                         val isActive = p.id == active?.id
                         PickRow(
-                            active = isActive,
+                            // In Manual the profile waits for Espresso: no row is "loaded" here.
+                            active = isActive && recipe == null,
                             onClick = { open = false; onSelect(p.id) },
+                            enabled = !rowsLocked,
                             leading = {
                                 // 48×32 mini-curve thumbnail (proto .bh-pick-spark).
                                 Box(
@@ -1004,6 +1240,8 @@ private fun PickRow(
     active: Boolean,
     onClick: () -> Unit,
     leading: @Composable () -> Unit,
+    /** False while the picker is locked (brew-modes §4): dimmed, no tap. */
+    enabled: Boolean = true,
     name: String,
     meta: String,
     favourite: Boolean = false,
@@ -1017,10 +1255,11 @@ private fun PickRow(
     val metaColor = MaterialTheme.colorScheme.onSurfaceVariant
     Surface(
         onClick = onClick,
+        enabled = enabled,
         shape = RoundedCornerShape(10.dp),
         color = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
         contentColor = rowColor,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.45f),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
@@ -1115,6 +1354,85 @@ private fun PopFootIcon(icon: String, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         PhIcon(icon, sizeDp = 16, tint = MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+/** The picker's tabs (brew-modes §2): Espresso lists DE1 profiles, Manual recipes. */
+private const val PICK_ESPRESSO = "espresso"
+private const val PICK_MANUAL = "manual"
+
+/**
+ * The picker's Manual rows: each recipe with its method, dose, water and
+ * time under the name; the search filters by name or method.
+ */
+@Composable
+private fun RecipePickList(
+    recipes: List<coffee.crema.core.BrewRecipe>,
+    query: String,
+    selectedId: String?,
+    enabled: Boolean,
+    onPick: (String) -> Unit,
+) {
+    val summaries = remember(recipes) { recipes.associate { it.id to coffee.crema.ui.BrewSelectionRules.summary(it) } }
+    val q = query.trim()
+    val shown = recipes.filter {
+        q.isEmpty() || it.name.contains(q, ignoreCase = true) ||
+            coffee.crema.brew.methodLabel(it.method).contains(q, ignoreCase = true)
+    }
+    if (shown.isEmpty()) {
+        Text(
+            if (q.isEmpty()) "No recipes yet" else "No recipes match “$q”",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+        )
+    }
+    PopList {
+        shown.forEach { r ->
+            val sum = summaries[r.id]
+            PickRow(
+                active = r.id == selectedId,
+                onClick = { onPick(r.id) },
+                enabled = enabled,
+                leading = {
+                    Box(
+                        Modifier
+                            .size(width = 48.dp, height = 32.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerLowest),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        PhIcon(coffee.crema.brew.methodIcon(r.method), sizeDp = 18, tint = MaterialTheme.colorScheme.primary)
+                    }
+                },
+                name = r.name,
+                meta = listOfNotNull(
+                    coffee.crema.brew.methodLabel(r.method),
+                    sum?.let { "${it.doseG.roundToInt()} g" },
+                    sum?.let { "${it.waterG.roundToInt()} g" },
+                    sum?.estimateLabel()?.let { "~$it" },
+                ).joinToString(" · "),
+            )
+        }
+    }
+}
+
+/** Manual's header action in place of Quick Controls: Duplicate to edit, or Edit recipe. */
+@Composable
+private fun RecipeEditPill(label: String, icon: String, enabled: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(999.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .alpha(if (enabled) 1f else 0.45f)
+            .padding(horizontal = 18.dp, vertical = 9.dp)
+            .testTag("manual-edit-recipe"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        PhIcon(icon, sizeDp = 18, tint = MaterialTheme.colorScheme.onSurface)
+        Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
     }
 }
 
@@ -1919,6 +2237,8 @@ private fun BrewFoot(
     onHotWater: () -> Unit,
     onFlush: () -> Unit,
     onCoffee: () -> Unit,
+    /** Manual (brew-modes §3): its controls in place of Coffee, with Steam and Flush hidden. */
+    manualControls: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier) {
@@ -1983,10 +2303,16 @@ private fun BrewFoot(
                 // Flush all come off the group, so they share one signal.
                 val steamHot = steamAtTemperature(steamTemp, targets.steamTempC)
                 val groupHot = groupAtTemperature(machineSubstate)
-                ModeChip("Steam", steamSub, "cloud", CremaTheme.telemetry.modeSteam, active = steaming, enabled = connected, atTemperature = steamHot, onTap = onSteam)
+                if (manualControls == null) {
+                    ModeChip("Steam", steamSub, "cloud", CremaTheme.telemetry.modeSteam, active = steaming, enabled = connected, atTemperature = steamHot, onTap = onSteam)
+                }
                 ModeChip("Hot water", waterSub, "drop", CremaTheme.telemetry.modeWater, active = dispensing, enabled = connected, atTemperature = groupHot, onTap = onHotWater)
-                ModeChip("Flush", flushSub, "sparkle", CremaTheme.telemetry.modeFlush, active = flushing, enabled = connected, atTemperature = groupHot, onTap = onFlush)
-                CoffeeButton(running = showStop, uploading = profileUploading, enabled = connected, onClick = onCoffee)
+                if (manualControls == null) {
+                    ModeChip("Flush", flushSub, "sparkle", CremaTheme.telemetry.modeFlush, active = flushing, enabled = connected, atTemperature = groupHot, onTap = onFlush)
+                    CoffeeButton(running = showStop, uploading = profileUploading, enabled = connected, onClick = onCoffee)
+                } else {
+                    manualControls()
+                }
             }
         }
     }
