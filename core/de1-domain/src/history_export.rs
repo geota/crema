@@ -243,11 +243,15 @@ fn build_v2_document(shot: &StoredShot, truncate_at_flow_end: bool) -> V2Documen
         .grinder_model
         .clone()
         .or_else(|| shot.bean.as_ref().and_then(|b| b.grinder.clone()));
-    let grinder_setting = shot
+    let dial = shot
         .metadata
         .grinder_setting
         .clone()
         .or_else(|| shot.bean.as_ref().and_then(|b| b.grinder_setting.clone()));
+    // The speed rides on the grind text, "480 700rpm" (owner decision 6);
+    // the import splits it back (`shot_grinder::take_rpm_from_grind`).
+    let grinder_setting =
+        crate::shot_grinder::visualizer_grind_text(dial.as_deref(), shot.grind_rpm);
 
     let profile = profile_out(
         shot.profile.as_ref(),
@@ -1205,6 +1209,76 @@ mod tests {
         // Empty or absent → no bean object.
         assert!(bean_out(None).is_none());
         assert!(bean_out(Some("   ")).is_none());
+    }
+
+    /// The grinding speed rides on the grind text ("480 700rpm", owner
+    /// decision 6), in both places the v2 document has it, and comes back
+    /// apart on import.
+    #[test]
+    fn the_grind_speed_round_trips_on_the_grind_text() {
+        let mut shot = fixture();
+        shot.metadata.grinder_setting = Some("480".into());
+        shot.grind_rpm = Some(700);
+        let exported = export_v2_json_shot(&shot).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&exported).unwrap();
+        assert_eq!(v["meta"]["grinder"]["setting"], "480 700rpm");
+        assert_eq!(
+            v["app"]["data"]["settings"]["grinder_setting"],
+            "480 700rpm"
+        );
+        // The import is additive (review #554 M1): the text stays whole, the
+        // speed is read off it too, and the re-export doesn't append it twice.
+        let parsed = import_v2_json_shot(&exported).expect("re-imports");
+        assert_eq!(
+            parsed.metadata.grinder_setting.as_deref(),
+            Some("480 700rpm")
+        );
+        assert_eq!(parsed.grind_rpm, Some(700));
+        let again: serde_json::Value =
+            serde_json::from_str(&export_v2_json_shot(&parsed).unwrap()).unwrap();
+        assert_eq!(again["meta"]["grinder"]["setting"], "480 700rpm");
+        // Without a speed nothing changes.
+        shot.grind_rpm = None;
+        let parsed = import_v2_json_shot(&export_v2_json_shot(&shot).unwrap()).expect("re-imports");
+        assert_eq!(
+            (parsed.metadata.grinder_setting.as_deref(), parsed.grind_rpm),
+            (Some("480"), None)
+        );
+    }
+
+    /// Review #554 M1: a grind another app wrote with a speed in it comes
+    /// back out byte for byte through import → export, whatever its shape.
+    #[test]
+    fn a_foreign_grind_text_round_trips_byte_identical() {
+        for text in ["15 1200rpm", "1200rpm", "700 RPM", "18 clicks"] {
+            let mut shot = fixture();
+            shot.metadata.grinder_setting = Some(text.into());
+            shot.grind_rpm = None;
+            let file = export_v2_json_shot(&shot).unwrap();
+            let imported = import_v2_json_shot(&file).expect("imports");
+            assert_eq!(
+                imported.metadata.grinder_setting.as_deref(),
+                Some(text),
+                "{text}"
+            );
+            let out: serde_json::Value =
+                serde_json::from_str(&export_v2_json_shot(&imported).unwrap()).unwrap();
+            assert_eq!(out["meta"]["grinder"]["setting"], text, "{text}");
+            assert_eq!(
+                out["app"]["data"]["settings"]["grinder_setting"], text,
+                "{text}"
+            );
+            assert_eq!(
+                export_v2_json_shot(&imported).unwrap(),
+                export_v2_json_shot(&{
+                    let mut s = imported.clone();
+                    s.grind_rpm = None;
+                    s
+                })
+                .unwrap(),
+                "{text}: the speed adds nothing to the file"
+            );
+        }
     }
 
     /// The canonical round-trip: `export → import → equivalence`.

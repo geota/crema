@@ -301,3 +301,226 @@ fn the_capture_never_holds_the_serial_or_the_ssid() {
     }
     assert!(jsonl.contains(&hex("REDACTED")));
 }
+
+// ── Follow mode and the shot observation (G3) ─────────────────────────────
+
+fn selections(grinder: &str, grind: Option<&str>) -> de1_domain::ShotSelections {
+    de1_domain::ShotSelections {
+        grinder_id: Some(grinder.into()),
+        grind: grind.map(str::to_owned),
+        ..de1_domain::ShotSelections::default()
+    }
+}
+
+fn follow_grinds(events: &[Event]) -> Vec<(String, bool)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::FollowGrind { grind, announce } => Some((grind.clone(), *announce)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn gap(state: &str, gap: u32, total: u32) -> String {
+    period(state, total).replace(r#""bladeGap":480"#, &format!(r#""bladeGap":{gap}"#))
+}
+
+/// Linked, active and steady: Brew's grind follows, once per value.
+fn following() -> CremaCore {
+    let mut core = connected();
+    core.set_shot_selections(selections("grinder:motto", Some("500")));
+    core.set_grinder_link(Some("grinder:motto".into()));
+    core
+}
+
+#[test]
+fn brews_grind_follows_a_steady_dial_once_per_value() {
+    let mut core = following();
+    let mut t = 100;
+    let mut asked = Vec::new();
+    for _ in 0..4 {
+        asked.extend(follow_grinds(&feed(&mut core, &gap("IDLE", 480, 1), t)));
+        t += 200;
+    }
+    assert!(asked.is_empty(), "not steady yet");
+    assert_eq!(core.grinder_follow().status, FollowStatus::Waiting);
+    asked.extend(follow_grinds(&feed(&mut core, &gap("IDLE", 480, 1), t)));
+    assert_eq!(asked, [("480".to_owned(), false)]);
+    assert_eq!(core.grinder_follow().status, FollowStatus::Following);
+    assert_eq!(core.grinder_follow().grind.as_deref(), Some("480"));
+    // Not repeated while the shell applies it…
+    t += 200;
+    assert!(follow_grinds(&feed(&mut core, &gap("IDLE", 480, 1), t)).is_empty());
+    // …and once applied, nothing more.
+    core.set_shot_selections(selections("grinder:motto", Some("480")));
+    t += 200;
+    assert!(follow_grinds(&feed(&mut core, &gap("IDLE", 480, 1), t)).is_empty());
+    // A typed value loses to the collar (§5.4).
+    core.set_shot_selections(selections("grinder:motto", Some("470")));
+    assert_eq!(
+        follow_grinds(&core.on_tick(t + 100).events),
+        [("480".to_owned(), false)]
+    );
+    core.set_shot_selections(selections("grinder:motto", Some("480")));
+    // Turning the collar: moving, then the new value once it holds.
+    t += 200;
+    feed(&mut core, &gap("IDLE", 485, 1), t);
+    assert_eq!(core.grinder_follow().moving, Some(true));
+    let mut asked = Vec::new();
+    for _ in 0..5 {
+        t += 200;
+        asked.extend(follow_grinds(&feed(&mut core, &gap("IDLE", 490, 1), t)));
+    }
+    assert_eq!(asked, [("490".to_owned(), false)]);
+}
+
+#[test]
+fn paused_or_another_active_grinder_never_moves_brews_grind() {
+    let mut core = following();
+    core.set_grinder_follow_paused(true);
+    let mut t = 100;
+    let mut events = Vec::new();
+    for _ in 0..6 {
+        events.extend(feed(&mut core, &gap("IDLE", 480, 1), t));
+        t += 200;
+    }
+    assert!(follow_grinds(&events).is_empty());
+    assert_eq!(core.grinder_follow().status, FollowStatus::Paused);
+    assert_eq!(core.followed_grinder_id(), None);
+    // Resuming takes the grinder's value.
+    let out = core.set_grinder_follow_paused(false);
+    assert_eq!(follow_grinds(&out.events), [("480".to_owned(), false)]);
+    assert_eq!(core.followed_grinder_id().as_deref(), Some("grinder:motto"));
+    // Another grinder active: only the chip (decision 4), never a switch.
+    core.set_shot_selections(selections("grinder:niche", Some("14")));
+    let out = core.on_tick(t);
+    assert!(follow_grinds(&out.events).is_empty());
+    let view = core.grinder_follow();
+    assert_eq!(
+        (view.status, view.grinder_id.as_deref()),
+        (FollowStatus::Suggest, Some("grinder:motto"))
+    );
+    assert!(out.events.iter().any(|e| matches!(e, Event::GrinderFollowChanged { follow } if follow.status == FollowStatus::Suggest)));
+    // Not linked: off.
+    core.set_grinder_link(None);
+    assert_eq!(core.grinder_follow(), GrinderFollowView::default());
+}
+
+#[test]
+fn a_drop_goes_stale_and_a_reconnect_announces_a_changed_value() {
+    let mut core = following();
+    let mut t = 100;
+    for _ in 0..5 {
+        feed(&mut core, &gap("IDLE", 480, 1), t);
+        t += 200;
+    }
+    core.set_shot_selections(selections("grinder:motto", Some("480")));
+    core.disconnect_grinder();
+    let view = core.grinder_follow();
+    assert_eq!(
+        (view.status, view.grind.as_deref()),
+        (FollowStatus::Stale, Some("480"))
+    );
+    assert_eq!(core.followed_grinder_id(), None);
+    // Back, with the collar moved meanwhile.
+    core.connect_grinder(NAME, &[]);
+    core.grinder_subscribed(20, t);
+    let mut asked = Vec::new();
+    for _ in 0..5 {
+        t += 200;
+        asked.extend(follow_grinds(&feed(&mut core, &gap("IDLE", 500, 1), t)));
+    }
+    assert_eq!(asked, [("500".to_owned(), true)]);
+    // Unchanged on reconnect: nothing to say.
+    core.set_shot_selections(selections("grinder:motto", Some("500")));
+    core.disconnect_grinder();
+    core.connect_grinder(NAME, &[]);
+    core.grinder_subscribed(20, t);
+    let mut asked = Vec::new();
+    for _ in 0..5 {
+        t += 200;
+        asked.extend(follow_grinds(&feed(&mut core, &gap("IDLE", 500, 1), t)));
+    }
+    assert!(asked.is_empty());
+}
+
+#[test]
+fn a_shot_gets_the_grind_before_it_once_then_the_reading() {
+    let mut core = following();
+    feed(&mut core, &gap("IDLE", 480, 10), 100);
+    for i in 0..30 {
+        feed(&mut core, &gap("GRINDING", 480, 10), 300 + i * 200);
+    }
+    feed(&mut core, &gap("IDLE", 480, 11), 6_300);
+    // A purge after it is never the shot's (decision 9).
+    feed(&mut core, &gap("ADJUSTMENTPURGE", 480, 11), 7_000);
+    feed(&mut core, &gap("IDLE", 480, 11), 9_000);
+    let start = 60_000;
+    let o = core
+        .grinder_observation_for_shot(start, Some("grinder:motto"))
+        .expect("an observation");
+    assert_eq!(
+        o.source,
+        de1_domain::shot_grinder::ObservationSource::LastGrind
+    );
+    assert_eq!(o.setting.as_deref(), Some("480"));
+    assert_eq!(o.grind_rpm, Some(900));
+    assert_eq!(o.grind_ms, Some(6_000));
+    assert_eq!(o.ended_before_shot_ms, Some(53_700));
+    assert_eq!(o.preset, Some(-1));
+    assert_eq!(o.model.as_deref(), Some("bookoo-motto-80"));
+    // The next shot doesn't reuse it: the reading at its start.
+    let o = core
+        .grinder_observation_for_shot(start + 1_000, Some("grinder:motto"))
+        .expect("the reading");
+    assert_eq!(
+        o.source,
+        de1_domain::shot_grinder::ObservationSource::AtShotStart
+    );
+    assert_eq!((o.grind_ms, o.ended_before_shot_ms), (None, None));
+    // A shot on another grinder gets nothing from this one.
+    assert_eq!(
+        core.grinder_observation_for_shot(start, Some("grinder:niche")),
+        None
+    );
+}
+
+/// A grind from `from` to `to` at 5 Hz, then idle.
+fn grind(core: &mut CremaCore, from: u64, to: u64) {
+    let mut t = from;
+    while t < to {
+        feed(core, &gap("GRINDING", 480, 10), t);
+        t += 200;
+    }
+    feed(core, &gap("IDLE", 480, 11), to);
+}
+
+#[test]
+fn a_grind_older_than_ten_minutes_is_not_the_shots() {
+    let mut core = following();
+    grind(&mut core, 100, 5_100);
+    let late = 5_100 + de1_domain::shot_grinder::GRIND_ATTRIBUTION_WINDOW_MS + 1;
+    let o = core
+        .grinder_observation_for_shot(late, Some("grinder:motto"))
+        .expect("reading");
+    assert_eq!(
+        o.source,
+        de1_domain::shot_grinder::ObservationSource::AtShotStart
+    );
+    // Dropped and gone: a grind before the drop still counts, nothing else.
+    let mut core = following();
+    grind(&mut core, 100, 5_100);
+    core.disconnect_grinder();
+    let o = core
+        .grinder_observation_for_shot(60_000, Some("grinder:motto"))
+        .expect("the grind");
+    assert_eq!(
+        o.source,
+        de1_domain::shot_grinder::ObservationSource::LastGrind
+    );
+    assert_eq!(
+        core.grinder_observation_for_shot(61_000, Some("grinder:motto")),
+        None
+    );
+}

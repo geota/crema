@@ -120,6 +120,7 @@ pub mod settings_import;
 pub mod shot;
 pub mod shot_capture;
 pub mod shot_effects;
+pub mod shot_grinder;
 pub mod shot_merge;
 pub mod shot_quality;
 pub mod shot_summary;

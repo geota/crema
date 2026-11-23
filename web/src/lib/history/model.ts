@@ -419,6 +419,14 @@ export interface StoredShot {
 	 * `StoredShot::mirror_copy`; absent when false.
 	 */
 	mirrorCopy?: boolean;
+	/**
+	 * What a connected grinder reported for the shot (#488 phase 2): core
+	 * `StoredShot::grinder_observed`, a `ShotGrinderObservation`. Kept as the
+	 * object it came in, so a newer build's fields survive; absent = none.
+	 */
+	grinderObserved?: Record<string, unknown>;
+	/** Grinding speed, rpm: core `StoredShot::grind_rpm`; absent = none. */
+	grindRpm?: number;
 }
 
 /**

@@ -869,6 +869,9 @@ pub struct CremaCore {
     /// [`Self::shot_selections`] frozen on the current shot's start
     /// (REVIEW-CORE H3), whoever started it: the shot records this copy.
     shot_selections_at_start: Option<ShotSelections>,
+    /// What the connected grinder reported for the current shot, chosen at
+    /// its start (SPEC grinder-ble §4.2).
+    shot_grinder_observed: Option<de1_domain::shot_grinder::ShotGrinderObservation>,
     /// The first stop the core commanded for the current shot, if any.
     shot_stop_reason: Option<StopReason>,
     /// The last finished shot, waiting for the shell's
@@ -1213,6 +1216,7 @@ impl CremaCore {
             shot_as_run: None,
             shot_selections: ShotSelections::default(),
             shot_selections_at_start: None,
+            shot_grinder_observed: None,
             shot_stop_reason: None,
             pending_shot: None,
             capture: CaptureRecorder::default(),
@@ -3410,8 +3414,10 @@ impl CremaCore {
         self.clock = self.clock.max(now);
         let mut out = CoreOutput::default();
         self.poll_scale_watch(now, &mut out);
-        // The grinder's first-reading and silence deadlines.
+        // The grinder's first-reading and silence deadlines, and follow mode
+        // (Brew's selections may have changed since the last reading).
         self.tick_grinder(now_ms, &mut out);
+        self.drive_follow(&mut out);
         // A scale going stale or dead changes the legs with no reading.
         self.refresh_auto_stop_targets();
         // An owed stop is retried on the clock, with no telemetry at all.
@@ -5875,6 +5881,7 @@ impl CremaCore {
                 .shot_selections_at_start
                 .take()
                 .unwrap_or_else(|| self.shot_selections.clone()),
+            grinder_observed: self.shot_grinder_observed.take(),
         });
         // Drip learning (Decenza SAW learning): the measured sample is (final
         // settled weight − weight at the stop trigger) at the trigger's flow.
@@ -5978,6 +5985,11 @@ impl CremaCore {
                 // the machine's own start, so a group-head start records the
                 // same bag, profile, grinder and grind an app start does.
                 self.shot_selections_at_start = Some(self.shot_selections.clone());
+                // The grind before this shot, or the grinder's reading now.
+                let start_ms = u64::try_from(now.as_millis()).unwrap_or(u64::MAX);
+                let shot_grinder = self.shot_selections.grinder_id.clone();
+                self.shot_grinder_observed =
+                    self.grinder_observation_for_shot(start_ms, shot_grinder.as_deref());
                 self.shot_stop_reason = None;
                 // Flow hasn't begun yet (the shot opens in the heating phase) —
                 // the elapsed clock is zeroed at the first preinfusion/pouring
@@ -14357,6 +14369,54 @@ mod tests {
                     let shot = core.take_stored_shot(ctx()).expect("a shot");
                     assert_eq!(shot.metadata.dose, Some(20.5));
                     assert_eq!(shot.yield_target, Some(41.0));
+                }
+
+                /// The connected grinder's grind before a shot is stamped on
+                /// it, with its speed (SPEC grinder-ble §4.2), end to end.
+                #[test]
+                fn a_shot_records_the_grind_before_it() {
+                    let mut core = connected();
+                    assert_eq!(
+                        core.connect_grinder("BOOKOO MT80 1a2b3c4d", &[]).as_deref(),
+                        Some("bookoo-motto-80")
+                    );
+                    core.grinder_subscribed(20, 0);
+                    core.set_grinder_link(Some("grinder:motto".into()));
+                    core.set_shot_selections(de1_domain::ShotSelections {
+                        grinder_id: Some("grinder:motto".into()),
+                        grinder_name: Some("Motto 80".into()),
+                        grind: Some("480".into()),
+                        ..de1_domain::ShotSelections::default()
+                    });
+                    let send = |core: &mut CremaCore, state: &str, total: u32, t: u64| {
+                        let msg = format!(
+                            r#"{{"broadcast":{{"periodInfo":{{"bladeGap":480,"grindRpm":900,"feedingRpm":40,"devState":"{state}","totalGrinds":{total},"selectPreset":-1}}}}}}"#
+                        );
+                        for f in de1_grinder::bookoo_motto80::encode(msg.as_bytes(), 1, 20) {
+                            core.on_notification(Source::GrinderNotify, &f, t);
+                        }
+                    };
+                    let mut t = 100;
+                    while t < 600 {
+                        send(&mut core, "GRINDING", 10, t);
+                        t += 100;
+                    }
+                    send(&mut core, "IDLE", 11, 700);
+                    pour(&mut core, 900);
+                    let shot = core.take_stored_shot(ctx()).expect("a shot");
+                    let o = shot.grinder_observed.as_ref().expect("the grind before it");
+                    assert_eq!(
+                        o.source,
+                        de1_domain::shot_grinder::ObservationSource::LastGrind
+                    );
+                    assert_eq!(o.setting.as_deref(), Some("480"));
+                    assert_eq!(shot.grind_rpm, Some(900));
+                    assert_eq!(shot.metadata.grinder_setting.as_deref(), Some("480"));
+                    assert_eq!(shot.grinder_id.as_deref(), Some("grinder:motto"));
+                    assert_eq!(
+                        de1_domain::shot_grinder::grind_provenance(&shot),
+                        de1_domain::shot_grinder::GrindProvenance::Observed
+                    );
                 }
 
                 #[test]

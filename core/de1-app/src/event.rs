@@ -545,6 +545,22 @@ pub enum Event {
         /// The oldest firmware that works, for display.
         minimum: String,
     },
+    /// Follow mode changed (SPEC grinder-ble §5): what Brew's Grind cell
+    /// shows — following, paused, stale, the "Use ‹grinder›" chip.
+    GrinderFollowChanged {
+        /// Follow mode now.
+        follow: crate::grinder::GrinderFollowView,
+    },
+    /// Following: set Brew's grind to `grind`, the grinder's steady dial
+    /// value (§5.2). Sent when it differs from Brew's grind; again if Brew's
+    /// grind drifts from it (the collar wins over a typed value, §5.4).
+    FollowGrind {
+        /// The grind as text ("480").
+        grind: String,
+        /// Say so: a reconnect changed Brew's grind ("Grind 500 μm from your
+        /// Motto 80").
+        announce: bool,
+    },
     /// A grind or purge on the connected grinder finished (or was cut off by
     /// a drop). The core also keeps the last 20 (`CremaCore::recent_grinds`).
     GrindCompleted {

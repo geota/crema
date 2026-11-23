@@ -134,6 +134,8 @@ pub fn import_legacy_tcl_shot(content: &str) -> Result<StoredShot, ImportError> 
         stored = stored.with_profile(profile);
     }
     stored.format_version = STORED_SHOT_FORMAT_VERSION;
+    // "480 700rpm" (decision 6's Visualizer text) is a grind and a speed.
+    crate::shot_grinder::take_rpm_from_grind(&mut stored);
     Ok(stored)
 }
 
@@ -217,6 +219,8 @@ pub fn import_v2_json_shot(content: &str) -> Result<StoredShot, ImportError> {
         stored.metadata.drinker = settings_name(app.data.settings.drinker_name.as_ref());
     }
     stored.format_version = STORED_SHOT_FORMAT_VERSION;
+    // "480 700rpm" (decision 6's Visualizer text) is a grind and a speed.
+    crate::shot_grinder::take_rpm_from_grind(&mut stored);
     Ok(stored)
 }
 

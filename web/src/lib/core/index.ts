@@ -277,6 +277,10 @@ export interface RustStoredShot {
 	recipeName?: string | null;
 	/** Weight-only guided-session telemetry (Rust `BrewSeries`). */
 	brewSeries?: import('./crema-core').BrewSeries | null;
+	/** What a connected grinder reported (Rust `grinder_observed`). */
+	grinderObserved?: Record<string, unknown> | null;
+	/** Grinding speed, rpm (Rust `grind_rpm`): an imported "15 1200rpm" fills it. */
+	grindRpm?: number | null;
 }
 
 /**

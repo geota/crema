@@ -55,6 +55,12 @@ interface ShotMeta {
     val pinned: Boolean
     val replay: Boolean
     val mirrorCopy: Boolean
+    /** What a connected grinder reported for the shot (core
+     *  `StoredShot::grinder_observed`, a `ShotGrinderObservation`), kept as
+     *  JSON so a newer build's fields survive a re-save here; null = none. */
+    val grinderObserved: kotlinx.serialization.json.JsonObject?
+    /** Grinding speed, rpm (core `StoredShot::grind_rpm`). */
+    val grindRpm: Int?
     val machineSerial: String?
     val machineFirmware: String?
     val machineModel: String?
@@ -101,6 +107,8 @@ data class ShotRow(
     override val pinned: Boolean = false,
     override val replay: Boolean = false,
     override val mirrorCopy: Boolean = false,
+    override val grinderObserved: kotlinx.serialization.json.JsonObject? = null,
+    override val grindRpm: Int? = null,
     override val machineSerial: String? = null,
     override val machineFirmware: String? = null,
     override val machineModel: String? = null,
@@ -121,7 +129,8 @@ fun StoredShot.toRow(summary: ShotSummary): ShotRow = ShotRow(
     notes = notes, nextPlan = nextPlan, barista = barista, drinker = drinker, grinderModel = grinderModel, grinderId = grinderId,
     tags = tags, preinfuseTargetS = preinfuseTargetS, stopOnWeight = stopOnWeight, autoTare = autoTare,
     stopReason = stopReason, stopEstimated = stopEstimated, privacy = privacy, visualizerId = visualizerId,
-    decentId = decentId, visualizerUpdatedAt = visualizerUpdatedAt, pinned = pinned, replay = replay, mirrorCopy = mirrorCopy, machineSerial = machineSerial,
+    decentId = decentId, visualizerUpdatedAt = visualizerUpdatedAt, pinned = pinned, replay = replay, mirrorCopy = mirrorCopy,
+    grinderObserved = grinderObserved, grindRpm = grindRpm, machineSerial = machineSerial,
     machineFirmware = machineFirmware, machineModel = machineModel, brewMethod = brewMethod,
     brewMethodLabel = brewMethodLabel, recipeName = recipeName, waterG = waterG, brewTempC = brewTempC,
     summary = summary,
@@ -144,7 +153,8 @@ fun ShotRow.withHeavy(
     grinderModel = grinderModel, grinderId = grinderId, samples = samples, tags = tags, preinfuseTargetS = preinfuseTargetS,
     stopOnWeight = stopOnWeight, autoTare = autoTare, stopReason = stopReason, stopEstimated = stopEstimated,
     privacy = privacy, visualizerId = visualizerId, decentId = decentId, visualizerUpdatedAt = visualizerUpdatedAt,
-    pinned = pinned, replay = replay, mirrorCopy = mirrorCopy, machineSerial = machineSerial, machineFirmware = machineFirmware, machineModel = machineModel,
+    pinned = pinned, replay = replay, mirrorCopy = mirrorCopy, grinderObserved = grinderObserved, grindRpm = grindRpm,
+    machineSerial = machineSerial, machineFirmware = machineFirmware, machineModel = machineModel,
     brewMethod = brewMethod, brewMethodLabel = brewMethodLabel, recipeName = recipeName, waterG = waterG,
     brewTempC = brewTempC, brewSeries = brewSeries,
 )
