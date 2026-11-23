@@ -15,6 +15,8 @@ import coffee.crema.ui.activeBag
 import coffee.crema.ui.activeGrinder
 import coffee.crema.ui.activeGrindScale
 import coffee.crema.ui.brewGrindView
+import coffee.crema.ui.followSuggestion
+import coffee.crema.ui.grindHeaderText
 import coffee.crema.ui.liveGrinders
 import coffee.crema.ui.savedGrindForBrew
 import coffee.crema.ui.headerText
@@ -1127,18 +1129,25 @@ private fun GrinderBlock(vm: MainViewModel, ui: coffee.crema.ui.MainUiState, onN
             extra = {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        grindView.headerText(),
+                        // "Grind 480 μm · from grinder" in follow mode (grinder-ble §5.2).
+                        ui.grindHeaderText(),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                     )
                     if (marker != null) coffee.crema.ui.components.UnsavedGrindMarker(marker, ui.unsavedGrindExplanation())
+                    // "Use ‹grinder›" (§5.4, decision 4): a suggestion, never a switch on its own.
+                    ui.followSuggestion()?.let { g ->
+                        CremaButton(onClick = { if (gate.editable) vm.setActiveGrinder(g.id) }, variant = CremaButtonVariant.Tonal, label = "Use ${g.name}")
+                    }
                 }
             },
         )
         CremaAnchoredPopup(expanded = open, onDismiss = { open = false; adding = false }) {
             PopCard {
                 PickerLead(listOfNotNull("Your grinders", bag?.name).joinToString(" · "))
+                // Follow mode: pause, resume, or use the connected grinder (grinder-ble §5).
+                coffee.crema.ui.components.GrinderFollowControls(vm, ui, Modifier.padding(top = 8.dp))
                 val lastGrinds = remember(bag?.id, ui.history.version) { bag?.let { vm.lastGrindsForBag(it.id) }.orEmpty() }
                 val rows = coffee.crema.ui.grinderPickRows(ui.liveGrinders, bag, lastGrinds)
                 PopList {

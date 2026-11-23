@@ -266,6 +266,8 @@ fun storedShotFromWire(wire: JsonObject, samplesJson: String?, json: kotlinx.ser
         // The whole pulled series (F10): a re-upload must reproduce it.
         samples = samples,
         visualizerId = vid,
+        // "480 700rpm" stays whole on the bean; the core read its speed off it.
+        grindRpm = beanStr("grind_rpm")?.toIntOrNull()?.takeIf { it > 0 },
     )
 }
 

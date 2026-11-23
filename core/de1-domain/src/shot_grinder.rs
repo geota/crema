@@ -123,15 +123,20 @@ pub fn grind_provenance_json(shot_json: &str) -> Result<String, String> {
 /// The grind text Visualizer gets: the setting with the speed appended,
 /// "480 700rpm", as the community writes it (owner decision 6). The setting
 /// alone without a speed; the speed alone ("700rpm") without a setting;
-/// `None` with neither. A setting that already ends in this speed (a shot
-/// imported or pulled as "15 1200rpm") goes out as it is, never twice.
+/// `None` with neither. A setting that already ends in a speed (a shot
+/// imported or pulled as "15 1200rpm") never gets a second one: the same
+/// speed goes out as it is, a different one takes its place ("15 1300rpm").
 #[must_use]
 pub fn visualizer_grind_text(setting: Option<&str>, grind_rpm: Option<u32>) -> Option<String> {
     let setting = setting.map(str::trim).filter(|s| !s.is_empty());
-    if let (Some(s), Some(rpm)) = (setting, grind_rpm)
-        && split_visualizer_grind(s).1 == Some(rpm)
-    {
-        return Some(s.to_owned());
+    if let (Some(s), Some(rpm)) = (setting, grind_rpm) {
+        let (dial, had) = split_visualizer_grind(s);
+        match had {
+            Some(had) if had == rpm => return Some(s.to_owned()),
+            Some(_) if dial.is_empty() => return Some(format!("{rpm}rpm")),
+            Some(_) => return Some(format!("{dial} {rpm}rpm")),
+            None => {}
+        }
     }
     match (setting, grind_rpm) {
         (Some(s), Some(rpm)) => Some(format!("{s} {rpm}rpm")),
@@ -258,6 +263,19 @@ mod tests {
         assert_eq!(
             visualizer_grind_text(Some("480"), Some(700)).as_deref(),
             Some("480 700rpm")
+        );
+        // A different speed takes the old one's place (review #555 M1).
+        assert_eq!(
+            visualizer_grind_text(Some("15 1200rpm"), Some(1300)).as_deref(),
+            Some("15 1300rpm")
+        );
+        assert_eq!(
+            visualizer_grind_text(Some("1200rpm"), Some(800)).as_deref(),
+            Some("800rpm")
+        );
+        assert_eq!(
+            visualizer_grind_text(Some("480 700rpm"), Some(800)).as_deref(),
+            Some("480 800rpm")
         );
         // Already there (an imported "15 1200rpm"): never twice.
         assert_eq!(

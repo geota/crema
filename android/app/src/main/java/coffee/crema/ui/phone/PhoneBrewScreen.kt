@@ -75,6 +75,8 @@ import coffee.crema.ui.activeBag
 import coffee.crema.ui.activeGrinder
 import coffee.crema.ui.activeGrindScale
 import coffee.crema.ui.brewGrindView
+import coffee.crema.ui.followSuggestion
+import coffee.crema.ui.grindHeaderText
 import coffee.crema.ui.gate
 import coffee.crema.ui.liveGrinders
 import coffee.crema.ui.headerText
@@ -200,6 +202,7 @@ fun PhoneBrewScreen(
                         onAllBeans = { swapOpen = false; onNav("beans") },
                         onSelectGrinder = { vm.setActiveGrinder(it); swapOpen = false },
                         onManageGrinders = { swapOpen = false; vm.openDevicesTab("grinder"); onNav("scale") },
+                        followControls = { coffee.crema.ui.components.GrinderFollowControls(vm, ui) },
                         lastGrinds = { id -> vm.lastGrindsForBag(id) },
                         onDismiss = { swapOpen = false },
                     )
@@ -437,7 +440,7 @@ internal fun beanLine(ui: MainUiState): String {
  *  suffix), after the unsaved-grind marker. Null with neither a grind nor a grinder. */
 internal fun beanSpecLine(ui: MainUiState): String? {
     val view = ui.brewGrindView()
-    return if (view.value != null || ui.activeGrinder() != null) view.headerText() else null
+    return if (view.value != null || ui.activeGrinder() != null) ui.grindHeaderText() else null
 }
 
 // ── Profile strip (proto .pf-profilestrip) ───────────────────────────────────
@@ -541,6 +544,8 @@ private fun SwapDropdown(
     onDismiss: () -> Unit,
     onSelectGrinder: (String?) -> Unit = {},
     onManageGrinders: () -> Unit = {},
+    /** Follow mode's controls under the Grinder head (grinder-ble §5). */
+    followControls: @Composable () -> Unit = {},
     lastGrinds: (String) -> List<coffee.crema.core.LastGrind> = { emptyList() },
     /** The recipes, most recent first. */
     recipes: List<coffee.crema.core.BrewRecipe> = emptyList(),
@@ -602,6 +607,7 @@ private fun SwapDropdown(
                         // each has saved for the bag, under Profile and Bean.
                         DdDivider()
                         DdSectionHead("Grinder", "Manage grinders →", onManageGrinders)
+                        followControls()
                         grinderRows.forEach { row ->
                             coffee.crema.ui.components.GrinderPickerRow(row, active = row.grinder.id == activeGrinder?.id, onClick = { if (grinderGate.editable) onSelectGrinder(row.grinder.id) })
                         }

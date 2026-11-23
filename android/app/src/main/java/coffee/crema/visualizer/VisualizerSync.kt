@@ -2456,6 +2456,8 @@ internal fun shotPatchInputs(
     // reference setting — the same precedence History displays
     // (issue #16: a grind edit must reach the uploaded copy).
     grinderSetting = shot.effectiveGrindSetting?.takeIf { sendJournal },
+    // The speed rides on the grind text, "480 700rpm" (core, owner decision 6).
+    grindRpm = shot.grindRpm?.takeIf { it > 0 && sendJournal }?.toUInt(),
     // Who made it → `barista` (a free-account field; no drinker field).
     // Only after a barista edit ([sendBarista]); null = the core leaves the
     // remote value alone. Empty once cleared, so a clear reaches Visualizer.

@@ -761,6 +761,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             persistPrefs()
+            // A remote never holds the grinder link (the hub owns the grinder):
+            // the core drops it, a hub or normal device takes it back.
+            grinderController.syncCoreLink()
         },
         // The re-find reattached on a new port of the saved host: that is
         // the remote's target now (same role, same hub, nothing to drop).
@@ -941,6 +944,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         notify = { notifyUser(it) },
         persistPrefs = { persistPrefs() },
         addFromCatalogue = { presetId -> library.addGrinder("", presetId) },
+        setCoreLink = { id -> lane.deliver(bridge.setGrinderLink(id)) },
+        effectiveState = { effectiveState() },
+        setCorePaused = { paused -> lane.deliver(bridge.setGrinderFollowPaused(paused)) },
+        // The collar sets Brew's grind: the typed-grind path, persisted and mirrored.
+        applyFollowGrind = { grind -> machine.execute(MachineCommand.SetGrind(grind)) },
     )
 
     /**
@@ -2426,6 +2434,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Change or clear the grinder a stored shot names; its id follows through the core (N7). */
     fun setShotGrinder(id: String, name: String?) = library.setShotGrinder(id, name)
 
+    /** Set (null clears) a stored shot's grinding speed, rpm (the shot editor's RPM field). */
+    fun setShotGrindRpm(id: String, rpm: Int?) = library.setShotGrindRpm(id, rpm)
+
     /**
      * Prefill Brew from a logged shot — "start from this shot". Re-activates
      * the shot's bag (while it still exists un-archived), loads its profile
@@ -3427,6 +3438,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** "Reconnect" on the grinder card (after it stopped sending data). */
     fun reconnectGrinder() = grinderController.reconnect()
+
+    /** Brew's grinder menu: "Pause following" for this session, or resume. */
+    fun pauseGrinderFollowing(paused: Boolean) = grinderController.pauseFollowing(paused)
 
     /** "Retry now" on the grinder card. */
     fun retryGrinder() = grinderController.kickReconnect(coffee.crema.ble.ReconnectTrigger.USER_RETRY)

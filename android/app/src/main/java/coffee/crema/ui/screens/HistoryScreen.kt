@@ -674,6 +674,7 @@ fun HistoryScreen(
                             beans = ui.beans,
                             roasters = ui.roasters,
                             onGrindChange = { g, scale -> vm.setShotGrind(selected.id, g, scale) },
+                            onGrindRpmChange = { rpm -> vm.setShotGrindRpm(selected.id, rpm) },
                             grinders = ui.grinders,
                             onGrinderChange = { name -> vm.setShotGrinder(selected.id, name) },
                             onBeanChange = { bid -> vm.setShotBean(selected.id, bid) },
@@ -993,6 +994,8 @@ private fun ShotDetail(
     roasters: List<coffee.crema.core.Roaster> = emptyList(),
     /** Edit the grind recorded on this shot (issue #16): a number on the shot's grinder's scale. */
     onGrindChange: (Double, coffee.crema.core.GrindScale) -> Unit = { _, _ -> },
+    /** Edit the shot's grinding speed, rpm (null clears; grinder-ble §4.2). */
+    onGrindRpmChange: (Int?) -> Unit = {},
     /** The grinders, for the shot's grind scale (#488). */
     grinders: List<coffee.crema.core.Grinder> = emptyList(),
     /** Change or clear the grinder this shot names (N7); null clears. */
@@ -1415,7 +1418,11 @@ private fun ShotDetail(
                 Eyebrow("Grind")
                 coffee.crema.ui.components.ShotGrindStepper(shot, grinders, onGrindChange)
             }
+            // The grinder's speed (grinder-ble §4.2), on variable-speed grinders.
+            coffee.crema.ui.components.ShotRpmField(shot, grinders, onGrindRpmChange)
         }
+        // What the connected grinder said (§7): "From Motto 80 · 700 rpm …", "Edited (grinder said 480)".
+        coffee.crema.ui.components.ShotGrinderObservedLine(shot)
         // The grinder the shot names (N7): its id follows the name through the core.
         val grinderNames = remember(grinders) { grinders.filter { it.archivedAt == null && it.deletedAt == null }.map { it.name } }
         coffee.crema.ui.components.ShotGrinderField(shot.id, shot.grinderModel, grinderNames, onGrinderChange)
