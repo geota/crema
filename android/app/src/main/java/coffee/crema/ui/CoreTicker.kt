@@ -31,6 +31,7 @@ internal class CoreTicker(
     private var job: Job? = null
     private var de1Up = false
     private var scaleUp = false
+    private var grinderUp = false
 
     /** Whether the clock is running. */
     val running: Boolean get() = job?.isActive == true
@@ -47,8 +48,15 @@ internal class CoreTicker(
         follow()
     }
 
+    /** Follow the grinder link [state]: its first-reading and silence
+     *  deadlines run on the core's tick, so a grinder alone keeps it going. */
+    fun onGrinderState(state: coffee.crema.ble.GrinderBleManager.State) {
+        grinderUp = ticks(state)
+        follow()
+    }
+
     private fun follow() {
-        if (de1Up || scaleUp) start() else stop()
+        if (de1Up || scaleUp || grinderUp) start() else stop()
     }
 
     fun start() {
@@ -79,6 +87,17 @@ internal class CoreTicker(
             De1BleManager.State.IDLE,
             De1BleManager.State.SCANNING,
             De1BleManager.State.DISCONNECTED -> false
+        }
+
+        /** Grinder link states in which the core ticks (the same rule). */
+        fun ticks(state: coffee.crema.ble.GrinderBleManager.State): Boolean = when (state) {
+            coffee.crema.ble.GrinderBleManager.State.CONNECTING,
+            coffee.crema.ble.GrinderBleManager.State.DISCOVERING,
+            coffee.crema.ble.GrinderBleManager.State.SUBSCRIBING,
+            coffee.crema.ble.GrinderBleManager.State.READY -> true
+            coffee.crema.ble.GrinderBleManager.State.IDLE,
+            coffee.crema.ble.GrinderBleManager.State.SCANNING,
+            coffee.crema.ble.GrinderBleManager.State.DISCONNECTED -> false
         }
 
         /** Scale link states in which the core ticks (the same rule). */

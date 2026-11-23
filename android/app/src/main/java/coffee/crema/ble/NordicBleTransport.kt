@@ -513,6 +513,20 @@ class NordicBleTransport(context: Context) : BleTransport {
         }
     }
 
+    override suspend fun requestLargeMtu(device: BleTransport.DeviceHandle): Int? {
+        val handle = device as NordicDeviceHandle
+        val peripheral = peripherals[handle] ?: return null
+        // Nordic's public MTU call asks for the highest (517), like decaid.
+        return runCatching {
+            withTimeout(5_000) { peripheral.requestHighestValueLength() }
+            peripheral.mtu.value
+        }.onSuccess {
+            Log.i(TAG, "MTU for ${handle.address}: $it")
+        }.onFailure {
+            Log.i(TAG, "MTU request not applied for ${handle.address}: ${it.message}")
+        }.getOrNull()
+    }
+
     override suspend fun enableNotifications(
         device: BleTransport.DeviceHandle,
         service: UUID,

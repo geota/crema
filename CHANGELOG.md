@@ -7,6 +7,16 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Connected grinders (beta, Android)** — Settings → Connected grinders
+  connects a BOOKOO Motto 80 over Bluetooth. Devices → Grinder then shows it
+  live: burr gap, speed, feeder, state, humidity, lifetime grinds, firmware,
+  and the last grind. It links to the grinder in your list, or offers to add
+  it, reconnects on its own, and pauses during a DE1 firmware update. If it
+  can't be found or doesn't answer, it says to close the BOOKOO app first. Off
+  by default; nothing is written to the grinder (#488).
+
 ### Changed
 
 - **A shot records the grinder in use, not the bag's** — a new shot is

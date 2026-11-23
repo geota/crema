@@ -293,6 +293,19 @@ data class AppPrefs(
      *  scans to zero with the screen off, reaprime #107) while still telling
      *  the core codec which scale it is. Additive → nullable. */
     val scaleName: String? = null,
+    /** Remembered grinder Bluetooth address and advertised name: the same
+     *  per-device auto-connect rule as the scale's (grinder-ble decision 7:
+     *  a grinder's identity is stored like a scale's and the DE1's). */
+    val grinderAddress: String? = null,
+    val grinderName: String? = null,
+    /** The owned grinder record ([coffee.crema.core.Grinder] id) the grinder at
+     *  [grinderLinkedAddress] is linked to (SPEC grinder-ble §6.1). Per device,
+     *  beside the address it belongs to; not library data. */
+    val grinderLinkedAddress: String? = null,
+    val grinderLinkedId: String? = null,
+    /** Settings → Connected grinders (beta): off by default until the
+     *  hardware gate passes (SPEC grinder-ble §8). */
+    val connectedGrinders: Boolean = false,
     // ── Multi-device LAN proxy: hub and remotes ──────────────────────────────
     /** Proxy role — `"normal" | "primary" | "secondary"` (users see normal,
      *  hub, remote). `normal` = today's single-device behaviour. Set live by the
@@ -531,6 +544,11 @@ private data class PersistedPrefs(
     val de1Address: String? = null,
     val scaleAddress: String? = null,
     val scaleName: String? = null,
+    val grinderAddress: String? = null,
+    val grinderName: String? = null,
+    val grinderLinkedAddress: String? = null,
+    val grinderLinkedId: String? = null,
+    val connectedGrinders: Boolean = false,
     val proxyRole: String = "normal",
     val proxyPrimaryHost: String = "",
     val proxyPrimaryPort: Int = 0,
@@ -562,6 +580,11 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     de1Address = de1Address,
     scaleAddress = scaleAddress,
     scaleName = scaleName,
+    grinderAddress = grinderAddress,
+    grinderName = grinderName,
+    grinderLinkedAddress = grinderLinkedAddress,
+    grinderLinkedId = grinderLinkedId,
+    connectedGrinders = connectedGrinders,
     proxyRole = proxyRole,
     proxyPrimaryHost = proxyPrimaryHost,
     proxyPrimaryPort = proxyPrimaryPort,
@@ -592,6 +615,11 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     de1Address = de1Address,
     scaleAddress = scaleAddress,
     scaleName = scaleName,
+    grinderAddress = grinderAddress,
+    grinderName = grinderName,
+    grinderLinkedAddress = grinderLinkedAddress,
+    grinderLinkedId = grinderLinkedId,
+    connectedGrinders = connectedGrinders,
     proxyRole = proxyRole,
     proxyPrimaryHost = proxyPrimaryHost,
     proxyPrimaryPort = proxyPrimaryPort,

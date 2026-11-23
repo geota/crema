@@ -82,6 +82,9 @@ class ConnectionController(
     /** A user-initiated scale disconnect: clear the scale UI slice
      *  (readings, capabilities, identity). */
     private val onScaleSessionClosed: () -> Unit,
+    /** [kickReconnect] for the devices this controller doesn't own (the
+     *  connected grinder). */
+    private val kickOthers: (ReconnectTrigger) -> Unit = {},
     /** The DE1 just reached READY (once per connection): fire the
      *  machine read-sweep. */
     private val onDe1Ready: () -> Unit,
@@ -516,6 +519,7 @@ class ConnectionController(
     fun kickReconnect(trigger: ReconnectTrigger) {
         runCatching { kickDe1(trigger) }.onFailure { appendLog("DE1 reconnect kick failed: ${it.message}") }
         runCatching { kickScale(trigger) }.onFailure { appendLog("Scale reconnect kick failed: ${it.message}") }
+        runCatching { kickOthers(trigger) }.onFailure { appendLog("Reconnect kick failed: ${it.message}") }
     }
 
     /**

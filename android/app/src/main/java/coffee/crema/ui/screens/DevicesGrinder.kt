@@ -57,6 +57,7 @@ import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.GrinderAddBox
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.liveGrinders
+import coffee.crema.ui.linkedGrinder
 import coffee.crema.beans.newestShotGrind
 import coffee.crema.ui.presetLabel
 import coffee.crema.ui.remoteAutoSaveNote
@@ -93,6 +94,8 @@ fun DevicesGrinderContent(vm: MainViewModel, ui: MainUiState, wide: Boolean, mod
 
     val list: @Composable (Modifier) -> Unit = { m ->
         Column(m, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // The connected grinder, behind Settings → Connected grinders (beta).
+            if (ui.connectedGrinders) ConnectedGrinderCard(vm, ui)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Your grinders", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                 CremaButton(onClick = { adding = !adding }, variant = CremaButtonVariant.Tonal, icon = "plus", label = "Add grinder")
@@ -189,7 +192,7 @@ fun DevicesGrinderContent(vm: MainViewModel, ui: MainUiState, wide: Boolean, mod
             if (selected != null) {
                 Column {
                     Text(selected.name, style = MaterialTheme.typography.titleMedium)
-                    Text("Set by hand · Bluetooth comes later", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(if (ui.connectedGrinders && ui.linkedGrinder()?.id == selected.id) "Linked to the connected grinder" else "Set by hand", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             list(Modifier)

@@ -141,6 +141,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             ble.writeCharacteristic(target, bytes, urgent = urgent, ackUploadId = ackUploadId)
         },
         writeScale = { bytes -> scale.writeCommand(bytes) },
+        writeGrinder = { bytes -> grinder.writeCommand(bytes) },
         readState = { ble.readState() },
         profileWriteFailed = { id -> bridge.profileWriteFailed(SystemClock.elapsedRealtime().toULong(), id) },
         faults = faults,
@@ -713,7 +714,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         appendLog = { appendLog(it) },
         connect = { connect() },
         disconnect = { disconnect() },
-        disconnectDevices = { ble.disconnect(); scale.disconnect() },
+        disconnectDevices = { ble.disconnect(); scale.disconnect(); grinder.disconnect() },
         connectScale = { connectScale() },
         scaleAttachWanted = {
             scale.state.value.let { it != ScaleBleManager.State.READY && it != ScaleBleManager.State.SCANNING }
@@ -738,6 +739,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // streams — the DE1 ShotSample and the scale weight — stay live-only or
         // the mirror's core double-counts (issue 04; M1-PROTOCOL §5).
         isSnapshotChar = { _, char -> char != De1Uuids.SHOT_SAMPLE && char != scale.weightNotifyChar },
+        // Remotes see grinder summaries, never its raw GATT (grinder-ble §6.2).
+        isRelayedService = { it !in grinderController.serviceUuids },
         firmwareHoldsLink = { runCatching { bridge.firmwareLocksWrites() }.getOrDefault(false) },
         onRoleStarting = { role, refind -> remoteConfig.onRoleStarting(role, refind) },
         showPending = { remoteConfig.showPending(it) },
@@ -858,6 +861,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             bgConnection.setFirmwareFlashActive(active)
             // Scale Bluetooth stands down for the flash (Decenza 270b89df).
             connection.setFirmwareFlashActive(active)
+            grinderController.onFirmwareFlash(active)
         },
         afterRelease = { session.afterFirmwareRelease() },
         restoreRunning = { restoreState() == coffee.crema.restore.RestoreState.RUNNING },
@@ -908,6 +912,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     /**
+     * The connected grinder (grinder-ble G2b): its BLE manager and the
+     * controller that owns its lifecycle and folds its core events into the
+     * UI. Behind Settings → Connected grinders (beta). Not recorded by
+     * [bleRecorder] (its `baseInfo` holds the serial and Wi-Fi name; the
+     * core's own capture keeps it redacted).
+     */
+    private val grinder: coffee.crema.ble.GrinderBleManager = coffee.crema.ble.GrinderBleManager(
+        transport = proxy.transport,
+        bridge = bridge,
+        onCoreOutput = lane::deliver,
+        onStatus = { line -> appendLog(line) },
+        onIdentified = { model, caps -> grinderController.onIdentified(model, caps) },
+        onMismatch = { grinderController.onMismatch() },
+    )
+
+    private val grinderController: GrinderController = GrinderController(
+        scope = viewModelScope,
+        lane = lane,
+        manager = grinder,
+        bleScanner = bleScanner,
+        transport = proxy.transport,
+        uiState = { _ui.value },
+        updateUi = { transform -> _ui.update(transform) },
+        updateLive = { transform -> _live.update(transform) },
+        appendLog = { appendLog(it) },
+        notify = { notifyUser(it) },
+        persistPrefs = { persistPrefs() },
+        addFromCatalogue = { presetId -> library.addGrinder("", presetId) },
+    )
+
+    /**
      * The device-connection controller (review #43) — DE1/scale connect and
      * disconnect verbs, the manager-state collectors, the Bluetooth-adapter
      * watcher, per-device auto-connect, the scale heartbeat, and the DE1
@@ -937,6 +972,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onConnectStarted = { _live.update { it.copy(eventLog = emptyList()) } },
         onDe1SessionClosed = { session.clearDe1SessionUi() },
         onScaleSessionClosed = { scaleController.clearScaleSessionUi() },
+        // Foreground, unlock, Bluetooth back on, presence: the grinder too.
+        kickOthers = { trigger -> grinderController.kickReconnect(trigger) },
         onDe1Ready = {
             // Into a DE1 still in a flash / reboot window, nothing but the
             // flash's own build read (audit H2); [afterFirmwareRelease] runs
@@ -1436,6 +1473,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // The lost-scale watchdog runs on the core clock: a scale alone keeps
         // it ticking (a scale-only session).
         viewModelScope.launch { scale.state.collect { coreTicker.onScaleState(it) } }
+        // …and a grinder alone too: its first-reading and silence deadlines.
+        viewModelScope.launch { grinder.state.collect { coreTicker.onGrinderState(it) } }
+        grinderController.start()
         viewModelScope.launch {
             connection.state.collect { cs ->
                 _ui.update {
@@ -3128,6 +3168,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Hydrate the remembered addresses, arm each manager's reconnect loop,
         // and cold-start auto-connect to each remembered device.
         connection.hydrateRemembered(p.de1Address, p.scaleAddress, p.scaleName)
+        grinderController.hydrate()
         // Companion associations: the system's list is the truth (a removal in
         // system settings wins over the stored id); restart presence observation.
         refreshCompanion()
@@ -3365,6 +3406,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Disconnect the scale — delegate of [ConnectionController.disconnectScale]. */
     fun disconnectScale() = connection.disconnectScale()
 
+    // ── Connected grinder — see [GrinderController] ─────────────────────────
+
+    /** Settings → Connected grinders (beta). Off disconnects the grinder. Persisted. */
+    fun setConnectedGrinders(on: Boolean) {
+        _ui.update { it.copy(connectedGrinders = on) }
+        persistPrefs()
+        grinderController.onBetaChanged(on)
+    }
+
+    /** Devices → Grinder → Connect: scan for a grinder. */
+    fun connectGrinder() = grinderController.connect()
+
+    /** Devices → Grinder → Disconnect. */
+    fun disconnectGrinder() = grinderController.disconnect()
+
+    /** Devices → Grinder → Forget: stop auto-connecting the remembered grinder. */
+    fun forgetGrinder() = grinderController.forget()
+
+    /** "Retry now" on the grinder card. */
+    fun retryGrinder() = grinderController.kickReconnect(coffee.crema.ble.ReconnectTrigger.USER_RETRY)
+
+    /** "Linked to ‹record›": link the connected grinder to grinder record [id]; null unlinks. */
+    fun linkConnectedGrinder(id: String?) = grinderController.link(id)
+
+    /** "Add Motto 80 to your grinders": add it from the catalogue and link it. */
+    fun addConnectedGrinder() = grinderController.addAndLink()
+
     // ── Scale — see [ScaleController] ───────────────────────────────────────
 
     /** Set the connected scale's beeper volume (clamped to its range). */
@@ -3431,6 +3499,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             presence.clearQuitSleep()
             // Adapter watcher off, scans cancelled, both device links down…
             connection.close()
+            grinderController.close()
             // The recorder is process-scoped: don't let it pin this VM.
             coffee.crema.diag.ReconnectTimelines.recorder.releaseOnFinished(timelineLogHook)
             // Close the transport last — it unregisters the Nordic environment's

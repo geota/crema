@@ -158,6 +158,9 @@ class ProxyController(
     private val roster: () -> List<DeviceInfo>,
     /** Whether (service, char) is snapshot-on-attach vs a counted live stream. */
     private val isSnapshotChar: (service: UUID, char: UUID) -> Boolean,
+    /** Whether a service's notifications may be relayed to mirrors at all
+     *  (false for the grinder's: [coffee.crema.ble.proxy.RelayHub]). */
+    private val isRelayedService: (service: UUID) -> Boolean = { true },
     /** A mode switch landed: mirror role/host/port into MainUiState (sticky
      *  rules), drop the mirror overlay fields, and persist the prefs. */
     private val onModeApplied: (role: String, host: String, port: Int) -> Unit,
@@ -1325,6 +1328,7 @@ class ProxyController(
             // streams — the DE1 ShotSample and the scale weight — stay live-only or
             // the mirror's core double-counts (issue 04; M1-PROTOCOL §5).
             isSnapshotChar = isSnapshotChar,
+            isRelayedService = isRelayedService,
             // Relayed user intent from a secondary → the machine command seam.
             controlHandler = { method, args, originId, originName ->
                 when (val outcome = handleRelayedControl(method, args, originId, originName)) {

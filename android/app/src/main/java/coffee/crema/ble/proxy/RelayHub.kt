@@ -64,6 +64,13 @@ class RelayHub(
      */
     private val isSnapshotChar: (service: UUID, char: UUID) -> Boolean,
     /**
+     * Whether a notification of `service` may reach a mirror at all. False for
+     * the connected grinder's service: remotes see grinder summaries, never its
+     * raw GATT (SPEC grinder-ble §6.2), and its `baseInfo` carries the serial
+     * and the Wi-Fi name.
+     */
+    private val isRelayedService: (service: UUID) -> Boolean = { true },
+    /**
      * Per-client outbox capacity. Bounded, so a client that stops reading is
      * dropped (its link closes; it resyncs on reconnect) instead of growing the
      * primary's heap. Tests that need a tiny or unlimited outbox pass one.
@@ -130,6 +137,7 @@ class RelayHub(
         atMs: Long,
         src: String? = null,
     ) {
+        if (!isRelayedService(service)) return
         val frame = Frame.Notify(address, service.toString(), char.toString(), Hex.encode(data), atMs, src)
         val key = cacheKey(address, char)
         val seq = seqGen.incrementAndGet()

@@ -119,6 +119,11 @@ internal class SettingsController(
             proxyPrimaryPort = p.proxyPrimaryPort,
             replayPrimary = p.replayPrimary,
             companionDeclined = p.companionDeclined,
+            rememberedGrinderAddress = p.grinderAddress,
+            rememberedGrinderName = p.grinderName,
+            grinderLinkedAddress = p.grinderLinkedAddress,
+            grinderLinkedId = p.grinderLinkedId,
+            connectedGrinders = p.connectedGrinders,
         ) }
     }
 
@@ -250,6 +255,12 @@ internal class SettingsController(
         de1Address = connectionState().rememberedDe1Address,
         scaleAddress = connectionState().rememberedScaleAddress,
         scaleName = connectionState().rememberedScaleName,
+        // The grinder's identity lives in the UI state (GrinderController).
+        grinderAddress = uiState().rememberedGrinderAddress,
+        grinderName = uiState().rememberedGrinderName,
+        grinderLinkedAddress = uiState().grinderLinkedAddress,
+        grinderLinkedId = uiState().grinderLinkedId,
+        connectedGrinders = uiState().connectedGrinders,
         de1CompanionId = companionIdFor(connectionState().rememberedDe1Address),
         scaleCompanionId = companionIdFor(connectionState().rememberedScaleAddress),
         companionDeclined = uiState().companionDeclined,

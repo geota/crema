@@ -117,6 +117,9 @@ class TappingBleTransport(
     override suspend fun requestConnectionPriority(device: BleTransport.DeviceHandle, high: Boolean) =
         delegate.requestConnectionPriority(device, high)
 
+    override suspend fun requestLargeMtu(device: BleTransport.DeviceHandle): Int? =
+        delegate.requestLargeMtu(device)
+
     override suspend fun rearmNotifications(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID) =
         delegate.rearmNotifications(device, service, characteristic)
 
