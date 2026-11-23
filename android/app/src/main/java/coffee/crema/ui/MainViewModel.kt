@@ -74,6 +74,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
@@ -109,6 +110,9 @@ const val DISCONNECT_WHILE_POURING = "The machine is pouring. Disconnect, and Cr
  * and per-screen state are still folded into one class so the end-to-end path
  * is readable top to bottom. Splitting these into proper layers is future work.
  */
+/** The least time between two grinder-driven snapshot pushes (§6.2: at most 2 Hz). */
+private const val GRINDER_SNAPSHOT_MIN_MS = 500L
+
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** First of all: the process can outlive a ViewModel, and this one starts
@@ -675,6 +679,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         override fun hasProfile(id: String): Boolean = library.hasProfile(id)
         override fun hasBean(id: String): Boolean = _ui.value.beans.any { it.id == id }
         override fun liveGrinder(id: String): coffee.crema.core.Grinder? = _ui.value.liveGrinders.firstOrNull { it.id == id }
+        // Owner decision 5: while this hub's grinder collar sets the grind, a
+        // remote's grind dial is refused, not silently reverted.
+        override fun grindFollowedBy(): String? = _ui.value.takeIf { it.grinderFollow.status.collarSetsGrind() }
+            ?.let { s -> s.grinders.firstOrNull { it.id == s.grinderFollow.grinder_id }?.name ?: grinderModelName(s.connectedGrinder.model) }
         override fun applyQuickSave(copyName: String?, asNew: Boolean): CommandOutcome = library.quickSave(copyName, asNew)
         // Someone is using Crema on a mirror: that's presence at the machine.
         override fun notePeerActivity() = presence.idleActivity(coffee.crema.core.IdleActivity.Mirror)
@@ -806,6 +814,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         hasProfile = { library.hasProfile(it) },
         adoptCustomProfile = { library.adoptCustomProfile(it) },
         persistLibraryNow = { library.persistLibraryNow() },
+        grinderReading = { _live.value.grinderReading },
     )
 
     /**
@@ -1484,6 +1493,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { scale.state.collect { coreTicker.onScaleState(it) } }
         // …and a grinder alone too: its first-reading and silence deadlines.
         viewModelScope.launch { grinder.state.collect { coreTicker.onGrinderState(it) } }
+        // A hub sends its grinder block to its remotes when it changes, at
+        // most twice a second (grinder-ble §6.2); a remote's attach gets the
+        // current one with the rest of the snapshot.
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(ui, _live) { s, l -> grinderSnapshot(s, l.grinderReading) }
+                .distinctUntilChanged()
+                .conflate()
+                .collect {
+                    runCatching { proxy.pushConfig() }
+                    kotlinx.coroutines.delay(GRINDER_SNAPSHOT_MIN_MS)
+                }
+        }
         grinderController.start()
         viewModelScope.launch {
             connection.state.collect { cs ->

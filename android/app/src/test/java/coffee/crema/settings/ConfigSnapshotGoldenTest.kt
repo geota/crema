@@ -40,6 +40,12 @@ class ConfigSnapshotGoldenTest {
         steamEco = true, steamTwoTap = true, fanThresholdC = 58f, waterRefillPointMm = 8f, heaterVoltage = 230,
         flowMultiplier = 1.1f, lineFrequencyHz = 50f, lineFrequencyOverride = 0f, cupWarmerTempC = 60,
         volumeStopWithScale = true, requireScale = true, preFlush = true, steamPurge = true, idleSleepMin = 60,
+        // G3b: the hub's grinder, as a summary (grinder-ble §6.2).
+        grinder = GrinderSnapshot(
+            connected = true, model = "Motto 80", state = "Idle", follow = "Following", setting = "480",
+            grindRpm = 700, feedRpm = 40, grinderId = "grinder:motto-80", grinderName = "Motto 80",
+            lastGrindMs = 9800, lastGrindSetting = "480",
+        ),
     )
 
     @Test
@@ -124,4 +130,31 @@ class ConfigSnapshotGoldenTest {
         val unknown = Setting.entries.filter { it.mirroredVia == MirrorSource.SNAPSHOT && !remote.knownOnRemote(it) }.toSet()
         kotlin.test.assertEquals(setOf(Setting.HEATER_VOLTAGE, Setting.FLOW_MULTIPLIER, Setting.CUP_WARMER_TEMP), unknown)
     }
+
+    /** G3b (grinder-ble §6.2): the grinder block carries summaries only, and
+     *  never the serial, the Wi-Fi name or the Bluetooth address. */
+    @Test
+    fun `the hub's grinder block is a summary with nothing private`() {
+        val full = coreJson.parseToJsonElement(Golden.require("config-snapshot/schema.json")).jsonObject
+        val block = full["grinder"]!!.jsonObject
+        kotlin.test.assertEquals(
+            setOf("connected", "model", "state", "follow", "setting", "grindRpm", "feedRpm", "grinderId", "grinderName", "lastGrindMs", "lastGrindSetting"),
+            block.keys,
+        )
+        // Built from a live hub state that knows the serial's tail and the address.
+        val ui = MainUiState(
+            connectedGrinderAddress = "AA:BB:CC:DD:EE:01",
+            rememberedGrinderAddress = "AA:BB:CC:DD:EE:01",
+            connectedGrinder = coffee.crema.ui.ConnectedGrinderUi(
+                status = coffee.crema.ui.GrinderLinkStatus.LIVE, model = "bookoo-motto-80", firmware = "1.3.11.1020", serialTail = "2355",
+            ),
+        )
+        val built = coreJson.encodeToString(GrinderSnapshot.serializer(), coffee.crema.ui.grinderSnapshot(ui, null)!!)
+        for (secret in listOf("2355", "AA:BB", "1.3.11")) assertTrue(secret !in built, "$secret in $built")
+        // No grinder: no block, and an older hub's snapshot without one decodes.
+        kotlin.test.assertNull(coffee.crema.ui.grinderSnapshot(MainUiState(), null))
+        val old = coreJson.decodeFromString(ConfigSnapshot.serializer(), JsonObject(full - "grinder").toString())
+        kotlin.test.assertNull(old.grinder)
+    }
 }
+

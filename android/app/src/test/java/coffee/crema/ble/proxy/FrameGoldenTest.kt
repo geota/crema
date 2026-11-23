@@ -51,6 +51,8 @@ class FrameGoldenTest {
         // #488 review F6: a bag pick's answer carries the core's selection.
         "controlOk.bagPick" to Frame.ControlOk(13, """{"change":{"grind":{"value":"18"}},"undo":{"grind":{"value":"15"}},"changed":true,"message":"Bag b: Niche Zero at 18"}"""),
         "controlErr" to Frame.ControlErr(12, "not authorized"),
+        // G3b, owner decision 5: a remote's grind dial while the hub follows its grinder.
+        "controlErr.grindFollows" to Frame.ControlErr(14, "The grind follows Motto 80 on Kitchen tablet"),
         "notify" to Frame.Notify(addr, service, "0000a00d-0000-1000-8000-00805f9b34fb", "0712deadbeef", 123_456L),
         "notify.src" to Frame.Notify(addr, service, stateChar, "0200", 123_457L, src = "DE1_STATE"),
         "state" to Frame.State(addr, "DISCONNECTED"),

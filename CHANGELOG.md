@@ -25,6 +25,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   "From Motto 80 · 700 rpm …" and "Edited (grinder said 480)", and the shot
   editor has an RPM field for variable-speed grinders. Visualizer gets the
   speed on the grind, "480 700rpm" (#488).
+- **Remotes see the hub's grinder (beta, Android)** — a remote's Brew shows
+  "480 μm · from Motto 80 on ‹hub›" while the hub follows its grinder, and its
+  grind dial is locked: the hub refuses a remote's grind change then, saying
+  "The grind follows Motto 80 on ‹hub›", instead of the collar quietly putting
+  its value back. Remotes get a summary only, never the grinder's serial or
+  Wi-Fi name (#488).
 
 ### Changed
 

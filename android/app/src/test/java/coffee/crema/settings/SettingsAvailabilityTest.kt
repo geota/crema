@@ -32,7 +32,9 @@ import kotlin.test.assertSame
  */
 class SettingsAvailabilityTest {
 
-    private val v4 = coreJson.decodeFromString(ConfigSnapshot.serializer(), Golden.require("config-snapshot/schema.json"))
+    // The fixture's hub follows its grinder (G3b), which locks the grind dial
+    // on its own (RemoteGrinderFollowTest); these rows are about the rest.
+    private val v4 = coreJson.decodeFromString(ConfigSnapshot.serializer(), Golden.require("config-snapshot/schema.json")).copy(grinder = null)
 
     /** A hub that hasn't read its machine registers yet. */
     private val unread = v4.copy(heaterVoltage = null, flowMultiplier = null, cupWarmerTempC = null)

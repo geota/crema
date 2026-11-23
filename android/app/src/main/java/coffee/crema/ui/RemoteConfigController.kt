@@ -41,6 +41,9 @@ internal class RemoteConfigController(
     private val hasProfile: (String) -> Boolean,
     private val adoptCustomProfile: suspend (String) -> Unit,
     private val persistLibraryNow: suspend () -> Unit,
+    /** The connected grinder's latest reading (5 Hz, kept out of the UI
+     *  state), for the snapshot's grinder block. */
+    private val grinderReading: () -> coffee.crema.core.GrinderReading? = { null },
 ) {
     // ── The hub's snapshot ───────────────────────────────────────────────────
 
@@ -129,6 +132,7 @@ internal class RemoteConfigController(
                 preFlush = ui.preFlush,
                 steamPurge = ui.steamPurge,
                 idleSleepMin = ui.idleSleepMin,
+                grinder = grinderSnapshot(ui, grinderReading()),
             ),
         )
     }.getOrDefault("")
@@ -372,3 +376,32 @@ internal class RemoteConfigController(
         appendLog("Adopted ${take.size} settings from the hub")
     }
 }
+
+/**
+ * The hub's grinder block (grinder-ble §6.2), or null with no grinder linked
+ * or connected. Only display fields: never the serial, the Wi-Fi name or the
+ * Bluetooth address (the same rule the relay keeps for the grinder's GATT).
+ */
+internal fun grinderSnapshot(ui: MainUiState, reading: coffee.crema.core.GrinderReading?): coffee.crema.settings.GrinderSnapshot? {
+    val g = ui.connectedGrinder
+    val f = ui.grinderFollow
+    val connected = g.status == GrinderLinkStatus.LIVE || g.status == GrinderLinkStatus.WAITING
+    val follow = f.status.takeIf { it != coffee.crema.core.FollowStatus.Off }
+    if (!connected && follow == null) return null
+    val record = (f.grinder_id ?: ui.grinderLinkedId)?.let { id -> ui.grinders.firstOrNull { it.id == id } }
+    val live = reading?.takeIf { connected }
+    return coffee.crema.settings.GrinderSnapshot(
+        connected = connected,
+        model = g.model?.let { grinderModelName(it) },
+        state = live?.state?.string,
+        follow = follow?.string,
+        setting = f.grind ?: live?.setting?.value,
+        grindRpm = (f.grind_rpm ?: live?.grind_rpm)?.toInt(),
+        feedRpm = live?.feed_rpm?.toInt(),
+        grinderId = record?.id,
+        grinderName = record?.name,
+        lastGrindMs = g.lastGrind?.duration_ms?.toInt(),
+        lastGrindSetting = g.lastGrind?.setting?.value,
+    )
+}
+

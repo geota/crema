@@ -161,6 +161,15 @@ fn samples() -> Vec<(&'static str, Frame)> {
             },
         ),
         (
+            // Grinder-ble G3b, owner decision 5: a remote's grind dial while
+            // the hub follows its grinder.
+            "controlErr.grindFollows",
+            Frame::ControlErr {
+                id: 14,
+                reason: s("The grind follows Motto 80 on Kitchen tablet"),
+            },
+        ),
+        (
             "notify",
             Frame::Notify {
                 address: addr.clone(),

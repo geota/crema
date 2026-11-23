@@ -230,6 +230,8 @@ const val FOLLOW_GATE_NOTE = "The grinder's collar sets this. Pause following fr
  * "last seen 12:03" while the linked grinder is away; null otherwise.
  */
 fun MainUiState.grindFollowNote(): String? {
+    // A remote shows the hub's grinder, read-only (grinder-ble §6.2).
+    if (mirror != null) return hubGrinderFollowing()?.let { "from $it on ${remoteHubLabel()}" }
     val f = grinderFollow
     return when (f.status) {
         coffee.crema.core.FollowStatus.Following -> buildString {
@@ -254,4 +256,16 @@ fun MainUiState.grindHeaderText(): String =
 fun MainUiState.followSuggestion(): Grinder? =
     grinderFollow.takeIf { it.status == coffee.crema.core.FollowStatus.Suggest }?.grinder_id
         ?.let { id -> liveGrinders.firstOrNull { it.id == id } }
+
+/** On a remote: the hub's grinder whose collar sets the grind now (the hub
+ *  follows it), by name, or null (grinder-ble §6.2, owner decision 5). */
+fun MainUiState.hubGrinderFollowing(): String? =
+    mirror?.snapshot?.grinder?.takeIf { g -> coffee.crema.core.FollowStatus.entries.any { it.string == g.follow && it.collarSetsGrind() } }
+        ?.let { it.grinderName ?: it.model ?: "the grinder" }
+
+/** The collar sets Brew's grind: following, or about to (Waiting: linked and
+ *  live, the value not steady yet). The dial is locked, and a remote's
+ *  refused, in both (review #558). */
+fun coffee.crema.core.FollowStatus.collarSetsGrind(): Boolean =
+    this == coffee.crema.core.FollowStatus.Following || this == coffee.crema.core.FollowStatus.Waiting
 
