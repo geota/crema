@@ -225,6 +225,10 @@ data class MainUiState(
      *  restart, so the launch doesn't seed the first profile as it does on a
      *  fresh install (PLAN follow-up 5). Any pick sets it back. */
     val profileCleared: Boolean = false,
+    /** The recipe Brew has selected (brew-modes §2): set and live means
+     *  Manual. Per device, never relayed; persisted beside [activeProfileId]
+     *  (AppPrefs.activeRecipeId). Read it through [brewView]. */
+    val activeRecipeId: String? = null,
     /** Transient Quick-Controls brew override, or null = use the active profile. */
     val brewParams: BrewParams? = null,
     /**

@@ -32,6 +32,9 @@ object BrewLogOwner {
 
     /** A finished guided session's "Save brew…" (issue #10 Phase 2). */
     const val SCALE = "scale"
+
+    /** The same, from Brew's Manual page (brew-modes §3). */
+    const val BREW = "brew"
 }
 
 /** The pushed phone route for the form (see [coffee.crema.ui.NavRestore]). */

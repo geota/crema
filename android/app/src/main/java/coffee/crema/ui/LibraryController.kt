@@ -953,7 +953,9 @@ class LibraryController(
                 customProfilesJson = listOf(written) + customProfilesJson
                 refreshProfiles()
                 persistCustomProfiles()
-                profileIdOf(written, json)?.let { setActiveProfile(it) }
+                // Saved either way; made active only while nothing holds the
+                // profile (a shot, its start or a guided brew: §4, REVIEW-532 M1).
+                if (uiState().brewPickLock() == null) profileIdOf(written, json)?.let { setActiveProfile(it) }
                 parts += "Saved “$name”"
             } else {
                 customProfilesJson = customProfilesJson.map { if (profileIdOf(it, json) == id) written else it }
@@ -3172,7 +3174,10 @@ class LibraryController(
                     activeProfileId = s.activeProfileId,
                     linkedProfileMissing = missing,
                     linkedProfileName = linked?.let { id -> s.profiles.firstOrNull { it.id == id }?.name },
-                    shotInProgress = s.shotInProgress,
+                    // A pending start or a guided brew holds the profile as a
+                    // running shot does (brew-modes §4, REVIEW-532 M1): the
+                    // linked profile is skipped, with the core's notice.
+                    shotInProgress = s.shotInProgress || s.brewPickLock() != null,
                     activeGrinderId = s.activeGrinderId,
                     grind = s.brewGrindView().value,
                     grinders = s.grinders,

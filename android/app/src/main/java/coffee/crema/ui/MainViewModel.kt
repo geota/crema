@@ -549,7 +549,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The open Log-brew form's draft, or null (see [NavRestore.restoreRoute]). */
     val logBrew: StateFlow<coffee.crema.ui.brewlog.BrewLogDraft?> get() = guided.logBrew
 
-    /** The Scale screen's Weigh | Brew mode and the Brew setup's picks. */
+    /** The guided brew's setup picks (recipe, start-on-pour, bean). */
     val guidedSetup: StateFlow<coffee.crema.ui.brewlog.GuidedBrewSetup> get() = guided.guidedSetup
 
     /** The open recipe editor's working copy, or null. */
@@ -593,7 +593,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     internal val wakePending: Boolean get() = wake.pending
 
     /** Arm a session for [recipe]; [startOnPour] starts it at the first pour. */
-    fun brewSessionArm(recipe: coffee.crema.core.BrewRecipe, startOnPour: Boolean) = guided.brewSessionArm(recipe, startOnPour)
+    fun brewSessionArm(recipe: coffee.crema.core.BrewRecipe, startOnPour: Boolean) {
+        // A brew started anywhere (the phone's Scale segment too) selects its
+        // recipe, so Brew shows it in Manual on either layout (brew-modes §2).
+        if (_ui.value.activeRecipeId != recipe.id) pickRecipe(recipe.id)
+        guided.brewSessionArm(recipe, startOnPour)
+    }
 
     /** Start an armed session's clock (the Start tap). */
     fun brewSessionBegin() = guided.brewSessionBegin()
@@ -618,7 +623,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun defaultBrewRecipeFor(method: String): coffee.crema.core.BrewRecipe? = guided.defaultBrewRecipeFor(method)
 
     // Setup selections + the recipe editor.
-    fun setScaleMode(mode: String) = guided.setScaleMode(mode)
     fun selectGuidedMethod(method: String) = guided.selectGuidedMethod(method)
     fun selectGuidedRecipe(recipe: coffee.crema.core.BrewRecipe) = guided.selectGuidedRecipe(recipe)
     fun setGuidedStartOnPour(on: Boolean) = guided.setGuidedStartOnPour(on)
@@ -630,7 +634,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         guided.updateRecipeEdit(transform)
     fun setRecipeEditMethod(method: String) = guided.setRecipeEditMethod(method)
     fun closeRecipeEdit() = guided.closeRecipeEdit()
-    fun saveRecipeEdit() = guided.saveRecipeEdit()
+    fun saveRecipeEdit() {
+        val owner = guided.recipeEdit.value?.owner
+        val saved = guided.saveRecipeEdit() ?: return
+        // Brew's editor (Duplicate to edit, + New recipe) comes back on the
+        // saved recipe: Manual brews what was just saved.
+        if (owner == coffee.crema.ui.brewlog.RecipeEditOwner.BREW) pickRecipe(saved.id)
+    }
 
     // Your own brewing methods.
     fun openNewMethod(target: String, label: String = "") = guided.openNewMethod(target, label)
@@ -645,7 +655,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun dismissSaveMethodPrompt() = guided.dismissSaveMethodPrompt()
 
     /** The finished session's "Save brew…": the Log-brew form, pre-filled with measured truth. */
-    fun openGuidedLogBrew() = guided.openGuidedLogBrew()
+    fun openGuidedLogBrew(owner: String = coffee.crema.ui.brewlog.BrewLogOwner.SCALE) = guided.openGuidedLogBrew(owner)
 
     /**
      * What this device does for each [MachineCommand]: the bodies behind the
@@ -668,6 +678,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Someone is using Crema on a mirror: that's presence at the machine.
         override fun notePeerActivity() = presence.idleActivity(coffee.crema.core.IdleActivity.Mirror)
         override fun configReady(): Boolean = settings.loaded
+        // A remote's profile pick while this hub runs a shot or a guided
+        // brew (brew-modes §4): the lock's note, else null.
+        override fun profilePickLock(): String? = _ui.value.brewPickLock()?.note
     }
 
     /**
@@ -1317,6 +1330,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }.onFailure { notifyUser("Couldn't share the damaged files: ${it.message}") }
     }
 
+    // The restore engine and its marker, declared before the init below:
+    // its startup load reads [restoreEngine], and with tiny store files that
+    // load can finish inside the constructor (#532 CI: an NPE on the lazy's
+    // not-yet-set delegate).
+    private val restoreMarker by lazy {
+        coffee.crema.restore.RestoreMarkerStore(
+            java.io.File(getApplication<Application>().filesDir, coffee.crema.restore.RestoreMarkerStore.FILE_NAME),
+            json,
+        )
+    }
+
+    /** The restore engine, over this ViewModel's stores. */
+    internal val restoreEngine: coffee.crema.restore.RestoreEngine by lazy {
+        coffee.crema.restore.RestoreEngine(
+            library.restoreSink(
+                LibraryController.RestoreDeps(
+                    machineBusy = { _ui.value.shotInProgress || firmware.ui.value.holdsLink || firmware.ui.value.running },
+                    totalLitres = { _ui.value.maintenance.totalLitres },
+                    restoreRecipes = { r, m, d, h -> guided.restoreRecipes(r, m, d, h) },
+                    restoreSettings = { p -> restoreSettingsNow(p) },
+                    restoreMaintenance = { m -> maintenance.restoreNow(m) },
+                ),
+            ),
+            restoreMarker,
+            json,
+        )
+    }
+
     init {
         // Sleep-on-quit (see [PresenceController.installQuitSleep]).
         presence.installQuitSleep()
@@ -1537,10 +1578,63 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Select the Brew header's active profile. (M1: display only — uploading the
      *  profile to the DE1 on Coffee is the M2 gated-start sequence.) Persisted
      *  (AppPrefs.activeProfileId) so the selection survives a restart. */
-    fun setActiveProfile(id: String) {
+    fun setActiveProfile(id: String) = setActiveProfile(id) {}
+
+    private fun setActiveProfile(id: String, onOutcome: (CommandOutcome) -> Unit) {
         // Picking a profile resolves "Can't start shot" (web `selectFavorite`).
         _ui.update { it.copy(shotStartError = null) }
-        machine.execute(MachineCommand.SetActiveProfile(id))
+        machine.execute(MachineCommand.SetActiveProfile(id), onOutcome)
+    }
+
+    /**
+     * A profile picked in Brew's picker (brew-modes §2): the only profile
+     * change that leaves Manual. Once the profile took (on a remote, once the
+     * hub took it), the core's pick clears the recipe; a refusal leaves Manual
+     * as it was. Every other profile change (a bag's linked profile, the
+     * Profiles page, Quick Controls, a peer) only updates the stored profile
+     * and leaves Manual on, as web does (#531) and as follow_hub_profile does.
+     */
+    fun pickProfile(id: String) = setActiveProfile(id) { outcome ->
+        if (outcome !is CommandOutcome.Refused) leaveManualFor(id)
+    }
+
+    /** A profile pick took: store the core's pick, which clears the recipe. */
+    private fun leaveManualFor(profileId: String) {
+        val st = _ui.value
+        if (st.activeRecipeId == null) return
+        // A guided brew keeps its recipe (§4: no row changes during one): a
+        // profile that changes under it (a linked bag, a Quick Save copy, a
+        // peer's edit) must not take Brew off its Manual page (REVIEW-532 M1).
+        if (st.brewPickLock()?.recipesLocked == true) return
+        val stored = BrewSelectionRules.pick(
+            st.storedBrewSelection(),
+            coffee.crema.core.BrewSelection(coffee.crema.core.BrewSelectionKind.Profile, profileId),
+        )
+        _ui.update { it.copy(activeRecipeId = stored.activeRecipeId) }
+        persistPrefs()
+    }
+
+    /**
+     * Pick recipe [id] in Brew's picker (brew-modes §2): Brew turns to Manual.
+     * Local on every device (recipes are per device, §5), so nothing is
+     * relayed; the profile stays for Espresso. Refused while the lock (§4)
+     * covers recipe rows: a guided brew runs here.
+     */
+    fun pickRecipe(id: String) {
+        val st = _ui.value
+        val recipe = st.builtinRecipes.firstOrNull { it.id == id }
+            ?: st.brewRecipes.firstOrNull { it.id == id && it.deletedAt == null }
+            ?: return
+        effectiveState().brewPickLock()?.takeIf { it.recipesLocked }?.let { notifyUser(it.note); return }
+        val stored = BrewSelectionRules.pick(
+            st.storedBrewSelection(),
+            coffee.crema.core.BrewSelection(coffee.crema.core.BrewSelectionKind.Recipe, id),
+        )
+        _ui.update { it.copy(activeRecipeId = stored.activeRecipeId) }
+        // The guided engine brews the setup's recipe; recents follow the pick.
+        guided.selectGuidedRecipe(recipe)
+        guided.setDefaultBrewRecipe(recipe)
+        persistPrefs()
     }
 
     // ── Library delegates (see [LibraryController]) ──────────────────────────
@@ -1735,29 +1829,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Restore through the core's plan (restore-safety PR7a) ──────────────
 
-    private val restoreMarker by lazy {
-        coffee.crema.restore.RestoreMarkerStore(
-            java.io.File(getApplication<Application>().filesDir, coffee.crema.restore.RestoreMarkerStore.FILE_NAME),
-            json,
-        )
-    }
-
-    /** The restore engine, over this ViewModel's stores. */
-    internal val restoreEngine: coffee.crema.restore.RestoreEngine by lazy {
-        coffee.crema.restore.RestoreEngine(
-            library.restoreSink(
-                LibraryController.RestoreDeps(
-                    machineBusy = { _ui.value.shotInProgress || firmware.ui.value.holdsLink || firmware.ui.value.running },
-                    totalLitres = { _ui.value.maintenance.totalLitres },
-                    restoreRecipes = { r, m, d, h -> guided.restoreRecipes(r, m, d, h) },
-                    restoreSettings = { p -> restoreSettingsNow(p) },
-                    restoreMaintenance = { m -> maintenance.restoreNow(m) },
-                ),
-            ),
-            restoreMarker,
-            json,
-        )
-    }
 
     /** Test seam: [LibraryController.beforeRestoreRemove]. */
     internal var beforeRestoreRemove: (suspend () -> Unit)?
@@ -1800,6 +1871,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Picks whose run is under way, Main thread only (#413). */
     private val picksRunning = HashSet<Int>()
+
+    /** Test seam: a confirmed restore is still running (its singletons save last). */
+    @androidx.annotation.VisibleForTesting
+    internal val restoreRunning: Boolean get() = picksRunning.isNotEmpty()
 
     /**
      * Whether a newer pick has taken over from [pending] (#413, #425): its

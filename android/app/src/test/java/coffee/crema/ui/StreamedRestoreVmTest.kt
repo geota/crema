@@ -55,11 +55,14 @@ class StreamedRestoreVmTest {
     }
 
     @After fun tearDown() {
+        VmHarness.settleRestores(built)
         store.clear()
         VmHarness.idle()
     }
 
-    private fun vm(): MainViewModel = VmHarness.build(store).also { VmHarness.idle(); VmHarness.awaitStartupLoaded(it) }
+    private val built = mutableListOf<MainViewModel>()
+
+    private fun vm(): MainViewModel = VmHarness.build(store).also { built += it; VmHarness.idle(); VmHarness.awaitStartupLoaded(it) }
 
     private fun <T> onMain(vm: MainViewModel, what: String, block: suspend () -> T): T {
         val job = vm.viewModelScope.async { block() }

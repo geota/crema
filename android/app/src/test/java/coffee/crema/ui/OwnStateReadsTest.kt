@@ -35,6 +35,10 @@ class OwnStateReadsTest {
             "reuploadActiveProfile" to setOf("activeProfileId", "brewParams"),
             // Restore defaults keeps this device's own line frequency (F15).
             "resetPreferences" to setOf("lineFreqOverride"),
+            // Brew's selection is this device's own pair (brew-modes §5): a
+            // pick stores over its own keys, never the hub's projected profile.
+            "leaveManualFor" to setOf("storedBrewSelection()"),
+            "pickRecipe" to setOf("storedBrewSelection()"),
         ),
         "FirmwareController.kt" to mapOf(
             // The holder's own machine reads.

@@ -111,6 +111,9 @@ internal class SettingsController(
             // fresh install keeps the first profile the load seeded.
             activeProfileId = if (p.profileCleared) null else p.activeProfileId ?: it.activeProfileId,
             profileCleared = p.profileCleared && p.activeProfileId == null,
+            // The recipe Manual reopens on (brew-modes §2): the core's
+            // brew_selection falls back to the profile while it isn't live.
+            activeRecipeId = p.activeRecipeId,
             proxyRole = p.proxyRole,
             proxyPrimaryHost = p.proxyPrimaryHost,
             proxyPrimaryPort = p.proxyPrimaryPort,
@@ -240,6 +243,7 @@ internal class SettingsController(
         qcGrind = uiState().qcGrind,
         activeProfileId = uiState().activeProfileId,
         profileCleared = uiState().profileCleared && uiState().activeProfileId == null,
+        activeRecipeId = uiState().activeRecipeId,
         // The remembered addresses live on the connection controller — its
         // setters call persistPrefs AFTER their state update, so this read is
         // always fresh (the MainUiState copies are display mirrors).

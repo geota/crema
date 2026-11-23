@@ -63,6 +63,24 @@ class RelayedCommandDispatcherTest {
         assertEquals(CommandOutcome.Accepted, dispatch("setActiveBean", "bean-1"), "nothing to say: a plain accept")
     }
 
+    /** Brew modes §4: a peer's profile pick waits for this hub's shot or guided brew. */
+    @Test
+    fun `a relayed profile pick is refused while the hub's own shot or brew runs`() {
+        actions.pickLock = "Finish the current brew first"
+        assertEquals(CommandOutcome.Refused("Finish the current brew first"), dispatch("setActiveProfile", "p-1"))
+        assertTrue(actions.applied.none { it.startsWith("commit(") }, "nothing changed: ${actions.applied}")
+        assertTrue(announced.isEmpty())
+        // Only the profile: the hub's other settings still take a peer's edit.
+        assertEquals(CommandOutcome.Accepted, dispatch("setActiveBean", "bean-1"))
+        // The hub's own pick isn't a peer's: its picker locks its own rows.
+        var local: CommandOutcome? = null
+        LocalMachine(actions, notify = {}).execute(MachineCommand.SetActiveProfile("p-1")) { local = it }
+        assertEquals(CommandOutcome.Accepted, local)
+
+        actions.pickLock = null
+        assertEquals(CommandOutcome.Accepted, dispatch("setActiveProfile", "p-1"))
+    }
+
     @Test
     fun `commands run on the lane in the order they were dispatched`() {
         runBlocking {

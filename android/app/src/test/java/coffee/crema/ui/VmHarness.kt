@@ -262,6 +262,22 @@ internal object VmHarness {
      * reset whose values the restore then puts back, say). Its last step
      * says "Restored …".
      */
+    /**
+     * Before a test's teardown: let [vms]' running restores finish, so none
+     * resumes in a later test after its stores reset (the strict SaveFloor
+     * would throw into that test's runTest, #532 CI). A restore a test holds
+     * on purpose (a kill hook) is left after [timeoutMs]; its scope's
+     * cancellation ends it.
+     */
+    fun settleRestores(vms: List<MainViewModel>, timeoutMs: Long = 10_000) {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000
+        while (vms.any { it.restoreRunning } && System.nanoTime() < deadline) {
+            idle()
+            Thread.sleep(5)
+        }
+        idle()
+    }
+
     /** How many "Restored …" messages [vm] has shown: a confirmed run's last word. */
     fun restoredCount(vm: MainViewModel): Int = vm.ui.value.userMessages.count { it.startsWith("Restored ") }
 

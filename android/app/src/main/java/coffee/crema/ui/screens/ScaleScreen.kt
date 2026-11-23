@@ -139,32 +139,9 @@ fun ScaleScreen(
                 DevicesGrinderContent(vm, ui, wide = true, modifier = Modifier.weight(1f))
                 return@Column
             }
-            // Weigh | Brew segment (issue #10): the scale is the instrument
-            // for both — Weigh is the classic standalone weighing surface,
-            // Brew the guided session. The mode is VM-held (it survives the
-            // phone↔tablet host swap), and arming a session pins it to Brew
-            // so navigating away and back mid-pourover lands on the clock.
-            val setup by vm.guidedSetup.collectAsStateWithLifecycle()
-            val scaleMode = setup.scaleMode
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                Box(Modifier.weight(1f)) { ScaleHeader(connected, caps) }
-                coffee.crema.ui.components.CremaTabSwitch(
-                    options = listOf(
-                        coffee.crema.ui.components.TabOption("weigh", "Weigh"),
-                        coffee.crema.ui.components.TabOption("brew", "Brew"),
-                    ),
-                    value = scaleMode,
-                    onChange = vm::setScaleMode,
-                )
-            }
-            if (scaleMode == "brew") {
-                coffee.crema.ui.brewlog.GuidedBrewPanel(
-                    vm = vm,
-                    onNav = onNav,
-                    phone = false,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
+            // Weighing only (brew-modes §3): the guided brew moved to Brew,
+            // where picking a recipe opens it (Manual).
+            ScaleHeader(connected, caps)
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(sp.s5)) {
                 // Left column — readout, dose helper, recent activity
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(sp.s4)) {
@@ -191,7 +168,6 @@ fun ScaleScreen(
                     connected = connected,
                     modifier = Modifier.width(372.dp).fillMaxHeight(),
                 )
-            }
             }
         }
     }

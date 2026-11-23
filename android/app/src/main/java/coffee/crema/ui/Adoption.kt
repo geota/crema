@@ -134,7 +134,11 @@ fun adopt(own: MainUiState, cfg: ConfigSnapshot, changes: Set<Setting>, hasBean:
                 null -> s.copy(qcGrind = null)
                 else -> if (MachineCommand.SetGrind(g).refusal() == null) s.copy(qcGrind = g) else s
             }
-            Setting.ACTIVE_PROFILE -> cfg.activeProfileId?.let { s.copy(activeProfileId = it) } ?: s
+            // The hub's profile only (brew-modes §5): this device's recipe,
+            // and with it Manual, stays until its user picks a profile.
+            Setting.ACTIVE_PROFILE -> cfg.activeProfileId?.let {
+                s.copy(activeProfileId = BrewSelectionRules.followHub(s.storedBrewSelection(), it).activeProfileId)
+            } ?: s
             Setting.ACTIVE_BEAN -> s.copy(activeBeanId = cfg.activeBeanId?.takeIf(hasBean))
             Setting.BREW_PARAMS -> when (val p = hubValue(cfg, Setting.BREW_PARAMS) as BrewParams?) {
                 null -> s.copy(brewParams = null)

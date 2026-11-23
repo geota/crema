@@ -31,19 +31,12 @@ object BrewCueDefaults {
         explicit ?: default()
 }
 
-/** The Scale screen's Weigh | Brew segment. */
-object ScaleMode {
-    const val WEIGH = "weigh"
-    const val BREW = "brew"
-}
-
 /**
  * The Brew segment's setup selections. [recipe] is the chosen recipe itself —
  * a saved one or a built-in — or null when the method has neither (espresso,
  * drip, free text: the setup offers "+ New recipe").
  */
 data class GuidedBrewSetup(
-    val scaleMode: String = ScaleMode.WEIGH,
     val method: String? = null,
     val recipe: BrewRecipe? = null,
     val startOnPour: Boolean = true,
@@ -159,6 +152,9 @@ object GuidedSetupRules {
 object RecipeEditOwner {
     const val SCALE = "scale"
     const val PROFILES = "profiles"
+
+    /** Brew's Manual page (brew-modes §3): Save selects the saved recipe. */
+    const val BREW = "brew"
 }
 
 /** The phone's pushed recipe-editor route (see [coffee.crema.ui.NavRestore]). */
@@ -243,48 +239,3 @@ data class RecipeEditDraft(
     }
 }
 
-/**
- * The live session's layout class, chosen from the pane it actually gets
- * (`BoxWithConstraints`), never the screen width — the rail and host chrome
- * eat space, and a phone in landscape lands on the tablet shell at ~400dp tall.
- */
-enum class LivePane {
-    /** < ~600dp window (a < 560dp pane): one column, controls pinned at the bottom. */
-    COMPACT,
-
-    /** 600–840dp wide and ≥ 600 tall: one centred ≤460dp column; chart only when very tall. */
-    MEDIUM,
-
-    /** ≥ 840 wide, ≥ 600 tall: session column + live chart. */
-    TWO_COLUMN,
-
-    /** ≥ 600 wide, < 600 tall: clock + controls | step card + next; no chart. */
-    COCKPIT,
-    ;
-
-    companion object {
-        /**
-         * Below this pane width: COMPACT. A 600dp window (a 7" portrait on
-         * the phone shell) leaves a ~568dp pane after the shell's 16dp
-         * edges, and still gets the MEDIUM layout; the widest phones stay
-         * under ~450dp.
-         */
-        const val COMPACT_MAX_WIDTH = 560f
-
-        fun of(widthDp: Float, heightDp: Float): LivePane = when {
-            widthDp < COMPACT_MAX_WIDTH -> COMPACT
-            // Short panes go cockpit even below 840: a phone in landscape
-            // lands on the tablet shell, and the rail leaves its pane
-            // ~780dp wide and ~330dp tall.
-            heightDp < 600f -> COCKPIT
-            widthDp < 840f -> MEDIUM
-            else -> TWO_COLUMN
-        }
-
-        /** MEDIUM panes show the chart under the step card only from this height. */
-        const val MEDIUM_CHART_MIN_HEIGHT = 900f
-
-        /** The big clock scales with the height it gets, 48–96sp. */
-        fun clockSp(heightDp: Float): Float = (heightDp * 0.11f).coerceIn(48f, 96f)
-    }
-}
