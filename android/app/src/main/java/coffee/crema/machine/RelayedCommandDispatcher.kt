@@ -36,7 +36,16 @@ class RelayedCommandDispatcher(
     private val order = Mutex()
 
     suspend fun dispatch(method: String, args: String, origin: CommandOrigin): CommandOutcome {
-        val cmd = when (val decoded = MachineCommandCodec.decode(method, args)) {
+        // Decoding crosses into the core: a throw there (a core panic) is a
+        // refusal for this control, like any other, not the session's end.
+        val decoded = try {
+            MachineCommandCodec.decode(method, args)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            return refused(method, e.message ?: "control failed")
+        }
+        val cmd = when (decoded) {
             is MachineCommandCodec.Decoded.Invalid -> return refused(method, decoded.reason)
             is MachineCommandCodec.Decoded.Valid -> decoded.command
         }

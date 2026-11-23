@@ -11,11 +11,12 @@ type Target = fn(&[u8]);
 #[test]
 fn corpus_replays() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("fuzz/corpus");
-    let targets: [(&str, Target); 2] = [
+    let targets: [(&str, Target); 3] = [
         ("fuzz_decode_command", |d| {
             fuzzing::decode(d);
         }),
         ("fuzz_number", fuzzing::number),
+        ("fuzz_decode_frame", fuzzing::frame),
     ];
     for (name, run) in targets {
         let dir = root.join(name);

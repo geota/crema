@@ -32,5 +32,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_decode_frame"
+path = "fuzz_targets/fuzz_decode_frame.rs"
+test = false
+doc = false
+bench = false
+
 # Its own workspace root, so the core workspace's settings don't apply.
 [workspace]
