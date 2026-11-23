@@ -1636,7 +1636,7 @@ mod tests {
         // Idempotent: the next load does nothing.
         let again = migrate_grinder_library(
             &ek,
-            &[folded.clone()],
+            std::slice::from_ref(folded),
             "Niche Zero",
             MigrationGate::READ,
             NOW,
