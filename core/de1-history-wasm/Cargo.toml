@@ -38,7 +38,7 @@ serde_json.workspace = true
 de1-history = { path = "../de1-history", features = ["store"] }
 # Exact pins (SPEC §1, N10): each bump's diff is read first. `rusqlite` 0.42
 # takes `sqlite-wasm-rs` >=0.6.3, <0.7; both compile SQLite 3.54.1.
-rusqlite = { version = "=0.42.0", default-features = false, features = ["ffi-sqlite-wasm-rs", "cache", "backup"] }
+rusqlite = { version = "=0.43.0", default-features = false, features = ["ffi-sqlite-wasm-rs", "cache", "backup"] }
 sqlite-wasm-rs = { version = "=0.6.3", default-features = false, features = ["wasm-bindgen"] }
 sqlite-wasm-vfs = { version = "=0.3.0", features = ["sahpool"] }
 wasm-bindgen = "0.2.130"
