@@ -52,7 +52,13 @@ val hasReleaseSigning = releaseKeystoreFile != null &&
 
 android {
     namespace = "coffee.crema"
-    compileSdk = 37
+    // 37.1, the minor SDK release: Compose 1.13 (BOM 2026.11) needs it
+    // (`checkDebugAarMetadata`). The CI workflows install `platforms;android-37.1`.
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 1
+        }
+    }
     // Pinned to the NDK installed via the SDK Manager ("NDK (Side by side)").
     // AGP's built-in default NDK version differs, so without an explicit pin
     // Gradle looks for a version that isn't installed and fails with
@@ -305,7 +311,7 @@ kotlin {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
+    val composeBom = platform("androidx.compose:compose-bom:2026.11.01")
     implementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.19.1")
@@ -426,7 +432,7 @@ dependencies {
     testImplementation("net.java.dev.jna:jna:5.19.1")
     // Robolectric: a real Application/Looper for the MainViewModel
     // construct-and-clear smoke test (cohort review 2026-10-25, P3-2).
-    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("org.robolectric:robolectric:4.18.1")
     testImplementation("androidx.test:core:1.7.0")
     // Compose UI tests under Robolectric (Devices' tab switch, #488 follow-up
     // 23): the test rule, BOM-managed, and the empty activity it hosts
