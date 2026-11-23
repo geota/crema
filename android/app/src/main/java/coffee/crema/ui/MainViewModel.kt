@@ -1566,6 +1566,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun leaveManualFor(profileId: String) {
         val st = _ui.value
         if (st.activeRecipeId == null) return
+        // A guided brew keeps its recipe (§4: no row changes during one): a
+        // profile that changes under it (a linked bag, a Quick Save copy, a
+        // peer's edit) must not take Brew off its Manual page (REVIEW-532 M1).
+        if (st.brewPickLock()?.recipesLocked == true) return
         val stored = BrewSelectionRules.pick(
             st.storedBrewSelection(),
             coffee.crema.core.BrewSelection(coffee.crema.core.BrewSelectionKind.Profile, profileId),

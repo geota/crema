@@ -162,6 +162,88 @@ class BrewModeVmTest {
         assertEquals(profile, vm.own().activeProfileId)
     }
 
+    /** Manual with a guided brew armed on this hub (REVIEW-532 M1's probe). */
+    private fun armedInManual(): Triple<MainViewModel, coffee.crema.core.BrewRecipe, String> {
+        val vm = vm()
+        val profile = vm.profileId()
+        vm.setActiveProfile(profile)
+        val recipe = vm.recipe()
+        vm.pickRecipe(recipe.id)
+        vm.brewSessionArm(recipe, startOnPour = true)
+        VmHarness.drainCoreLane(vm)
+        VmHarness.idle()
+        assertEquals("armed", vm.own().guidedBrew.phase)
+        assertEquals(BrewMode.Manual, vm.own().brewView().mode)
+        return Triple(vm, recipe, profile)
+    }
+
+    private fun MainViewModel.assertStillManual(recipe: coffee.crema.core.BrewRecipe, profile: String, what: String) {
+        assertEquals(recipe.id, own().activeRecipeId, "$what: the brew keeps its recipe")
+        assertEquals(BrewMode.Manual, own().brewView().mode, "$what: Brew stays on its Manual page")
+        assertEquals("armed", own().guidedBrew.phase, what)
+        assertEquals(profile, own().activeProfileId, "$what: the profile is held like a shot's")
+    }
+
+    /** REVIEW-532 M1: a peer's bag pick with a linked profile can't strand the hub's guided brew. */
+    @Test
+    fun `a relayed bag pick with a linked profile leaves the hub's guided brew in Manual`() {
+        java.io.File(VmHarness.app().filesDir, "beanLibrary.json").writeText(
+            coreJson.encodeToString(
+                coffee.crema.beans.BeanLibrary.serializer(),
+                coffee.crema.beans.BeanLibrary(
+                    listOf(
+                        coffee.crema.beans.newBean("Bag a", null, null, null, 0L).copy(id = "a", updatedAt = 1L),
+                        coffee.crema.beans.newBean("Bag b", null, null, null, 0L).copy(id = "b", updatedAt = 1L),
+                    ),
+                    activeBeanId = "a",
+                ),
+            ),
+        )
+        val (vm, recipe, profile) = armedInManual()
+        val linked = vm.own().profiles.first { it.id != profile && it.source != "custom" }
+        vm.updateBean("b", "") { it.copy(linkedProfileId = linked.id) }
+        VmHarness.idle()
+
+        val outcome = runBlocking { VmHarness.proxyController(vm).handleRelayedControl("setActiveBean", "b", "remote-1", "Phone") }
+        VmHarness.idle()
+        assertTrue(outcome !is CommandOutcome.Refused, "the bag itself is picked: $outcome")
+        assertEquals("b", vm.own().activeBeanId)
+        vm.assertStillManual(recipe, profile, "relayed bag pick")
+
+        // The hub's own bag pick, during its own pour-over, the same.
+        vm.setActiveBean("a")
+        vm.setActiveBean("b")
+        VmHarness.idle()
+        vm.assertStillManual(recipe, profile, "local bag pick")
+        vm.brewSessionCancel()
+    }
+
+    /** REVIEW-532 M1 (c): a peer's Quick Save copy is saved, not made active, during the hub's brew. */
+    @Test
+    fun `a relayed Quick Save copy during the hub's guided brew saves without activating`() {
+        val (vm, recipe, profile) = armedInManual()
+        vm.quickAdjustBrew(19.5, 41.0, 91.0)
+        VmHarness.idle()
+        val outcome = runBlocking { VmHarness.proxyController(vm).handleRelayedControl("quickSave", "copy:Probe copy", "remote-1", "Phone") }
+        VmHarness.idle()
+        assertTrue(outcome !is CommandOutcome.Refused, "$outcome")
+        assertEquals(1, vm.own().profiles.count { it.name == "Probe copy" }, "the copy is saved")
+        vm.assertStillManual(recipe, profile, "relayed Quick Save copy")
+        vm.brewSessionCancel()
+    }
+
+    /** REVIEW-532 M1 (a): a profile change that does land mid-brew still keeps the recipe. */
+    @Test
+    fun `a profile set during a guided brew keeps the recipe`() {
+        val (vm, recipe, _) = armedInManual()
+        val other = vm.own().profiles.first { it.id != vm.own().activeProfileId }
+        vm.setActiveProfile(other.id)
+        VmHarness.idle()
+        assertEquals(recipe.id, vm.own().activeRecipeId)
+        assertEquals(BrewMode.Manual, vm.own().brewView().mode)
+        vm.brewSessionCancel()
+    }
+
     @Test
     fun `the hub's profile reaching this device keeps its recipe`() {
         val stored = coffee.crema.core.StoredBrewSelection(activeProfileId = "p1", activeRecipeId = "builtin:x")
