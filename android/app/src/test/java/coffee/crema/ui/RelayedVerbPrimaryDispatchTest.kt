@@ -204,6 +204,16 @@ class RelayedVerbPrimaryDispatchTest {
         val err = assertIs<Frame.ControlErr>(relay(Golden.require("control/setQcGrind.json")))
         assertTrue(err.reason.startsWith("The grind follows $SAMPLE_GRINDER_NAME on "), err.reason)
         assertEquals("480", vm.ui.value.qcGrind)
+        // Waiting (the collar not steady yet): refused too (review #558).
+        VmHarness.applyCoreOutput(
+            vm,
+            """{"events":[{"type":"GrinderFollowChanged","content":{"follow":{"status":"Waiting","grinder_id":"$SAMPLE_GRINDER_ID"}}}],"commands":[]}""",
+        )
+        VmHarness.idleUntil("waiting") { vm.ui.value.grinderFollow.status == coffee.crema.core.FollowStatus.Waiting }
+        val waiting = assertIs<Frame.ControlErr>(relay(Golden.require("control/setQcGrind.json")))
+        assertEquals(err.reason, waiting.reason)
+        assertEquals("480", vm.ui.value.qcGrind)
+        assertEquals(false, vm.ui.value.gate(coffee.crema.settings.Setting.QC_GRIND).editable, "the hub's own dial is locked too")
         // Paused: the dial is the remote's to set again.
         VmHarness.applyCoreOutput(
             vm,

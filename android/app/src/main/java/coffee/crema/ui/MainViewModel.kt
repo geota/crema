@@ -681,7 +681,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         override fun liveGrinder(id: String): coffee.crema.core.Grinder? = _ui.value.liveGrinders.firstOrNull { it.id == id }
         // Owner decision 5: while this hub's grinder collar sets the grind, a
         // remote's grind dial is refused, not silently reverted.
-        override fun grindFollowedBy(): String? = _ui.value.takeIf { it.grinderFollow.status == coffee.crema.core.FollowStatus.Following }
+        override fun grindFollowedBy(): String? = _ui.value.takeIf { it.grinderFollow.status.collarSetsGrind() }
             ?.let { s -> s.grinders.firstOrNull { it.id == s.grinderFollow.grinder_id }?.name ?: grinderModelName(s.connectedGrinder.model) }
         override fun applyQuickSave(copyName: String?, asNew: Boolean): CommandOutcome = library.quickSave(copyName, asNew)
         // Someone is using Crema on a mirror: that's presence at the machine.
