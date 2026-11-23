@@ -2,11 +2,11 @@ package coffee.crema.ble.proxy
 
 import coffee.crema.ble.BleTransport
 import coffee.crema.core.RelayKeys
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
@@ -63,17 +63,30 @@ class LanRelayWsTest {
             withTimeout(5_000) { proxy.connect(match.device) }
             assertEquals(BleTransport.ConnState.CONNECTED, proxy.connectionState(match.device).value)
 
+            val n = 200
             val received = CopyOnWriteArrayList<BleTransport.Notification>()
+            // Completed by the collector itself, so the test waits on the
+            // events rather than a poll window. The hub enqueues the attach
+            // snapshot right after Attached, but live samples sent once
+            // connect() returns may be enqueued before it (onInbound runs on
+            // another thread), so the snapshot can arrive after the last
+            // sample: the samples arriving says nothing about the snapshot.
+            val snapshotArrived = CompletableDeferred<Unit>()
+            val samplesArrived = CompletableDeferred<Unit>()
             val obs = scope.launch {
                 merge(
                     proxy.observe(match.device, service, stateChar),
                     proxy.observe(match.device, service, sampleChar),
-                ).collect { received.add(it) }
+                ).collect {
+                    received.add(it)
+                    if (it.characteristic == stateChar && it.data.contentEquals(byteArrayOf(0x01, 0x02))) snapshotArrived.complete(Unit)
+                    if (received.count { r -> r.characteristic == sampleChar } >= n) samplesArrived.complete(Unit)
+                }
             }
 
-            val n = 200
             repeat(n) { i -> hub.onInbound(addr, service, sampleChar, byteArrayOf(i.toByte()), atMs = 1_000L + i) }
-            withTimeout(5_000) { while (received.count { it.characteristic == sampleChar } < n) delay(5) }
+            withTimeout(10_000) { samplesArrived.await() }
+            withTimeout(10_000) { snapshotArrived.await() }
 
             val samples = received.filter { it.characteristic == sampleChar }
             assertEquals(n, samples.size, "every sample relayed over the wire — no loss")
