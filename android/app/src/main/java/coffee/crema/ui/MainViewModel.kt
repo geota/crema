@@ -761,6 +761,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             persistPrefs()
+            // A remote never holds the grinder link (the hub owns the grinder):
+            // the core drops it, a hub or normal device takes it back.
+            grinderController.syncCoreLink()
         },
         // The re-find reattached on a new port of the saved host: that is
         // the remote's target now (same role, same hub, nothing to drop).

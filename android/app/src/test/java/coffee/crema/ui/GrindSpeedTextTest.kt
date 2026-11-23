@@ -41,4 +41,43 @@ class GrindSpeedTextTest {
         assertEquals(700, pulled.grindRpm)
         assertEquals("480 700rpm", pulled.bean?.grinderSetting)
     }
+
+    private fun patchedGrind(shot: coffee.crema.history.StoredShot): String {
+        val inputs = coffee.crema.visualizer.shotPatchInputs(shot, includeNotes = false, defaultPrivacy = null)
+        val body = kotlinx.serialization.json.Json.parseToJsonElement(
+            coffee.crema.core.visualizerShotPatchJson(
+                kotlinx.serialization.json.Json.encodeToString(coffee.crema.core.ShotPatchInputs.serializer(), inputs),
+                true,
+            )!!,
+        ) as kotlinx.serialization.json.JsonObject
+        return (body["grinder_setting"] as kotlinx.serialization.json.JsonPrimitive).content
+    }
+
+    /** Review #555 M1 (a): a pulled shot's grind lives on its bean; an RPM
+     *  edit replaces the speed in it, and Visualizer gets one speed. */
+    @Test
+    fun `an rpm edit on a pulled shot replaces the speed on its bean grind`() {
+        val pulled = coffee.crema.history.StoredShot(
+            id = "shot:remote:v1", completedAtMs = 1, durationMs = 1, grindRpm = 700,
+            bean = coffee.crema.core.ShotBean(name = "Guji", grinderSetting = "480 700rpm"),
+        )
+        val edited = pulled.copy(grindRpm = 800, grindSetting = rpmEditGrind(pulled, 800))
+        assertEquals("480 800rpm", edited.grindSetting)
+        assertEquals("480 800rpm", patchedGrind(edited))
+    }
+
+    /** Review #555 M1 (b): a grind retyped with a new speed carries it, so
+     *  Visualizer never gets "15 1300rpm 1200rpm". */
+    @Test
+    fun `a retyped grind with a speed is the shot's speed`() {
+        val imported = coffee.crema.history.StoredShot(id = "shot:1", completedAtMs = 1, durationMs = 1, grindSetting = "15 1200rpm", grindRpm = 1200)
+        val edited = imported.copy(grindSetting = "15 1300rpm", grindRpm = grindEditSpeed("15 1300rpm", imported.grindRpm))
+        assertEquals(1300, edited.grindRpm)
+        assertEquals("15 1300rpm", patchedGrind(edited))
+        // No speed in the new text: the shot's speed stays.
+        assertEquals(1200, grindEditSpeed("15", 1200))
+        // The core never sends two speeds, whatever the fields say (review #555 M1).
+        assertEquals("15 1300rpm", patchedGrind(imported.copy(grindSetting = "15 1200rpm", grindRpm = 1300)))
+    }
 }
+

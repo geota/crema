@@ -321,6 +321,13 @@ class GrinderControllerTest {
         assertEquals("480", ui.value.qcGrind)
         c.pauseFollowing(false)
         until("resumed") { ui.value.qcGrind == "490" }
+        // A switch to remote drops the link from the core; back, it returns (review #555).
+        ui.update { it.copy(proxyRole = "secondary") }
+        c.syncCoreLink()
+        assertEquals(null, links.last())
+        ui.update { it.copy(proxyRole = "normal") }
+        c.syncCoreLink()
+        assertEquals("grinder:motto", links.last())
         // Beta off: the core loses the link.
         ui.update { it.copy(connectedGrinders = false) }
         c.onBetaChanged(false)
