@@ -71,6 +71,12 @@ class RelayHub(
      */
     private val isRelayedService: (service: UUID) -> Boolean = { true },
     /**
+     * Whether the device at `address` is relayed at all. False for the
+     * connected (or remembered) grinder: its notifications, state and reads
+     * never reach a mirror, and an attach to it finds nothing.
+     */
+    private val isRelayedDevice: (address: String) -> Boolean = { true },
+    /**
      * Per-client outbox capacity. Bounded, so a client that stops reading is
      * dropped (its link closes; it resyncs on reconnect) instead of growing the
      * primary's heap. Tests that need a tiny or unlimited outbox pass one.
@@ -137,7 +143,7 @@ class RelayHub(
         atMs: Long,
         src: String? = null,
     ) {
-        if (!isRelayedService(service)) return
+        if (!isRelayedService(service) || !isRelayedDevice(address)) return
         val frame = Frame.Notify(address, service.toString(), char.toString(), Hex.encode(data), atMs, src)
         val key = cacheKey(address, char)
         val seq = seqGen.incrementAndGet()
@@ -158,6 +164,7 @@ class RelayHub(
     /** A device's connection state changed: fan a [Frame.State] out to attached
      *  secondaries (their managers' reconnect loops react to it). */
     fun onConnState(address: String, state: String) {
+        if (!isRelayedDevice(address)) return
         connStates[address] = state
         val frame = Frame.State(address, state)
         for (c in clients) if (c.approved && c.isAttached(address)) deliver(c, frame)
@@ -335,6 +342,14 @@ class RelayHub(
     private suspend fun handle(session: ClientSession, frame: Frame) {
         when (frame) {
             is Frame.Attach -> {
+                // A device that isn't relayed (the grinder) looks like one the
+                // hub doesn't hold: nothing attaches, nothing is replayed. The
+                // protocol has no attach error, so the honest answer is
+                // DISCONNECTED.
+                if (!isRelayedDevice(frame.address)) {
+                    deliver(session, Frame.Attached(frame.id, frame.address, BleTransport.ConnState.DISCONNECTED.name))
+                    return
+                }
                 // A (re-)attach means the peer's core is converging afresh: clear
                 // its per-char seq marks for this device FIRST so the snapshot
                 // burst is delivered even for chars it saw in a previous attach.
@@ -381,6 +396,11 @@ class RelayHub(
     }
 
     private suspend fun handleRead(session: ClientSession, frame: Frame.Read) {
+        val service = runCatching { UUID.fromString(frame.service) }.getOrNull()
+        if (!isRelayedDevice(frame.address) || (service != null && !isRelayedService(service))) {
+            deliver(session, Frame.ReadErr(frame.id, NOT_RELAYED))
+            return
+        }
         val reply = try {
             val bytes = readSource(frame.address, UUID.fromString(frame.service), UUID.fromString(frame.char))
             Frame.ReadOk(frame.id, Hex.encode(bytes))
@@ -503,3 +523,6 @@ class RelayHub(
         const val CONTROLS_BUSY = "too many controls waiting"
     }
 }
+
+/** A remote's read of a device or service the hub never relays (the grinder). */
+const val NOT_RELAYED = "not-relayed"

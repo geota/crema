@@ -741,6 +741,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         isSnapshotChar = { _, char -> char != De1Uuids.SHOT_SAMPLE && char != scale.weightNotifyChar },
         // Remotes see grinder summaries, never its raw GATT (grinder-ble §6.2).
         isRelayedService = { it !in grinderController.serviceUuids },
+        isRelayedDevice = { address -> !grinderController.isGrinderAddress(address) },
         firmwareHoldsLink = { runCatching { bridge.firmwareLocksWrites() }.getOrDefault(false) },
         onRoleStarting = { role, refind -> remoteConfig.onRoleStarting(role, refind) },
         showPending = { remoteConfig.showPending(it) },

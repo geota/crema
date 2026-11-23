@@ -383,6 +383,12 @@ class GrinderController internal constructor(
         }
     }
 
+    /** Whether [address] is the connected or the remembered grinder: the hub
+     *  never relays it to remotes. */
+    fun isGrinderAddress(address: String): Boolean =
+        address.equals(manager.connectedAddress, ignoreCase = true) ||
+            address.equals(uiState().rememberedGrinderAddress, ignoreCase = true)
+
     /** A DE1 firmware flash started or ended: pause the grinder link for it. */
     fun onFirmwareFlash(active: Boolean) {
         if (!active) manager.heldForFirmwareFlash = false
