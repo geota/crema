@@ -139,4 +139,41 @@ class RelayGrinderPrivacyTest {
             scope.cancel()
         }
     }
+
+    /** Review #552 S1: only roster devices are served, so a standard service
+     *  (a Device Information serial, 0x2A25) on an unlisted device is refused
+     *  even when nothing names it a grinder; a rostered scale that drops out
+     *  for a while is still served. */
+    @Test
+    fun `only devices the roster listed are served`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val scale = "22:33:44:55:66:77"
+            val roster = java.util.concurrent.atomic.AtomicReference(
+                listOf(DeviceInfo(de1, "DE1", "de1", "CONNECTED"), DeviceInfo(scale, "BOOKOO_SC 1", "scale", "CONNECTED")),
+            )
+            val reads = CopyOnWriteArrayList<String>()
+            val (clientEnd, serverEnd) = InMemoryFrameLink.pair()
+            val hub = RelayHub(
+                primaryName = "Kitchen tablet",
+                roster = { roster.get() },
+                readSource = { a, _, _ -> reads += a; byteArrayOf(0x42) },
+                isSnapshotChar = { _, _ -> true },
+            )
+            scope.launch { hub.serve(serverEnd, TEST_PEER) }
+            val proxy = ProxyTransport(clientEnd, scope)
+            withTimeout(2_000) { proxy.scan { it == "DE1" }.first() }
+            val unlisted = Handle(grinder, "BOOKOO MT80 1a2b3c4d")
+            val e = assertFailsWith<IllegalStateException> { withTimeout(2_000) { proxy.read(unlisted, deviceInfo, serialChar) } }
+            assertTrue(e.message!!.contains(NOT_RELAYED), "${e.message}")
+            withTimeout(2_000) { proxy.connect(unlisted) }
+            assertEquals(BleTransport.ConnState.DISCONNECTED, proxy.connectionState(unlisted).value)
+            // The scale drops out of the roster and is still served.
+            roster.set(listOf(DeviceInfo(de1, "DE1", "de1", "CONNECTED")))
+            assertContentEquals(byteArrayOf(0x42), withTimeout(2_000) { proxy.read(Handle(scale, "BOOKOO_SC 1"), deviceInfo, serialChar) })
+            assertEquals(listOf(scale), reads.toList())
+        } finally {
+            scope.cancel()
+        }
+    }
 }

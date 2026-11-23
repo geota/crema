@@ -49,11 +49,14 @@ class GrinderControllerTest {
         }
     }
 
+    private lateinit var bridge: CremaBridge
+    private lateinit var lane: CoreLane
+
     private fun controller(fake: FakeGrinder, scanTimeoutMs: Long = 10_000): Pair<GrinderController, GrinderBleManager> {
-        val bridge = CremaBridge()
+        bridge = CremaBridge()
         lateinit var manager: GrinderBleManager
         lateinit var controller: GrinderController
-        val lane = CoreLane(
+        lane = CoreLane(
             scope = scope,
             json = Json { ignoreUnknownKeys = true },
             log = { log += it },
@@ -183,5 +186,73 @@ class GrinderControllerTest {
         c.connect()
         Thread.sleep(200)
         assertEquals(0, fake.connects)
+    }
+
+    /** Review #552 M1: beta on, connect, beta off, restart, then a DE1 flash must not bring the grinder back. */
+    @Test
+    fun aFirmwareFlashDoesNotBringBackAGrinderWithTheBetaOff() {
+        val fake = FakeGrinder()
+        val (c, m) = controller(fake)
+        ui.update { it.copy(connectedGrinders = false, rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
+        c.hydrate()
+        c.onFirmwareFlash(true)
+        c.onFirmwareFlash(false)
+        Thread.sleep(300)
+        assertEquals(0, fake.connects)
+        assertEquals(0, fake.writes.size)
+        assertEquals(GrinderBleManager.State.IDLE, m.state.value)
+        assertTrue(log.none { it.startsWith("Grinder:") }, "no pause lines for an unwanted grinder: $log")
+        // With the beta on, the same flash pauses and brings it back.
+        ui.update { it.copy(connectedGrinders = true) }
+        c.hydrate()
+        until("connected") { fake.writes.size == 4 }
+        c.onFirmwareFlash(true)
+        until("paused") { m.state.value == GrinderBleManager.State.DISCONNECTED }
+        c.onFirmwareFlash(false)
+        until("back") { fake.writes.size == 8 }
+    }
+
+    /** Web #551 parity: three reconnects in a row with no reading stop auto-reconnect. */
+    @Test
+    fun aGrinderThatStopsSendingDataStopsReconnectingAfterThree() {
+        val fake = FakeGrinder()
+        val (c, m) = controller(fake)
+        ui.update { it.copy(connectedGrinders = true, rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
+        c.hydrate()
+        until("the handshake") { fake.writes.size == 4 }
+        fake.send(FakeGrinder.period("IDLE", 3), seq = 2)
+        until("live") { ui.value.connectedGrinder.status == GrinderLinkStatus.LIVE }
+        // It goes quiet: silence, then every reconnect handshakes but never reads.
+        fake.clock.addAndGet(6_000)
+        lane.deliver(bridge.onTick(fake.clock.get().toULong()))
+        for (n in 1..NO_DATA_GIVE_UP) {
+            until("handshake ${n + 1}", timeoutMs = 20_000) { fake.writes.size == 4 * (n + 1) }
+            until("ready ${n + 1}") { m.state.value == GrinderBleManager.State.READY }
+            fake.clock.addAndGet(6_000)
+            lane.deliver(bridge.onTick(fake.clock.get().toULong()))
+            if (n < NO_DATA_GIVE_UP) until("reconnecting ${n + 1}") { m.state.value != GrinderBleManager.State.READY }
+        }
+        until("stopped") { ui.value.connectedGrinder.status == GrinderLinkStatus.NO_DATA && m.isUserDisconnected }
+        assertEquals(GrinderMessages.NO_DATA, ui.value.connectedGrinder.message)
+        val writes = fake.writes.size
+        Thread.sleep(3_000)
+        assertEquals(writes, fake.writes.size, "no more reconnects")
+        // Reconnect starts over.
+        c.reconnect()
+        until("reconnected") { fake.writes.size == writes + 4 }
+    }
+
+    /** A first connect that never answers stops at once (no reconnect loop). */
+    @Test
+    fun aFirstConnectThatNeverAnswersStops() {
+        val fake = FakeGrinder()
+        val (c, m) = controller(fake)
+        ui.update { it.copy(connectedGrinders = true, rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
+        c.hydrate()
+        until("the handshake") { fake.writes.size == 4 }
+        fake.clock.addAndGet(6_000)
+        lane.deliver(bridge.onTick(fake.clock.get().toULong()))
+        until("stopped") { m.isUserDisconnected && ui.value.connectedGrinder.status == GrinderLinkStatus.NO_ANSWER }
+        assertTrue(ui.value.connectedGrinder.message!!.startsWith("The grinder didn't answer."))
     }
 }

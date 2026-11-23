@@ -25,6 +25,9 @@ internal class ScaleFlashPause(
     private val port: Port,
     /** Which device the log lines name (the grinder shares this pause). */
     private val label: String = "Scale",
+    /** Say nothing about a device that isn't wanted (the grinder with its
+     *  beta off); the scale keeps its line either way. */
+    private val quietWhenUnwanted: Boolean = false,
 ) {
     interface Port {
         /** A scale is linked, connecting, reconnecting or remembered, and not ended by the user. */
@@ -53,7 +56,7 @@ internal class ScaleFlashPause(
         if (active) {
             bringBack = port.scaleWanted()
             port.standDown()
-            port.log("$label: Bluetooth paused for the firmware update")
+            if (bringBack || !quietWhenUnwanted) port.log("$label: Bluetooth paused for the firmware update")
         } else {
             val restore = bringBack
             bringBack = false

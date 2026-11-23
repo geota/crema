@@ -3425,6 +3425,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Devices → Grinder → Forget: stop auto-connecting the remembered grinder. */
     fun forgetGrinder() = grinderController.forget()
 
+    /** "Reconnect" on the grinder card (after it stopped sending data). */
+    fun reconnectGrinder() = grinderController.reconnect()
+
     /** "Retry now" on the grinder card. */
     fun retryGrinder() = grinderController.kickReconnect(coffee.crema.ble.ReconnectTrigger.USER_RETRY)
 

@@ -28,6 +28,9 @@ enum class GrinderLinkStatus {
     NOT_FOUND,
     /** Connected but it never answered, or went quiet. */
     NO_ANSWER,
+    /** It answered before, but [NO_DATA_GIVE_UP] reconnects in a row brought
+     *  no reading: auto-reconnect stopped, the user reconnects. */
+    NO_DATA,
     /** Its firmware is too old for the protocol. */
     UPDATE_FIRMWARE,
     /** A device with a grinder's name but not its service. */
@@ -57,6 +60,11 @@ data class ConnectedGrinderUi(
     /** Drops within [EARLY_DROP_MS] of connecting, this session (§2.7). */
     val earlyDrops: Int = 0,
 )
+
+/** After this many `NoFirstReading`s in a row on a grinder that answered
+ *  before, stop reconnecting (web #551's `NO_DATA_GIVE_UP`): a link that comes
+ *  back but never streams would otherwise recycle every 5–6 s forever. */
+const val NO_DATA_GIVE_UP = 3
 
 /** A drop this soon after connecting counts toward the firmware hint. */
 const val EARLY_DROP_MS = 15_000L
@@ -89,6 +97,9 @@ object GrinderMessages {
     /** Repeated drops right after connect: the October 2026 firmware fix. */
     fun withRestartHint(base: String, earlyDrops: Int): String =
         if (earlyDrops >= 2) "$base If it keeps restarting, update its firmware in the BOOKOO app." else base
+
+    const val NO_DATA =
+        "Grinder not sending data. Crema stopped reconnecting: check it's on and not connected to another app, then reconnect."
 
     const val MISMATCH = "This doesn't look like a Motto 80."
     const val NOT_YOUR_LINKED = "This isn't your linked grinder. Choose which grinder it is."

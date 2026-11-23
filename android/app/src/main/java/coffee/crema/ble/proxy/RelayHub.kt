@@ -163,6 +163,25 @@ class RelayHub(
 
     /** A device's connection state changed: fan a [Frame.State] out to attached
      *  secondaries (their managers' reconnect loops react to it). */
+    /** Every address the roster has listed (the DE1, the scale): the only
+     *  devices a remote may attach or read. A device that drops out of the
+     *  roster for a while (the scale reconnecting) stays served. */
+    private val rostered: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** [roster], noting what it lists. */
+    private fun rosterNow(): List<DeviceInfo> = roster().also { list -> list.forEach { rostered += it.address.uppercase() } }
+
+    /** Whether a remote may attach or read [address]: listed by the roster,
+     *  now or before, and relayed. The grinder is never listed, so neither its
+     *  custom service nor a standard one (a Device Information serial) is
+     *  served. */
+    private fun served(address: String): Boolean {
+        if (!isRelayedDevice(address)) return false
+        if (address.uppercase() in rostered) return true
+        rosterNow()
+        return address.uppercase() in rostered
+    }
+
     fun onConnState(address: String, state: String) {
         if (!isRelayedDevice(address)) return
         connStates[address] = state
@@ -188,7 +207,7 @@ class RelayHub(
      *  reconnect. [Frame.Roster] is the standalone update the secondary's
      *  `ProxyTransport` already folds into its `deviceRoster`. */
     fun pushRoster() {
-        val frame = Frame.Roster(roster())
+        val frame = Frame.Roster(rosterNow())
         for (c in clients) if (c.approved) deliver(c, frame)
     }
 
@@ -256,7 +275,7 @@ class RelayHub(
             runCatching { link.revoke() }
             return@coroutineScope
         }
-        deliver(session, Frame.Welcome(primaryName, AUTHORITY_PRIMARY, roster(), if (peer.canControl) SCOPE_CONTROL else SCOPE_MIRROR))
+        deliver(session, Frame.Welcome(primaryName, AUTHORITY_PRIMARY, rosterNow(), if (peer.canControl) SCOPE_CONTROL else SCOPE_MIRROR))
         onClientsChanged() // the hub's Remotes list shows it
         val reader = launch { readFrames(session, link) }
         // One writer drains the outbox to the link, so the primary's notification
@@ -342,11 +361,11 @@ class RelayHub(
     private suspend fun handle(session: ClientSession, frame: Frame) {
         when (frame) {
             is Frame.Attach -> {
-                // A device that isn't relayed (the grinder) looks like one the
-                // hub doesn't hold: nothing attaches, nothing is replayed. The
+                // A device the roster never listed (the grinder) looks like one
+                // the hub doesn't hold: nothing attaches, nothing is replayed. The
                 // protocol has no attach error, so the honest answer is
                 // DISCONNECTED.
-                if (!isRelayedDevice(frame.address)) {
+                if (!served(frame.address)) {
                     deliver(session, Frame.Attached(frame.id, frame.address, BleTransport.ConnState.DISCONNECTED.name))
                     return
                 }
@@ -367,7 +386,7 @@ class RelayHub(
                 // DISCONNECTED — never a fabricated CONNECTED the State stream
                 // would have to walk back.
                 val state = connStates[frame.address]
-                    ?: roster().firstOrNull { it.address == frame.address }?.state
+                    ?: rosterNow().firstOrNull { it.address == frame.address }?.state
                     ?: BleTransport.ConnState.DISCONNECTED.name
                 deliver(session, Frame.Attached(frame.id, frame.address, state))
                 // Snapshot burst: replay every cached state/identity char for this
@@ -397,7 +416,7 @@ class RelayHub(
 
     private suspend fun handleRead(session: ClientSession, frame: Frame.Read) {
         val service = runCatching { UUID.fromString(frame.service) }.getOrNull()
-        if (!isRelayedDevice(frame.address) || (service != null && !isRelayedService(service))) {
+        if (!served(frame.address) || (service != null && !isRelayedService(service))) {
             deliver(session, Frame.ReadErr(frame.id, NOT_RELAYED))
             return
         }

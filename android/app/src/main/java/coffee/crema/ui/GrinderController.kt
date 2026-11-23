@@ -37,7 +37,7 @@ import kotlinx.serialization.json.Json
  */
 class GrinderController internal constructor(
     private val scope: CoroutineScope,
-    lane: CoreLane,
+    private val lane: CoreLane,
     private val manager: GrinderBleManager,
     private val bleScanner: BleScanner,
     private val transport: BleTransport,
@@ -73,7 +73,9 @@ class GrinderController internal constructor(
 
     private val flashPause = ScaleFlashPause(object : ScaleFlashPause.Port {
         override fun scaleWanted(): Boolean {
-            if (manager.isUserDisconnected) return false
+            // With the beta off (or on a remote) the grinder is never wanted,
+            // whatever is remembered: a flash must not bring it back.
+            if (!allowed() || manager.isUserDisconnected) return false
             val s = manager.state.value
             return uiState().rememberedGrinderAddress != null ||
                 (s != GrinderBleManager.State.IDLE && s != GrinderBleManager.State.DISCONNECTED) ||
@@ -98,16 +100,24 @@ class GrinderController internal constructor(
         }
 
         override fun log(line: String) = appendLog(line)
-    }, label = "Grinder")
+    }, label = "Grinder", quietWhenUnwanted = true)
 
     private var scanTimeout: Job? = null
     @Volatile private var readyAtMs: Long? = null
+    /** It gave a reading since the user's last connect (lane-owned). */
+    @Volatile private var everReady = false
+    /** `NoFirstReading`s in a row since the last reading (lane-owned). */
+    @Volatile private var silentReconnects = 0
+    /** Why the controller stopped the link for good, until the next connect:
+     *  late states from the stopped session mustn't hide it. */
+    @Volatile private var stoppedAs: GrinderLinkStatus? = null
     @Volatile private var scanSinceMs: Long? = null
     private val kickDebouncer = coffee.crema.ble.KickDebouncer(nowMs)
 
     init {
         lane.on<Event.GrinderReady> { e ->
             val info = e.content.info
+            everReady = true
             appendLog("Grinder ready: ${grinderModelName(info.model)}" + (info.firmware?.let { ", firmware $it" } ?: ""))
             updateUi { s ->
                 s.copy(connectedGrinder = s.connectedGrinder.copy(
@@ -121,6 +131,7 @@ class GrinderController internal constructor(
             scope.launch { resolveLink(info.model) }
         }
         lane.on<Event.GrinderReading> { e ->
+            silentReconnects = 0
             updateLive { it.copy(grinderReading = e.content.reading) }
             if (uiState().connectedGrinder.status != GrinderLinkStatus.LIVE) {
                 updateUi { s -> s.copy(connectedGrinder = s.connectedGrinder.copy(status = GrinderLinkStatus.LIVE, message = null)) }
@@ -140,14 +151,26 @@ class GrinderController internal constructor(
             val reason = e.content.reason
             appendLog("Grinder link dead: ${reason.string}")
             updateLive { it.copy(grinderReading = null) }
+            val noFirst = reason == coffee.crema.core.GrinderLinkDeadReason.NoFirstReading
+            if (noFirst && everReady) silentReconnects += 1
+            // As web #551: a first connect that never answers stops; one that
+            // answered before stops after NO_DATA_GIVE_UP silent reconnects.
+            val stop = noFirst && (!everReady || silentReconnects >= NO_DATA_GIVE_UP)
+            val noData = noFirst && everReady && stop
             updateUi { s ->
                 s.copy(connectedGrinder = s.connectedGrinder.copy(
-                    status = GrinderLinkStatus.NO_ANSWER,
-                    message = GrinderMessages.noAnswer(reason, s.connectedGrinder.earlyDrops),
+                    status = if (noData) GrinderLinkStatus.NO_DATA else GrinderLinkStatus.NO_ANSWER,
+                    message = if (noData) GrinderMessages.NO_DATA else GrinderMessages.noAnswer(reason, s.connectedGrinder.earlyDrops),
                 ))
             }
-            if (manager.state.value == GrinderBleManager.State.READY) {
-                scope.launch { manager.presumeDead(reason.string) }
+            when {
+                stop -> {
+                    stoppedAs = if (noData) GrinderLinkStatus.NO_DATA else GrinderLinkStatus.NO_ANSWER
+                    if (noData) appendLog("Grinder not sending data after $NO_DATA_GIVE_UP reconnects — stopped reconnecting")
+                    scope.launch { manager.giveUp(if (noData) "not sending data" else "no answer") }
+                }
+                manager.state.value == GrinderBleManager.State.READY ->
+                    scope.launch { manager.presumeDead(reason.string) }
             }
         }
         lane.on<Event.GrinderUnsupported> { e ->
@@ -196,7 +219,10 @@ class GrinderController internal constructor(
         updateUi { st ->
             val cur = st.connectedGrinder
             val reconnecting = phase != ReconnectKicker.Phase.IDLE && !manager.isUserDisconnected
-            val status = if (cur.status in TERMINAL) {
+            val stopped = stoppedAs
+            val status = if (stopped != null && manager.isUserDisconnected) {
+                stopped
+            } else if (cur.status in TERMINAL) {
                 // The session ended for good (old firmware, not a grinder): a
                 // late state from it mustn't hide that; only a new connect clears it.
                 cur.status
@@ -296,6 +322,7 @@ class GrinderController internal constructor(
     /** Scan for and connect to a grinder (Devices → Grinder → Connect). */
     fun connect() {
         if (!allowed()) return
+        freshSession()
         if (flashPause.holdConnect()) return
         val prefixes = filters.name_prefixes
         if (prefixes.isEmpty()) {
@@ -395,8 +422,24 @@ class GrinderController internal constructor(
         flashPause.onFlashActive(active)
     }
 
+    /** A connect the user (or the launch) asked for starts the silent-reconnect count over. */
+    private fun freshSession() {
+        stoppedAs = null
+        lane.post {
+            everReady = false
+            silentReconnects = 0
+        }
+    }
+
+    /** "Reconnect" after the grinder stopped sending data, or any time it isn't linked. */
+    fun reconnect() {
+        if (uiState().rememberedGrinderAddress != null) directOrScan() else connect()
+    }
+
     private fun directOrScan() {
+        if (!allowed()) return
         if (flashPause.holdConnect()) return
+        freshSession()
         val st = uiState()
         val addr = st.rememberedGrinderAddress
         val name = st.rememberedGrinderName
@@ -425,11 +468,11 @@ class GrinderController internal constructor(
         const val GRINDER_MODEL_FALLBACK = "bookoo-motto-80"
 
         /** Statuses that end a session; cleared only by the user's next connect. */
-        private val TERMINAL = setOf(GrinderLinkStatus.UPDATE_FIRMWARE, GrinderLinkStatus.MISMATCH)
+        private val TERMINAL = setOf(GrinderLinkStatus.UPDATE_FIRMWARE, GrinderLinkStatus.MISMATCH, GrinderLinkStatus.NO_DATA)
 
         /** Statuses a drop leaves on the card until the next connect. */
         private val STICKY = setOf(
-            GrinderLinkStatus.NOT_FOUND, GrinderLinkStatus.NO_ANSWER,
+            GrinderLinkStatus.NOT_FOUND, GrinderLinkStatus.NO_ANSWER, GrinderLinkStatus.NO_DATA,
             GrinderLinkStatus.UPDATE_FIRMWARE, GrinderLinkStatus.MISMATCH,
         )
     }

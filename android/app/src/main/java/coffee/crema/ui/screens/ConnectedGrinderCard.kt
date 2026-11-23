@@ -49,6 +49,7 @@ internal fun grinderStatusText(status: GrinderLinkStatus, modelName: String): St
     GrinderLinkStatus.RECONNECTING -> "Reconnecting…"
     GrinderLinkStatus.NOT_FOUND -> "Not found"
     GrinderLinkStatus.NO_ANSWER -> "Not answering"
+    GrinderLinkStatus.NO_DATA -> "Not sending data"
     GrinderLinkStatus.UPDATE_FIRMWARE -> "Update firmware"
     GrinderLinkStatus.MISMATCH -> "Not a supported grinder"
 }
@@ -81,7 +82,10 @@ fun ConnectedGrinderCard(vm: MainViewModel, ui: MainUiState, modifier: Modifier 
     val g = ui.connectedGrinder
     val modelName = grinderModelName(g.model ?: coffee.crema.ui.GrinderController.GRINDER_MODEL_FALLBACK)
     val remote = ui.proxyRole == "secondary"
-    val linkedUp = g.status !in setOf(GrinderLinkStatus.OFF, GrinderLinkStatus.NOT_FOUND, GrinderLinkStatus.UPDATE_FIRMWARE, GrinderLinkStatus.MISMATCH)
+    val linkedUp = g.status !in setOf(
+        GrinderLinkStatus.OFF, GrinderLinkStatus.NOT_FOUND, GrinderLinkStatus.UPDATE_FIRMWARE,
+        GrinderLinkStatus.MISMATCH, GrinderLinkStatus.NO_DATA,
+    ) && !(g.status == GrinderLinkStatus.NO_ANSWER && ui.connectedGrinderAddress == null)
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -159,6 +163,8 @@ fun ConnectedGrinderCard(vm: MainViewModel, ui: MainUiState, modifier: Modifier 
                     if (g.status == GrinderLinkStatus.RECONNECTING) {
                         CremaButton(onClick = vm::retryGrinder, variant = CremaButtonVariant.Text, label = "Retry now")
                     }
+                } else if (g.status == GrinderLinkStatus.NO_DATA) {
+                    CremaButton(onClick = vm::reconnectGrinder, variant = CremaButtonVariant.Tonal, icon = "bluetooth", label = "Reconnect")
                 } else {
                     CremaButton(onClick = vm::connectGrinder, variant = CremaButtonVariant.Tonal, icon = "bluetooth", label = "Connect")
                 }
