@@ -872,6 +872,11 @@ pub struct CremaCore {
     /// What the connected grinder reported for the current shot, chosen at
     /// its start (SPEC grinder-ble §4.2).
     shot_grinder_observed: Option<de1_domain::shot_grinder::ShotGrinderObservation>,
+    /// The end time of the grind [`Self::shot_grinder_observed`] names: the
+    /// current shot's until it completes, then the pending shot's until it
+    /// is taken (and claims it).
+    shot_grind_ended_at: Option<u64>,
+    pending_grind_ended_at: Option<u64>,
     /// The first stop the core commanded for the current shot, if any.
     shot_stop_reason: Option<StopReason>,
     /// The last finished shot, waiting for the shell's
@@ -1217,6 +1222,8 @@ impl CremaCore {
             shot_selections: ShotSelections::default(),
             shot_selections_at_start: None,
             shot_grinder_observed: None,
+            shot_grind_ended_at: None,
+            pending_grind_ended_at: None,
             shot_stop_reason: None,
             pending_shot: None,
             capture: CaptureRecorder::default(),
@@ -3366,7 +3373,14 @@ impl CremaCore {
     /// disposition, so an aborted shot's undo can still record it. One-shot:
     /// a second call returns `None`, as does a shot with no telemetry.
     pub fn take_stored_shot(&mut self, ctx: ShotCaptureContext) -> Option<StoredShot> {
-        de1_domain::assemble_stored_shot(self.pending_shot.take()?, ctx)
+        let ended_at = self.pending_grind_ended_at.take();
+        let shot = de1_domain::assemble_stored_shot(self.pending_shot.take()?, ctx)?;
+        // The shot claims the grind before it; a discard gives it back
+        // ([`release_shot_grind`](Self::release_shot_grind)).
+        if let Some(at) = ended_at {
+            self.claim_taken_grind(&shot.id, at);
+        }
+        Some(shot)
     }
 
     /// [`take_stored_shot`](Self::take_stored_shot) over JSON: the
@@ -5883,6 +5897,7 @@ impl CremaCore {
                 .unwrap_or_else(|| self.shot_selections.clone()),
             grinder_observed: self.shot_grinder_observed.take(),
         });
+        self.pending_grind_ended_at = self.shot_grind_ended_at.take();
         // Drip learning (Decenza SAW learning): the measured sample is (final
         // settled weight − weight at the stop trigger) at the trigger's flow.
         // The settle window above (#64) lets `final_weight` reach the true
@@ -5988,7 +6003,7 @@ impl CremaCore {
                 // The grind before this shot, or the grinder's reading now.
                 let start_ms = u64::try_from(now.as_millis()).unwrap_or(u64::MAX);
                 let shot_grinder = self.shot_selections.grinder_id.clone();
-                self.shot_grinder_observed =
+                (self.shot_grinder_observed, self.shot_grind_ended_at) =
                     self.grinder_observation_for_shot(start_ms, shot_grinder.as_deref());
                 self.shot_stop_reason = None;
                 // Flow hasn't begun yet (the shot opens in the heating phase) —
@@ -14416,6 +14431,20 @@ mod tests {
                     assert_eq!(
                         de1_domain::shot_grinder::grind_provenance(&shot),
                         de1_domain::shot_grinder::GrindProvenance::Observed
+                    ); // A discarded pull gives the grind back: the retry gets it
+                    // (review #554 S2); a kept one doesn't.
+                    core.release_shot_grind(&shot.id);
+                    pour(&mut core, 4_000);
+                    let retry = core.take_stored_shot(ctx()).expect("the retry");
+                    assert_eq!(
+                        retry.grinder_observed.map(|o| o.source),
+                        Some(de1_domain::shot_grinder::ObservationSource::LastGrind)
+                    );
+                    pour(&mut core, 7_000);
+                    let next = core.take_stored_shot(ctx()).expect("the next");
+                    assert_ne!(
+                        next.grinder_observed.map(|o| o.source),
+                        Some(de1_domain::shot_grinder::ObservationSource::LastGrind)
                     );
                 }
 

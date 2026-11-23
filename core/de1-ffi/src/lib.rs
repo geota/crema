@@ -4034,6 +4034,19 @@ impl CremaBridge {
         self.core().followed_grinder_id()
     }
 
+    /// The shell discarded shot `shot_id` (an aborted pull, a cleaning run):
+    /// the grind it claimed goes back for the next shot. See
+    /// [`de1_app::CremaCore::release_shot_grind`].
+    pub fn release_shot_grind(&self, shot_id: String) {
+        self.core().release_shot_grind(&shot_id);
+    }
+
+    /// The shell kept shot `shot_id` after all (a discard's Undo): it claims
+    /// its grind again. See [`de1_app::CremaCore::claim_shot_grind`].
+    pub fn claim_shot_grind(&self, shot_id: String) {
+        self.core().claim_shot_grind(&shot_id);
+    }
+
     /// The last 20 completed grinds and purges, oldest first, as a
     /// `GrindSession[]` JSON. In memory only.
     pub fn recent_grinds(&self) -> String {
