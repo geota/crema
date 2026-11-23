@@ -356,7 +356,7 @@ export function withGrindRpm(text: string | null | undefined, rpm: number | null
 		setting: string;
 		grindRpm: number | null;
 	};
-	if (grindRpm == null) return text;
+	if (grindRpm == null || grindRpm === rpm) return text;
 	const next = [setting, rpm != null ? `${rpm}rpm` : ''].filter(Boolean).join(' ');
 	return next === '' ? null : next;
 }

@@ -7,7 +7,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
 import { formatGrind, hasVariableSpeed, sameGrind, withGrindRpm } from '#lib/bean/grinder.js';
-import { grindLabel, grinderObservationText, type StoredShot } from './model';
+import { editShotGrind, editShotRpm, grindLabel, grinderObservationText, type StoredShot } from './model';
 
 beforeAll(async () => {
 	await initTestWasm();
@@ -68,5 +68,51 @@ describe('withGrindRpm', () => {
 		expect(hasVariableSpeed({ presetId: 'bookoo-motto-80' })).toBe(true);
 		expect(hasVariableSpeed({ presetId: 'niche-zero' })).toBe(false);
 		expect(hasVariableSpeed(null)).toBe(false);
+	});
+});
+
+describe('History speed and grind edits (REVIEW-557 M1)', () => {
+	/** A pulled shot: its grind lives on the bean snapshot, with the speed. */
+	const pulled = () =>
+		({ metadata: { grinderSetting: null }, bean: { grinderSetting: '480 700rpm' }, grindRpm: 700 }) as unknown as StoredShot;
+	const typed = () => shot({ grind: '15 1200rpm', grindRpm: 1200 });
+
+	it('a pulled shot, speed to 800: the effective grind follows, one speed', () => {
+		const s = editShotRpm(pulled(), 800);
+		expect(s.metadata.grinderSetting).toBe('480 800rpm');
+		expect(s.grindRpm).toBe(800);
+		expect(grindLabel(s)).toBe('Grind 480 800rpm');
+	});
+
+	it('a pulled shot, speed cleared: the speed leaves the grind too', () => {
+		const s = editShotRpm(pulled(), null);
+		expect(s.metadata.grinderSetting).toBe('480');
+		expect(s.grindRpm).toBeUndefined();
+		expect(grindLabel(s)).toBe('Grind 480');
+	});
+
+	it('a typed grind, speed to 800 or cleared', () => {
+		expect(editShotRpm(typed(), 800)).toMatchObject({ grindRpm: 800, metadata: { grinderSetting: '15 800rpm' } });
+		const cleared = editShotRpm(typed(), null);
+		expect(cleared.metadata.grinderSetting).toBe('15');
+		expect(cleared.grindRpm).toBeUndefined();
+	});
+
+	it('a speed on a grind that names none rides beside it', () => {
+		const s = editShotRpm(shot({ grind: '480' }), 700);
+		expect(s).toMatchObject({ grindRpm: 700, metadata: { grinderSetting: '480' } });
+		expect(grindLabel(s)).toBe('Grind 480 · 700 rpm');
+	});
+
+	it('a grind retyped with a speed takes that speed', () => {
+		const s = editShotGrind(typed(), '15 1300rpm');
+		expect(s.grindRpm).toBe(1300);
+		expect(grindLabel(s)).toBe('Grind 15 1300rpm');
+	});
+
+	it('a grind retyped without a speed keeps the old one; cleared, it keeps it too', () => {
+		expect(editShotGrind(typed(), '16')).toMatchObject({ grindRpm: 1200, metadata: { grinderSetting: '16' } });
+		expect(editShotGrind(typed(), null)).toMatchObject({ grindRpm: 1200, metadata: { grinderSetting: null } });
+		expect(editShotGrind(shot({ grind: '480' }), '481').grindRpm).toBeUndefined();
 	});
 });

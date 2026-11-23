@@ -45,6 +45,7 @@ import {
 import type { TelemetrySample } from '#lib/state/index.js';
 import { filenameStamp } from '#lib/utils/download.js';
 import { fromWire } from './telemetry-wire';
+import { withGrindRpm } from '#lib/bean/grinder.js';
 
 /**
  * A snapshot of the current bean at the moment a shot was pulled. Stored on
@@ -768,9 +769,65 @@ export function effectiveGrindSetting(shot: Pick<StoredShot, 'metadata' | 'bean'
 	return snap || null;
 }
 
-/** Whether `text` already ends in `rpm` ("15 1200rpm"): the core's split of a Visualizer grind. */
+/** The speed a grind text ends in ("15 1200rpm" → 1200), or `null`: the core's split of a Visualizer grind. */
+export function trailingSpeed(text: string): number | null {
+	return (JSON.parse(splitVisualizerGrindJson(text)) as { grindRpm: number | null }).grindRpm ?? null;
+}
+
+/** Whether `text` already ends in `rpm` ("15 1200rpm"). */
 function endsInSpeed(text: string, rpm: number): boolean {
-	return (JSON.parse(splitVisualizerGrindJson(text)) as { grindRpm: number | null }).grindRpm === rpm;
+	return trailingSpeed(text) === rpm;
+}
+
+/**
+ * The grind a shot keeps when its speed is edited to `rpm` (REVIEW-557 M1,
+ * Android's `rpmEditGrind`): the effective grind (a pulled shot's lives on its
+ * bean snapshot) with its trailing speed replaced or dropped; the stored grind
+ * as it is when that changes nothing.
+ */
+export function rpmEditGrind(shot: Pick<StoredShot, 'metadata' | 'bean'>, rpm: number | null): string | null {
+	const effective = effectiveGrindSetting(shot);
+	const edited = withGrindRpm(effective, rpm);
+	return edited !== effective ? edited : (shot.metadata?.grinderSetting ?? null);
+}
+
+/**
+ * The speed a shot keeps when its grind is edited to `grind` (REVIEW-557 M1,
+ * Android's `grindEditSpeed`): one typed in the grind ("15 1300rpm") wins,
+ * else the one it had.
+ */
+export function grindEditSpeed(grind: string | null, had: number | null): number | null {
+	return (grind != null ? trailingSpeed(grind) : null) ?? had;
+}
+
+/** `shot` with `grindRpm` set to `rpm`, or without it for `null`. */
+function withSpeed<T extends { grindRpm?: number }>(shot: T, rpm: number | null): T {
+	const { grindRpm: _old, ...rest } = shot;
+	return (rpm != null ? { ...rest, grindRpm: rpm } : rest) as T;
+}
+
+/**
+ * A History grind edit (REVIEW-557 M1): the grind as typed, and the speed it
+ * names ("15 1300rpm") or the one the shot had.
+ */
+export function editShotGrind<T extends Pick<StoredShot, 'metadata' | 'grindRpm'>>(
+	shot: T,
+	grinderSetting: string | null
+): T {
+	const next = withSpeed(shot, grindEditSpeed(grinderSetting, shot.grindRpm ?? null));
+	return { ...next, metadata: { ...shot.metadata, grinderSetting } };
+}
+
+/**
+ * A History speed edit (REVIEW-557 M1): the speed, and the effective grind with
+ * its trailing speed following it ({@link rpmEditGrind}).
+ */
+export function editShotRpm<T extends Pick<StoredShot, 'metadata' | 'bean' | 'grindRpm'>>(
+	shot: T,
+	rpm: number | null
+): T {
+	const next = withSpeed(shot, rpm);
+	return { ...next, metadata: { ...shot.metadata, grinderSetting: rpmEditGrind(shot, rpm) } };
 }
 
 /**
