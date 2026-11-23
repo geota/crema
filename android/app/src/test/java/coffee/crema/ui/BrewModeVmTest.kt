@@ -288,6 +288,31 @@ class BrewModeVmTest {
         vm.brewSessionClearSummary()
     }
 
+    /** REVIEW-532 final: saving a guided brew from Brew ends its session, so it can't be saved (and debited) twice. */
+    @Test
+    fun `saving a finished brew from Brew ends the session`() {
+        val vm = vm()
+        val recipe = vm.recipe()
+        vm.pickRecipe(recipe.id)
+        vm.brewSessionArm(recipe, startOnPour = false)
+        vm.brewSessionBegin()
+        VmHarness.drainCoreLane(vm)
+        vm.brewSessionFinish()
+        VmHarness.drainCoreLane(vm)
+        VmHarness.idle()
+        assertEquals("done", vm.own().guidedBrew.phase)
+        val rows = VmHarness.rows(vm).size
+
+        vm.openGuidedLogBrew(coffee.crema.ui.brewlog.BrewLogOwner.BREW)
+        assertTrue(vm.saveLogBrew())
+        VmHarness.idle()
+        assertEquals("idle", vm.own().guidedBrew.phase, "the summary, and its Save brew…, are gone")
+        assertNull(vm.own().guidedBrew.summary)
+        VmHarness.idleUntil("the row") { VmHarness.rows(vm).size == rows + 1 }
+        // Manual stays on the recipe for the next brew, with Start brew, not a second Save.
+        assertEquals(recipe.id, vm.ui.value.manualRecipe()?.id)
+    }
+
     /** REVIEW-532 round 2: deleting the running recipe mid-brew keeps its Manual page. */
     @Test
     fun `deleting the running recipe mid-brew keeps the brew's Manual page`() {

@@ -894,7 +894,9 @@ internal class GuidedBrewController(
         }
         _logBrew.value = null
         // A guided session's summary card ends once its brew is saved.
-        if (d.owner == coffee.crema.ui.brewlog.BrewLogOwner.SCALE && uiState().guidedBrew.phase == "done") {
+        // Brew's Manual page owns it now (BREW); SCALE is a draft from before.
+        val guidedOwner = d.owner == coffee.crema.ui.brewlog.BrewLogOwner.BREW || d.owner == coffee.crema.ui.brewlog.BrewLogOwner.SCALE
+        if (guidedOwner && uiState().guidedBrew.phase == "done") {
             brewSessionClearSummary()
         }
         return true
