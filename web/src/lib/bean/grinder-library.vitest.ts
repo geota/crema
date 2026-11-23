@@ -13,7 +13,7 @@ import { getSettingsStore } from '#lib/settings/index.js';
 import { getRecipeStore } from '#lib/brew/recipes.svelte.js';
 import { getCustomMethodStore } from '#lib/brew/custom-methods.svelte.js';
 import { buildBackupJsonl, webSingletons } from '#lib/backup/index.js';
-import { planNow, prepareBackup, readRecords, runRestore, type RestoreDeps, type WebMode } from '#lib/restore/engine.js';
+import { keepLocalGrinds, planNow, prepareBackup, readRecords, runRestore, type RestoreDeps, type WebMode } from '#lib/restore/engine.js';
 import { resetTabSafetyForTest } from '#lib/restore/tab-safety.js';
 import { mergeBeanImport } from './import-merge';
 import { exportCremaJsonl, importCremaJsonl } from '#lib/wasm/de1_wasm.js';
@@ -184,6 +184,44 @@ describe('the library migration runs only over a loaded library', () => {
 		expect(g.grinds).toEqual([{ grinderId: lib.grinders[0].id, grinderName: lib.grinders[0].name, grind: '12', starred: true }]);
 		expect(g.grinderSetting, 'the old field stays').toBe('12');
 		expect(lib.migrateGrinders('Niche Zero'), 'idempotent').toBe(false);
+	});
+
+	it('folds a waiting old grind into a list a Quick Save made, after a reload (save-boundaries follow-up 60)', () => {
+		// The Save ran while the settings were quarantined; the settings read on this load.
+		const bag = {
+			...blankBean('bean:waiting'),
+			name: 'Waiting',
+			grinderSetting: '12',
+			grinds: [{ grinderId: 'grinder:ek', grinderName: 'EK43', grind: '9', starred: false }],
+			legacyGrindPending: true
+		};
+		const ek = { ...library.addGrinder('EK43')!, id: 'grinder:ek' };
+		localStorage.setItem(
+			LIBRARY_KEY,
+			JSON.stringify({ schemaVersion: 1, beans: [bag], roasters: [], grinders: [ek] })
+		);
+		const lib = reloaded();
+		expect(lib.getBean('bean:waiting')?.legacyGrindPending, 'the load keeps the mark').toBe(true);
+		expect(lib.migrateGrinders('Niche Zero')).toBe(true);
+		const g = lib.getBean('bean:waiting')!;
+		expect(g.grinds?.map((r) => [r.grinderName, r.grind])).toEqual([
+			['EK43', '9'],
+			['Niche Zero', '12']
+		]);
+		expect(g.legacyGrindPending).toBeUndefined();
+		expect(lib.migrateGrinders('Niche Zero'), 'idempotent').toBe(false);
+	});
+
+	it('a restore that keeps the local grinds keeps their waiting mark too (REVIEW-540)', () => {
+		const here = { ...blankBean('bean:w'), grinderSetting: '12', grinds: [], legacyGrindPending: true };
+		const plain = { ...blankBean('bean:p'), grinds: [] };
+		const backup = [
+			{ ...blankBean('bean:w'), grinderSetting: '12', grinds: undefined },
+			{ ...blankBean('bean:p'), grinds: undefined }
+		];
+		const [w, p] = keepLocalGrinds(backup, [here, plain], ['bean:w', 'bean:p']);
+		expect([w.grinds, w.legacyGrindPending]).toEqual([[], true]);
+		expect('legacyGrindPending' in p).toBe(false);
 	});
 
 	it('never migrates a library that could not be read', () => {

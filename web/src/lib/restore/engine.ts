@@ -624,7 +624,9 @@ export function nextRows<T extends { id: string }>(
 /**
  * The bags a restore writes, with the device's saved grinds kept on the ones
  * the plan names (review F7): their backup row came from an app from before
- * #488 and carries no `grinds`, which would otherwise erase them.
+ * #488 and carries no `grinds`, which would otherwise erase them. The local
+ * `legacyGrindPending` mark comes with them (save-boundaries follow-up 60), so
+ * an old grind still waiting to be folded into those grinds still is.
  */
 export function keepLocalGrinds(next: Bean[], local: readonly Bean[], keep: readonly string[]): Bean[] {
 	if (keep.length === 0) return next;
@@ -632,7 +634,8 @@ export function keepLocalGrinds(next: Bean[], local: readonly Bean[], keep: read
 	const mine = new Map(local.map((b) => [b.id, b]));
 	return next.map((b) => {
 		const here = mine.get(b.id);
-		return ids.has(b.id) && here && b.grinds == null && here.grinds != null ? { ...b, grinds: here.grinds } : b;
+		if (!ids.has(b.id) || !here || b.grinds != null || here.grinds == null) return b;
+		return here.legacyGrindPending ? { ...b, grinds: here.grinds, legacyGrindPending: true } : { ...b, grinds: here.grinds };
 	});
 }
 

@@ -150,6 +150,11 @@ pub fn coerce_bean(raw: &Value, now_ms: i64) -> Option<Bean> {
     if let Some(Value::Array(rows)) = obj.get("grinds") {
         bean.grinds = Some(rows.iter().filter_map(coerce_bag_grind).collect());
     }
+    // The old grind still waiting to be folded in (save-boundaries follow-up
+    // 60): only `true` means anything.
+    if obj.get("legacyGrindPending").and_then(Value::as_bool) == Some(true) {
+        bean.legacy_grind_pending = Some(true);
+    }
     if let Some(Value::Array(arr)) = obj.get("tags") {
         bean.tags = arr
             .iter()
@@ -365,6 +370,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!((old.grinds, old.grinder_setting.as_str()), (None, "3"));
+    }
+
+    /// Save-boundaries follow-up 60 (REVIEW-540 M1): the waiting mark survives.
+    #[test]
+    fn a_waiting_legacy_grind_mark_survives_the_coerce() {
+        let row = |pending: serde_json::Value| {
+            coerce_bean(
+                &serde_json::json!({
+                    "id": "b1", "name": "x", "grinderSetting": "14",
+                    "grinds": [{ "grinderId": "grinder:ek", "grind": "9" }],
+                    "legacyGrindPending": pending,
+                }),
+                0,
+            )
+            .unwrap()
+            .legacy_grind_pending
+        };
+        assert_eq!(row(serde_json::json!(true)), Some(true));
+        assert_eq!(row(serde_json::json!(false)), None);
+        assert_eq!(row(serde_json::json!("yes")), None);
+        assert_eq!(row(serde_json::Value::Null), None);
     }
 
     #[test]

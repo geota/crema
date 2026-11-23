@@ -141,6 +141,14 @@ export interface Bean {
 	 */
 	grinds?: BagGrind[] | null;
 	/**
+	 * The old `grinderSetting` is still waiting to become a saved grind
+	 * although `grinds` is set: a save made the list before the library
+	 * migration reached this bag (save-boundaries follow-up 60). The core's
+	 * migration folds it in and clears this. Mirrors
+	 * `de1_domain::Bean.legacy_grind_pending`.
+	 */
+	legacyGrindPending?: boolean;
+	/**
 	 * Free-form user tags — `["daily-driver", "comp"]`. Defaults to `[]`.
 	 * Mirrors the profile tag pattern (`#lib/profiles`'s `CremaProfile.tags`)
 	 * so the filter / chip UI behaves consistently across the two libraries.
