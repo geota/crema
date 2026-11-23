@@ -6,8 +6,30 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
+import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.navArgument
+
+/**
+ * The Profiles destination, for both hosts: `profiles` with its optional
+ * `filter` argument ([NavRestore.PROFILES_PATTERN]); [content] gets the filter
+ * (`recipes`, `all` or null).
+ */
+internal fun NavGraphBuilder.profilesDestination(content: @Composable (filter: String?) -> Unit) {
+    composable(
+        NavRestore.PROFILES_PATTERN,
+        arguments = listOf(
+            navArgument(NavRestore.PROFILES_FILTER_ARG) {
+                type = NavType.StringType
+                nullable = true
+                defaultValue = null
+            },
+        ),
+    ) { entry -> content(entry.arguments?.getString(NavRestore.PROFILES_FILTER_ARG)) }
+}
 
 /**
  * Keeps a nav host in step with MainActivity's hoisted route so a phone↔tablet
@@ -36,7 +58,9 @@ internal fun SyncNavRoute(
         restored = true
     }
     val entry by nav.currentBackStackEntryAsState()
-    val route = entry?.destination?.route
+    val route = entry?.let { e ->
+        e.destination.route?.let { NavRestore.reportedRoute(it, e.arguments?.getString(NavRestore.PROFILES_FILTER_ARG)) }
+    }
     // Hold reports until the replay has run, or the transient `brew` start
     // would overwrite the route we are restoring.
     LaunchedEffect(route, restored) {

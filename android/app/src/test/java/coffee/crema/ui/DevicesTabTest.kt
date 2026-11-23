@@ -49,7 +49,7 @@ class DevicesTabTest {
                     scaleConnected = false,
                     onRailConnect = {},
                     brewContent = { navTo -> open = navTo },
-                    profilesContent = {},
+                    profilesContent = { _, _ -> },
                     beansContent = {},
                     historyContent = {},
                     scaleContent = { navTo -> ScaleScreen(vm, onNav = navTo, onConnect = {}) },

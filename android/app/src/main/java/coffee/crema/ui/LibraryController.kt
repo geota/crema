@@ -3176,8 +3176,10 @@ class LibraryController(
                     linkedProfileName = linked?.let { id -> s.profiles.firstOrNull { it.id == id }?.name },
                     // A pending start or a guided brew holds the profile as a
                     // running shot does (brew-modes §4, REVIEW-532 M1): the
-                    // linked profile is skipped, with the core's notice.
-                    shotInProgress = s.shotInProgress || s.brewPickLock() != null,
+                    // linked profile is skipped, with the core's notice ("Brew
+                    // in progress" for a guided brew).
+                    shotInProgress = s.shotInProgress || s.shotStarting,
+                    brewInProgress = s.guidedBrewHolds(),
                     activeGrinderId = s.activeGrinderId,
                     grind = s.brewGrindView().value,
                     grinders = s.grinders,
@@ -3247,7 +3249,8 @@ class LibraryController(
             profileId = s.activeProfileId,
             grinderId = s.activeGrinderId,
             grind = s.qcGrind,
-            shotInProgress = s.shotInProgress,
+            // A guided brew holds the profile as a shot does (no upload mid-brew).
+            shotInProgress = s.shotInProgress || s.guidedBrewHolds(),
         )
         val still = runCatching { coffee.crema.beans.bagSelectionUndo(u.selection, now) }.getOrElse {
             appendLog("Bag selection undo failed: ${it.message}")

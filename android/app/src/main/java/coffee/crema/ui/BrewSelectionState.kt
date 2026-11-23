@@ -106,8 +106,11 @@ fun MainUiState.storedBrewSelection(): StoredBrewSelection = StoredBrewSelection
 fun MainUiState.brewPickLock(): BrewPickLock? =
     BrewSelectionRules.lock(
         shotRunning = shotInProgress || shotStarting,
-        guidedBrewRunning = BrewSelectionRules.guidedBrewRunning(guidedBrew.phase),
+        guidedBrewRunning = guidedBrewHolds(),
     )
+
+/** This device runs a guided brew (armed, running or paused): it holds the profile and Brew's picks. */
+fun MainUiState.guidedBrewHolds(): Boolean = BrewSelectionRules.guidedBrewRunning(guidedBrew.phase)
 
 /** "15 g · 250 g water · 100 °C · ~3:00", the header block's line. */
 fun RecipeSummary.headerLine(): String = buildString {

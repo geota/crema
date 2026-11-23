@@ -148,4 +148,33 @@ class NavRestoreTest {
         // A method dialog on another tab doesn't hijack the route.
         assertEquals("beans", NavRestore.restoreRoute("beans", null, phone = true, methodEditOwner = "profiles"))
     }
+
+    // ── Profiles' recipes filter (brew-modes polish) ─────────────────────
+
+    @Test fun theProfilesFilterIsATabWithArguments() {
+        assertEquals("profiles", NavRestore.baseRoute(NavRestore.PROFILES_RECIPES))
+        assertEquals("profiles", NavRestore.baseRoute("profiles"))
+        // A plain tab restores what it showed; arguments open it fresh on them.
+        assertEquals(true, NavRestore.restoresState("profiles"))
+        assertEquals(false, NavRestore.restoresState(NavRestore.PROFILES_RECIPES))
+        assertEquals(false, NavRestore.restoresState(NavRestore.PROFILES_ALL))
+        assertEquals(true, NavRestore.recipesOnly("recipes"))
+        assertEquals(false, NavRestore.recipesOnly("all"))
+        assertEquals(false, NavRestore.recipesOnly(null))
+    }
+
+    @Test fun aHostSwapKeepsTheRecipesOnlyView() {
+        val reported = NavRestore.reportedRoute(NavRestore.PROFILES_PATTERN, "recipes")
+        assertEquals(NavRestore.PROFILES_RECIPES, reported)
+        assertEquals("profiles", NavRestore.reportedRoute(NavRestore.PROFILES_PATTERN, null))
+        assertEquals("profiles", NavRestore.reportedRoute(NavRestore.PROFILES_PATTERN, "all"))
+        assertEquals("bean-edit", NavRestore.reportedRoute("bean-edit", null))
+        for (phone in listOf(true, false)) {
+            assertEquals(reported, NavRestore.restoreRoute(reported, null, phone = phone))
+        }
+        assertEquals(listOf(reported), NavRestore.steps(reported, PHONE_ROUTES))
+        assertEquals(listOf(reported), NavRestore.steps(reported, TABLET_ROUTES))
+        // The recipe editor open over it still comes back as the editor on the phone.
+        assertEquals("recipe-edit", NavRestore.restoreRoute(reported, null, phone = true, recipeEditOwner = "profiles"))
+    }
 }

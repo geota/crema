@@ -12,6 +12,8 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.ui.phone.PhoneBrewScreen
 import coffee.crema.ui.phone.PhoneScaleScreen
@@ -231,5 +233,67 @@ class BrewManualScreenTest {
         compose.waitForIdle()
         assertEquals(recipes.first().id, vm.ui.value.activeRecipeId)
         compose.onNodeWithTag("manual-phone-step").assertExists()
+    }
+
+    /** Brew-modes polish: "All recipes →" opens Profiles on its recipes only, "All profiles →" on the whole library. */
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun `the phone dropdown's library links name the Profiles filter`() {
+        val vm = vm()
+        vm.setActiveProfile(VmHarness.ownState(vm).profiles.first().id)
+        val routes = mutableListOf<String>()
+        compose.setContent { CremaTheme { PhoneBrewScreen(vm, onNav = { routes += it }, onConnect = {}) } }
+        compose.waitForIdle()
+        compose.onNode(hasText(vm.ui.value.activeProfile()!!.name) and hasClickAction()).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("All recipes →").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(NavRestore.PROFILES_RECIPES), routes)
+        compose.onNode(hasText(vm.ui.value.activeProfile()!!.name) and hasClickAction()).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("All profiles →").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(NavRestore.PROFILES_RECIPES, NavRestore.PROFILES_ALL), routes)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun `the phone Profiles screen on its recipes only leaves the profiles out`() {
+        val vm = vm()
+        val own = VmHarness.ownState(vm)
+        val profile = own.profiles.first()
+        val recipe = coffee.crema.ui.brewlog.visibleBrewRecipes(own.brewRecipes, "", own.builtinRecipes, own.hiddenBuiltinRecipes).first()
+        val routes = mutableListOf<String>()
+        var filter by androidx.compose.runtime.mutableStateOf<String?>(NavRestore.FILTER_RECIPES)
+        compose.setContent {
+            CremaTheme { coffee.crema.ui.phone.PhoneProfilesScreen(vm, onNav = { routes += it }, onConnect = {}, filter = filter) }
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("profiles-recipes-only").assertExists()
+        compose.onNodeWithText("Search recipes").assertExists()
+        compose.onNodeWithText(profile.name).assertDoesNotExist()
+        compose.onNodeWithText(recipe.name).performScrollTo().assertExists()
+        compose.onNodeWithText("Show profiles too").performClick()
+        assertEquals(listOf(NavRestore.PROFILES_ALL), routes)
+
+        // The whole library: the profiles are back, the note is gone.
+        filter = "all"
+        compose.waitForIdle()
+        compose.onNodeWithTag("profiles-recipes-only").assertDoesNotExist()
+        compose.onNodeWithText(profile.name).assertExists()
+    }
+
+    @Test
+    fun `the tablet Profiles screen on its recipes only leaves the profiles out`() {
+        val vm = vm()
+        val own = VmHarness.ownState(vm)
+        val profile = own.profiles.first()
+        compose.setContent {
+            CremaTheme { coffee.crema.ui.screens.ProfilesScreen(vm, onNav = {}, onConnect = {}, filter = NavRestore.FILTER_RECIPES) }
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("profiles-recipes-only").assertExists()
+        compose.onNodeWithText(profile.name).assertDoesNotExist()
+        compose.onNodeWithText("Brew recipes").assertExists()
     }
 }

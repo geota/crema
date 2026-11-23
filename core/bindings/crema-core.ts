@@ -433,6 +433,13 @@ export interface BagSelectInput {
 	 * loaded, and a notice says so. The grinder and grind still change.
 	 */
 	shotInProgress: boolean;
+	/**
+	 * A guided brew runs on this device (armed, running or paused; brew
+	 * modes §4): the linked profile is held back as for a shot, and the
+	 * notice says "Brew in progress". With both, the brew is named, as
+	 * [`brew_pick_lock`](crate::brew_pick_lock) names it.
+	 */
+	brewInProgress: boolean;
 	/** The active grinder pointer now. */
 	activeGrinderId?: string;
 	/** Brew's grind value now. */
@@ -472,7 +479,10 @@ export interface SelectionChange {
 export enum SelectionNoticeKind {
 	/** The bag's linked profile isn't in this library: nothing was loaded. */
 	LinkedProfileMissing = "linkedProfileMissing",
-	/** A shot is in progress: the linked profile wasn't loaded. */
+	/**
+	 * A shot or a guided brew is in progress: the linked profile wasn't
+	 * loaded.
+	 */
 	ProfileNotLoaded = "profileNotLoaded",
 }
 

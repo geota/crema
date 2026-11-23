@@ -380,6 +380,11 @@ data class BagSelectInput (
 	/// upload it to the machine mid-extraction, so the linked profile isn't
 	/// loaded, and a notice says so. The grinder and grind still change.
 	val shotInProgress: Boolean,
+	/// A guided brew runs on this device (armed, running or paused; brew
+	/// modes §4): the linked profile is held back as for a shot, and the
+	/// notice says "Brew in progress". With both, the brew is named, as
+	/// [`brew_pick_lock`](crate::brew_pick_lock) names it.
+	val brewInProgress: Boolean,
 	/// The active grinder pointer now.
 	val activeGrinderId: String? = null,
 	/// Brew's grind value now.
@@ -419,7 +424,8 @@ enum class SelectionNoticeKind(val string: String) {
 	/// The bag's linked profile isn't in this library: nothing was loaded.
 	@SerialName("linkedProfileMissing")
 	LinkedProfileMissing("linkedProfileMissing"),
-	/// A shot is in progress: the linked profile wasn't loaded.
+	/// A shot or a guided brew is in progress: the linked profile wasn't
+	/// loaded.
 	@SerialName("profileNotLoaded")
 	ProfileNotLoaded("profileNotLoaded"),
 }

@@ -55,7 +55,10 @@ fun PhoneProfilesScreen(
     vm: MainViewModel,
     onNav: (String) -> Unit,
     onConnect: (String) -> Unit,
+    /** The nav argument: `recipes` shows the recipes only (Brew's "All recipes →"). */
+    filter: String? = null,
 ) {
+    val recipesOnly = coffee.crema.ui.NavRestore.recipesOnly(filter)
     val ui by vm.ui.collectAsStateWithLifecycle()
     // Search, both facet axes (#124: status all / pinned / hidden, and roast)
     // and sort live in the hoisted ListMemory (issue #123), shared by both
@@ -125,7 +128,11 @@ fun PhoneProfilesScreen(
             )
         },
         floatingActionButton = {
-            CremaNewFab(label = "New") { vm.startNewProfile(); onNav("profile-edit") }
+            if (recipesOnly) {
+                CremaNewFab(label = "New") { editRecipe(newRecipeFor("pourover", System.currentTimeMillis()), true) }
+            } else {
+                CremaNewFab(label = "New") { vm.startNewProfile(); onNav("profile-edit") }
+            }
         },
         containerColor = MaterialTheme.colorScheme.background,
     ) { inner ->
@@ -134,45 +141,56 @@ fun PhoneProfilesScreen(
             // (#124) — Hidden + Light is hidden light-roast profiles — with
             // faceted counts (what tapping each chip would show).
             val roasts = setOf("light", "medium", "dark")
-            CremaFilterChipRow(
-                chips = buildList {
-                    add(FilterChipSpec("all", "All", chipCounts["all"]))
-                    add(FilterChipSpec("pinned", "Pinned", chipCounts["pinned"], icon = "star"))
-                    if (ui.hiddenProfileIds.isNotEmpty()) add(FilterChipSpec("hidden", "Hidden", chipCounts["hidden"]))
-                    add(FilterChipSpec("light", "Light", chipCounts["light"]))
-                    add(FilterChipSpec("medium", "Medium", chipCounts["medium"]))
-                    add(FilterChipSpec("dark", "Dark", chipCounts["dark"]))
-                },
-                isSelected = { id -> if (id in roasts) roastFilter == id else effectiveFilter == id },
-                onSelect = { id ->
-                    if (id in roasts) roastFilter = if (roastFilter == id) null else id
-                    else filter = if (filter == id && id != "all") "all" else id
-                },
-                trailing = {
-                    CremaSortControl(
-                        keys = listOf(
-                            SortKey("name", "Name", "sort-ascending"),
-                            SortKey("roast", "Roast", "fire"),
-                            SortKey("pinned", "Pinned", "star"),
-                        ),
-                        selectedKey = sort,
-                        descending = sortDesc,
-                        onKeyChange = { sort = it },
-                        onToggleDirection = { sortDesc = !sortDesc },
-                    )
-                },
-            )
+            // Recipes only: the note that says so, and its way out; the
+            // profile filters have nothing to filter.
+            if (recipesOnly) {
+                coffee.crema.ui.screens.RecipesOnlyNote(
+                    onShowAll = { onNav(coffee.crema.ui.NavRestore.PROFILES_ALL) },
+                    modifier = Modifier.padding(horizontal = CremaEdge),
+                )
+            } else {
+                CremaFilterChipRow(
+                    chips = buildList {
+                        add(FilterChipSpec("all", "All", chipCounts["all"]))
+                        add(FilterChipSpec("pinned", "Pinned", chipCounts["pinned"], icon = "star"))
+                        if (ui.hiddenProfileIds.isNotEmpty()) add(FilterChipSpec("hidden", "Hidden", chipCounts["hidden"]))
+                        add(FilterChipSpec("light", "Light", chipCounts["light"]))
+                        add(FilterChipSpec("medium", "Medium", chipCounts["medium"]))
+                        add(FilterChipSpec("dark", "Dark", chipCounts["dark"]))
+                    },
+                    isSelected = { id -> if (id in roasts) roastFilter == id else effectiveFilter == id },
+                    onSelect = { id ->
+                        if (id in roasts) roastFilter = if (roastFilter == id) null else id
+                        else filter = if (filter == id && id != "all") "all" else id
+                    },
+                    trailing = {
+                        CremaSortControl(
+                            keys = listOf(
+                                SortKey("name", "Name", "sort-ascending"),
+                                SortKey("roast", "Roast", "fire"),
+                                SortKey("pinned", "Pinned", "star"),
+                            ),
+                            selectedKey = sort,
+                            descending = sortDesc,
+                            onKeyChange = { sort = it },
+                            onToggleDirection = { sortDesc = !sortDesc },
+                        )
+                    },
+                )
+            }
             // Scroll position per facet + sort (issue #123), kept in ListMemory
             // across the profile / recipe editor routes and a host swap. Rows:
             // search, the profiles (or the empty note), then the recipes after
             // their header + "Your methods".
-            val recipeLead = 1 + maxOf(sorted.size, 1) + 2
+            val shownProfiles = if (recipesOnly) emptyList() else sorted
+            val showRecipes = recipesOnly || effectiveFilter != "hidden"
+            val recipeLead = 1 + (if (recipesOnly) 0 else maxOf(sorted.size, 1)) + 2
             val listState = rememberListMemoryState(
-                profilesListKey(effectiveFilter, roastFilter, sort, sortDesc, showHiddenRecipes),
-                sorted.size + recipes.size,
+                profilesListKey(effectiveFilter, roastFilter, sort, sortDesc, showHiddenRecipes) + if (recipesOnly) "|recipes" else "",
+                shownProfiles.size + recipes.size,
             ) { k ->
-                sorted.indexOfFirst { it.id == k }.takeIf { it >= 0 }?.plus(1)
-                    ?: recipes.indexOfFirst { it.id == k }.takeIf { it >= 0 && effectiveFilter != "hidden" }?.plus(recipeLead)
+                shownProfiles.indexOfFirst { it.id == k }.takeIf { it >= 0 }?.plus(1)
+                    ?: recipes.indexOfFirst { it.id == k }.takeIf { it >= 0 && showRecipes }?.plus(recipeLead)
             }
             LazyColumn(
                 state = listState,
@@ -181,9 +199,13 @@ fun PhoneProfilesScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 item {
-                    CremaPhoneSearch(query = query, onQueryChange = { query = it }, placeholder = "Search profiles")
+                    CremaPhoneSearch(
+                        query = query,
+                        onQueryChange = { query = it },
+                        placeholder = if (recipesOnly) "Search recipes" else "Search profiles",
+                    )
                 }
-                items(sorted, key = { it.id }) { profile ->
+                items(shownProfiles, key = { it.id }) { profile ->
                     PhoneProfileCard(
                         profile = profile,
                         isLoaded = profile.id == ui.activeProfileId,
@@ -198,7 +220,7 @@ fun PhoneProfilesScreen(
                         onTogglePin = { vm.togglePinProfile(profile.id) },
                     )
                 }
-                if (sorted.isEmpty()) {
+                if (!recipesOnly && sorted.isEmpty()) {
                     item {
                         Text(
                             if (query.isBlank()) "No profiles in this view." else "No profiles match your search.",
@@ -209,7 +231,7 @@ fun PhoneProfilesScreen(
                     }
                 }
                 // ── Brew recipes section (hidden while browsing the archive).
-                if (effectiveFilter != "hidden") {
+                if (showRecipes) {
                     item(key = "recipes-head") {
                         Column(Modifier.padding(top = 14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Eyebrow("Guided brews")
@@ -229,7 +251,7 @@ fun PhoneProfilesScreen(
                                 )
                             }
                             Text(
-                                "Step plans you follow by hand — run them from the Scale tab.",
+                                "Step plans you follow by hand — pick one under Manual recipes in Brew's picker.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
