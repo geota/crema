@@ -66,7 +66,7 @@ import kotlin.math.roundToInt
  * running "planned vs water" check. Twin of the web RecipeEditor.
  *
  * Two hosts over ONE VM-held draft ([MainViewModel.recipeEdit]), opened in
- * place from wherever the user is — Scale's Brew setup or Profiles' Brew
+ * place from wherever the user is — Brew's Manual page or Profiles' Brew
  * recipes section:
  *  • tablet: [RecipeEditorSheet], a right side sheet on the owning tab;
  *  • phone: [RecipeEditorScreen], the pushed `recipe-edit` route.

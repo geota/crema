@@ -30,10 +30,7 @@ object BrewLogOwner {
     const val HISTORY = "history"
     const val BEANS = "beans"
 
-    /** A finished guided session's "Save brew…" (issue #10 Phase 2). */
-    const val SCALE = "scale"
-
-    /** The same, from Brew's Manual page (brew-modes §3). */
+    /** A finished guided session's "Save brew…", on Brew's Manual page (brew-modes §3). */
     const val BREW = "brew"
 }
 

@@ -26,9 +26,6 @@ object MethodEditTarget {
     /** The recipe editor's method selector. */
     const val RECIPE = "recipe"
 
-    /** Scale → Brew setup's method chips. */
-    const val SCALE = "scale"
-
     /** Profiles → "Your methods" (add / rename / edit defaults). */
     const val MANAGE = "manage"
 }

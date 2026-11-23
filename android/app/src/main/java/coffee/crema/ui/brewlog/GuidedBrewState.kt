@@ -44,37 +44,22 @@ data class GuidedBrewSetup(
      *  edit). Until then the setup follows the most recent method, so the
      *  opening pick never freezes on whatever loaded first. */
     val methodChosen: Boolean = false,
-    /**
-     * The bag this brew debits (issue #10 feedback): null follows the active
-     * bag, [GuidedBeanRules.NO_BEAN] is "No bean", else a bean id. Resolve it
-     * with [GuidedBeanRules.resolve]. Choosing never changes the active bag,
-     * and a method / recipe change keeps it.
-     */
-    val beanPick: String? = null,
 )
 
 /**
- * Which bag a guided brew uses — the Brew setup's bean picker, carried
- * through the summary into the Log-brew form (where it's still changeable).
- * Twin of the web `$lib/brew/bean-pick`.
+ * Which bag a guided brew uses — Brew's active bag, carried through the
+ * summary into the Log-brew form (where it's still changeable).
  */
 object GuidedBeanRules {
-    /** [GuidedBrewSetup.beanPick] / the pick for "No bean". */
+    /** The bean pickers' "No bean" key. */
     const val NO_BEAN = "none"
 
     /** A bag a brew can use: it exists and is neither archived nor deleted. */
     fun pickable(b: Bean?): Boolean = b != null && b.archivedAt == null && b.deletedAt == null
 
-    /**
-     * The bag [pick] resolves to: the chosen bag while it's still pickable;
-     * if it was archived or deleted meanwhile (or nothing was chosen), the
-     * active bag; else none. "No bean" stays none.
-     */
-    fun resolve(pick: String?, beans: List<Bean>, activeBeanId: String?): String? {
-        if (pick == NO_BEAN) return null
-        if (pick != null && pickable(beans.firstOrNull { it.id == pick })) return pick
-        return activeBeanId?.takeIf { id -> pickable(beans.firstOrNull { it.id == id }) }
-    }
+    /** The bag a guided brew debits: the active bag while it's pickable, else none. */
+    fun brewBag(beans: List<Bean>, activeBeanId: String?): String? =
+        activeBeanId?.takeIf { id -> pickable(beans.firstOrNull { it.id == id }) }
 
     /**
      * The dose would take more than the bag has left (a bag with no
@@ -150,7 +135,6 @@ object GuidedSetupRules {
 
 /** Who opened the recipe editor — the tablet shows its side sheet on that tab. */
 object RecipeEditOwner {
-    const val SCALE = "scale"
     const val PROFILES = "profiles"
 
     /** Brew's Manual page (brew-modes §3): Save selects the saved recipe. */

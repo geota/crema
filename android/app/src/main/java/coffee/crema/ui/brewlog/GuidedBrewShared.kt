@@ -93,14 +93,14 @@ internal const val CUE_FLASH_MS = 900L
 /**
  * A finished session's card: what was brewed, its numbers and curve, and
  * Discard / "Save brew…" ([onSave] opens the Log-brew form where the caller
- * hosts it). The Scale segment and Brew's Manual page share it.
+ * hosts it). Brew's Manual page shows it on both layouts.
  */
 @Composable
 internal fun GuidedDoneSummary(vm: MainViewModel, onSave: () -> Unit) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val setup by vm.guidedSetup.collectAsStateWithLifecycle()
     val session = ui.guidedBrew
-    val brewBeanId = GuidedBeanRules.resolve(setup.beanPick, ui.beans, ui.activeBeanId)
+    val brewBeanId = GuidedBeanRules.brewBag(ui.beans, ui.activeBeanId)
     val brewBean = brewBeanId?.let { id -> ui.beans.firstOrNull { it.id == id } }
     val summary = session.summary
     if (summary != null) {
