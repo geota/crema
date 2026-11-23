@@ -219,3 +219,39 @@ sealed interface GrinderPick {
     /** "+ Create “text”": a new grinder with the default scale. */
     data class Create(val name: String) : GrinderPick
 }
+
+/** The grind stepper's note while the collar sets Brew's grind (follow mode). */
+const val FOLLOW_GATE_NOTE = "The grinder's collar sets this. Pause following from Brew's grinder menu."
+
+/**
+ * What Brew says about follow mode beside its grind (grinder-ble §5.2):
+ * "from grinder" (with "700 rpm" on a variable-speed grinder), "turning…"
+ * while the collar moves, "waiting for the grinder", "following paused",
+ * "last seen 12:03" while the linked grinder is away; null otherwise.
+ */
+fun MainUiState.grindFollowNote(): String? {
+    val f = grinderFollow
+    return when (f.status) {
+        coffee.crema.core.FollowStatus.Following -> buildString {
+            append(if (f.moving == true) "turning\u2026" else "from grinder")
+            val rpm = f.grind_rpm
+            if (rpm != null && coffee.crema.core.grinderHasVariableSpeed(activeGrinder()?.presetId)) append(" \u00b7 $rpm rpm")
+        }
+        coffee.crema.core.FollowStatus.Waiting -> "waiting for the grinder"
+        coffee.crema.core.FollowStatus.Paused -> "following paused"
+        coffee.crema.core.FollowStatus.Stale -> grinderFollowStaleSince?.let {
+            "last seen " + java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(it))
+        } ?: "grinder away"
+        else -> null
+    }
+}
+
+/** "Grind 480 μm · from grinder": Brew's grind with the follow note. */
+fun MainUiState.grindHeaderText(): String =
+    brewGrindView().headerText() + (grindFollowNote()?.let { " \u00b7 $it" } ?: "")
+
+/** The live grinder record the "Use ‹grinder›" chip suggests (follow `Suggest`), or null. */
+fun MainUiState.followSuggestion(): Grinder? =
+    grinderFollow.takeIf { it.status == coffee.crema.core.FollowStatus.Suggest }?.grinder_id
+        ?.let { id -> liveGrinders.firstOrNull { it.id == id } }
+
