@@ -70,8 +70,21 @@ pub(crate) struct GrinderSlot {
     /// The next follow value is a reconnect's: announce it if it changes
     /// Brew's grind (§5.2).
     announce: bool,
-    /// The end time of the grind the last shot used: no second shot gets it.
+    /// The end time of the grind the last kept shot used: no second shot
+    /// gets it.
     used_grind_ended_at: Option<u64>,
+    /// The last shot taken with a grind, so a shell that discards it can
+    /// give the grind back (review #554 S2).
+    taken: Option<TakenGrind>,
+}
+
+/// A grind a taken shot claimed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TakenGrind {
+    shot_id: String,
+    ended_at: u64,
+    /// What was used before this shot claimed it.
+    before: Option<u64>,
 }
 
 /// What a scanned or connected device is, across every kind: scales first
@@ -272,12 +285,27 @@ impl CremaCore {
     ///
     /// Only for a shot of the grinder record the grinder is linked to: a
     /// shot on another grinder gets nothing (it wasn't ground on this one).
+    ///
+    /// Choosing doesn't use the grind up: the shot claims it when it is taken
+    /// ([`Self::claim_taken_grind`]), and a shell that discards the shot gives
+    /// it back ([`Self::release_shot_grind`]). The second value is the grind's
+    /// end time, to claim with.
     pub(crate) fn grinder_observation_for_shot(
         &mut self,
         start_ms: u64,
         shot_grinder: Option<&str>,
-    ) -> Option<ShotGrinderObservation> {
-        let g = &mut self.grinder;
+    ) -> (Option<ShotGrinderObservation>, Option<u64>) {
+        let observed = self.grinder_observation_inner(start_ms, shot_grinder);
+        let ended_at = observed.as_ref().and_then(|(_, at)| *at);
+        (observed.map(|(o, _)| o), ended_at)
+    }
+
+    fn grinder_observation_inner(
+        &self,
+        start_ms: u64,
+        shot_grinder: Option<&str>,
+    ) -> Option<(ShotGrinderObservation, Option<u64>)> {
+        let g = &self.grinder;
         let linked = g.linked.as_deref()?;
         if shot_grinder != Some(linked) {
             return None;
@@ -295,36 +323,77 @@ impl CremaCore {
                     && g.used_grind_ended_at != Some(s.ended_at)
             });
         if let Some(s) = grind {
-            g.used_grind_ended_at = Some(s.ended_at);
-            return Some(ShotGrinderObservation {
-                source: ObservationSource::LastGrind,
-                model,
-                firmware,
-                setting: s.setting.as_ref().map(|v| v.value.clone()),
-                grind_rpm: s.grind_rpm,
-                feed_rpm: s.feed_rpm,
-                grind_ms: Some(s.duration_ms),
-                ended_before_shot_ms: u32::try_from(start_ms - s.ended_at).ok(),
-                preset: s.preset.map(preset_number),
-                humidity_pct: s.humidity_pct,
-            });
+            return Some((
+                ShotGrinderObservation {
+                    source: ObservationSource::LastGrind,
+                    model,
+                    firmware,
+                    setting: s.setting.as_ref().map(|v| v.value.clone()),
+                    grind_rpm: s.grind_rpm,
+                    feed_rpm: s.feed_rpm,
+                    grind_ms: Some(s.duration_ms),
+                    ended_before_shot_ms: u32::try_from(start_ms - s.ended_at).ok(),
+                    preset: s.preset.map(preset_number),
+                    humidity_pct: s.humidity_pct,
+                },
+                Some(s.ended_at),
+            ));
         }
         if !g.live {
             return None;
         }
         let r = g.last_reading.as_ref()?;
-        Some(ShotGrinderObservation {
-            source: ObservationSource::AtShotStart,
-            model,
-            firmware,
-            setting: r.setting.as_ref().map(|v| v.value.clone()),
-            grind_rpm: r.grind_rpm,
-            feed_rpm: r.feed_rpm,
-            grind_ms: None,
-            ended_before_shot_ms: None,
-            preset: r.preset.map(preset_number),
-            humidity_pct: r.humidity_pct,
-        })
+        Some((
+            ShotGrinderObservation {
+                source: ObservationSource::AtShotStart,
+                model,
+                firmware,
+                setting: r.setting.as_ref().map(|v| v.value.clone()),
+                grind_rpm: r.grind_rpm,
+                feed_rpm: r.feed_rpm,
+                grind_ms: None,
+                ended_before_shot_ms: None,
+                preset: r.preset.map(preset_number),
+                humidity_pct: r.humidity_pct,
+            },
+            None,
+        ))
+    }
+
+    /// A taken shot (`shot_id`) claims the grind it was stamped with
+    /// (`ended_at`): no later shot gets it.
+    pub(crate) fn claim_taken_grind(&mut self, shot_id: &str, ended_at: u64) {
+        let g = &mut self.grinder;
+        g.taken = Some(TakenGrind {
+            shot_id: shot_id.to_owned(),
+            ended_at,
+            before: g.used_grind_ended_at,
+        });
+        g.used_grind_ended_at = Some(ended_at);
+    }
+
+    /// The shell discarded shot `shot_id` (an aborted pull, a cleaning run):
+    /// the grind it claimed goes back, so the next shot within the window
+    /// gets it (review #554 S2). A no-op for any other shot.
+    pub fn release_shot_grind(&mut self, shot_id: &str) {
+        let g = &mut self.grinder;
+        if let Some(t) = &g.taken
+            && t.shot_id == shot_id
+            && g.used_grind_ended_at == Some(t.ended_at)
+        {
+            g.used_grind_ended_at = t.before;
+        }
+    }
+
+    /// The shell kept shot `shot_id` after all (the discard's Undo): it
+    /// claims its grind again. A no-op for any other shot.
+    pub fn claim_shot_grind(&mut self, shot_id: &str) {
+        let g = &mut self.grinder;
+        if let Some(t) = &g.taken
+            && t.shot_id == shot_id
+        {
+            g.used_grind_ended_at = Some(t.ended_at);
+        }
     }
 
     /// The connected grinder's GATT UUIDs. `None` with no grinder.
