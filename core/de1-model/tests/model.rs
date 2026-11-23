@@ -1,5 +1,6 @@
 //! The model test: generated op sequences against the real core.
 
+use de1_domain::StopReason;
 use de1_model::{De1Params, Ending, Invariant, Op, ScaleMode, Status, World};
 use de1_protocol::MachineState;
 use proptest::prelude::*;
@@ -1867,16 +1868,30 @@ fn a_shot_whose_start_was_lost_on_a_live_link_is_its_own_session() {
 /// 2026-11-23 (CI run 45181334811): a 6 g bump drawn on the instant a slow
 /// scale (one reading every 1.2 s) turned healthy. Its first reading is the
 /// first after the pace's last gap, so the load landed while the scale wasn't
-/// reporting: §3.5's known limit for a bump on a slow scale. The disturbance
-/// check took the 6 g step as a disturbance, and the estimate stopped the 36 g
-/// shot at a true 28.8 g, the top of that limit's documented 24.8 to 28.8 g.
-/// One 10 Hz reading before the bump (100 ms), and it's judged, and holds.
-/// The generator no longer draws the first shape
-/// ([`without_slow_scale_disturbances`]); this pins both, so a core change
-/// that lifts the limit, or breaks the 10 Hz case, shows here.
+/// reporting: §3.5's known limit for a bump on a slow scale. The 6 g read as
+/// coffee, the gate opened on it, the bump's lift refused weight, and the
+/// estimate, counting from a `last` that carried the 6 g, stopped the 36 g
+/// shot at a true 28.8 g, the top of the limit's documented 24.8 to 28.8 g.
+///
+/// The generator no longer draws that shape
+/// ([`without_slow_scale_disturbances`]). This pins what each gap of 10 Hz
+/// readings before the bump does, since some of it no invariant judges
+/// (REVIEW-553 S1):
+/// - 0 ms: the limit. The CI case's 6 g happens to return on the band's
+///   edge, so with `BAND_AMBIGUITY_G` the oracle now counts it unseen and
+///   I13 skips it; an 8 g bump, past the band, still fails I13 at a true
+///   26.8 g, which is why the generator keeps the shape out.
+/// - 100 ms to 1 s: the core's gate is still shut (on a 1.2 s scale it opens
+///   only at about 16 g, §3.5's F1), so the bump refuses weight before the
+///   gate, the session goes `Blind`, and the 114 ml backstop ends the shot at
+///   a true 63.6 g. Not early, so I13 holds; late, but I22 skips a bumped
+///   scale, so nothing else judges it.
+/// - 1.1 s and more: the gate has opened, and the estimate stops at 34.8 g.
+///
+/// A core change that moves any of these shows here.
 #[test]
 fn a_bump_as_a_slow_scale_turns_healthy_is_the_known_limit() {
-    let case = |gap_ms: Option<u64>| Case {
+    let case = |gap_ms: Option<u64>, grams: f32| Case {
         params: De1Params {
             preinfusion: false,
             ending: Ending::Prompt,
@@ -1907,40 +1922,138 @@ fn a_bump_as_a_slow_scale_turns_healthy_is_the_known_limit() {
         .into_iter()
         .chain(gap_ms.map(|ms| Op::Advance { ms }))
         .chain([
-            Op::Scale(ScaleMode::Bump {
-                grams: 6.0,
-                ms: 1_200,
-            }),
+            Op::Scale(ScaleMode::Bump { grams, ms: 1_200 }),
             Op::Advance { ms: 100 },
         ])
         .collect(),
     };
-    let limit = run(&case(None));
-    let found: Vec<String> = limit.violations.iter().map(ToString::to_string).collect();
+    let one_stop = |world: &World| -> (StopReason, f32) {
+        assert_eq!(world.stops.len(), 1, "{:?}", world.stops);
+        world.stops[0]
+    };
+
+    // The CI case: on the band's edge, counted unseen.
+    let ci = run(&case(None, 6.0));
+    let (reason, grams) = one_stop(&ci);
+    assert_eq!(reason, StopReason::EstimatedWeight);
+    assert!((28.0..=29.5).contains(&grams), "{grams} g");
+    assert_eq!(ci.coverage.unseen_loads, 1);
+    assert!(ci.violations.is_empty(), "{:?}", ci.violations);
+    // Past the band: the known limit, judged.
+    let limit = run(&case(None, 8.0));
+    let (reason, grams) = one_stop(&limit);
+    assert_eq!(reason, StopReason::EstimatedWeight);
+    assert!((26.0..=27.5).contains(&grams), "{grams} g");
+    assert_eq!(limit.violations.len(), 1, "{:?}", limit.violations);
     assert_eq!(
-        found,
-        ["I13 at 42200 ms: EstimatedWeight stop at a true 28.800158 g of 36 g"],
-        "the known limit's shape (if this now holds, the generator rule can go)"
+        limit.violations[0].invariant,
+        Invariant::I13,
+        "the known limit (if it now holds, the generator rule can go)"
     );
-    for gap_ms in [100, 500, 2_000] {
-        let world = run(&case(Some(gap_ms)));
+
+    for gap_ms in [100, 500, 1_000] {
+        let world = run(&case(Some(gap_ms), 6.0));
+        let (reason, grams) = one_stop(&world);
+        assert_eq!(
+            reason,
+            StopReason::Volume,
+            "{gap_ms} ms: the backstop, the gate still shut"
+        );
+        assert!((63.0..=64.5).contains(&grams), "{gap_ms} ms: {grams} g");
         assert!(
             world.violations.is_empty(),
-            "{gap_ms} ms at 10 Hz first: {:?}",
+            "{gap_ms} ms: {:?}",
             world.violations
         );
     }
+    for gap_ms in [1_100, 2_000] {
+        let world = run(&case(Some(gap_ms), 6.0));
+        let (reason, grams) = one_stop(&world);
+        assert_eq!(
+            reason,
+            StopReason::EstimatedWeight,
+            "{gap_ms} ms: the estimate, the gate open"
+        );
+        assert!((34.0..=35.5).contains(&grams), "{gap_ms} ms: {grams} g");
+        assert!(
+            world.violations.is_empty(),
+            "{gap_ms} ms: {:?}",
+            world.violations
+        );
+    }
+
     // The generator draws the bump only once the scale has read at 10 Hz.
-    let drawn = without_slow_scale_disturbances(true, case(None).ops);
+    let drawn = without_slow_scale_disturbances(true, case(None, 6.0).ops);
     assert!(
         !drawn
             .iter()
             .any(|op| matches!(op, Op::Scale(ScaleMode::Bump { .. })))
     );
-    let drawn = without_slow_scale_disturbances(true, case(Some(100)).ops);
+    let drawn = without_slow_scale_disturbances(true, case(Some(100), 6.0).ops);
     assert!(
         drawn
             .iter()
             .any(|op| matches!(op, Op::Scale(ScaleMode::Bump { .. })))
     );
+}
+
+/// REVIEW-553 F2: on a 10 Hz scale, a stall of 1.6 s or 1.8 s and then a 7 g
+/// bump returns a reading on the core's band edge (17.4 g on a band of 17.4 g).
+/// The core accepted it as coffee, and the estimate stopped the 36 g shot at a
+/// true 27.6 g; the oracle, rebuilding the band from the true cup, had called
+/// the reading refused and so judged the stop: I13, in 58 of 2,196 such cases
+/// (stall start 30.0 to 36.0 s, 1 to 2 s, 5 to 10 g). Inside the oracle's
+/// `BAND_AMBIGUITY_G` the load now counts as unseen, §3.5's limit for a load
+/// that lands while the scale isn't reporting, and I13 skips the session.
+#[test]
+fn a_bump_on_the_return_bands_edge_is_the_unseen_load_limit() {
+    for (start_ms, stall_ms) in [(30_300, 1_600), (30_300, 1_800), (30_700, 1_600)] {
+        let case = Case {
+            params: De1Params {
+                preinfusion: false,
+                ending: Ending::Prompt,
+                idle_ignored: 0,
+                two_tap_steam: false,
+                unknown_pour: false,
+                heating_ms: 1_000,
+            },
+            headspace_ml: 50.0,
+            lane_timeout_ms: 5_000,
+            read_only: false,
+            pre_flush: false,
+            pace: None,
+            untared_cup_g: None,
+            tare_latency_ms: 200,
+            ops: vec![
+                Op::UserStop,
+                Op::Advance { ms: 100 },
+                Op::Advance { ms: 200 },
+                Op::GroupHead(MachineState::Espresso),
+                Op::Advance { ms: start_ms - 300 },
+                Op::Scale(ScaleMode::Stall),
+                Op::Advance { ms: stall_ms },
+                Op::Scale(ScaleMode::Bump {
+                    grams: 7.0,
+                    ms: 1_200,
+                }),
+                Op::Advance { ms: 100 },
+            ],
+        };
+        let world = run(&case);
+        assert_eq!(
+            world.coverage.unseen_loads, 1,
+            "{start_ms}/{stall_ms}: counted unseen"
+        );
+        assert!(
+            world.violations.is_empty(),
+            "{start_ms}/{stall_ms}: {:?}",
+            world.violations
+        );
+        let (reason, grams) = world.stops[0];
+        assert_eq!(reason, StopReason::EstimatedWeight, "{start_ms}/{stall_ms}");
+        assert!(
+            (27.0..=28.5).contains(&grams),
+            "{start_ms}/{stall_ms}: still the limit's {grams} g"
+        );
+    }
 }

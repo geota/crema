@@ -14,6 +14,16 @@ use crate::sim::{De1Params, ScaleMode, SimCup, SimDe1, SimLane, SimLink, SimScal
 
 /// The simulator's step.
 const STEP_MS: u64 = 100;
+
+/// How far past a band's edge a step still counts as accepted in the oracle's
+/// unseen-load check, grams. The core judges a returning reading against a
+/// band built from its own readings and the DE1's pour; the oracle rebuilds
+/// that band from the true cup. The two differ by float error, so a step on
+/// the edge can be accepted by the core and refused by the oracle. Inside
+/// this margin the oracle takes the core's side (the load counts as unseen,
+/// so I13 skips the session), rather than flag a float tie as an early stop.
+/// 0.5 g is well under any load the generator draws (whole grams).
+const BAND_AMBIGUITY_G: f32 = 0.5;
 /// A DE1 sample every this long.
 const SAMPLE_MS: u64 = 200;
 /// The shells' tick.
@@ -317,6 +327,10 @@ pub struct World {
     pub coverage: Coverage,
     /// What broke.
     pub violations: Vec<Violation>,
+    /// Every `StopTriggered`, in order: its reason and the true cup weight
+    /// then, grams (what a pinned case asserts about a stop no invariant
+    /// judges, such as a backstop).
+    pub stops: Vec<(StopReason, f32)>,
     /// Every requested-state write the core sent, in order, with a
     /// `Command::Stop` as its Idle byte and `true` for a stop.
     pub requests: Vec<(u8, bool)>,
@@ -408,6 +422,7 @@ impl World {
             last_load: 0.0,
             coverage: Coverage::default(),
             violations: Vec::new(),
+            stops: Vec::new(),
             requests: Vec::new(),
         };
         world.core.set_start_settings(pre_flush, false, false);
@@ -826,13 +841,22 @@ impl World {
             #[allow(clippy::cast_precision_loss)]
             let gap_s = gap_ms.min(60_000) as f32 / 1000.0;
             let step = gain + load_step;
+            // A step within [`BAND_AMBIGUITY_G`] of a band's edge counts as
+            // accepted: the core and the oracle measure it from different
+            // floats (the core from its readings and the DE1's pour, the
+            // oracle from the true cup gain), so at the edge either side may
+            // round the other way, and a case the core decides by a float
+            // can't fail I13 (REVIEW-553 F2: a 1.6 s stall, then a 7 g bump,
+            // read 17.4 g on a band of 17.4 g).
             let accepted = if gap_ms >= 1_000 {
                 // A return: `Tared` has no check; after the gate, the core's
                 // band, `last − 3 g` to `last + 1.5 × poured + 5 g`.
-                !self.gate_seen || (-3.0..=1.5 * gain.max(0.0) + 5.0).contains(&step)
+                !self.gate_seen
+                    || (-3.0 - BAND_AMBIGUITY_G..=1.5 * gain.max(0.0) + 5.0 + BAND_AMBIGUITY_G)
+                        .contains(&step)
             } else {
                 // Not a return: the step band, `3 g + 12 g/s × dt`.
-                step.abs() <= 3.0 + 12.0 * gap_s
+                step.abs() <= 3.0 + 12.0 * gap_s + BAND_AMBIGUITY_G
             };
             // A new scale's first reading over the target (or 50 g) is the
             // untared-cup guard's, which the model must still see.
@@ -1566,6 +1590,7 @@ impl World {
                 // Espresso's target; what's in the cup since the last tare a
                 // person meant.
                 let grams = self.true_cup_g();
+                self.stops.push((*reason, grams));
                 let judged = self.judged();
                 let judged_honest = self.judged_honest();
                 let lost = if self.scale_lost {
