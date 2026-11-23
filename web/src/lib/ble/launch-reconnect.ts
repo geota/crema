@@ -26,8 +26,11 @@
 
 import { isJsonObject, readJson, writeJson } from '#lib/utils/storage.js';
 
-/** The two devices the app connects. */
-export type DeviceKind = 'de1' | 'scale';
+/** The devices the app connects (the grinder only with the beta on). */
+export type DeviceKind = 'de1' | 'scale' | 'grinder';
+
+/** Every {@link DeviceKind}, in launch order. */
+export const DEVICE_KINDS: readonly DeviceKind[] = ['de1', 'scale', 'grinder'];
 
 /** The browser's identity for a connected device. */
 export interface DeviceIdentity {
@@ -65,7 +68,8 @@ export function readLastDevices(): LastDevices {
 	});
 	return {
 		de1: raw && isRemembered(raw.de1) ? raw.de1 : null,
-		scale: raw && isRemembered(raw.scale) ? raw.scale : null
+		scale: raw && isRemembered(raw.scale) ? raw.scale : null,
+		grinder: raw && isRemembered(raw.grinder) ? raw.grinder : null
 	};
 }
 
@@ -229,7 +233,11 @@ export async function reconnectOnLaunch(opts: {
  * user Connect / Disconnect calls while a wait is pending.
  */
 export class LaunchReconnect {
-	readonly #pending: Record<DeviceKind, AbortController | null> = { de1: null, scale: null };
+	readonly #pending: Record<DeviceKind, AbortController | null> = {
+		de1: null,
+		scale: null,
+		grinder: null
+	};
 
 	/** Stop a pending launch reconnect for `kind` (the user took over). */
 	cancel(kind: DeviceKind): void {
@@ -253,10 +261,12 @@ export class LaunchReconnect {
 		timeoutMs?: number;
 	}): Promise<Record<DeviceKind, LaunchOutcome>> {
 		const { bluetooth } = opts;
-		if (!supportsLaunchReconnect(bluetooth)) return { de1: 'unsupported', scale: 'unsupported' };
+		if (!supportsLaunchReconnect(bluetooth)) {
+			return { de1: 'unsupported', scale: 'unsupported', grinder: 'unsupported' };
+		}
 		const last = readLastDevices();
-		const [de1, scale] = await Promise.all(
-			(['de1', 'scale'] as const).map(async (kind): Promise<LaunchOutcome> => {
+		const [de1, scale, grinder] = await Promise.all(
+			DEVICE_KINDS.map(async (kind): Promise<LaunchOutcome> => {
 				const remembered = last[kind];
 				if (remembered === null || !remembered.auto || !opts.isIdle(kind)) return 'not-remembered';
 				// A re-run (the page back in view) replaces an earlier wait: the
@@ -283,6 +293,6 @@ export class LaunchReconnect {
 				}
 			})
 		);
-		return { de1, scale };
+		return { de1: de1!, scale: scale!, grinder: grinder! };
 	}
 }

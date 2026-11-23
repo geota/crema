@@ -57,7 +57,8 @@ describe('device memory', () => {
 		rememberDevice('scale', { id: 'sc-id', name: 'BOOKOO_SC' });
 		expect(JSON.parse(localStorage.getItem(LAST_DEVICES_KEY)!)).toEqual({
 			de1: { id: 'de1-id', name: 'DE1', auto: true },
-			scale: { id: 'sc-id', name: 'BOOKOO_SC', auto: true }
+			scale: { id: 'sc-id', name: 'BOOKOO_SC', auto: true },
+			grinder: null
 		});
 	});
 
@@ -71,7 +72,7 @@ describe('device memory', () => {
 
 	it('reads a malformed entry as nothing remembered', () => {
 		localStorage.setItem(LAST_DEVICES_KEY, JSON.stringify({ de1: { id: 3 }, scale: 'x' }));
-		expect(readLastDevices()).toEqual({ de1: null, scale: null });
+		expect(readLastDevices()).toEqual({ de1: null, scale: null, grinder: null });
 	});
 });
 
@@ -79,9 +80,9 @@ describe('LaunchReconnect', () => {
 	it('unsupported (no navigator.bluetooth, or no getDevices) is a silent no-op', async () => {
 		rememberDevice('de1', { id: 'de1-id', name: 'DE1' });
 		const a = runner(new LaunchReconnect(), undefined);
-		expect(await a.done).toEqual({ de1: 'unsupported', scale: 'unsupported' });
+		expect(await a.done).toEqual({ de1: 'unsupported', scale: 'unsupported', grinder: 'unsupported' });
 		const b = runner(new LaunchReconnect(), {} as Bluetooth);
-		expect(await b.done).toEqual({ de1: 'unsupported', scale: 'unsupported' });
+		expect(await b.done).toEqual({ de1: 'unsupported', scale: 'unsupported', grinder: 'unsupported' });
 		expect(a.connect).not.toHaveBeenCalled();
 		expect(b.connect).not.toHaveBeenCalled();
 	});
@@ -92,7 +93,7 @@ describe('LaunchReconnect', () => {
 		rememberDevice('de1', { id: 'de1-id', name: 'DE1' });
 		rememberDevice('scale', { id: 'sc-id', name: 'BOOKOO_SC' });
 		const r = runner(new LaunchReconnect(), fakeBluetooth([scale, de1]));
-		expect(await r.done).toEqual({ de1: 'connecting', scale: 'connecting' });
+		expect(await r.done).toEqual({ de1: 'connecting', scale: 'connecting', grinder: 'not-remembered' });
 		expect(r.connect).toHaveBeenCalledWith('de1', de1);
 		expect(r.connect).toHaveBeenCalledWith('scale', scale);
 	});
@@ -108,7 +109,7 @@ describe('LaunchReconnect', () => {
 	it('nothing found (not permitted, nothing remembered) does nothing', async () => {
 		rememberDevice('de1', { id: 'de1-id', name: 'DE1' });
 		const r = runner(new LaunchReconnect(), fakeBluetooth([fakeDevice('other', 'Other')]));
-		expect(await r.done).toEqual({ de1: 'not-found', scale: 'not-remembered' });
+		expect(await r.done).toEqual({ de1: 'not-found', scale: 'not-remembered', grinder: 'not-remembered' });
 		expect(r.connect).not.toHaveBeenCalled();
 	});
 

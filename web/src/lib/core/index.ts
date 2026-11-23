@@ -21,7 +21,14 @@
  * Mirrors the role of the Android shell's `CremaBridge` Kotlin binding.
  */
 
-import type { CoreOutput, ScaleCapabilities, ScaleUuids, TimedSample } from './crema-core';
+import type {
+	CoreOutput,
+	GrinderCapabilities,
+	GrinderUuids,
+	ScaleCapabilities,
+	ScaleUuids,
+	TimedSample
+} from './crema-core';
 import type { CalTarget, MmrRegister } from './crema-core';
 import type { ShotQualityInput, ShotQualityReport, SawModelLoad } from './crema-core';
 import type { FlashBlocker, FlashShellConditions, FlashStep } from './crema-core';
@@ -290,7 +297,8 @@ export type NotificationSource =
 	| 'De1ProfileHeader'
 	| 'De1FrameAck'
 	| 'De1HeaderAck'
-	| 'ScaleButton';
+	| 'ScaleButton'
+	| 'GrinderNotify';
 
 /**
  * The async core facade. One instance owns one `CremaBridge`; obtain it from
@@ -491,6 +499,30 @@ export interface CremaCore {
 	 * characteristics to subscribe to.
 	 */
 	scaleUuids(): Promise<ScaleUuids | undefined>;
+	/**
+	 * Identify and connect a grinder from its BLE `advertisedName` and the
+	 * discovered GATT `serviceUuids`. Resolves to its model id (the grinder
+	 * catalogue's id, e.g. `bookoo-motto-80`), or `undefined` if nothing
+	 * matched. A fresh driver each call: every connect and reconnect makes
+	 * one, and a second connect replaces the first.
+	 */
+	connectGrinder(advertisedName: string, serviceUuids: readonly string[]): Promise<string | undefined>;
+	/**
+	 * The shell subscribed to the grinder's notify characteristic: the
+	 * output's `WriteGrinder` commands (the handshake) go out in order, with
+	 * response. `maxPacket` is 20 on web (Web Bluetooth can't tell the MTU).
+	 * Starts the core's first-reading deadline.
+	 */
+	grinderSubscribed(maxPacket: number, nowMs: number): Promise<CoreOutput>;
+	/**
+	 * The grinder link dropped or the user disconnected: drop its driver. The
+	 * output may carry a `GrindCompleted` for a grind the drop cut off.
+	 */
+	disconnectGrinder(): Promise<CoreOutput>;
+	/** The connected grinder's GATT UUIDs, or `undefined` with no grinder. */
+	grinderUuids(): Promise<GrinderUuids | undefined>;
+	/** What the connected grinder reports, or `undefined` with no grinder. */
+	grinderCapabilities(): Promise<GrinderCapabilities | undefined>;
 	/**
 	 * Tell the core which profile the DE1 should hold: the library
 	 * `CremaProfile` (`null` = no active profile) with the Quick Controls
@@ -1062,6 +1094,8 @@ async function createCore(): Promise<CremaCore> {
 				return wasm.NotificationSource.De1HeaderAck;
 			case 'ScaleButton':
 				return wasm.NotificationSource.ScaleButton;
+			case 'GrinderNotify':
+				return wasm.NotificationSource.GrinderNotify;
 		}
 	};
 
@@ -1229,6 +1263,23 @@ async function createCore(): Promise<CremaCore> {
 		async scaleUuids() {
 			const raw = bridge.scale_uuids();
 			return raw === undefined ? undefined : (JSON.parse(raw) as ScaleUuids);
+		},
+		async connectGrinder(advertisedName, serviceUuids) {
+			return bridge.connect_grinder(advertisedName, [...serviceUuids]);
+		},
+		async grinderSubscribed(maxPacket, nowMs) {
+			return parseOutput(bridge.grinder_subscribed(maxPacket, nowMs));
+		},
+		async disconnectGrinder() {
+			return parseOutput(bridge.disconnect_grinder());
+		},
+		async grinderUuids() {
+			const raw = bridge.grinder_uuids();
+			return raw === undefined ? undefined : (JSON.parse(raw) as GrinderUuids);
+		},
+		async grinderCapabilities() {
+			const raw = bridge.grinder_capabilities();
+			return raw === undefined ? undefined : (JSON.parse(raw) as GrinderCapabilities);
 		},
 		async setDesiredProfile(profile, qc, nowMs) {
 			const sync = JSON.parse(
@@ -1558,6 +1609,14 @@ async function createCore(): Promise<CremaCore> {
 }
 
 export type { CoreOutput, ScaleCapabilities, ScaleUuids, FirmwareBuildReport } from './crema-core';
+export type {
+	GrinderCapabilities,
+	GrinderInfo,
+	GrinderReading,
+	GrinderUuids,
+	GrindSession
+} from './crema-core';
+export { GrinderLinkDeadReason, GrinderState } from './crema-core';
 export type { BrewOverrides, ProfileSyncStatus } from './crema-core';
 export type {
 	FirmwareArtifact,

@@ -26,7 +26,15 @@ import type {
 	MmrRegister,
 	CalTarget
 } from '#lib/core/index.js';
-import type { HotWaterTarget } from '#lib/core/crema-core.js';
+import type {
+	GrindSession,
+	GrinderCapabilities,
+	GrinderInfo,
+	GrinderReading,
+	HotWaterTarget
+} from '#lib/core/crema-core.js';
+import type { BleConnectionState } from '#lib/ble/connection-state.js';
+import type { GrinderProblem } from '#lib/ble/grinder.js';
 import { StopReason, SubState } from '#lib/core/crema-core.js';
 import { MaintenanceFailure, ScaleLinkDeadReason } from '#lib/core/crema-core.js';
 import type { De1State, De1Diagnostics } from '#lib/ble/de1.js';
@@ -476,7 +484,48 @@ export interface UiSnapshot {
 
 	/** The current capture-replay status, or `null` when no replay has run. */
 	readonly replay: ReplayStatus | null;
+
+	/** The connected grinder (beta, Devices → Grinder). */
+	readonly grinder: ConnectedGrinderView;
 }
+
+/**
+ * The connected grinder as Devices → Grinder shows it. The serial is held in
+ * memory only, like a scale's, and never logged.
+ */
+export interface ConnectedGrinderView {
+	/** The link's coarse state. */
+	readonly state: BleConnectionState;
+	/** The browser's Bluetooth id (the link's key, `#lib/grinder/connected-link`), or null. */
+	readonly deviceId: string | null;
+	/** The advertised name, or null. */
+	readonly name: string | null;
+	/** The model id the core identified (a grinder catalogue id), or null. */
+	readonly model: string | null;
+	/** What it reports (units, ranges), from the core once identified, or null. */
+	readonly capabilities: GrinderCapabilities | null;
+	/** What it said about itself (firmware; serial in memory only), or null. */
+	readonly info: GrinderInfo | null;
+	/** The latest reading, kept while the link recovers; null when disconnected. */
+	readonly reading: GrinderReading | null;
+	/** The last completed grind or purge on this link, or null. */
+	readonly lastRun: GrindSession | null;
+	/** Why the link ended without a retry, or null. */
+	readonly problem: GrinderProblem | null;
+}
+
+/** No grinder connected. */
+export const NO_GRINDER: ConnectedGrinderView = {
+	state: 'idle',
+	deviceId: null,
+	name: null,
+	model: null,
+	capabilities: null,
+	info: null,
+	reading: null,
+	lastRun: null,
+	problem: null
+};
 
 /**
  * The DE1's memory-mapped diagnostic registers (R1) — the raw 32-bit value of
@@ -688,7 +737,8 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	machineError: null,
 	maintenance: null,
 	idleSince: null,
-	replay: null
+	replay: null,
+	grinder: NO_GRINDER
 };
 
 // The DE1 tank-level → ml lookup moved to the core 2026-05-22
@@ -1514,13 +1564,58 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			};
 		// The connected grinder (G2a core only): the web shell has no grinder
 		// transport yet, so these don't arrive; G2b gives them a home.
+		// The connected grinder (beta). Its events carry the serial
+		// (`GrinderInfo.serial`), so none is logged whole: the log names the
+		// firmware only, and readings (5 a second) aren't logged at all.
 		case 'GrinderReady':
+			return {
+				...snapshot,
+				grinder: { ...snapshot.grinder, info: event.content.info },
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Grinder ready${event.content.info.firmware ? ` (firmware ${event.content.info.firmware})` : ''}`
+				)
+			};
 		case 'GrinderReading':
-		case 'GrinderInfoChanged':
+			return { ...snapshot, grinder: { ...snapshot.grinder, reading: event.content.reading } };
+		case 'GrinderInfoChanged': {
+			const prior = snapshot.grinder.info?.firmware;
+			const firmware = event.content.info.firmware;
+			return {
+				...snapshot,
+				grinder: { ...snapshot.grinder, info: event.content.info },
+				eventLog:
+					firmware && firmware !== prior
+						? appendLog(snapshot.eventLog, `Grinder firmware ${firmware}`)
+						: snapshot.eventLog
+			};
+		}
 		case 'GrinderLinkDead':
+			return {
+				...snapshot,
+				eventLog: appendLog(snapshot.eventLog, `Grinder link dead: ${event.content.reason}`)
+			};
 		case 'GrinderUnsupported':
-		case 'GrindCompleted':
-			return snapshot;
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Grinder firmware ${event.content.firmware} unsupported (needs ${event.content.minimum})`
+				)
+			};
+		case 'GrindCompleted': {
+			const run = event.content.session;
+			const what = run.kind === 'Purge' ? 'Purge' : 'Grind';
+			const cut = run.ended_by === 'LinkLost' ? ', cut off by a drop' : '';
+			return {
+				...snapshot,
+				grinder: { ...snapshot.grinder, lastRun: run },
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`${what} finished: ${(run.duration_ms / 1000).toFixed(1)} s${cut}`
+				)
+			};
+		}
 		case 'UnknownMachineByte':
 			return {
 				...snapshot,

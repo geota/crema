@@ -443,6 +443,22 @@
 	</StRow>
 </StGroup>
 
+<StGroup title="Beta">
+	<StRow
+		title="Connected grinders"
+		sub="Connect a BOOKOO Motto 80 from Devices → Grinder and see its readings live. Crema only reads it: nothing is sent but the connect handshake. Close the BOOKOO app first; the grinder takes one phone at a time."
+	>
+		{#snippet control()}
+			<StToggle
+				on={prefs.connectedGrinderBeta === true}
+				onChange={(v) =>
+					app ? void app.setConnectedGrinderBeta(v) : settings.set('connectedGrinderBeta', v)}
+				label="Connected grinders (beta)"
+			/>
+		{/snippet}
+	</StRow>
+</StGroup>
+
 <StGroup
 	title="Webhooks"
 	sub="Outbound POSTs to your URL when these events fire. Requires CORS to be configured on your endpoint."
