@@ -518,6 +518,14 @@ pub struct Bean {
     /// change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grinds: Option<Vec<crate::bag_grind::BagGrind>>,
+    /// The old `grinder_setting` is still waiting to become a saved grind
+    /// although `grinds` is `Some`: a save made the list before the library
+    /// migration ran on this bag (a Quick Save while the settings were
+    /// quarantined, save-boundaries follow-up 60). The migration folds it in
+    /// without overwriting a row for the same grinder, then clears this.
+    /// `None` = nothing waiting (or `grinds` is `None`, which waits anyway).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_grind_pending: Option<bool>,
     /// Free-form user tags — e.g. `"daily-driver"`, `"comp"`, `"experimental"`.
     /// Defaults to an empty list. Serialised as `tags` so the JSON contract
     /// matches the [`crate::Profile`] tag pattern.
@@ -898,6 +906,7 @@ pub fn duplicate_bean(source: &Bean, new_id: &str, now_ms: i64) -> Bean {
         grinder,
         grinder_setting,
         grinds,
+        legacy_grind_pending,
         tags,
         linked_profile_id,
         visualizer_id: _,
@@ -943,6 +952,7 @@ pub fn duplicate_bean(source: &Bean, new_id: &str, now_ms: i64) -> Bean {
         grinder,
         grinder_setting,
         grinds,
+        legacy_grind_pending,
         tags,
         linked_profile_id,
         visualizer_id: None,
@@ -1134,6 +1144,7 @@ impl Bean {
             grinder: String::new(),
             grinder_setting: String::new(),
             grinds: None,
+            legacy_grind_pending: None,
             tags: Vec::new(),
             linked_profile_id: None,
             visualizer_id: None,

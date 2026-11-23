@@ -221,6 +221,15 @@ export interface Bean {
 	 */
 	grinds?: BagGrind[];
 	/**
+	 * The old `grinder_setting` is still waiting to become a saved grind
+	 * although `grinds` is `Some`: a save made the list before the library
+	 * migration ran on this bag (a Quick Save while the settings were
+	 * quarantined, save-boundaries follow-up 60). The migration folds it in
+	 * without overwriting a row for the same grinder, then clears this.
+	 * `None` = nothing waiting (or `grinds` is `None`, which waits anyway).
+	 */
+	legacyGrindPending?: boolean;
+	/**
 	 * Free-form user tags — e.g. `"daily-driver"`, `"comp"`, `"experimental"`.
 	 * Defaults to an empty list. Serialised as `tags` so the JSON contract
 	 * matches the [`crate::Profile`] tag pattern.
@@ -3807,7 +3816,8 @@ export interface GrinderLibraryMigration {
 	/** Grinder records to add. */
 	newGrinders: Grinder[];
 	/**
-	 * Bags whose `grinds` it filled (they were `None`); `updated_at` is not
+	 * Bags whose `grinds` it filled (they were `None`, or the old grind was
+	 * still waiting: [`Bean::legacy_grind_pending`]); `updated_at` is not
 	 * changed, since the migration isn't an edit.
 	 */
 	updatedBeans: Bean[];
@@ -3825,7 +3835,8 @@ export interface GrinderLibraryMigration {
 	 */
 	skipped?: MigrationSkip;
 	/**
-	 * Bags left unmigrated (`grinds` still `None`) because the settings were
+	 * Bags left unmigrated (`grinds` still `None`, or the old grind still
+	 * waiting) because the settings were
 	 * quarantined and the bag names no grinder of its own
 	 * ([`MigrationGate::settings_quarantined`], PLAN follow-up 40): they
 	 * migrate on a later load whose settings read.

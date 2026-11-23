@@ -315,6 +315,7 @@ pub fn quick_save_undo(input: &QuickSaveUndoInput, now_ms: i64) -> QuickSaveUndo
         // The Save made the list: an Undo that empties it puts back `None`.
         if g.grinds_were_none == Some(true) && rows.is_empty() {
             out.grinds = None;
+            out.legacy_grind_pending = None;
         }
         out.updated_at = now_ms.max(bag.updated_at);
         Some(out)
@@ -600,7 +601,10 @@ mod tests {
     fn undo_puts_back_no_grinds_list_when_the_bag_had_none() {
         let mut before = bag(Vec::new());
         before.grinds = None;
+        before.grinder_setting = "14".to_owned();
         let (after, undo) = undo_after_save(&before, "grinder:ek", "9");
+        // The old grind waits to be folded in (save-boundaries follow-up 60).
+        assert_eq!(after.legacy_grind_pending, Some(true));
         let grind = undo.grind.clone().unwrap();
         assert_eq!(grind.grinds_were_none, Some(true));
         let run = |now_bag: Bean| {
@@ -613,10 +617,17 @@ mod tests {
                 NOW,
             )
         };
-        assert_eq!(run(after.clone()).restore_bean.unwrap().grinds, None);
+        let back = run(after.clone()).restore_bean.unwrap();
+        assert_eq!(back.grinds, None);
+        assert_eq!(
+            back.legacy_grind_pending, None,
+            "exactly as before the Save"
+        );
         // A row for another grinder added since stays, so the list does too.
         let auto = save_bag_grind(&after, Some(&grinder("grinder:c40", "C40")), "22", NOW).bean;
-        let kept = run(auto).restore_bean.unwrap().grinds.unwrap();
+        let kept_bag = run(auto).restore_bean.unwrap();
+        assert_eq!(kept_bag.legacy_grind_pending, Some(true), "still waiting");
+        let kept = kept_bag.grinds.unwrap();
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].grinder_id, "grinder:c40");
         // On the wire; an older record without it reads as false.

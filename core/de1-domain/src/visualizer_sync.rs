@@ -773,8 +773,8 @@ pub fn reconcile_roasters(
 
 /// The local bean a decoded remote matches, live rows first: a live row by
 /// (`visualizer_id` both-set-and-equal) OR (same `id`); else a live unbound
-/// row by signature; else a tombstone by id, or an unbound tombstone by
-/// signature (the caller skips either).
+/// row by signature; else a tombstone by id, or an unbound tombstone with a
+/// roast date by signature (the caller skips either).
 fn match_local_bean<'a>(
     local: &'a [Bean],
     decoded: &Bean,
@@ -797,13 +797,22 @@ fn match_local_bean<'a>(
                 b.roasted_on.as_deref(),
             ) == decoded_sig
     };
+    // A tombstone matches by signature only when it has a roast date
+    // (save-boundaries follow-up 53). Tombstones are kept for good, so a
+    // dateless one ("House blend", no roaster) would hide every later remote
+    // bag of that name on this device.
+    let dated = |b: &&Bean| {
+        b.roasted_on
+            .as_deref()
+            .is_some_and(|d| !d.trim().is_empty())
+    };
     let live = || local.iter().filter(|b| b.deleted_at.is_none());
     let tombstones = || local.iter().filter(|b| b.deleted_at.is_some());
     live()
         .find(same_id)
         .or_else(|| live().find(unbound_same_sig))
         .or_else(|| tombstones().find(same_id))
-        .or_else(|| tombstones().find(unbound_same_sig))
+        .or_else(|| tombstones().find(|b| dated(b) && unbound_same_sig(b)))
 }
 
 /// One pulled bag as the shell hands it to [`reconcile_pulled_bags`]: the RAW
@@ -843,7 +852,9 @@ pub struct PulledBag {
 /// matches only a tombstone gets no action: never added again, never written
 /// over the tombstone. It matches one by Visualizer id or `id`, or, for a
 /// tombstone that was never bound (deleted before its first upload bound it,
-/// #488 follow-up 41), by signature. Live rows match first, so a bag the user
+/// #488 follow-up 41), by signature, but only when the tombstone has a roast
+/// date: a dateless one would hide every later same-named bag for good, so a
+/// dateless bag deleted mid-upload whose reply was lost comes back instead. Live rows match first, so a bag the user
 /// adds again here (same signature, unbound) binds to the remote as a new bag
 /// would. The trade-off: while an unbound tombstone stays, an identical bag
 /// added on purpose on another device (same name, roaster and roast date)
@@ -2026,6 +2037,27 @@ pub(crate) mod tests {
         other.roasted_on = Some("2026-06-01".to_owned());
         assert!(matches!(
             pull(std::slice::from_ref(&gone), &[other], &names, None).as_slice(),
+            [BeanReconcileAction::Add { .. }]
+        ));
+        // A tombstone with no roast date never matches by signature
+        // (follow-up 53): it would hide every later same-named bag for good.
+        let mut dateless = gone.clone();
+        dateless.roasted_on = None;
+        let mut later = remote.clone();
+        later.roasted_on = None;
+        assert!(matches!(
+            pull(
+                std::slice::from_ref(&dateless),
+                std::slice::from_ref(&later),
+                &names,
+                None
+            )
+            .as_slice(),
+            [BeanReconcileAction::Add { .. }]
+        ));
+        dateless.roasted_on = Some("  ".to_owned());
+        assert!(matches!(
+            pull(&[dateless], &[later], &names, None).as_slice(),
             [BeanReconcileAction::Add { .. }]
         ));
         // A bound tombstone matches only by its ids, never by signature.

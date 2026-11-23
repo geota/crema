@@ -202,6 +202,13 @@ data class Bean (
 	/// local value (review F7). Omitted when `None`, so older bytes don't
 	/// change.
 	val grinds: List<BagGrind>? = null,
+	/// The old `grinder_setting` is still waiting to become a saved grind
+	/// although `grinds` is `Some`: a save made the list before the library
+	/// migration ran on this bag (a Quick Save while the settings were
+	/// quarantined, save-boundaries follow-up 60). The migration folds it in
+	/// without overwriting a row for the same grinder, then clears this.
+	/// `None` = nothing waiting (or `grinds` is `None`, which waits anyway).
+	val legacyGrindPending: Boolean? = null,
 	/// Free-form user tags — e.g. `"daily-driver"`, `"comp"`, `"experimental"`.
 	/// Defaults to an empty list. Serialised as `tags` so the JSON contract
 	/// matches the [`crate::Profile`] tag pattern.
@@ -3858,7 +3865,8 @@ enum class MigrationSkip(val string: String) {
 data class GrinderLibraryMigration (
 	/// Grinder records to add.
 	val newGrinders: List<Grinder>,
-	/// Bags whose `grinds` it filled (they were `None`); `updated_at` is not
+	/// Bags whose `grinds` it filled (they were `None`, or the old grind was
+	/// still waiting: [`Bean::legacy_grind_pending`]); `updated_at` is not
 	/// changed, since the migration isn't an edit.
 	val updatedBeans: List<Bean>,
 	/// When the grinders step ran: the grinder to make active (the one the
@@ -3870,7 +3878,8 @@ data class GrinderLibraryMigration (
 	/// Why nothing ran: an input wasn't read ([`MigrationGate`]). `None` when
 	/// the migration ran (even with nothing to do).
 	val skipped: MigrationSkip? = null,
-	/// Bags left unmigrated (`grinds` still `None`) because the settings were
+	/// Bags left unmigrated (`grinds` still `None`, or the old grind still
+	/// waiting) because the settings were
 	/// quarantined and the bag names no grinder of its own
 	/// ([`MigrationGate::settings_quarantined`], PLAN follow-up 40): they
 	/// migrate on a later load whose settings read.
