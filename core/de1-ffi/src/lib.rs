@@ -2818,6 +2818,31 @@ pub fn split_visualizer_grind_json(text: String) -> String {
     de1_domain::shot_grinder::split_visualizer_grind_json(&text)
 }
 
+/// A grind text with its trailing speed set to `rpm` ("15 1200rpm" with 1100
+/// is "15 1100rpm"). See [`de1_domain::shot_grinder::grind_with_rpm`].
+#[uniffi::export]
+pub fn grind_with_rpm(text: Option<String>, rpm: Option<u32>) -> Option<String> {
+    de1_domain::shot_grinder::grind_with_rpm(text.as_deref(), rpm)
+}
+
+/// The grind a shot keeps when its speed is edited: an `RpmEditGrind` JSON.
+/// See [`de1_domain::shot_grinder::rpm_edit_grind`].
+#[uniffi::export]
+pub fn rpm_edit_grind_json(
+    own: Option<String>,
+    bean_grind: Option<String>,
+    rpm: Option<u32>,
+) -> String {
+    de1_domain::shot_grinder::rpm_edit_grind_json(own.as_deref(), bean_grind.as_deref(), rpm)
+}
+
+/// The speed a shot keeps when its grind is edited. See
+/// [`de1_domain::shot_grinder::grind_edit_rpm`].
+#[uniffi::export]
+pub fn grind_edit_rpm(grind: Option<String>, had: Option<u32>) -> Option<u32> {
+    de1_domain::shot_grinder::grind_edit_rpm(grind.as_deref(), had)
+}
+
 /// Whether a grinder's catalogue entry has a variable speed (the shot
 /// editor's RPM field). See [`de1_domain::grinder_catalogue::has_variable_speed`].
 #[uniffi::export]

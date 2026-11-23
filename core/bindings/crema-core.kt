@@ -5867,6 +5867,17 @@ data class RoasterPushItem (
 	val create: Boolean
 )
 
+/// What a shot's grind becomes when its speed is edited ([`rpm_edit_grind`]).
+@Serializable
+data class RpmEditGrind (
+	/// The shot's own grind (`metadata.grinder_setting`) after the edit.
+	val grinderSetting: String? = null,
+	/// Drop the bean snapshot's legacy grind (`bean.grinder_setting`) too:
+	/// it held only the speed being cleared, and would otherwise come back
+	/// as the shot's grind.
+	val clearBeanGrind: Boolean
+)
+
 /// What a connected scale can do, beyond reporting a bare weight.
 /// 
 /// Crema is **capability-driven, never device-driven**: the app reads this

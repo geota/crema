@@ -214,15 +214,21 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
     // Brew's grind at the start is the shot's (it follows the grinder in
     // follow mode); with none, the grinder's own setting (§4.2, §5.2). The
     // observation is kept beside it either way, so a paused follow's typed
-    // grind reads "Edited (grinder said …)".
-    s.metadata.grinder_setting = non_blank(sel.grind.as_deref()).or_else(|| {
+    // grind reads "Edited (grinder said …)". A speed Brew's grind names
+    // ("470 1100rpm", typed while following was paused) is the shot's; else
+    // the grinder's (REVIEW-555 recheck).
+    let brew_grind = non_blank(sel.grind.as_deref());
+    let typed_rpm = brew_grind
+        .as_deref()
+        .and_then(|g| crate::shot_grinder::split_visualizer_grind(g).1);
+    s.metadata.grinder_setting = brew_grind.or_else(|| {
         non_blank(
             shot.grinder_observed
                 .as_ref()
                 .and_then(|o| o.setting.as_deref()),
         )
     });
-    s.grind_rpm = shot.grinder_observed.as_ref().and_then(|o| o.grind_rpm);
+    s.grind_rpm = typed_rpm.or_else(|| shot.grinder_observed.as_ref().and_then(|o| o.grind_rpm));
     s.grinder_observed = shot.grinder_observed;
     s.metadata.barista = non_blank(ctx.barista.as_deref());
     s.grinder_model = non_blank(sel.grinder_name.as_deref());
@@ -633,6 +639,28 @@ mod tests {
             crate::shot_grinder::GrindProvenance::Edited {
                 grinder_said: "480".into()
             }
+        );
+        // Paused and typed with a speed: the typed speed wins too.
+        let mut shot = with(
+            ShotSelections {
+                grind: Some("470 1100rpm".into()),
+                ..ShotSelections::default()
+            },
+            completed(None),
+        );
+        shot.grinder_observed = Some(observed("480", 700));
+        let s = assemble_stored_shot(shot, ShotCaptureContext::default()).expect("shot");
+        assert_eq!(
+            (s.metadata.grinder_setting.as_deref(), s.grind_rpm),
+            (Some("470 1100rpm"), Some(1100))
+        );
+        assert_eq!(
+            crate::shot_grinder::visualizer_grind_text(
+                s.metadata.grinder_setting.as_deref(),
+                s.grind_rpm
+            )
+            .as_deref(),
+            Some("470 1100rpm")
         );
         // No grind on Brew: the grinder's setting fills it.
         let mut shot = completed(None);
