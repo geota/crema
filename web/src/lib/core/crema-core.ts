@@ -463,6 +463,14 @@ export interface BagSelectInput {
 	 * stays, with no message.
 	 */
 	activeBeanId?: string;
+	/**
+	 * The grinder record Brew's grind follows now (a connected grinder in
+	 * follow mode, SPEC grinder-ble §5), or `None`. When the pick leaves
+	 * that grinder active, the pick rule doesn't change Brew's grind (the
+	 * collar sets it): the bag's grind becomes a target in the message,
+	 * and stays out of the change and its Undo (§5.3).
+	 */
+	followedGrinderId?: string;
 }
 
 /** Set a pointer or value to `value` (`None` clears it). */
@@ -1584,6 +1592,12 @@ export interface CatalogueGrinderInfo {
 	 * verified entry says it comes with its scale).
 	 */
 	tier: ScaleTier;
+	/**
+	 * Its grinding speed is variable, so a shot's RPM is worth recording
+	 * (the shot editor shows "RPM", SPEC grinder-ble §4.2). Optional so the
+	 * shells' generated types decode JSON without it; `None` = fixed speed.
+	 */
+	variableSpeed?: boolean;
 }
 
 /** One page of catalogue search results. */
@@ -2571,6 +2585,28 @@ export type Event =
 	firmware: string;
 	/** The oldest firmware that works, for display. */
 	minimum: string;
+}}
+	/**
+	 * Follow mode changed (SPEC grinder-ble §5): what Brew's Grind cell
+	 * shows — following, paused, stale, the "Use ‹grinder›" chip.
+	 */
+	| { type: "GrinderFollowChanged", content: {
+	/** Follow mode now. */
+	follow: GrinderFollowView;
+}}
+	/**
+	 * Following: set Brew's grind to `grind`, the grinder's steady dial
+	 * value (§5.2). Sent when it differs from Brew's grind; again if Brew's
+	 * grind drifts from it (the collar wins over a typed value, §5.4).
+	 */
+	| { type: "FollowGrind", content: {
+	/** The grind as text ("480"). */
+	grind: string;
+	/**
+	 * Say so: a reconnect changed Brew's grind ("Grind 500 μm from your
+	 * Motto 80").
+	 */
+	announce: boolean;
 }}
 	/**
 	 * A grind or purge on the connected grinder finished (or was cut off by
@@ -4041,6 +4077,59 @@ export interface GrinderCapabilities {
 	commands: GrinderCommands;
 }
 
+/** Where follow mode is. */
+export enum FollowStatus {
+	/**
+	 * No connected grinder linked to a grinder record: Brew's grind is the
+	 * user's.
+	 */
+	Off = "Off",
+	/** Linked and active, waiting for a steady value from this connection. */
+	Waiting = "Waiting",
+	/** Brew's grind follows the grinder. */
+	Following = "Following",
+	/** The user paused following for this session: the stepper is back. */
+	Paused = "Paused",
+	/**
+	 * The grinder is live and linked, but its record isn't the active
+	 * grinder: suggest "Use ‹grinder›" ([`GrinderFollowView::grinder_id`]).
+	 */
+	Suggest = "Suggest",
+	/**
+	 * The driver doesn't trust its reading as the grind: shown and logged,
+	 * never followed (owner decision 2).
+	 */
+	ReadOnly = "ReadOnly",
+	/**
+	 * The linked grinder dropped: the last value stays, marked stale, and
+	 * the stepper is back until it reconnects.
+	 */
+	Stale = "Stale",
+}
+
+/**
+ * Follow mode as Brew shows it. Crosses the FFI as JSON; every field but
+ * the status is optional so the generated shell types decode it whole.
+ */
+export interface GrinderFollowView {
+	/** Where it is. */
+	status: FollowStatus;
+	/**
+	 * The grinder record the connected grinder is linked to (the chip's
+	 * "Use ‹grinder›" target when [`FollowStatus::Suggest`]).
+	 */
+	grinder_id?: string;
+	/** The last steady dial value ("480"), when there is one. */
+	grind?: string;
+	/**
+	 * The dial is moving: the live value differs from [`Self::grind`] (Brew
+	 * shows the live value greyed meanwhile).
+	 */
+	moving?: boolean;
+	/** Grinding speed now, rpm, when known. */
+	grind_rpm?: number;
+}
+
 /** What a grinder says about itself. */
 export interface GrinderInfo {
 	/** The model id (the grinder catalogue's id, e.g. `bookoo-motto-80`). */
@@ -4227,6 +4316,12 @@ export interface GrinderSwitchInput {
 	grinders: Grinder[];
 	/** The bag's newest grind per grinder, from the history. */
 	lastGrinds: LastGrind[];
+	/**
+	 * The grinder record Brew's grind follows (see
+	 * [`BagSelectInput::followed_grinder_id`]): switching to it leaves
+	 * Brew's grind to the collar.
+	 */
+	followedGrinderId?: string;
 }
 
 /** The GATT UUIDs a shell needs for a connected grinder. */
@@ -6192,6 +6287,52 @@ export interface ShotEffectsInput {
 	replay: boolean;
 }
 
+/** Where a shot's grinder observation came from. */
+export enum ObservationSource {
+	/**
+	 * The grind before the shot: the newest completed grind (never a
+	 * purge, decision 9) within [`GRIND_ATTRIBUTION_WINDOW_MS`] that no
+	 * earlier shot used.
+	 */
+	LastGrind = "LastGrind",
+	/** No such grind: the grinder's reading when the shot started. */
+	AtShotStart = "AtShotStart",
+}
+
+/**
+ * What the connected grinder reported for a shot. Every field but
+ * [`Self::source`] is optional, so a row from any build decodes.
+ */
+export interface ShotGrinderObservation {
+	/** The grind before the shot, or the reading at shot start. */
+	source: ObservationSource;
+	/** The grinder model id (the catalogue's, `bookoo-motto-80`). */
+	model?: string;
+	/** Its firmware, for display. */
+	firmware?: string;
+	/**
+	 * The dial as the grinder said it ("480"); the unit is the grinder
+	 * record's scale's.
+	 */
+	setting?: string;
+	/** Grinding speed, rpm (the median over the grind). */
+	grindRpm?: number;
+	/** Bean-feeder speed, rpm. */
+	feedRpm?: number;
+	/** How long the grind ran, ms ([`ObservationSource::LastGrind`] only). */
+	grindMs?: number;
+	/**
+	 * How long before the shot started the grind ended, ms
+	 * ([`ObservationSource::LastGrind`] only). A duration, not a time: the
+	 * core's clock is monotonic.
+	 */
+	endedBeforeShotMs?: number;
+	/** The grinder's preset: `-1` = its manual mode, `0..=9` a preset. */
+	preset?: number;
+	/** Relative humidity, %. */
+	humidityPct?: number;
+}
+
 /** What the merge reads of the local row. */
 export interface ShotMergeInput {
 	/** The local tags. */
@@ -6276,6 +6417,11 @@ export interface ShotPatchInputs {
 	beanNotes?: string;
 	/** Inline bean: the bean's recorded dial → `grinder_setting`. */
 	grinderSetting?: string;
+	/**
+	 * The shot's grinding speed, rpm: appended to `grinder_setting` as
+	 * "480 700rpm" (owner decision 6). `None` sends the dial alone.
+	 */
+	grindRpm?: number;
 	/**
 	 * Who made the shot → `barista` (editable on free accounts too).
 	 * `None` = leave the remote value alone; a blank string is sent as
@@ -6793,8 +6939,16 @@ export interface WireShotBean {
 	bean_notes?: string;
 	/** Grinder model (`grinder_model`). */
 	grinder_model?: string;
-	/** Grinder dial (`grinder_setting`). */
+	/**
+	 * Grinder dial (`grinder_setting`), without a speed Crema appended:
+	 * "480 700rpm" arrives as "480" here and 700 in [`Self::grind_rpm`].
+	 */
 	grinder_setting?: string;
+	/**
+	 * The grinding speed split off `grinder_setting` (owner decision 6),
+	 * rpm, or `None`.
+	 */
+	grind_rpm?: number;
 }
 
 /**
@@ -7245,6 +7399,21 @@ export type FlashBlocker =
 	| { type: "MaintenanceRunning", content?: undefined }
 	/** The tablet is on battery below 50 % and not charging. */
 	| { type: "LowPower", content?: undefined };
+
+/** How a shot's grind reads beside its observation. */
+export type GrindProvenance = 
+	/** No connected grinder reported anything: the grind was typed. */
+	| { kind: "Typed", details?: undefined }
+	/** The grind is what the grinder said. */
+	| { kind: "Observed", details?: undefined }
+	/**
+	 * The grind differs from what the grinder said ("Edited (grinder said
+	 * 480)"): edited later, or typed while following was paused.
+	 */
+	| { kind: "Edited", details: {
+	/** What the grinder said. */
+	grinder_said: string;
+}};
 
 /**
  * Why a grinder link counts as dead. The shell drops the link and

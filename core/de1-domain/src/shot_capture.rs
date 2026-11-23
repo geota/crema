@@ -152,6 +152,9 @@ pub struct CompletedShot {
     pub auto_tare: bool,
     /// What Brew had selected when the shot started (frozen by the core).
     pub selections: ShotSelections,
+    /// What the connected grinder reported, chosen by the core at shot
+    /// start (SPEC grinder-ble §4.2), or `None`.
+    pub grinder_observed: Option<crate::shot_grinder::ShotGrinderObservation>,
 }
 
 fn non_blank(s: Option<&str>) -> Option<String> {
@@ -208,7 +211,19 @@ pub fn assemble_stored_shot(shot: CompletedShot, ctx: ShotCaptureContext) -> Opt
     s.stop_on_weight = Some(shot.stop_on_weight);
     s.auto_tare = Some(shot.auto_tare);
     s.metadata.yield_out = shot.final_weight.filter(|w| w.is_finite() && *w > 0.0);
-    s.metadata.grinder_setting = non_blank(sel.grind.as_deref());
+    // Brew's grind at the start is the shot's (it follows the grinder in
+    // follow mode); with none, the grinder's own setting (§4.2, §5.2). The
+    // observation is kept beside it either way, so a paused follow's typed
+    // grind reads "Edited (grinder said …)".
+    s.metadata.grinder_setting = non_blank(sel.grind.as_deref()).or_else(|| {
+        non_blank(
+            shot.grinder_observed
+                .as_ref()
+                .and_then(|o| o.setting.as_deref()),
+        )
+    });
+    s.grind_rpm = shot.grinder_observed.as_ref().and_then(|o| o.grind_rpm);
+    s.grinder_observed = shot.grinder_observed;
     s.metadata.barista = non_blank(ctx.barista.as_deref());
     s.grinder_model = non_blank(sel.grinder_name.as_deref());
     s.grinder_id = non_blank(sel.grinder_id.as_deref());
@@ -286,6 +301,7 @@ mod tests {
             stop_on_weight: true,
             auto_tare: false,
             selections: ShotSelections::default(),
+            grinder_observed: None,
         }
     }
 
@@ -565,5 +581,66 @@ mod tests {
             parse_shot_capture_context(r#"{"completedAt":1,"tags":null,"machine":null}"#).unwrap();
         assert_eq!(minimal.completed_at, 1);
         assert_eq!(minimal.tags, None);
+    }
+    fn observed(setting: &str, rpm: u32) -> crate::shot_grinder::ShotGrinderObservation {
+        crate::shot_grinder::ShotGrinderObservation {
+            source: crate::shot_grinder::ObservationSource::LastGrind,
+            model: Some("bookoo-motto-80".into()),
+            firmware: Some("1.3.11.1020".into()),
+            setting: Some(setting.into()),
+            grind_rpm: Some(rpm),
+            feed_rpm: Some(40),
+            grind_ms: Some(9_800),
+            ended_before_shot_ms: Some(30_000),
+            preset: Some(-1),
+            humidity_pct: Some(30),
+        }
+    }
+
+    #[test]
+    fn the_grinder_observation_is_stamped_beside_brews_grind() {
+        // Following: Brew's grind is the grinder's; both are kept.
+        let mut shot = with(
+            ShotSelections {
+                grind: Some("480".into()),
+                ..ShotSelections::default()
+            },
+            completed(None),
+        );
+        shot.grinder_observed = Some(observed("480", 700));
+        let s = assemble_stored_shot(shot, ShotCaptureContext::default()).expect("shot");
+        assert_eq!(s.metadata.grinder_setting.as_deref(), Some("480"));
+        assert_eq!(s.grind_rpm, Some(700));
+        assert_eq!(
+            s.grinder_observed
+                .as_ref()
+                .and_then(|o| o.setting.as_deref()),
+            Some("480")
+        );
+        // Paused and typed: Brew's grind wins, the observation stays beside.
+        let mut shot = with(
+            ShotSelections {
+                grind: Some("470".into()),
+                ..ShotSelections::default()
+            },
+            completed(None),
+        );
+        shot.grinder_observed = Some(observed("480", 700));
+        let s = assemble_stored_shot(shot, ShotCaptureContext::default()).expect("shot");
+        assert_eq!(s.metadata.grinder_setting.as_deref(), Some("470"));
+        assert_eq!(
+            crate::shot_grinder::grind_provenance(&s),
+            crate::shot_grinder::GrindProvenance::Edited {
+                grinder_said: "480".into()
+            }
+        );
+        // No grind on Brew: the grinder's setting fills it.
+        let mut shot = completed(None);
+        shot.grinder_observed = Some(observed("480", 700));
+        let s = assemble_stored_shot(shot, ShotCaptureContext::default()).expect("shot");
+        assert_eq!(s.metadata.grinder_setting.as_deref(), Some("480"));
+        // No grinder: nothing.
+        let s = assemble_stored_shot(completed(None), ShotCaptureContext::default()).expect("shot");
+        assert_eq!((s.grinder_observed, s.grind_rpm), (None, None));
     }
 }

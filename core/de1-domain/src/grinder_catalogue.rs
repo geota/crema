@@ -201,6 +201,21 @@ pub struct CatalogueGrinderInfo {
     /// Verified, or typical ("Typical range — check your dial" wherever a
     /// verified entry says it comes with its scale).
     pub tier: ScaleTier,
+    /// Its grinding speed is variable, so a shot's RPM is worth recording
+    /// (the shot editor shows "RPM", SPEC grinder-ble §4.2). Optional so the
+    /// shells' generated types decode JSON without it; `None` = fixed speed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variable_speed: Option<bool>,
+}
+
+/// Catalogue entries whose grinding speed is variable, each from its
+/// maker: the Motto 80's `grindRpm`, 500–1500 (BOOKOO README §8.1).
+const VARIABLE_SPEED: &[&str] = &["bookoo-motto-80"];
+
+/// Whether the catalogue entry `preset_id` has a variable grinding speed.
+#[must_use]
+pub fn has_variable_speed(preset_id: Option<&str>) -> bool {
+    preset_id.is_some_and(|id| VARIABLE_SPEED.contains(&id))
 }
 
 impl From<&CatalogueGrinder> for CatalogueGrinderInfo {
@@ -215,6 +230,7 @@ impl From<&CatalogueGrinder> for CatalogueGrinderInfo {
             scale: g.scale.as_ref().map(CatalogueScale::scale),
             source: g.scale.as_ref().map(|s| s.source.to_owned()),
             tier: g.scale.map_or(ScaleTier::Typical, |s| s.tier),
+            variable_speed: VARIABLE_SPEED.contains(&g.id).then_some(true),
         }
     }
 }

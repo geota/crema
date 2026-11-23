@@ -19,14 +19,21 @@
 use std::collections::VecDeque;
 
 use de1_device::{DeviceKind, DeviceMatch, ScanFilters};
+use de1_domain::shot_grinder::{
+    GRIND_ATTRIBUTION_WINDOW_MS, ObservationSource, ShotGrinderObservation,
+};
 use de1_grinder::{
     GRINDERS, GrindSession, GrindTracker, GrinderCapabilities, GrinderDriver, GrinderEvent,
-    GrinderUuids, UnsupportedReason,
+    GrinderInfo, GrinderReading, GrinderUuids, PresetSlot, RunKind, UnsupportedReason,
 };
 use de1_scale::Scale;
 
 use crate::CremaCore;
 use crate::event::{Command, CoreOutput, Event, Source};
+
+mod follow;
+use follow::{FollowInputs, Steadier, follow_status};
+pub use follow::{FollowStatus, GrinderFollowView, STABLE_READINGS};
 
 /// How many completed grinds and purges the core keeps.
 pub const RECENT_GRINDS: usize = 20;
@@ -37,6 +44,34 @@ pub(crate) struct GrinderSlot {
     driver: Option<GrinderDriver>,
     tracker: GrindTracker,
     recent: VecDeque<GrindSession>,
+    /// A reading arrived on this connection.
+    live: bool,
+    /// The driver trusts its reading as the grind (`physical`), fixed per
+    /// connection from its capabilities.
+    trusted: bool,
+    /// What the grinder said about itself, kept across a drop for the shot
+    /// observation.
+    info: Option<GrinderInfo>,
+    /// The latest reading on this connection.
+    last_reading: Option<GrinderReading>,
+    /// The grinder record the connected grinder is linked to (the shell's,
+    /// per device; owner decision 7).
+    linked: Option<String>,
+    /// "Pause following" for this session (owner decision 3).
+    paused: bool,
+    /// A grinder was live this session.
+    seen: bool,
+    steadier: Steadier,
+    /// The follow view last reported to the shells.
+    view: GrinderFollowView,
+    /// The (grind, Brew's grind then) a `FollowGrind` last asked for, so it
+    /// isn't repeated at 5 Hz while the shell applies it.
+    asked: Option<(String, Option<String>)>,
+    /// The next follow value is a reconnect's: announce it if it changes
+    /// Brew's grind (§5.2).
+    announce: bool,
+    /// The end time of the grind the last shot used: no second shot gets it.
+    used_grind_ended_at: Option<u64>,
 }
 
 /// What a scanned or connected device is, across every kind: scales first
@@ -87,8 +122,15 @@ impl CremaCore {
     ) -> Option<String> {
         let driver = GrinderDriver::identify(advertised_name, discovered_services);
         let model = driver.as_ref().map(|d| d.model().to_owned());
+        self.grinder.trusted = driver
+            .as_ref()
+            .and_then(|d| d.capabilities().setting)
+            .is_some_and(|s| s.physical);
         self.grinder.driver = driver;
         self.grinder.tracker = GrindTracker::new();
+        self.grinder.live = false;
+        self.grinder.last_reading = None;
+        self.grinder.steadier.relink();
         model
     }
 
@@ -112,10 +154,177 @@ impl CremaCore {
     pub fn disconnect_grinder(&mut self) -> CoreOutput {
         let mut out = CoreOutput::default();
         self.grinder.driver = None;
+        self.grinder.live = false;
+        self.grinder.last_reading = None;
+        self.grinder.steadier.relink();
         if let Some(session) = self.grinder.tracker.link_lost() {
             self.complete_grind(session, &mut out);
         }
+        self.drive_follow(&mut out);
         out
+    }
+
+    /// The grinder record the connected grinder is linked to (the shell's
+    /// per-device link, §6.1; `None` = not linked). Follow mode needs it to
+    /// match Brew's active grinder, and a shot's observation is stamped only
+    /// on a shot of that grinder.
+    pub fn set_grinder_link(&mut self, grinder_id: Option<String>) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        self.grinder.linked = grinder_id.filter(|id| !id.trim().is_empty());
+        self.grinder.asked = None;
+        self.drive_follow(&mut out);
+        out
+    }
+
+    /// "Pause following for this session" (owner decision 3), or resume.
+    /// Resuming takes the grinder's value again.
+    pub fn set_grinder_follow_paused(&mut self, paused: bool) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        self.grinder.paused = paused;
+        self.grinder.asked = None;
+        self.drive_follow(&mut out);
+        out
+    }
+
+    /// Follow mode now (§5): what Brew's Grind cell shows.
+    #[must_use]
+    pub fn grinder_follow(&self) -> GrinderFollowView {
+        self.follow_view()
+    }
+
+    /// The grinder record whose grind the collar sets: the linked one, while
+    /// its grinder is live, trusted and not paused, whether or not it is the
+    /// active grinder yet. A bag pick or grinder switch onto it leaves Brew's
+    /// grind alone (`BagSelectInput::followed_grinder_id`, §5.3).
+    #[must_use]
+    pub fn followed_grinder_id(&self) -> Option<String> {
+        let g = &self.grinder;
+        (g.live && g.trusted && !g.paused)
+            .then(|| g.linked.clone())
+            .flatten()
+    }
+
+    fn follow_view(&self) -> GrinderFollowView {
+        let g = &self.grinder;
+        let status = follow_status(FollowInputs {
+            linked: g.linked.as_deref(),
+            active: self
+                .shot_selections
+                .grinder_id
+                .as_deref()
+                .filter(|a| !a.trim().is_empty()),
+            live: g.live,
+            seen: g.seen,
+            trusted: g.trusted,
+            paused: g.paused,
+            steady: g.steadier.steady_this_link,
+        });
+        let off = status == FollowStatus::Off;
+        GrinderFollowView {
+            status,
+            grinder_id: if off { None } else { g.linked.clone() },
+            grind: if off { None } else { g.steadier.steady.clone() },
+            moving: (g.live && !off).then(|| g.steadier.moving()),
+            grind_rpm: g
+                .last_reading
+                .as_ref()
+                .and_then(|r| r.grind_rpm)
+                .filter(|_| !off),
+        }
+    }
+
+    /// Report a changed follow view, and ask the shell to set Brew's grind
+    /// when following and it differs (§5.2, §5.4).
+    pub(crate) fn drive_follow(&mut self, out: &mut CoreOutput) {
+        let view = self.follow_view();
+        if view.status == FollowStatus::Following
+            && let Some(grind) = view.grind.clone()
+        {
+            let brew = self.shot_selections.grind.clone();
+            let same = brew
+                .as_deref()
+                .is_some_and(|b| de1_domain::same_grind(b, &grind));
+            if !same {
+                let ask = (grind.clone(), brew.clone());
+                if self.grinder.asked.as_ref() != Some(&ask) {
+                    out.events.push(Event::FollowGrind {
+                        grind,
+                        announce: self.grinder.announce && brew.is_some(),
+                    });
+                    self.grinder.asked = Some(ask);
+                }
+            }
+            self.grinder.announce = false;
+        }
+        if view != self.grinder.view {
+            self.grinder.view = view.clone();
+            out.events
+                .push(Event::GrinderFollowChanged { follow: view });
+        }
+    }
+
+    /// What the connected grinder reported for a shot starting at
+    /// `start_ms` (§4.2), for the shot of grinder record `shot_grinder`:
+    /// 1. the newest completed grind (never a purge, decision 9) that ended
+    ///    within 10 minutes before the start (decision 8) and that no earlier
+    ///    shot used; else
+    /// 2. the reading now, when the grinder is live; else nothing.
+    ///
+    /// Only for a shot of the grinder record the grinder is linked to: a
+    /// shot on another grinder gets nothing (it wasn't ground on this one).
+    pub(crate) fn grinder_observation_for_shot(
+        &mut self,
+        start_ms: u64,
+        shot_grinder: Option<&str>,
+    ) -> Option<ShotGrinderObservation> {
+        let g = &mut self.grinder;
+        let linked = g.linked.as_deref()?;
+        if shot_grinder != Some(linked) {
+            return None;
+        }
+        let model = g.info.as_ref().map(|i| i.model.clone());
+        let firmware = g.info.as_ref().and_then(|i| i.firmware.clone());
+        let grind = g
+            .recent
+            .iter()
+            .rev()
+            .find(|s| s.kind == RunKind::Grind)
+            .filter(|s| {
+                s.ended_at <= start_ms
+                    && start_ms - s.ended_at <= GRIND_ATTRIBUTION_WINDOW_MS
+                    && g.used_grind_ended_at != Some(s.ended_at)
+            });
+        if let Some(s) = grind {
+            g.used_grind_ended_at = Some(s.ended_at);
+            return Some(ShotGrinderObservation {
+                source: ObservationSource::LastGrind,
+                model,
+                firmware,
+                setting: s.setting.as_ref().map(|v| v.value.clone()),
+                grind_rpm: s.grind_rpm,
+                feed_rpm: s.feed_rpm,
+                grind_ms: Some(s.duration_ms),
+                ended_before_shot_ms: u32::try_from(start_ms - s.ended_at).ok(),
+                preset: s.preset.map(preset_number),
+                humidity_pct: s.humidity_pct,
+            });
+        }
+        if !g.live {
+            return None;
+        }
+        let r = g.last_reading.as_ref()?;
+        Some(ShotGrinderObservation {
+            source: ObservationSource::AtShotStart,
+            model,
+            firmware,
+            setting: r.setting.as_ref().map(|v| v.value.clone()),
+            grind_rpm: r.grind_rpm,
+            feed_rpm: r.feed_rpm,
+            grind_ms: None,
+            ended_before_shot_ms: None,
+            preset: r.preset.map(preset_number),
+            humidity_pct: r.humidity_pct,
+        })
     }
 
     /// The connected grinder's GATT UUIDs. `None` with no grinder.
@@ -177,15 +386,32 @@ impl CremaCore {
     fn map_grinder_events(&mut self, events: Vec<GrinderEvent>, out: &mut CoreOutput) {
         for event in events {
             match event {
-                GrinderEvent::Ready { info } => out.events.push(Event::GrinderReady { info }),
+                GrinderEvent::Ready { info } => {
+                    // A grinder seen before this session reconnected: its
+                    // value replaces Brew's, announced if it changed (§5.2).
+                    self.grinder.announce = self.grinder.seen;
+                    self.grinder.live = true;
+                    self.grinder.seen = true;
+                    self.grinder.asked = None;
+                    self.grinder.info = Some(info.clone());
+                    out.events.push(Event::GrinderReady { info });
+                }
                 GrinderEvent::Reading(reading) => {
                     let completed = self.grinder.tracker.on_reading(&reading);
+                    if let Some(setting) = &reading.setting {
+                        self.grinder.steadier.feed(&setting.value);
+                    }
+                    self.grinder.last_reading = Some(reading.clone());
                     out.events.push(Event::GrinderReading { reading });
                     if let Some(session) = completed {
                         self.complete_grind(session, out);
                     }
+                    self.drive_follow(out);
                 }
-                GrinderEvent::Info(info) => out.events.push(Event::GrinderInfoChanged { info }),
+                GrinderEvent::Info(info) => {
+                    self.grinder.info = Some(info.clone());
+                    out.events.push(Event::GrinderInfoChanged { info });
+                }
                 GrinderEvent::Unsupported {
                     reason: UnsupportedReason::FirmwareTooOld { found, min },
                 } => out.events.push(Event::GrinderUnsupported {
@@ -193,12 +419,22 @@ impl CremaCore {
                     minimum: min,
                 }),
                 GrinderEvent::LinkDead { reason } => {
+                    self.grinder.live = false;
                     out.events.push(Event::GrinderLinkDead { reason });
+                    self.drive_follow(out);
                 }
                 // A driver event this core doesn't surface yet.
                 _ => {}
             }
         }
+    }
+}
+
+/// A preset slot as the shot stores it: `-1` = manual mode.
+fn preset_number(slot: PresetSlot) -> i8 {
+    match slot {
+        PresetSlot::Manual => -1,
+        PresetSlot::Slot { index } => i8::try_from(index).unwrap_or(i8::MAX),
     }
 }
 

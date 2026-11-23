@@ -412,6 +412,12 @@ pub struct BagSelectInput {
     /// already selected changes nothing (FINAL N7): an unsaved grind on Brew
     /// stays, with no message.
     pub active_bean_id: Option<String>,
+    /// The grinder record Brew's grind follows now (a connected grinder in
+    /// follow mode, SPEC grinder-ble §5), or `None`. When the pick leaves
+    /// that grinder active, the pick rule doesn't change Brew's grind (the
+    /// collar sets it): the bag's grind becomes a target in the message,
+    /// and stays out of the change and its Undo (§5.3).
+    pub followed_grinder_id: Option<String>,
 }
 
 /// Why a bag pick left something out, for a passing notice.
@@ -556,18 +562,26 @@ pub fn resolve_bag_selection(input: &BagSelectInput) -> BagSelection {
         }
         _ => active_now,
     };
+    let followed = active_after.is_some_and(|a| {
+        non_blank(input.followed_grinder_id.as_deref()).is_some_and(|f| f == a.id)
+    });
+    let mut collar_target = None;
     if let Some(grind) = pick_grind(bag, active_after, &input.last_grinds)
         && input
             .grind
             .as_deref()
             .is_none_or(|now| !same_grind(now, &grind))
     {
-        change.grind = Some(SetTo { value: Some(grind) });
-        undo.grind = Some(SetTo {
-            value: input.grind.clone(),
-        });
+        if followed {
+            collar_target = Some(grind);
+        } else {
+            change.grind = Some(SetTo { value: Some(grind) });
+            undo.grind = Some(SetTo {
+                value: input.grind.clone(),
+            });
+        }
     }
-    let changed = !change.is_empty();
+    let changed = !change.is_empty() || collar_target.is_some();
     let message = changed.then(|| {
         let mut parts = Vec::new();
         if change.profile_id.is_some() {
@@ -591,9 +605,18 @@ pub fn resolve_bag_selection(input: &BagSelectInput) -> BagSelection {
             (true, g, None) => parts.push(g.unwrap_or("No grinder").to_owned()),
             (false, Some(g), Some(at)) => parts.push(format!("{g} at {at}")),
             (false, None, Some(at)) => parts.push(format!("grind {at}")),
+            (false, Some(g), None) if collar_target.is_some() => parts.push(g.to_owned()),
             (false, _, None) => {}
         }
-        format!("{}: {}", bag.name, parts.join(", "))
+        let mut text = format!("{}: {}", bag.name, parts.join(", "));
+        if let Some(target) = &collar_target {
+            let at = crate::format_grind(
+                target,
+                &active_after.map(|a| a.scale.clone()).unwrap_or_default(),
+            );
+            text.push_str(&format!(" \u{b7} set the collar to {at}"));
+        }
+        text
     });
     BagSelection {
         changed,
@@ -677,6 +700,10 @@ pub struct GrinderSwitchInput {
     pub grinders: Vec<Grinder>,
     /// The bag's newest grind per grinder, from the history.
     pub last_grinds: Vec<LastGrind>,
+    /// The grinder record Brew's grind follows (see
+    /// [`BagSelectInput::followed_grinder_id`]): switching to it leaves
+    /// Brew's grind to the collar.
+    pub followed_grinder_id: Option<String>,
 }
 
 /// The grind Brew takes on switching grinder: [`pick_grind`] for the selected
@@ -686,6 +713,11 @@ pub struct GrinderSwitchInput {
 pub fn resolve_grinder_switch(input: &GrinderSwitchInput) -> Option<String> {
     let bag = input.bag.as_ref()?;
     let grinder = active_grinder(&input.grinders, input.grinder_id.as_deref());
+    if grinder
+        .is_some_and(|g| non_blank(input.followed_grinder_id.as_deref()).is_some_and(|f| f == g.id))
+    {
+        return None;
+    }
     pick_grind(bag, grinder, &input.last_grinds)
 }
 
@@ -1639,6 +1671,65 @@ mod tests {
         })
     }
 
+    /// Follow mode (SPEC grinder-ble §5.3): a pick that leaves the followed
+    /// grinder active doesn't change Brew's grind; the bag's grind is the
+    /// collar's target in the message and stays out of the change and the
+    /// Undo. The grinder switch and profile still apply.
+    #[test]
+    fn a_pick_onto_the_followed_grinder_makes_the_grind_a_collar_target() {
+        let mut motto = g("grinder:motto", "Motto 80");
+        motto.scale = crate::grinder::GrindScale {
+            min: 0.0,
+            max: 999.0,
+            step: 1.0,
+            unit: "μm".into(),
+        };
+        let grinders = vec![motto, g("grinder:nz", "Niche Zero")];
+        let pick = |active: &str, followed: Option<&str>| {
+            resolve_bag_selection(&BagSelectInput {
+                bag: Some(bag_with(vec![row("grinder:motto", "480", true)])),
+                active_grinder_id: Some(active.into()),
+                grind: Some("500".into()),
+                grinders: grinders.clone(),
+                followed_grinder_id: followed.map(str::to_owned),
+                ..BagSelectInput::default()
+            })
+        };
+        // Already on the followed Motto.
+        let out = pick("grinder:motto", Some("grinder:motto"));
+        assert_eq!(out.change.grind, None);
+        assert_eq!(out.undo.grind, None);
+        assert!(out.changed);
+        assert_eq!(
+            out.message.as_deref(),
+            Some("Guji: Motto 80 \u{b7} set the collar to 480 μm")
+        );
+        // Switched onto it by the star: the grinder changes, the grind doesn't.
+        let out = pick("grinder:nz", Some("grinder:motto"));
+        assert_eq!(out.change.grinder_id, set(Some("grinder:motto")));
+        assert_eq!(out.change.grind, None);
+        assert_eq!(
+            out.message.as_deref(),
+            Some("Guji: Motto 80 \u{b7} set the collar to 480 μm")
+        );
+        // Not following: the pick rule as before.
+        let out = pick("grinder:motto", None);
+        assert_eq!(out.change.grind, set(Some("480")));
+        assert_eq!(out.message.as_deref(), Some("Guji: Motto 80 at 480 μm"));
+        // The switch onto the followed grinder leaves the grind alone too.
+        let switch = |followed: Option<&str>| {
+            resolve_grinder_switch(&GrinderSwitchInput {
+                bag: Some(bag_with(vec![row("grinder:motto", "480", true)])),
+                grinder_id: Some("grinder:motto".into()),
+                grinders: grinders.clone(),
+                last_grinds: Vec::new(),
+                followed_grinder_id: followed.map(str::to_owned),
+            })
+        };
+        assert_eq!(switch(Some("grinder:motto")), None);
+        assert_eq!(switch(None).as_deref(), Some("480"));
+    }
+
     #[test]
     fn selecting_a_starred_bag_switches_profile_grinder_and_grind_with_one_undo() {
         let mut bag = bag_with(vec![
@@ -2258,6 +2349,7 @@ mod tests {
                 grinder_id: Some(id.into()),
                 grinders: grinders.clone(),
                 last_grinds: lasts,
+                followed_grinder_id: None,
             })
         };
         assert_eq!(switch("grinder:nz", Vec::new()).as_deref(), Some("14"));

@@ -519,6 +519,9 @@ pub fn wire_shot_from_detail(
             _ => None,
         }
     };
+    // "480 700rpm" is Crema's grind and speed (owner decision 6).
+    let grind =
+        bean_field("grinder_setting").map(|g| crate::shot_grinder::split_visualizer_grind(&g));
     let bean = WireShotBean {
         bean_brand: bean_field("bean_brand"),
         bean_type: bean_field("bean_type"),
@@ -528,7 +531,11 @@ pub fn wire_shot_from_detail(
             .map(|n| html_to_plain(&n))
             .filter(|n| !n.is_empty()),
         grinder_model: bean_field("grinder_model"),
-        grinder_setting: bean_field("grinder_setting"),
+        grinder_setting: grind
+            .as_ref()
+            .map(|(s, _)| s.clone())
+            .filter(|s| !s.is_empty()),
+        grind_rpm: grind.and_then(|(_, rpm)| rpm),
     };
     let bean = (bean != WireShotBean::default()).then_some(bean);
 
@@ -944,6 +951,10 @@ pub struct ShotPatchInputs {
     pub bean_notes: Option<String>,
     /// Inline bean: the bean's recorded dial → `grinder_setting`.
     pub grinder_setting: Option<String>,
+    /// The shot's grinding speed, rpm: appended to `grinder_setting` as
+    /// "480 700rpm" (owner decision 6). `None` sends the dial alone.
+    #[serde(default)]
+    pub grind_rpm: Option<u32>,
     /// Who made the shot → `barista` (editable on free accounts too).
     /// `None` = leave the remote value alone; a blank string is sent as
     /// `""`, which clears it. The shells pass `Some` only when the barista
@@ -978,7 +989,13 @@ pub fn visualizer_shot_patch(inputs: &ShotPatchInputs) -> Value {
         "bean_notes",
         &inputs.bean_notes.as_deref().map(plain_to_html),
     );
-    put_trimmed("grinder_setting", &inputs.grinder_setting);
+    put_trimmed(
+        "grinder_setting",
+        &crate::shot_grinder::visualizer_grind_text(
+            inputs.grinder_setting.as_deref(),
+            inputs.grind_rpm,
+        ),
+    );
     put_trimmed("grinder_model", &inputs.grinder_model);
     if let Some(barista) = &inputs.barista {
         body.insert(
@@ -1948,6 +1965,21 @@ mod tests {
     }
 
     #[test]
+    fn the_grind_speed_rides_on_the_grind_text() {
+        let body = visualizer_shot_patch(&ShotPatchInputs {
+            grinder_setting: Some("480".to_owned()),
+            grind_rpm: Some(700),
+            ..ShotPatchInputs::default()
+        });
+        assert_eq!(body["grinder_setting"], "480 700rpm");
+        let body = visualizer_shot_patch(&ShotPatchInputs {
+            grinder_setting: Some("480".to_owned()),
+            ..ShotPatchInputs::default()
+        });
+        assert_eq!(body["grinder_setting"], "480");
+    }
+
+    #[test]
     fn shot_patch_body_carries_the_typed_slots() {
         let body = visualizer_shot_patch(&ShotPatchInputs {
             rating: Some(4),
@@ -1962,6 +1994,7 @@ mod tests {
             roast_level: Some(3.0),
             bean_notes: Some("washed".to_owned()),
             grinder_setting: Some("14".to_owned()),
+            grind_rpm: None,
             barista: Some(" Ana ".to_owned()),
         });
         assert_eq!(body["flavor"], 12);
@@ -2097,6 +2130,7 @@ mod tests {
             roast_level: Some(3.0),
             bean_notes: Some("washed".to_owned()),
             grinder_setting: Some("14".to_owned()),
+            grind_rpm: None,
             barista: Some("Ana".to_owned()),
         })
     }

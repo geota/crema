@@ -403,7 +403,13 @@ data class BagSelectInput (
 	/// The bag that was selected before this pick. Picking the bag that is
 	/// already selected changes nothing (FINAL N7): an unsaved grind on Brew
 	/// stays, with no message.
-	val activeBeanId: String? = null
+	val activeBeanId: String? = null,
+	/// The grinder record Brew's grind follows now (a connected grinder in
+	/// follow mode, SPEC grinder-ble §5), or `None`. When the pick leaves
+	/// that grinder active, the pick rule doesn't change Brew's grind (the
+	/// collar sets it): the bag's grind becomes a target in the message,
+	/// and stays out of the change and its Undo (§5.3).
+	val followedGrinderId: String? = null
 )
 
 /// Set a pointer or value to `value` (`None` clears it).
@@ -1426,7 +1432,11 @@ data class CatalogueGrinderInfo (
 	val source: String? = null,
 	/// Verified, or typical ("Typical range — check your dial" wherever a
 	/// verified entry says it comes with its scale).
-	val tier: ScaleTier
+	val tier: ScaleTier,
+	/// Its grinding speed is variable, so a shot's RPM is worth recording
+	/// (the shot editor shows "RPM", SPEC grinder-ble §4.2). Optional so the
+	/// shells' generated types decode JSON without it; `None` = fixed speed.
+	val variableSpeed: Boolean? = null
 )
 
 /// One page of catalogue search results.
@@ -2237,6 +2247,23 @@ data class EventGrinderUnsupportedInner (
 	val minimum: String
 )
 
+/// Generated type representing the anonymous struct variant `GrinderFollowChanged` of the `Event` Rust enum
+@Serializable
+data class EventGrinderFollowChangedInner (
+	/// Follow mode now.
+	val follow: GrinderFollowView
+)
+
+/// Generated type representing the anonymous struct variant `FollowGrind` of the `Event` Rust enum
+@Serializable
+data class EventFollowGrindInner (
+	/// The grind as text ("480").
+	val grind: String,
+	/// Say so: a reconnect changed Brew's grind ("Grind 500 μm from your
+	/// Motto 80").
+	val announce: Boolean
+)
+
 /// Generated type representing the anonymous struct variant `GrindCompleted` of the `Event` Rust enum
 @Serializable
 data class EventGrindCompletedInner (
@@ -2775,6 +2802,17 @@ sealed class Event {
 	@Serializable
 	@SerialName("GrinderUnsupported")
 	data class GrinderUnsupported(val content: EventGrinderUnsupportedInner): Event()
+	/// Follow mode changed (SPEC grinder-ble §5): what Brew's Grind cell
+	/// shows — following, paused, stale, the "Use ‹grinder›" chip.
+	@Serializable
+	@SerialName("GrinderFollowChanged")
+	data class GrinderFollowChanged(val content: EventGrinderFollowChangedInner): Event()
+	/// Following: set Brew's grind to `grind`, the grinder's steady dial
+	/// value (§5.2). Sent when it differs from Brew's grind; again if Brew's
+	/// grind drifts from it (the collar wins over a typed value, §5.4).
+	@Serializable
+	@SerialName("FollowGrind")
+	data class FollowGrind(val content: EventFollowGrindInner): Event()
 	/// A grind or purge on the connected grinder finished (or was cut off by
 	/// a drop). The core also keeps the last 20 (`CremaCore::recent_grinds`).
 	@Serializable
@@ -4152,6 +4190,54 @@ data class GrinderCapabilities (
 	val commands: GrinderCommands
 )
 
+/// Where follow mode is.
+@Serializable
+enum class FollowStatus(val string: String) {
+	/// No connected grinder linked to a grinder record: Brew's grind is the
+	/// user's.
+	@SerialName("Off")
+	Off("Off"),
+	/// Linked and active, waiting for a steady value from this connection.
+	@SerialName("Waiting")
+	Waiting("Waiting"),
+	/// Brew's grind follows the grinder.
+	@SerialName("Following")
+	Following("Following"),
+	/// The user paused following for this session: the stepper is back.
+	@SerialName("Paused")
+	Paused("Paused"),
+	/// The grinder is live and linked, but its record isn't the active
+	/// grinder: suggest "Use ‹grinder›" ([`GrinderFollowView::grinder_id`]).
+	@SerialName("Suggest")
+	Suggest("Suggest"),
+	/// The driver doesn't trust its reading as the grind: shown and logged,
+	/// never followed (owner decision 2).
+	@SerialName("ReadOnly")
+	ReadOnly("ReadOnly"),
+	/// The linked grinder dropped: the last value stays, marked stale, and
+	/// the stepper is back until it reconnects.
+	@SerialName("Stale")
+	Stale("Stale"),
+}
+
+/// Follow mode as Brew shows it. Crosses the FFI as JSON; every field but
+/// the status is optional so the generated shell types decode it whole.
+@Serializable
+data class GrinderFollowView (
+	/// Where it is.
+	val status: FollowStatus,
+	/// The grinder record the connected grinder is linked to (the chip's
+	/// "Use ‹grinder›" target when [`FollowStatus::Suggest`]).
+	val grinder_id: String? = null,
+	/// The last steady dial value ("480"), when there is one.
+	val grind: String? = null,
+	/// The dial is moving: the live value differs from [`Self::grind`] (Brew
+	/// shows the live value greyed meanwhile).
+	val moving: Boolean? = null,
+	/// Grinding speed now, rpm, when known.
+	val grind_rpm: UInt? = null
+)
+
 /// What a grinder says about itself.
 @Serializable
 data class GrinderInfo (
@@ -4342,7 +4428,11 @@ data class GrinderSwitchInput (
 	/// The grinder records.
 	val grinders: List<Grinder>,
 	/// The bag's newest grind per grinder, from the history.
-	val lastGrinds: List<LastGrind>
+	val lastGrinds: List<LastGrind>,
+	/// The grinder record Brew's grind follows (see
+	/// [`BagSelectInput::followed_grinder_id`]): switching to it leaves
+	/// Brew's grind to the collar.
+	val followedGrinderId: String? = null
 )
 
 /// The GATT UUIDs a shell needs for a connected grinder.
@@ -6194,6 +6284,48 @@ data class ShotEffectsInput (
 	val replay: Boolean
 )
 
+/// Where a shot's grinder observation came from.
+@Serializable
+enum class ObservationSource(val string: String) {
+	/// The grind before the shot: the newest completed grind (never a
+	/// purge, decision 9) within [`GRIND_ATTRIBUTION_WINDOW_MS`] that no
+	/// earlier shot used.
+	@SerialName("LastGrind")
+	LastGrind("LastGrind"),
+	/// No such grind: the grinder's reading when the shot started.
+	@SerialName("AtShotStart")
+	AtShotStart("AtShotStart"),
+}
+
+/// What the connected grinder reported for a shot. Every field but
+/// [`Self::source`] is optional, so a row from any build decodes.
+@Serializable
+data class ShotGrinderObservation (
+	/// The grind before the shot, or the reading at shot start.
+	val source: ObservationSource,
+	/// The grinder model id (the catalogue's, `bookoo-motto-80`).
+	val model: String? = null,
+	/// Its firmware, for display.
+	val firmware: String? = null,
+	/// The dial as the grinder said it ("480"); the unit is the grinder
+	/// record's scale's.
+	val setting: String? = null,
+	/// Grinding speed, rpm (the median over the grind).
+	val grindRpm: UInt? = null,
+	/// Bean-feeder speed, rpm.
+	val feedRpm: UInt? = null,
+	/// How long the grind ran, ms ([`ObservationSource::LastGrind`] only).
+	val grindMs: UInt? = null,
+	/// How long before the shot started the grind ended, ms
+	/// ([`ObservationSource::LastGrind`] only). A duration, not a time: the
+	/// core's clock is monotonic.
+	val endedBeforeShotMs: UInt? = null,
+	/// The grinder's preset: `-1` = its manual mode, `0..=9` a preset.
+	val preset: Byte? = null,
+	/// Relative humidity, %.
+	val humidityPct: UByte? = null
+)
+
 /// What the merge reads of the local row.
 @Serializable
 data class ShotMergeInput (
@@ -6269,6 +6401,9 @@ data class ShotPatchInputs (
 	val beanNotes: String? = null,
 	/// Inline bean: the bean's recorded dial → `grinder_setting`.
 	val grinderSetting: String? = null,
+	/// The shot's grinding speed, rpm: appended to `grinder_setting` as
+	/// "480 700rpm" (owner decision 6). `None` sends the dial alone.
+	val grindRpm: UInt? = null,
 	/// Who made the shot → `barista` (editable on free accounts too).
 	/// `None` = leave the remote value alone; a blank string is sent as
 	/// `""`, which clears it. The shells pass `Some` only when the barista
@@ -6739,8 +6874,12 @@ data class WireShotBean (
 	val bean_notes: String? = null,
 	/// Grinder model (`grinder_model`).
 	val grinder_model: String? = null,
-	/// Grinder dial (`grinder_setting`).
-	val grinder_setting: String? = null
+	/// Grinder dial (`grinder_setting`), without a speed Crema appended:
+	/// "480 700rpm" arrives as "480" here and 700 in [`Self::grind_rpm`].
+	val grinder_setting: String? = null,
+	/// The grinding speed split off `grinder_setting` (owner decision 6),
+	/// rpm, or `None`.
+	val grind_rpm: UInt? = null
 )
 
 /// The fields the planner reads from a remote shot row. Visualizer's
@@ -7361,6 +7500,31 @@ sealed class FlashBlocker {
 	@Serializable
 	@SerialName("LowPower")
 	object LowPower: FlashBlocker()
+}
+
+/// Generated type representing the anonymous struct variant `Edited` of the `GrindProvenance` Rust enum
+@Serializable
+data class GrindProvenanceEditedInner (
+	/// What the grinder said.
+	val grinder_said: String
+)
+
+/// How a shot's grind reads beside its observation.
+@Serializable
+sealed class GrindProvenance {
+	/// No connected grinder reported anything: the grind was typed.
+	@Serializable
+	@SerialName("Typed")
+	object Typed: GrindProvenance()
+	/// The grind is what the grinder said.
+	@Serializable
+	@SerialName("Observed")
+	object Observed: GrindProvenance()
+	/// The grind differs from what the grinder said ("Edited (grinder said
+	/// 480)"): edited later, or typed while following was paused.
+	@Serializable
+	@SerialName("Edited")
+	data class Edited(val details: GrindProvenanceEditedInner): GrindProvenance()
 }
 
 /// Why a grinder link counts as dead. The shell drops the link and

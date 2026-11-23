@@ -2790,6 +2790,41 @@ pub fn scale_scan_uuids() -> String {
         .unwrap_or_else(|_| r#"{"service_uuids":[],"name_prefixes":[]}"#.to_owned())
 }
 
+/// How a stored shot's grind reads beside its grinder observation: a
+/// `GrindProvenance` JSON (`Typed`, `Observed`, or `Edited` with what the
+/// grinder said) for a `StoredShot` JSON. See
+/// [`de1_domain::shot_grinder::grind_provenance`].
+///
+/// # Errors
+///
+/// On a malformed shot.
+#[uniffi::export]
+pub fn grind_provenance_json(shot_json: String) -> Result<String, CremaError> {
+    de1_domain::shot_grinder::grind_provenance_json(&shot_json).map_err(crema_err)
+}
+
+/// The grind text Visualizer gets: "480 700rpm" (owner decision 6). See
+/// [`de1_domain::shot_grinder::visualizer_grind_text`].
+#[uniffi::export]
+pub fn visualizer_grind_text(setting: Option<String>, grind_rpm: Option<u32>) -> Option<String> {
+    de1_domain::shot_grinder::visualizer_grind_text(setting.as_deref(), grind_rpm)
+}
+
+/// Split "480 700rpm" back into `{"setting":"480","grindRpm":700}`; any
+/// other text comes back whole with no speed. See
+/// [`de1_domain::shot_grinder::split_visualizer_grind`].
+#[uniffi::export]
+pub fn split_visualizer_grind_json(text: String) -> String {
+    de1_domain::shot_grinder::split_visualizer_grind_json(&text)
+}
+
+/// Whether a grinder's catalogue entry has a variable speed (the shot
+/// editor's RPM field). See [`de1_domain::grinder_catalogue::has_variable_speed`].
+#[uniffi::export]
+pub fn grinder_has_variable_speed(preset_id: Option<String>) -> bool {
+    de1_domain::grinder_catalogue::has_variable_speed(preset_id.as_deref())
+}
+
 /// The pre-connect scan filters for one device kind (`"Scale"`,
 /// `"Grinder"`) or, for `None`, every kind (Android's one scanner) — as JSON
 /// `{"name_prefixes":[…],"service_uuids":[…]}`. An unknown kind gets empty
@@ -3969,6 +4004,34 @@ impl CremaBridge {
         self.core()
             .grinder_capabilities()
             .and_then(|caps| serde_json::to_string(&caps).ok())
+    }
+
+    /// The grinder record the connected grinder is linked to (the shell's
+    /// per-device link; `None` unlinks). Returns a `CoreOutput` JSON (follow
+    /// mode may change). See [`de1_app::CremaCore::set_grinder_link`].
+    pub fn set_grinder_link(&self, grinder_id: Option<String>) -> String {
+        let out = self.core().set_grinder_link(grinder_id);
+        self.emit(out)
+    }
+
+    /// "Pause following" for this session, or resume. Returns a `CoreOutput`
+    /// JSON. See [`de1_app::CremaCore::set_grinder_follow_paused`].
+    pub fn set_grinder_follow_paused(&self, paused: bool) -> String {
+        let out = self.core().set_grinder_follow_paused(paused);
+        self.emit(out)
+    }
+
+    /// Follow mode now, a `GrinderFollowView` JSON. See
+    /// [`de1_app::CremaCore::grinder_follow`].
+    pub fn grinder_follow(&self) -> String {
+        serde_json::to_string(&self.core().grinder_follow()).unwrap_or_default()
+    }
+
+    /// The grinder record whose grind the collar sets now (a bag pick's and a
+    /// grinder switch's `followedGrinderId`), or `None`. See
+    /// [`de1_app::CremaCore::followed_grinder_id`].
+    pub fn followed_grinder_id(&self) -> Option<String> {
+        self.core().followed_grinder_id()
     }
 
     /// The last 20 completed grinds and purges, oldest first, as a

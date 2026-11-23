@@ -1616,6 +1616,11 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				)
 			};
 		}
+		// Follow mode (grinder-ble G3): the core API lands first; the web
+		// shell's Brew follow-mode UI and grind application come with G3 shells.
+		case 'GrinderFollowChanged':
+		case 'FollowGrind':
+			return snapshot;
 		case 'UnknownMachineByte':
 			return {
 				...snapshot,

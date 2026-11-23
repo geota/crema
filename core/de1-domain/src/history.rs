@@ -564,6 +564,18 @@ pub struct StoredShot {
     /// the move falls back to its legacy rule for it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mirror_copy: bool,
+    /// What the connected grinder reported for this shot (#488 phase 2,
+    /// [`crate::shot_grinder`]): the grind before it, or its reading at the
+    /// start. `None` = no connected grinder. Recorded once; a later edit of
+    /// the grind leaves it as it was (that's how "Edited" is told,
+    /// [`crate::shot_grinder::grind_provenance`]). Omitted when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grinder_observed: Option<crate::shot_grinder::ShotGrinderObservation>,
+    /// Grinding speed, rpm: the grinder's, from [`Self::grinder_observed`],
+    /// or typed in the shot editor. Sent to Visualizer appended to the
+    /// grind ("480 700rpm", owner decision 6). Omitted when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grind_rpm: Option<u32>,
 }
 
 /// A shot's Visualizer privacy override — the `privacy` the upload sends.
@@ -641,6 +653,8 @@ impl StoredShot {
             bag_debit: None,
             replay: false,
             mirror_copy: false,
+            grinder_observed: None,
+            grind_rpm: None,
         }
     }
 
