@@ -302,7 +302,7 @@ kotlin {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
+    val composeBom = platform("androidx.compose:compose-bom:2026.11.01")
     implementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.19.1")
@@ -423,7 +423,7 @@ dependencies {
     testImplementation("net.java.dev.jna:jna:5.19.1")
     // Robolectric: a real Application/Looper for the MainViewModel
     // construct-and-clear smoke test (cohort review 2026-10-25, P3-2).
-    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("org.robolectric:robolectric:4.18.1")
     testImplementation("androidx.test:core:1.7.0")
     // Compose UI tests under Robolectric (Devices' tab switch, #488 follow-up
     // 23): the test rule, BOM-managed, and the empty activity it hosts
