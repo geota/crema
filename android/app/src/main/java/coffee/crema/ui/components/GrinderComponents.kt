@@ -45,6 +45,7 @@ import coffee.crema.core.GrinderMatchKind
 import coffee.crema.core.Grinder
 import coffee.crema.ui.GrinderPick
 import coffee.crema.ui.GrinderPickRow
+import coffee.crema.ui.followSuggestion
 import coffee.crema.core.UnsavedGrind
 import coffee.crema.history.effectiveGrindSetting
 
@@ -281,5 +282,95 @@ fun ShotGrindStepper(
         fullKeyboard = coffee.crema.beans.grindFullKeyboard(scale),
         clampTyped = false,
         blank = if (value == null) StepperBlank(grind ?: "—", start) else null,
+    )
+}
+
+/**
+ * Follow mode on Brew's grinder menu (grinder-ble §5.2, §5.4): while the
+ * collar sets the grind, "Pause following for this session"; paused,
+ * "Resume following"; a connected grinder whose record isn't active, the
+ * "Use ‹grinder›" suggestion (owner decision 4: never a switch on its own).
+ * Nothing when follow mode is off.
+ */
+@Composable
+fun GrinderFollowControls(vm: coffee.crema.ui.MainViewModel, ui: coffee.crema.ui.MainUiState, modifier: Modifier = Modifier) {
+    val status = ui.grinderFollow.status
+    val suggestion = ui.followSuggestion()
+    val text: String
+    val action: (@Composable () -> Unit)?
+    when (status) {
+        coffee.crema.core.FollowStatus.Following, coffee.crema.core.FollowStatus.Waiting -> {
+            text = "The grinder's collar sets this grind."
+            action = { CremaButton(onClick = { vm.pauseGrinderFollowing(true) }, variant = CremaButtonVariant.Text, label = "Pause following") }
+        }
+        coffee.crema.core.FollowStatus.Paused -> {
+            text = "Following is paused for this session: the grind is yours."
+            action = { CremaButton(onClick = { vm.pauseGrinderFollowing(false) }, variant = CremaButtonVariant.Text, label = "Resume following") }
+        }
+        coffee.crema.core.FollowStatus.Suggest -> {
+            if (suggestion == null) return
+            text = "${suggestion.name} is connected."
+            action = { CremaButton(onClick = { vm.setActiveGrinder(suggestion.id) }, variant = CremaButtonVariant.Tonal, label = "Use ${suggestion.name}") }
+        }
+        else -> return
+    }
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+        action?.invoke()
+    }
+}
+
+/**
+ * What the connected grinder said for a stored shot (grinder-ble §7): "From
+ * Motto 80 · 700 rpm · feed 40 · 9.8 s grind", and "Edited (grinder said
+ * 480)" when the shot's grind no longer matches. Nothing for a shot without
+ * an observation.
+ */
+@Composable
+fun ShotGrinderObservedLine(shot: coffee.crema.history.ShotMeta, modifier: Modifier = Modifier) {
+    val o = shot.grinderObserved ?: return
+    fun str(k: String) = (o[k] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
+    fun num(k: String) = (o[k] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { !it.isString }?.content?.toDoubleOrNull()
+    val said = str("setting")
+    val parts = buildList {
+        add("From ${coffee.crema.ui.grinderModelName(str("model"))}")
+        num("grindRpm")?.let { add("${it.toInt()} rpm") }
+        num("feedRpm")?.let { add("feed ${it.toInt()}") }
+        num("grindMs")?.let { add(String.format(java.util.Locale.ROOT, "%.1f s grind", it / 1000.0)) }
+    }
+    val edited = said != null && shot.effectiveGrindSetting.let { g -> g == null || !coffee.crema.beans.sameGrind(g, said) }
+    Column(modifier) {
+        Text(parts.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (edited) Text("Edited (grinder said $said)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/**
+ * The shot editor's RPM field (grinder-ble §4.2): for a shot whose grinder
+ * has a variable speed (its catalogue entry), or one that has a speed.
+ * Editing replaces a trailing speed in the grind text, never adds a second
+ * ([coffee.crema.ui.grindWithSpeed]).
+ */
+@Composable
+fun ShotRpmField(
+    shot: coffee.crema.history.ShotMeta,
+    grinders: List<Grinder>,
+    onChange: (Int?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val preset = remember(shot.grinderId, grinders) { grinders.firstOrNull { it.id == shot.grinderId }?.presetId }
+    if (shot.grindRpm == null && !coffee.crema.core.grinderHasVariableSpeed(preset)) return
+    var text by remember(shot.id, shot.grindRpm) { mutableStateOf(shot.grindRpm?.toString().orEmpty()) }
+    androidx.compose.material3.OutlinedTextField(
+        value = text,
+        onValueChange = { v ->
+            val digits = v.filter { it.isDigit() }.take(5)
+            text = digits
+            onChange(digits.toIntOrNull()?.takeIf { it > 0 })
+        },
+        label = { Text("RPM") },
+        singleLine = true,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+        modifier = modifier.widthIn(max = 160.dp),
     )
 }

@@ -3123,7 +3123,11 @@ class LibraryController(
         val grind = bag?.let {
             runCatching {
                 coffee.crema.beans.resolveGrinderSwitch(
-                    coffee.crema.core.GrinderSwitchInput(bag = it, grinderId = id, grinders = s.grinders, lastGrinds = lastGrindsForBag(it.id)),
+                    coffee.crema.core.GrinderSwitchInput(
+                        bag = it, grinderId = id, grinders = s.grinders, lastGrinds = lastGrindsForBag(it.id),
+                        // Switching onto the grinder whose collar sets the grind leaves it to the collar (§5.3).
+                        followedGrinderId = followedGrinderId(),
+                    ),
                 )
             }.onFailure { e -> appendLog("Grinder switch failed: ${e.message}") }.getOrNull()
         }
@@ -3185,6 +3189,8 @@ class LibraryController(
                     grinders = s.grinders,
                     lastGrinds = lastGrindsForBag(bag.id),
                     activeBeanId = activeBeanIdBefore,
+                    // A pick onto the followed grinder: "set the collar to …" (§5.3).
+                    followedGrinderId = followedGrinderId(),
                 ),
             )
         }.getOrElse {
@@ -3557,6 +3563,9 @@ class LibraryController(
 
     // ── Shot history ──────────────────────────────────────────────────────────
 
+    /** The grinder record whose collar sets Brew's grind now (follow mode), or null. */
+    private fun followedGrinderId(): String? = runCatching { bridge.followedGrinderId() }.getOrNull()
+
     /** What Brew has selected in [s], the effective state ([shotSelections]). */
     fun shotSelectionsOf(s: MainUiState): ShotSelections = shotSelections(s)
 
@@ -3596,8 +3605,13 @@ class LibraryController(
         // Descale/calibrate run in their own machine states, never here.
         if (!effects.record && !effects.offerUndo) {
             // Take the core's pending shot anyway, so it never outlives its
-            // completion (web takes it whatever the disposition too).
-            runCatching { bridge.takeStoredShot(json.encodeToString(ShotCaptureContext.serializer(), ShotCaptureContext(completedAt = now, replay = s.replayPrimary))) }
+            // completion (web takes it whatever the disposition too). Nothing
+            // was ground for it: the grind before it goes back (review #554 S2).
+            runCatching {
+                val taken = bridge.takeStoredShot(json.encodeToString(ShotCaptureContext.serializer(), ShotCaptureContext(completedAt = now, replay = s.replayPrimary)))
+                ((json.parseToJsonElement(taken) as? JsonObject)?.get("id") as? JsonPrimitive)
+                    ?.takeIf { it.isString }?.content?.let { bridge.releaseShotGrind(it) }
+            }
             appendLog("Cleaning run finished — not recorded as a shot")
             return
         }
@@ -3664,6 +3678,9 @@ class LibraryController(
         // the auto-save wait for the Undo.
         if (effects.offerUndo) {
             discardedShot = shot to effects
+            // An aborted pull isn't the grind's shot: the retry gets it; the
+            // Undo below claims it back (review #554 S2).
+            runCatching { bridge.releaseShotGrind(shot.id) }
             updateUi { it.copy(
                 // The Last-shot card would point at a shot history doesn't
                 // hold — clear it for an aborted pull.
@@ -3981,6 +3998,24 @@ class LibraryController(
     }
 
     /**
+     * Set (null clears) a stored shot's grinding speed, rpm (SPEC grinder-ble
+     * §4.2, the shot editor's RPM field). A grind text that ends in a speed
+     * ("15 1200rpm", an imported shot's) gets the new speed in place of the
+     * old one, or loses it when cleared: never a second speed.
+     */
+    fun setShotGrindRpm(id: String, rpm: Int?) {
+        val shot = findShot(id) ?: return
+        val value = rpm?.takeIf { it > 0 }
+        if (shot.grindRpm == value) return
+        val grind = grindWithSpeed(shot.grindSetting, value)
+        val marked = markForVisualizer(id, annotations = true)
+        historyStore.update(id) { it.copy(grindRpm = value, grindSetting = grind) }
+        saveMarkedEdit(marked)
+        schedulePatchEdited(id)
+        onShotAnnotationsEdited(id)
+    }
+
+    /**
      * Change (or with null / blank, clear) the grinder a stored shot names
      * (REVIEW-FINAL-2 N7, web History's `setGrinderModel`). The id follows the
      * name (REVIEW-499 M2): the grinder the core's `grinder_named` finds for
@@ -4127,6 +4162,7 @@ class LibraryController(
     fun undoDiscardShot() {
         val (shot, effects) = discardedShot ?: return
         discardedShot = null
+        runCatching { bridge.claimShotGrind(shot.id) }
         val cut = CapCut()
         val row = staged(shot)
         addMade(row, cut)
@@ -4310,3 +4346,24 @@ internal fun brewLogGrind(
 ): BrewLogGrind = runCatching {
     coreJson.decodeFromString(BrewLogGrind.serializer(), core(coreJson.encodeToString(BrewLogGrindInput.serializer(), BrewLogGrindInput(grinder, grind))))
 }.getOrElse { BrewLogGrind(grinderId = grinder?.id?.ifBlank { null }, grinderName = grinder?.name?.trim()?.ifEmpty { null }) }
+
+/**
+ * [grind] with its trailing speed ("15 1200rpm") replaced by [rpm], or
+ * dropped when [rpm] is null; a grind with no trailing speed is unchanged
+ * (the speed lives in `grindRpm`, and the core appends it for Visualizer).
+ */
+internal fun grindWithSpeed(grind: String?, rpm: Int?): String? {
+    val text = grind ?: return null
+    val split = runCatching { coffee.crema.core.splitVisualizerGrindJson(text) }.getOrNull()
+        ?.let { kotlinx.serialization.json.Json.parseToJsonElement(it) as? kotlinx.serialization.json.JsonObject }
+        ?: return text
+    val had = (split["grindRpm"] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull()
+        ?: return text
+    if (had == rpm) return text
+    val setting = (split["setting"] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+    return when {
+        rpm == null -> setting.ifEmpty { null }
+        setting.isEmpty() -> "${rpm}rpm"
+        else -> "$setting ${rpm}rpm"
+    }
+}

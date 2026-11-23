@@ -574,6 +574,15 @@ pub fn resolve_bag_selection(input: &BagSelectInput) -> BagSelection {
     {
         if followed {
             collar_target = Some(grind);
+            // The pick switched onto the followed grinder: the collar then
+            // sets Brew's grind, so the Undo (back to the old grinder) brings
+            // the old grind back too (review #554 S3). Without a switch the
+            // collar keeps setting it, and there is nothing to undo.
+            if change.grinder_id.is_some() {
+                undo.grind = Some(SetTo {
+                    value: input.grind.clone(),
+                });
+            }
         } else {
             change.grind = Some(SetTo { value: Some(grind) });
             undo.grind = Some(SetTo {
@@ -679,11 +688,12 @@ pub fn bag_selection_undo(selection: &BagSelection, now: &SelectionState) -> Sel
             .grinder_id
             .clone()
             .filter(|_| still_set(now.grinder_id.as_deref(), grinder_id.as_ref())),
-        grind: selection
-            .undo
-            .grind
-            .clone()
-            .filter(|_| still_grind(now.grind.as_deref(), grind.as_ref())),
+        grind: selection.undo.grind.clone().filter(|_| match grind {
+            Some(_) => still_grind(now.grind.as_deref(), grind.as_ref()),
+            // A switch onto the followed grinder left the grind to its collar
+            // (review #554 S3): the old grind comes back with the old grinder.
+            None => still_set(now.grinder_id.as_deref(), grinder_id.as_ref()),
+        }),
     }
 }
 
@@ -1716,6 +1726,28 @@ mod tests {
         let out = pick("grinder:motto", None);
         assert_eq!(out.change.grind, set(Some("480")));
         assert_eq!(out.message.as_deref(), Some("Guji: Motto 80 at 480 μm"));
+        // Review #554 S3: the Undo of a switch onto it brings the old grind
+        // back with the old grinder, while the old grinder is still what Undo
+        // replaces; with no switch there is no grind to undo.
+        let out = pick("grinder:nz", Some("grinder:motto"));
+        assert_eq!(out.undo.grind, set(Some("500")));
+        let now = SelectionState {
+            grinder_id: Some("grinder:motto".into()),
+            grind: Some("480".into()),
+            ..SelectionState::default()
+        };
+        let undo = bag_selection_undo(&out, &now);
+        assert_eq!(undo.grinder_id, set(Some("grinder:nz")));
+        assert_eq!(undo.grind, set(Some("500")));
+        let moved_on = SelectionState {
+            grinder_id: Some("grinder:other".into()),
+            ..now.clone()
+        };
+        assert_eq!(bag_selection_undo(&out, &moved_on).grind, None);
+        assert_eq!(
+            pick("grinder:motto", Some("grinder:motto")).undo.grind,
+            None
+        );
         // The switch onto the followed grinder leaves the grind alone too.
         let switch = |followed: Option<&str>| {
             resolve_grinder_switch(&GrinderSwitchInput {

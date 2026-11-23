@@ -247,6 +247,11 @@ internal fun Set<coffee.crema.settings.Setting>.withEchoes(volume: Boolean, stan
 
 /** The row gate for [setting] on this device (§7.6). */
 fun MainUiState.gate(setting: coffee.crema.settings.Setting): coffee.crema.ui.components.RowGate {
+    // Follow mode (grinder-ble §5.2): the collar sets Brew's grind, so the
+    // stepper is locked until the user pauses following.
+    if (setting == coffee.crema.settings.Setting.QC_GRIND && grinderFollow.status == coffee.crema.core.FollowStatus.Following) {
+        return coffee.crema.ui.components.RowGate(editable = false, note = FOLLOW_GATE_NOTE)
+    }
     if (mirror == null) return coffee.crema.ui.components.RowGate.Open
     val a = availability(setting)
     return coffee.crema.ui.components.RowGate(editable = a.editable, unknown = a == SettingAvailability.UNKNOWN, note = availabilityNote(setting))

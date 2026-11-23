@@ -1046,6 +1046,12 @@ private fun PhoneShotDetail(
                         val grinders by remember { vm.ui.map { it.grinders }.distinctUntilChanged() }.collectAsStateWithLifecycle(emptyList())
                         coffee.crema.ui.components.ShotGrindStepper(shot, grinders, { g, scale -> vm.setShotGrind(shot.id, g, scale) })
                     }
+                    // The grinder's speed and what the connected grinder said (grinder-ble §4.2, §7).
+                    run {
+                        val grinders by remember { vm.ui.map { it.grinders }.distinctUntilChanged() }.collectAsStateWithLifecycle(emptyList())
+                        coffee.crema.ui.components.ShotRpmField(shot, grinders, { rpm -> vm.setShotGrindRpm(shot.id, rpm) })
+                    }
+                    coffee.crema.ui.components.ShotGrinderObservedLine(shot)
                     // The grinder the shot names (N7): its id follows the name through the core.
                     val grinderNames by remember(vm) { vm.ui.map { s -> s.liveGrinders.map { it.name } }.distinctUntilChanged() }
                         .collectAsStateWithLifecycle(emptyList())

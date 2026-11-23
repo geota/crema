@@ -16,6 +16,15 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   it, reconnects on its own, and pauses during a DE1 firmware update. If it
   can't be found or doesn't answer, it says to close the BOOKOO app first. Off
   by default; nothing is written to the grinder (#488).
+- **Brew follows the connected grinder (beta, Android)** — with a Motto 80
+  linked to the grinder in use, Brew's grind follows its collar ("480 μm ·
+  from grinder") and each shot records the grind before it, with its speed.
+  Pause following for the session from Brew's grinder menu; another grinder
+  in use gets a "Use Motto 80" suggestion, never a switch. A bag pick says
+  "set the collar to 480 μm" instead of changing the grind. History shows
+  "From Motto 80 · 700 rpm …" and "Edited (grinder said 480)", and the shot
+  editor has an RPM field for variable-speed grinders. Visualizer gets the
+  speed on the grind, "480 700rpm" (#488).
 
 ### Changed
 

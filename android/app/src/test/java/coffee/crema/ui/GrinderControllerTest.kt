@@ -50,6 +50,19 @@ class GrinderControllerTest {
     }
 
     private lateinit var bridge: CremaBridge
+    private val links = CopyOnWriteArrayList<String?>()
+    private val applied = CopyOnWriteArrayList<String>()
+
+    /** What Brew has selected, to the core (the VM does this as the state changes). */
+    private fun pushSelections() {
+        val s = ui.value
+        bridge.setShotSelections(
+            Json.encodeToString(
+                coffee.crema.core.ShotSelections.serializer(),
+                coffee.crema.core.ShotSelections(grinderId = s.activeGrinderId, grind = s.qcGrind),
+            ),
+        )
+    }
     private lateinit var lane: CoreLane
 
     private fun controller(fake: FakeGrinder, scanTimeoutMs: Long = 10_000): Pair<GrinderController, GrinderBleManager> {
@@ -88,6 +101,14 @@ class GrinderControllerTest {
             persistPrefs = { saves.incrementAndGet() },
             addFromCatalogue = { id -> Grinder(id = "grinder:motto-80", name = "Motto 80", scale = GrindScale(0f, 999f, 1f, "μm"), presetId = id, updatedAt = 1L) },
             scanTimeoutMs = scanTimeoutMs,
+            setCoreLink = { id -> links += id; lane.deliver(bridge.setGrinderLink(id)) },
+            setCorePaused = { p -> lane.deliver(bridge.setGrinderFollowPaused(p)) },
+            // Brew's grind, as the VM's SetGrind path keeps it, and on to the core.
+            applyFollowGrind = { g ->
+                applied += g
+                ui.update { it.copy(qcGrind = g) }
+                pushSelections()
+            },
         )
         controller.start()
         return controller to manager
@@ -254,5 +275,86 @@ class GrinderControllerTest {
         lane.deliver(bridge.onTick(fake.clock.get().toULong()))
         until("stopped") { m.isUserDisconnected && ui.value.connectedGrinder.status == GrinderLinkStatus.NO_ANSWER }
         assertTrue(ui.value.connectedGrinder.message!!.startsWith("The grinder didn't answer."))
+    }
+
+    /** G3: a linked grinder is handed to the core; its steady dial then sets
+     *  Brew's grind, the stepper locks, Pause gives it back, and a bag pick
+     *  onto it says "set the collar to …". */
+    @Test
+    fun aLinkedGrinderFollowsAndPauses() {
+        val fake = FakeGrinder()
+        val (c, _) = controller(fake)
+        ui.update {
+            it.copy(
+                connectedGrinders = true,
+                rememberedGrinderAddress = FakeGrinder.Handle.address,
+                rememberedGrinderName = FakeGrinder.NAME,
+                grinderLinkedAddress = FakeGrinder.Handle.address,
+                grinderLinkedId = "grinder:motto",
+                grinders = rowViewOf(listOf(motto())),
+                activeGrinderId = "grinder:motto",
+                qcGrind = "500",
+            )
+        }
+        pushSelections()
+        c.hydrate()
+        assertEquals("grinder:motto", links.last(), "the link is the core's")
+        until("the handshake") { fake.writes.size == 4 }
+        var t = fake.clock.get()
+        repeat(6) {
+            t += 200
+            fake.send(FakeGrinder.period("IDLE", 3, gap = 480), seq = 2, atMs = t)
+        }
+        until("Brew follows") { applied.lastOrNull() == "480" && ui.value.qcGrind == "480" }
+        until("following") { ui.value.grinderFollow.status == coffee.crema.core.FollowStatus.Following }
+        assertEquals(false, ui.value.gate(coffee.crema.settings.Setting.QC_GRIND).editable, "the collar sets it")
+        assertEquals("from grinder \u00b7 900 rpm", ui.value.grindFollowNote())
+        // Paused: the stepper is back and the collar no longer moves Brew's grind.
+        c.pauseFollowing(true)
+        until("paused") { ui.value.grinderFollow.status == coffee.crema.core.FollowStatus.Paused }
+        assertEquals(true, ui.value.gate(coffee.crema.settings.Setting.QC_GRIND).editable)
+        repeat(6) {
+            t += 200
+            fake.send(FakeGrinder.period("IDLE", 3, gap = 490), seq = 3, atMs = t)
+        }
+        Thread.sleep(200)
+        assertEquals("480", ui.value.qcGrind)
+        c.pauseFollowing(false)
+        until("resumed") { ui.value.qcGrind == "490" }
+        // Beta off: the core loses the link.
+        ui.update { it.copy(connectedGrinders = false) }
+        c.onBetaChanged(false)
+        assertEquals(null, links.last())
+    }
+
+    /** G3: a connected grinder whose record isn't active is a suggestion only. */
+    @Test
+    fun anotherActiveGrinderGetsTheUseChip() {
+        val fake = FakeGrinder()
+        val (c, _) = controller(fake)
+        val niche = Grinder(id = "grinder:niche", name = "Niche", scale = GrindScale(0f, 50f, 1f, ""), updatedAt = 1L)
+        ui.update {
+            it.copy(
+                connectedGrinders = true,
+                rememberedGrinderAddress = FakeGrinder.Handle.address,
+                rememberedGrinderName = FakeGrinder.NAME,
+                grinderLinkedAddress = FakeGrinder.Handle.address,
+                grinderLinkedId = "grinder:motto",
+                grinders = rowViewOf(listOf(motto(), niche)),
+                activeGrinderId = "grinder:niche",
+                qcGrind = "14",
+            )
+        }
+        pushSelections()
+        c.hydrate()
+        until("the handshake") { fake.writes.size == 4 }
+        var t = fake.clock.get()
+        repeat(6) {
+            t += 200
+            fake.send(FakeGrinder.period("IDLE", 3), seq = 2, atMs = t)
+        }
+        until("the chip") { ui.value.followSuggestion()?.id == "grinder:motto" }
+        assertEquals("14", ui.value.qcGrind, "never switched or followed on its own")
+        assertEquals(emptyList(), applied.toList())
     }
 }

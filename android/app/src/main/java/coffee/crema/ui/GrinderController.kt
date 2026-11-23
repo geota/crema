@@ -52,6 +52,16 @@ class GrinderController internal constructor(
     private val nowMs: () -> Long = SystemClock::elapsedRealtime,
     /** How long a scan hunts before "Can't see your Motto 80" (§2.7: 10 s). */
     private val scanTimeoutMs: Long = SCAN_TIMEOUT_MS,
+    /** Tell the core which grinder record the connected grinder is linked to
+     *  (null = none): `CremaBridge.setGrinderLink`, its output delivered. */
+    private val setCoreLink: (String?) -> Unit = {},
+    /** Follow mode asks to set Brew's grind (core `FollowGrind`): the same
+     *  path as a typed grind, so it is persisted and mirrored. */
+    private val applyFollowGrind: (String) -> Unit = {},
+    /** "Pause following" to the core: `CremaBridge.setGrinderFollowPaused`, its output delivered. */
+    private val setCorePaused: (Boolean) -> Unit = {},
+    /** Wall clock, for "last seen 12:03" on a stale follow. */
+    private val wallMs: () -> Long = System::currentTimeMillis,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -114,7 +124,53 @@ class GrinderController internal constructor(
     @Volatile private var scanSinceMs: Long? = null
     private val kickDebouncer = coffee.crema.ble.KickDebouncer(nowMs)
 
+    /** The link last handed to the core (an unset sentinel until the first). */
+    @Volatile private var coreLink: Any? = UNSET
+
+    /**
+     * The grinder record the core follows and stamps shots for: the link,
+     * while it belongs to the connected or remembered grinder and the beta
+     * is on (a remote never has one). Handed over only when it changes.
+     */
+    internal fun syncCoreLink() {
+        val st = uiState()
+        val address = manager.connectedAddress ?: st.rememberedGrinderAddress
+        val id = st.grinderLinkedId?.takeIf {
+            allowed() && address != null && address.equals(st.grinderLinkedAddress, ignoreCase = true)
+        }
+        if (coreLink == id) return
+        coreLink = id
+        runCatching { setCoreLink(id) }.onFailure { appendLog("Grinder link not handed to the core: ${it.message}") }
+    }
+
     init {
+        lane.on<Event.GrinderFollowChanged> { e ->
+            val f = e.content.follow
+            updateUi { s ->
+                val was = s.grinderFollow.status
+                s.copy(
+                    grinderFollow = f,
+                    // "Last seen 12:03" while the linked grinder is away.
+                    grinderFollowStaleSince = when {
+                        f.status != coffee.crema.core.FollowStatus.Stale -> null
+                        was == coffee.crema.core.FollowStatus.Stale -> s.grinderFollowStaleSince
+                        else -> wallMs()
+                    },
+                )
+            }
+        }
+        lane.on<Event.FollowGrind> { e ->
+            val grind = e.content.grind
+            appendLog("Grind $grind from the grinder")
+            scope.launch {
+                applyFollowGrind(grind)
+                if (e.content.announce) {
+                    val st = uiState()
+                    val shown = runCatching { coffee.crema.beans.formatGrind(grind, st.activeGrindScale()) }.getOrDefault(grind)
+                    notify("Grind $shown from your ${grinderModelName(st.connectedGrinder.model)}")
+                }
+            }
+        }
         lane.on<Event.GrinderReady> { e ->
             val info = e.content.info
             everReady = true
@@ -257,6 +313,7 @@ class GrinderController internal constructor(
 
     /** Connecting auto-remembers the grinder, like the scale (Auto-connect on). */
     private fun remember() {
+        syncCoreLink()
         val addr = manager.connectedAddress ?: return
         val name = manager.connectedName
         manager.autoReconnectEnabled = true
@@ -302,6 +359,7 @@ class GrinderController internal constructor(
             )
         }
         persistPrefs()
+        syncCoreLink()
     }
 
     /** "Add Motto 80 to your grinders" (§6.1 rule 4): add it from the catalogue and link it. */
@@ -368,15 +426,18 @@ class GrinderController internal constructor(
         manager.autoReconnectEnabled = false
         updateUi { it.copy(rememberedGrinderAddress = null, rememberedGrinderName = null) }
         persistPrefs()
+        syncCoreLink()
     }
 
     /** The beta switch changed: off disconnects (the remembered grinder stays). */
     fun onBetaChanged(on: Boolean) {
+        syncCoreLink()
         if (!on) disconnect() else hydrate()
     }
 
     /** At launch (prefs loaded): connect the remembered grinder, when the beta is on. */
     fun hydrate() {
+        syncCoreLink()
         val st = uiState()
         manager.autoReconnectEnabled = st.rememberedGrinderAddress != null
         if (!allowed() || st.rememberedGrinderAddress == null) return
@@ -460,7 +521,14 @@ class GrinderController internal constructor(
         manager.close()
     }
 
+    /** "Pause following" for this session, or resume (owner decision 3). */
+    fun pauseFollowing(paused: Boolean) {
+        runCatching { setCorePaused(paused) }.onFailure { appendLog("Follow pause not handed to the core: ${it.message}") }
+    }
+
     companion object {
+        private val UNSET = Any()
+
         const val SCAN_LABEL = "Grinder"
         const val SCAN_TIMEOUT_MS = 10_000L
 
