@@ -3,8 +3,8 @@
  * (issue #10).
  *
  * The core's `BrewSessionMonitor` owns the truth (step boundaries,
- * cues, the recording); this store holds what Brew's Manual mode (and
- * the phone Scale page's Brew segment) renders between events: the recipe being run, the phase, the
+ * cues, the recording); this store holds what Brew's Manual mode
+ * renders between events: the recipe being run, the phase, the
  * current step, and — because shell and core share the same
  * `performance.now()` timebase — enough timestamps to draw the clock
  * without asking the core every frame.

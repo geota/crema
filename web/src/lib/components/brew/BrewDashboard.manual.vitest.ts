@@ -1,8 +1,8 @@
 /**
- * Brew's Manual mode on the wide dashboard (brew modes §2–§4): picking a
- * recipe in the Profile picker's Manual tab turns Brew into the guided
- * brew; picking a profile on the Espresso tab turns it back; the picker's
- * rows lock while a shot or a brew runs.
+ * Brew's Manual mode on the wide dashboard (brew modes §2–§4): the Profile
+ * picker lists Espresso profiles then Manual recipes; picking a recipe turns
+ * Brew into the guided brew, picking a profile turns it back; the rows lock
+ * while a shot or a brew runs.
  */
 import '#lib/testing/dom-stubs.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -67,7 +67,10 @@ describe('Brew in Manual mode (wide)', () => {
 		flushSync();
 		return root.querySelector<HTMLElement>('.hpick')!;
 	}
-	const tab = (picker: HTMLElement, id: string) => picker.querySelector<HTMLButtonElement>(`[role="tab"][data-tab="${id}"]`)!;
+	const section = (root: ParentNode, id: 'profiles' | 'recipes') =>
+		[...root.querySelectorAll<HTMLElement>('.hpick-section')][id === 'profiles' ? 0 : 1];
+	const rowNamed = (root: ParentNode, name: string) =>
+		buttons(root).find((b) => b.querySelector('.hpick-primary')?.textContent === name);
 
 	it('shows the recipe, its steps, Duplicate to edit, Hot water and Start brew', async () => {
 		getBrewSelectionStore().pickRecipe(RECIPE);
@@ -90,40 +93,46 @@ describe('Brew in Manual mode (wide)', () => {
 		expect(button(foot, 'Coffee')).toBeUndefined();
 	});
 
-	it('opens the picker on the current mode, and a profile pick goes back to Espresso', async () => {
+	it('lists Espresso profiles then Manual recipes, and a profile pick goes back to Espresso', async () => {
 		getBrewSelectionStore().pickRecipe(RECIPE);
 		const root = await render();
 		const picker = openPicker(root);
-		expect(tab(picker, 'manual').getAttribute('aria-selected')).toBe('true');
-		expect(text(picker, '.hpick-item.is-active .hpick-primary')).toBe(getRecipeStore().get(RECIPE)!.name);
+		expect(root.querySelector('[role="tab"]'), 'no tabs').toBeNull();
+		expect([...picker.querySelectorAll('.hpick-section-head')].map((h) => h.textContent)).toEqual([
+			'Espresso profiles',
+			'Manual recipes'
+		]);
+		expect(text(section(picker, 'recipes'), '.hpick-item.is-active .hpick-primary')).toBe(getRecipeStore().get(RECIPE)!.name);
+		expect(section(picker, 'profiles').querySelector('.hpick-item.is-active'), 'no profile is the selection').toBeNull();
 
-		tab(picker, 'espresso').click();
-		flushSync();
-		expect(root.querySelector('.hpick input')?.getAttribute('placeholder')).toBe('Search profiles…');
 		const other = getProfileStore().all[1];
-		buttons(root.querySelector('.hpick')!)
-			.find((b) => b.querySelector('.hpick-primary')?.textContent === other.name)!
-			.click();
+		rowNamed(section(picker, 'profiles'), other.name)!.click();
 		flushSync();
 
 		expect(getBrewSelectionStore().manual).toBe(false);
 		expect(getProfileStore().activeId).toBe(other.id);
 		expect(text(root, '.bh-block-profile .t-eyebrow')).toBe('Profile');
 		expect(button(root, 'Quick Controls')).toBeDefined();
-		expect(openPicker(root).querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Espresso');
 	});
 
-	it('picks a recipe from the Manual tab', async () => {
+	it('picks a recipe from the Manual recipes section, and the search filters both', async () => {
 		getBrewSelectionStore().pickProfile(getProfileStore().all[0].id);
 		const root = await render();
 		const picker = openPicker(root);
-		expect(tab(picker, 'espresso').getAttribute('aria-selected')).toBe('true');
-		tab(picker, 'manual').click();
-		flushSync();
 		const recipe = getRecipeStore().get(RECIPE)!;
-		buttons(root.querySelector('.hpick')!)
-			.find((b) => b.querySelector('.hpick-primary')?.textContent === recipe.name)!
-			.click();
+		const input = picker.querySelector<HTMLInputElement>('input')!;
+		input.value = 'aeropress';
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+		flushSync();
+		const recipeRows = [...section(picker, 'recipes').querySelectorAll('.hpick-primary')].map((e) => e.textContent);
+		expect(recipeRows.length).toBeGreaterThan(0);
+		expect(recipeRows.every((n) => /aeropress/i.test(n ?? ''))).toBe(true);
+		expect(section(picker, 'profiles').querySelector('.hpick-empty')?.textContent).toBe('No matches');
+
+		input.value = '';
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+		flushSync();
+		rowNamed(section(picker, 'recipes'), recipe.name)!.click();
 		flushSync();
 		expect(getBrewSelectionStore().recipe?.id).toBe(RECIPE);
 		expect(button(root, 'Start brew')).toBeDefined();
@@ -146,21 +155,19 @@ describe('Brew in Manual mode (wide)', () => {
 		expect(button(root, 'Duplicate to edit')?.disabled).toBe(true);
 
 		const picker = openPicker(root);
-		expect(text(picker, '.hpick-locked')).toBe('Finish the current brew first');
+		for (const id of ['profiles', 'recipes'] as const) {
+			expect(text(section(picker, id), '.hpick-locked')).toBe('Finish the current brew first');
+		}
 		expect(buttons(picker).filter((b) => b.classList.contains('hpick-item')).every((b) => b.disabled)).toBe(true);
-		tab(picker, 'espresso').click();
-		flushSync();
-		expect(text(root, '.hpick-locked'), 'the tabs still browse, locked').toBe('Finish the current brew first');
 	});
 
 	it('locks only the profile rows while a shot runs', async () => {
 		getBrewSelectionStore().pickProfile(getProfileStore().all[0].id);
 		const root = await render({ shotInProgress: true });
 		const picker = openPicker(root);
-		expect(text(picker, '.hpick-locked')).toBe('Finish the current shot first');
-		tab(picker, 'manual').click();
-		flushSync();
-		expect(root.querySelector('.hpick-locked')).toBeNull();
-		expect(root.querySelector<HTMLButtonElement>('.hpick-item')!.disabled).toBe(false);
+		expect(text(section(picker, 'profiles'), '.hpick-locked')).toBe('Finish the current shot first');
+		expect(section(picker, 'profiles').querySelector<HTMLButtonElement>('.hpick-item')!.disabled).toBe(true);
+		expect(section(picker, 'recipes').querySelector('.hpick-locked')).toBeNull();
+		expect(section(picker, 'recipes').querySelector<HTMLButtonElement>('.hpick-item')!.disabled).toBe(false);
 	});
 });

@@ -45,13 +45,11 @@
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { getProfileStore } from '#lib/profiles/index.js';
 	import { getSettingsStore, convertWeight, formatWeight } from '#lib/settings/index.js';
-	import GuidedBrewPanel from '#lib/components/brewlog/GuidedBrewPanel.svelte';
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import { setPhoneDevicesOpen, usePhoneBar } from '#lib/shell/phone-bar.svelte.js';
 	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
 	import BluetoothIcon from 'phosphor-svelte/lib/BluetoothIcon';
 	import GearSixIcon from 'phosphor-svelte/lib/GearSixIcon';
-	import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import FunnelIcon from 'phosphor-svelte/lib/FunnelIcon';
@@ -75,15 +73,6 @@
 		void goto(devicesHref(next), { replaceState: true, reset: false });
 	}
 
-	// ── Weigh | Brew segment (issue #10 Phase 2), phone only ─────────────
-	// Wide screens run guided brews from Brew's Manual mode (brew modes §3);
-	// the phone keeps this segment until its Profile dropdown picks recipes.
-	// Weigh is the classic standalone weighing surface; Brew is the guided
-	// session. A live session pins the page to Brew on entry so navigating
-	// away and back mid-pourover lands on the running clock.
-	const guidedBrew = getGuidedBrewStore();
-	// svelte-ignore state_referenced_locally
-	let mode = $state<'weigh' | 'brew'>(guidedBrew.phase === 'idle' ? 'weigh' : 'brew');
 	/** The reactive preference bundle — `prefs.weightUnit` drives the display-unit row. */
 	const prefs = $derived(settings.current);
 
@@ -470,29 +459,6 @@
 	{/if}
 {/snippet}
 
-{#snippet modeTabs()}
-			<div class="sc-mode" role="tablist" aria-label="Scale page mode">
-				<button
-					class="sc-mode-btn"
-					class:is-on={mode === 'weigh'}
-					role="tab"
-					aria-selected={mode === 'weigh'}
-					onclick={() => (mode = 'weigh')}
-				>
-					Weigh
-				</button>
-				<button
-					class="sc-mode-btn"
-					class:is-on={mode === 'brew'}
-					role="tab"
-					aria-selected={mode === 'brew'}
-					onclick={() => (mode = 'brew')}
-				>
-					Brew
-				</button>
-			</div>
-{/snippet}
-
 {#snippet doseHelper()}
 	<div class="sc-dose">
 		<div class="sc-dose-head">
@@ -779,12 +745,9 @@
 {/snippet}
 
 {#snippet phoneScale()}
-	<!-- Android's `PhoneScaleScreen`: the Weigh | Brew switch, the status, the
-	     hero, then Connect scale, or the tools and settings once one is paired. -->
-	<div class="sc-pswitch">{@render modeTabs()}</div>
-	{#if mode === 'brew'}
-		<GuidedBrewPanel {connected} {weightG} flowGs={deviceFlow} />
-	{:else}
+	<!-- Android's `PhoneScaleScreen`: the status, the hero, then Connect scale,
+	     or the tools and settings once one is paired. Guided brews run from
+	     Brew's Manual mode (brew modes §3). -->
 		<div class="sc-pbody">
 			<div class="sc-pstatus">
 				<div class="sc-pstatus-name">{connected ? scaleName : 'No scale connected'}</div>
@@ -874,7 +837,6 @@
 				{@render activityLog()}
 			{/if}
 		</div>
-	{/if}
 {/snippet}
 
 <div class="qcontain sc-page">
@@ -1084,34 +1046,6 @@
 	.dv-tab-dot.is-on {
 		background: var(--success);
 	}
-	/* Weigh | Brew segment (issue #10), phone only. */
-	.sc-mode {
-		display: inline-flex;
-		border: 1px solid rgba(var(--tint-rgb), 0.14);
-		border-radius: var(--radius-pill);
-		padding: 3px;
-		gap: 2px;
-	}
-	.sc-mode-btn {
-		background: transparent;
-		border: 0;
-		border-radius: var(--radius-pill);
-		color: var(--fg-3);
-		font-family: var(--font-sans);
-		font-size: 12.5px;
-		font-weight: 600;
-		padding: 6px 16px;
-		cursor: pointer;
-		transition: all var(--dur-1) var(--ease);
-	}
-	.sc-mode-btn:hover {
-		color: var(--fg-1);
-	}
-	.sc-mode-btn.is-on {
-		background: var(--copper-500);
-		color: var(--fg-on-accent);
-	}
-
 	/* Header */
 	.sc-head {
 		display: flex;
@@ -1618,35 +1552,6 @@
 			padding: 0 0 24px;
 			gap: 0;
 			overflow-y: auto;
-		}
-		.sc-pswitch {
-			padding: 2px var(--page-pad-x) 0;
-		}
-		.sc-pswitch .sc-mode {
-			display: flex;
-			width: 100%;
-			padding: 2px;
-			border: 1px solid var(--ph-outline);
-			border-radius: 999px;
-			background: transparent;
-		}
-		.sc-pswitch .sc-mode-btn {
-			position: relative;
-			height: 32px;
-			padding: 0 14px;
-			border-radius: 999px;
-			background: transparent;
-			color: var(--fg-muted);
-			font-size: 14px;
-		}
-		.sc-pswitch .sc-mode-btn::after {
-			content: '';
-			position: absolute;
-			inset: -6px 0;
-		}
-		.sc-pswitch .sc-mode-btn.is-on {
-			background: rgba(var(--tint-rgb), 0.08);
-			color: var(--fg-1);
 		}
 		.sc-pbody {
 			display: flex;

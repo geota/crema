@@ -1,6 +1,4 @@
 <script lang="ts" module>
-	import type { PickerTab } from './HeaderPicker.svelte';
-
 	/** What the Profile block shows in Manual. */
 	export type RecipeHeader = {
 		/** "Recipe · V60". */
@@ -11,11 +9,6 @@
 		/** A built-in: Duplicate to edit; your own: Edit recipe. */
 		builtin: boolean;
 	};
-
-	const MODE_TABS: readonly PickerTab[] = [
-		{ id: 'espresso', label: 'Espresso' },
-		{ id: 'manual', label: 'Manual' }
-	];
 </script>
 
 <script lang="ts">
@@ -39,15 +32,15 @@
 	 * wiring lives in `BrewDashboard.svelte`. Errors and maintenance are not
 	 * here: they are `BrewStatusCard`, at the foot of the left column.
 	 *
-	 * Brew modes (§2): the Profile picker has Espresso | Manual tabs and opens
-	 * on the current mode's. In Manual (`recipe` set) the Profile block shows
+	 * Brew modes (§2): the Profile picker lists Espresso profiles, then Manual
+	 * recipes, and its search filters both. In Manual (`recipe` set) the Profile block shows
 	 * the recipe ("Recipe · V60", its name, dose · water · temp · time) and
 	 * Quick Controls gives way to Duplicate to edit (Edit recipe for your own).
 	 * While a shot or guided brew runs (`pickLock`) the rows are disabled.
 	 */
 	import StarIcon from 'phosphor-svelte/lib/StarIcon';
 	import HeaderBlock from './HeaderBlock.svelte';
-	import HeaderPicker, { type PickerItem } from './HeaderPicker.svelte';
+	import HeaderPicker, { type PickerItem, type PickerSection } from './HeaderPicker.svelte';
 	import type { BrewPickLock } from '#lib/core/crema-core.js';
 	import GrinderPicker, { type GrinderPickRow } from '#lib/components/grinders/GrinderPicker.svelte';
 	import GrindMarker from '#lib/components/grinders/GrindMarker.svelte';
@@ -157,7 +150,7 @@
 		quickSheetOpen?: boolean;
 		/** Set in Manual: the Profile block shows this recipe. */
 		recipe?: RecipeHeader | null;
-		/** The picker's Manual tab rows. */
+		/** The picker's Manual recipes rows. */
 		recipeItems?: PickerItem[];
 		activeRecipeId?: string | null;
 		/** The picker lock (§4), or null. */
@@ -183,14 +176,27 @@
 	let grinderBlockEl = $state<HTMLElement | null>(null);
 	let beanBlockEl = $state<HTMLElement | null>(null);
 
-	/** The Profile picker's tab; it opens on the current mode's. */
-	let pickerTab = $state<'espresso' | 'manual'>('espresso');
-	const onManualTab = $derived(pickerTab === 'manual');
-
 	function toggle(which: 'profile' | 'grinder' | 'bean'): void {
 		openPicker = openPicker === which ? null : which;
-		if (openPicker === 'profile') pickerTab = recipe ? 'manual' : 'espresso';
 	}
+
+	/** The Profile picker: Espresso profiles, then Manual recipes (§2, §4). */
+	const pickerSections = $derived<PickerSection[]>([
+		{
+			id: 'profiles',
+			label: 'Espresso profiles',
+			items: profileItems,
+			activeId: recipe ? null : activeProfileId,
+			locked: pickLock ? pickLock.note : null
+		},
+		{
+			id: 'recipes',
+			label: 'Manual recipes',
+			items: recipeItems,
+			activeId: activeRecipeId,
+			locked: pickLock?.recipesLocked ? pickLock.note : null
+		}
+	]);
 	// Close the open picker on any click outside its block (the tap target + the
 	// panel both live inside the block, so opening / in-panel clicks don't self-close).
 	function onWindowClick(e: MouseEvent): void {
@@ -232,21 +238,16 @@
 		{#snippet picker()}
 			<HeaderPicker
 				open={openPicker === 'profile'}
-				label={onManualTab ? 'Choose recipe' : 'Choose profile'}
-				items={onManualTab ? recipeItems : profileItems}
-				activeId={onManualTab ? activeRecipeId : activeProfileId}
-				searchPlaceholder={onManualTab ? 'Search recipes…' : 'Search profiles…'}
-				addLabel={onManualTab ? 'Add recipe' : 'Add profile'}
-				canEdit={onManualTab ? activeRecipeId != null && onEditRecipe != null : canEditProfile}
-				onSelect={(id) => (onManualTab ? onSelectRecipe?.(id) : onSelectProfile(id))}
-				onAdd={onManualTab ? onAddRecipe : onAddProfile}
-				onEdit={onManualTab ? onEditRecipe : onEditProfile}
-				onLibrary={onManualTab ? onRecipeLibrary : onProfileLibrary}
+				label="Choose profile or recipe"
+				sections={pickerSections}
+				searchPlaceholder="Search profiles and recipes…"
+				addLabel={recipe ? 'Add recipe' : 'Add profile'}
+				canEdit={recipe ? onEditRecipe != null : canEditProfile}
+				onSelect={(id, section) => (section === 'recipes' ? onSelectRecipe?.(id) : onSelectProfile(id))}
+				onAdd={recipe ? onAddRecipe : onAddProfile}
+				onEdit={recipe ? onEditRecipe : onEditProfile}
+				onLibrary={recipe ? onRecipeLibrary : onProfileLibrary}
 				onClose={() => (openPicker = null)}
-				tabs={MODE_TABS}
-				tab={pickerTab}
-				onTab={(id) => (pickerTab = id === 'manual' ? 'manual' : 'espresso')}
-				locked={pickLock && (!onManualTab || pickLock.recipesLocked) ? pickLock.note : null}
 			/>
 		{/snippet}
 	</HeaderBlock>

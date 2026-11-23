@@ -911,13 +911,10 @@ summary:focus-visible,
 .hpick-foot-icon:hover { background: rgba(var(--tint-rgb), 0.06); border-color: rgba(var(--tint-rgb), 0.2); color: var(--fg-1); }
 .hpick-foot-icon:disabled { opacity: 0.4; cursor: default; }
 .hpick-foot-lib > :is(i, svg), .hpick-foot-icon > :is(i, svg) { font-size: 15px; }
-/* Brew's Espresso | Manual tabs beside the picker's search (brew modes §2). */
-.hpick-tabs { flex: none; display: inline-flex; gap: 2px; padding: 2px; border: 1px solid rgba(var(--tint-rgb), 0.16); border-radius: 999px; }
-.hpick-tab { border: 0; border-radius: 999px; padding: 4px 12px; background: transparent; cursor: pointer; font: 500 12px/1.2 var(--font-sans); color: var(--fg-2); }
-.hpick-tab:hover { color: var(--fg-1); }
-.hpick-tab.is-on { background: var(--copper-500); color: var(--fg-on-accent); font-weight: 600; }
-.hpick-tab:focus-visible { outline: 2px solid var(--copper-400); outline-offset: 2px; }
+/* Brew's picker sections: Espresso profiles, then Manual recipes (brew modes §2). */
+.hpick-section + .hpick-section { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(var(--tint-rgb), 0.08); }
+.hpick-section-head { padding: 6px 8px 4px; font: 600 11px/1.2 var(--font-sans); letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-3); }
 .hpick-method { background: var(--bg-page); color: var(--fg-accent); }
 .hpick-item:disabled { cursor: default; opacity: 0.45; }
 .hpick-item:disabled:hover { background: transparent; }
-.hpick-locked { padding: 8px 12px; font-family: var(--font-sans); font-size: 12px; color: var(--warning); border-bottom: 1px solid rgba(var(--tint-rgb), 0.08); }
+.hpick-locked { padding: 0 8px 4px; font-family: var(--font-sans); font-size: 12px; color: var(--warning); }

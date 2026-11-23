@@ -174,7 +174,8 @@
 	import { pinActiveThenFavourite } from '#lib/library-order.js';
 	import PhoneBrewStrip, {
 		type StripBeanRow,
-		type StripProfileRow
+		type StripProfileRow,
+		type StripRecipeRow
 	} from './PhoneBrewStrip.svelte';
 	import PhoneDualChip from './PhoneDualChip.svelte';
 	import PhoneMachineStats from './PhoneMachineStats.svelte';
@@ -1652,19 +1653,44 @@
 		return [grindInfo.recorded !== null ? grindInfo.label : null, g?.name ?? null].filter(Boolean).join(' · ') || null;
 	});
 	/** The swap dropdown's rows: the loaded item leads, then favourites. */
-	const stripProfiles = $derived.by<StripProfileRow[]>(() =>
-		pinActiveThenFavourite(profileStore.all, profileStore.activeId, (pr) => pr.pinned)
-			.slice(0, 4)
-			.map((pr) => ({
-				id: pr.id,
-				name: pr.name,
-				meta: `${formatRatio(pr.dose, pr.yieldOut)} · ${formatWeight(pr.dose, prefs.weightUnit)} · ${formatTemp(pr.brewTemp, prefs.tempUnit)}`,
-				segments: pr.segments
-			}))
-	);
-	const stripBeans = $derived.by<StripBeanRow[]>(() =>
+	/** Every profile as a dropdown row: the loaded one, then the most recently used. */
+	const allStripProfiles = $derived.by<StripProfileRow[]>(() => {
+		const recent = [...profileStore.all].sort((a, b) => (b.lastUsed ?? '').localeCompare(a.lastUsed ?? ''));
+		return pinActiveThenFavourite(recent, profileStore.activeId, () => false).map((pr) => ({
+			id: pr.id,
+			name: pr.name,
+			meta: `${formatRatio(pr.dose, pr.yieldOut)} · ${formatWeight(pr.dose, prefs.weightUnit)} · ${formatTemp(pr.brewTemp, prefs.tempUnit)}`,
+			segments: pr.segments
+		}));
+	});
+	/** The dropdown's Espresso profiles: three recent (brew modes §2). */
+	const stripProfiles = $derived(allStripProfiles.slice(0, 3));
+	/** Every recipe as a dropdown row: the selected one, then the ones you have run, then favourites. */
+	const allStripRecipes = $derived.by<StripRecipeRow[]>(() => {
+		const list: BrewRecipe[] = [...recipeStore.all, ...recipeStore.visibleBuiltins];
+		const sel = selection.recipe;
+		if (sel && !list.some((r) => r.id === sel.id)) list.push(sel);
+		const rank = (r: BrewRecipe) =>
+			r.id === sel?.id ? 0 : recipeStore.isDefault(r) ? 1 : r.favourite ? 2 : 3;
+		return list
+			.map((r, i) => ({ r, i }))
+			.sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i)
+			.map(({ r }) => {
+				const method = methodLabel(r.method);
+				const temp = r.tempC != null ? (prefs.tempUnit === 'C' ? `${Math.round(r.tempC)} °C` : formatTemp(r.tempC, prefs.tempUnit)) : null;
+				return {
+					id: r.id,
+					name: r.name,
+					meta: [method, recipeWeight(r.doseG), recipeWeight(r.waterG), temp].filter(Boolean).join(' · '),
+					method: r.method,
+					search: method.toLowerCase()
+				};
+			});
+	});
+	const stripRecipes = $derived(allStripRecipes.slice(0, 3));
+	/** Every live bag as a dropdown row, ranked as the bean picker ranks them. */
+	const allStripBeans = $derived.by<StripBeanRow[]>(() =>
 		rankForPicker(beanLibrary.beans.filter((b) => b.archivedAt == null), beanLibrary.activeBeanId)
-			.slice(0, 3)
 			.map((b) => {
 				const r = b.roasterId ? (beanLibrary.roasters.find((x) => x.id === b.roasterId) ?? null) : null;
 				const { mark, tone } = roasterMarkTone(r);
@@ -1682,6 +1708,7 @@
 				};
 			})
 	);
+	const stripBeans = $derived(allStripBeans.slice(0, 3));
 
 	const readiness = $derived(brewReadiness(modeReady, ui.machineStateName, ui.machineSubstate));
 	/** Live, never the pinned chart moment: these describe the machine now. */
@@ -2167,6 +2194,17 @@
 				syncLabel={profileSyncLabel}
 				profiles={stripProfiles}
 				beans={stripBeans}
+				recipes={stripRecipes}
+				allProfiles={allStripProfiles}
+				allRecipes={allStripRecipes}
+				allBeans={allStripBeans}
+				activeRecipeId={manual ? (run.recipe?.id ?? null) : null}
+				onSelectRecipe={(id) => {
+					if (!pickLock?.recipesLocked) selection.pickRecipe(id);
+				}}
+				onAllRecipes={() => void goto(`${resolve('/profiles')}#recipes`)}
+				profilesLocked={pickLock ? pickLock.note : null}
+				recipesLocked={pickLock?.recipesLocked ? pickLock.note : null}
 				activeProfileId={profileStore.activeId}
 				activeBeanId={beanLibrary.activeBeanId}
 				onSelectProfile={(id) => {

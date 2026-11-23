@@ -14,9 +14,10 @@
  *   can reconcile.
  *
  * The per-method default is a pointer (`lastUsed`, kept under its original
- * key): the recipe the phone Scale page's Brew setup opens on. Unset, a method
- * opens on its default built-in (`default_builtin_recipe_id`); methods
- * without one (espresso, drip, free text) open with no recipe.
+ * key): the method's default recipe, moved by running one on Brew or by
+ * Profiles' "Make default". Unset, a method falls back to its default
+ * built-in (`default_builtin_recipe_id`); methods without one (espresso,
+ * drip, free text) have no default.
  */
 
 import type {
@@ -279,7 +280,7 @@ export class RecipeStore {
 	}
 
 	/**
-	 * The recipe the Brew setup opens on for `method`: the user's chosen
+	 * The default recipe for `method`: the user's chosen
 	 * default when it still resolves, else the method's default built-in,
 	 * else nothing (espresso, drip, free text have no built-in).
 	 */
@@ -378,7 +379,7 @@ export class RecipeStore {
 	}
 
 	/**
-	 * Remember `recipe` as the method's default — run from the Brew setup,
+	 * Remember `recipe` as the method's default — run from Brew's Manual mode,
 	 * or "Make default" in Profiles. A user recipe not yet stored is
 	 * persisted; a built-in only moves the pointer.
 	 */

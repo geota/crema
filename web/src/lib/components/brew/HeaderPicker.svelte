@@ -33,8 +33,16 @@
 		method?: string;
 	};
 
-	/** One of the picker's tabs (Brew's Espresso | Manual). */
-	export type PickerTab = { id: string; label: string };
+	/** One section of a sectioned picker (Brew's profiles, then recipes). */
+	export type PickerSection = {
+		id: string;
+		/** "Espresso profiles". */
+		label: string;
+		items: PickerItem[];
+		activeId?: string | null;
+		/** The rows are disabled, with this note under the heading. */
+		locked?: string | null;
+	};
 </script>
 
 <script lang="ts">
@@ -44,10 +52,9 @@
 	 * and a `[+ Add] [Open library]` footer. Presentational; the parent owns the
 	 * data + the activate/route handlers and the open state.
 	 *
-	 * With `tabs`, a segmented tab row sits beside the search box (Brew's
-	 * Espresso | Manual, brew modes §2): the parent swaps `items` per tab, so
-	 * the picker keeps its height. `locked` disables the rows, with its note
-	 * above them; the tabs still browse (§4).
+	 * With `sections`, the list is one scroll of headed sections (Brew's
+	 * Espresso profiles, then Manual recipes; brew modes §2) and the search
+	 * filters each. A section's `locked` note disables its rows (§4).
 	 */
 	import MethodMark from '#lib/components/brewlog/MethodMark.svelte';
 	import ProfilePreview from '#lib/components/profiles/ProfilePreview.svelte';
@@ -67,15 +74,13 @@
 		onLibrary,
 		onClose,
 		rank,
-		tabs,
-		tab,
-		onTab,
-		locked = null
+		sections
 	}: {
 		open?: boolean;
 		/** Dialog name, e.g. "Choose profile" (final review 07 N5). */
 		label?: string;
-		items: PickerItem[];
+		/** The rows of a plain picker; ignored with `sections`. */
+		items?: PickerItem[];
 		activeId?: string | null;
 		searchPlaceholder?: string;
 		/**
@@ -90,34 +95,16 @@
 		addLabel: string;
 		/** Whether the active item can be edited (disables the ✎ when false). */
 		canEdit?: boolean;
-		onSelect: (id: string) => void;
+		/** A row was picked; `section` is its section's id in a sectioned picker. */
+		onSelect: (id: string, section?: string) => void;
 		onAdd?: () => void;
 		/** Edit the active item (the footer ✎). */
 		onEdit?: () => void;
 		onLibrary?: () => void;
 		onClose?: () => void;
-		/** Tabs beside the search box; omit for a plain picker. */
-		tabs?: readonly PickerTab[];
-		/** The tab on show. */
-		tab?: string;
-		onTab?: (id: string) => void;
-		/** Rows disabled, with this note above them (`null` = enabled). */
-		locked?: string | null;
+		/** Headed sections in place of `items`. */
+		sections?: readonly PickerSection[];
 	} = $props();
-
-	const listId = $props.id();
-
-	/** Arrow keys move between the tabs (the WAI-ARIA tabs pattern). */
-	function onTabKeydown(e: KeyboardEvent): void {
-		if (!tabs || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
-		e.preventDefault();
-		const i = tabs.findIndex((t) => t.id === tab);
-		const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
-		onTab?.(next.id);
-		(e.currentTarget as HTMLElement).parentElement
-			?.querySelector<HTMLElement>(`[data-tab="${next.id}"]`)
-			?.focus();
-	}
 
 	let query = $state('');
 	let inputEl = $state<HTMLInputElement | null>(null);
@@ -132,7 +119,11 @@
 		if (!open) return;
 		query = '';
 		const opener = document.activeElement;
-		requestAnimationFrame(() => inputEl?.focus());
+		requestAnimationFrame(() => {
+			inputEl?.focus();
+			// A sectioned list opens on the selection, wherever it sits.
+			if (sections) panelEl?.querySelector('.hpick-item.is-active')?.scrollIntoView?.({ block: 'nearest' });
+		});
 		return () => {
 			const active = document.activeElement;
 			if (active == null || active === document.body || panelEl?.contains(active)) {
@@ -148,34 +139,73 @@
 		onClose?.();
 	}
 
-	const filtered = $derived.by(() => {
+	/** `list` as the picker shows it: ordered, or filtered by the query. */
+	function shown(list: PickerItem[], active: string | null, ranked: boolean): PickerItem[] {
 		const q = query.trim().toLowerCase();
 		if (q === '') {
 			// Active item first, then pinned/favourites — shared library ordering
 			// (same primitive as the beans/profiles pages).
-			return pinActiveThenFavourite(items, activeId, (it) => it.pinned ?? false);
+			return pinActiveThenFavourite(list, active, (it) => it.pinned ?? false);
 		}
-		const scores = rank?.(query.trim()) ?? null;
+		const scores = ranked ? (rank?.(query.trim()) ?? null) : null;
 		if (scores) {
 			// Ranked: relevance decides, and the pinning is suspended — the same
 			// rule the library page follows, so a search behaves identically
 			// wherever it is run.
-			return items
+			return list
 				.filter((it) => scores.has(it.id))
 				.sort((a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0));
 		}
-		const base = items.filter((it) =>
+		const base = list.filter((it) =>
 			(it.search ?? `${it.primary} ${it.secondary ?? ''}`).toLowerCase().includes(q)
 		);
-		return pinActiveThenFavourite(base, activeId, (it) => it.pinned ?? false);
-	});
+		return pinActiveThenFavourite(base, active, (it) => it.pinned ?? false);
+	}
 
-	function choose(id: string): void {
-		if (locked) return;
-		onSelect(id);
+	/** A plain picker is one untitled section. */
+	const groups = $derived(
+		(sections ?? [{ id: '', label: '', items: items ?? [], activeId, locked: null }]).map((sec) => ({
+			...sec,
+			rows: shown(sec.items, sec.activeId ?? null, sections == null)
+		}))
+	);
+
+	function choose(id: string, section: string): void {
+		onSelect(id, sections ? section : undefined);
 		onClose?.();
 	}
 </script>
+
+{#snippet rows(list: PickerItem[], active: string | null, locked: string | null, section: string)}
+	{#each list as it (it.id)}
+		<button
+			type="button"
+			class="hpick-item"
+			class:is-active={it.id === active}
+			disabled={locked != null}
+			onclick={() => choose(it.id, section)}
+		>
+			{#if it.method}
+				<span class="hpick-graph hpick-method"><MethodMark method={it.method} size={18} /></span>
+			{:else if it.segments}
+				<span class="hpick-graph">
+					<ProfilePreview segments={it.segments} active={it.id === active} compact />
+				</span>
+			{:else if it.mark}
+				<span class="hpick-av" style="background:{it.tone ?? 'var(--copper-500)'}">{it.mark}</span>
+			{/if}
+			<span class="hpick-text">
+				<span class="hpick-primary">{it.primary}</span>
+				{#if it.secondary}<span class="hpick-secondary">{it.secondary}</span>{/if}
+			</span>
+			{#if it.linked}<LinkSimpleIcon class="hpick-link" aria-hidden="true" />{/if}
+			{#if it.pinned}<StarIcon weight="fill" class="hpick-pin" aria-hidden="true" />{/if}
+			{#if it.id === active}<CheckIcon class="hpick-check" aria-hidden="true" />{/if}
+		</button>
+	{:else}
+		<div class="hpick-empty">No matches</div>
+	{/each}
+{/snippet}
 
 {#if open}
 	<div
@@ -187,23 +217,6 @@
 		onkeydown={onPanelKeydown}
 	>
 		<div class="hpick-search">
-			{#if tabs}
-				<div class="hpick-tabs" role="tablist" aria-label="Brew mode">
-					{#each tabs as t (t.id)}
-						<button
-							type="button"
-							role="tab"
-							class={['hpick-tab', { 'is-on': t.id === tab }]}
-							data-tab={t.id}
-							aria-selected={t.id === tab}
-							aria-controls={listId}
-							tabindex={t.id === tab ? 0 : -1}
-							onclick={() => onTab?.(t.id)}
-							onkeydown={onTabKeydown}>{t.label}</button
-						>
-					{/each}
-				</div>
-			{/if}
 			<MagnifyingGlassIcon aria-hidden="true" />
 			<input
 				bind:this={inputEl}
@@ -214,35 +227,17 @@
 			/>
 		</div>
 
-		{#if locked}<div class="hpick-locked" role="note">{locked}</div>{/if}
-		<div class="hpick-list" id={listId} role={tabs ? 'tabpanel' : undefined}>
-			{#each filtered as it (it.id)}
-				<button
-					type="button"
-					class="hpick-item"
-					class:is-active={it.id === activeId}
-					disabled={locked != null}
-					onclick={() => choose(it.id)}
-				>
-					{#if it.method}
-						<span class="hpick-graph hpick-method"><MethodMark method={it.method} size={18} /></span>
-					{:else if it.segments}
-						<span class="hpick-graph">
-							<ProfilePreview segments={it.segments} active={it.id === activeId} compact />
-						</span>
-					{:else if it.mark}
-						<span class="hpick-av" style="background:{it.tone ?? 'var(--copper-500)'}">{it.mark}</span>
-					{/if}
-					<span class="hpick-text">
-						<span class="hpick-primary">{it.primary}</span>
-						{#if it.secondary}<span class="hpick-secondary">{it.secondary}</span>{/if}
-					</span>
-					{#if it.linked}<LinkSimpleIcon class="hpick-link" aria-hidden="true" />{/if}
-					{#if it.pinned}<StarIcon weight="fill" class="hpick-pin" aria-hidden="true" />{/if}
-					{#if it.id === activeId}<CheckIcon class="hpick-check" aria-hidden="true" />{/if}
-				</button>
-			{:else}
-				<div class="hpick-empty">No matches</div>
+		<div class="hpick-list">
+			{#each groups as g (g.id)}
+				{#if sections}
+					<div class="hpick-section" role="group" aria-labelledby="hpick-sec-{g.id}">
+						<div class="hpick-section-head" id="hpick-sec-{g.id}">{g.label}</div>
+						{#if g.locked}<div class="hpick-locked" role="note">{g.locked}</div>{/if}
+						{@render rows(g.rows, g.activeId ?? null, g.locked ?? null, g.id)}
+					</div>
+				{:else}
+					{@render rows(g.rows, g.activeId ?? null, null, g.id)}
+				{/if}
 			{/each}
 		</div>
 
