@@ -126,7 +126,7 @@ class SyncReadsStoreVmTest {
         val source = vm()
         val sourceLib = VmHarness.library(source)
         VmHarness.idleUntil("the rows") { sourceLib.rowsReady }
-        val zip = runBlocking { sourceLib.buildBackupZip(BackupKind.FILE) }!!
+        val zip = VmHarness.onMain("the backup") { sourceLib.buildBackupZip(BackupKind.FILE) }!!
         val bytes = zip.file.readBytes()
         zip.release()
 

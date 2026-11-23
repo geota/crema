@@ -158,7 +158,7 @@ class HistoryViewCapVmTest {
         val vm = vm()
         val library = VmHarness.library(vm)
         VmHarness.idleUntil("the series") { library.rowsReady }
-        val zip = assertNotNull(runBlocking { library.buildBackupZip(BackupKind.FILE) })
+        val zip = assertNotNull(VmHarness.onMain("the backup") { library.buildBackupZip(BackupKind.FILE) })
         try {
             assertEquals(320u, zip.counts.shots, "every row, past the cap too")
             assertEquals(planted.count { it.samples.isNotEmpty() }.toUInt(), zip.counts.curves, "with its curve")
@@ -223,7 +223,7 @@ class HistoryViewCapVmTest {
         val source = vm()
         val sourceLib = VmHarness.library(source)
         VmHarness.idleUntil("the series") { sourceLib.rowsReady }
-        val zip = assertNotNull(runBlocking { sourceLib.buildBackupZip(BackupKind.FILE) })
+        val zip = assertNotNull(VmHarness.onMain("the backup") { sourceLib.buildBackupZip(BackupKind.FILE) })
         val bytes = zip.file.readBytes()
         zip.release()
 

@@ -1,5 +1,6 @@
 package coffee.crema.ui
 
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -88,6 +89,27 @@ internal object VmHarness {
             Thread.sleep(5)
         }
     }
+
+    /**
+     * Run the suspend call [block] to completion with the main looper running
+     * meanwhile, and return its result (or rethrow its failure). For calls
+     * that may wait on work posted to Main, such as anything behind
+     * `LibraryController.awaitRows` (a backup, a restore's plan): a
+     * `runBlocking` on the Robolectric main thread deadlocks there whenever
+     * that work hasn't run yet (FLAKY.md, #417).
+     */
+    @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class, kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun <T> onMain(what: String, timeoutMs: Long = 60_000, block: suspend () -> T): T {
+        val job = kotlinx.coroutines.GlobalScope.async(
+            kotlinx.coroutines.Dispatchers.Unconfined,
+            start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED,
+        ) { block() }
+        idleUntil(what, timeoutMs) { job.isCompleted }
+        return job.getCompleted()
+    }
+
+    /** [MainViewModel.buildBackupZipBytes], run with [onMain]. */
+    fun backupBytes(vm: MainViewModel): ByteArray? = onMain("the backup") { vm.buildBackupZipBytes() }
 
     /**
      * The shot [id] whole, as a screen loads it (#310 P4a: a row holds no curve).
@@ -296,7 +318,7 @@ internal object VmHarness {
     fun restore(vm: MainViewModel, backup: ByteArray, mode: MainViewModel.RestoreMode = MainViewModel.RestoreMode.MERGE) {
         fun restored() = vm.ui.value.userMessages.count { it.startsWith("Restored ") }
         val before = restored()
-        kotlinx.coroutines.runBlocking { vm.restoreBackupBytes(backup, mode) }
+        onMain("the restore's plan") { vm.restoreBackupBytes(backup, mode) }
         try {
             idleUntil("the restore") { restored() > before }
         } catch (e: IllegalStateException) {

@@ -68,7 +68,7 @@ class RestoreAndRecoveryKeepEditsVmTest {
         val source = vm()
         val lib = VmHarness.library(source)
         VmHarness.idleUntil("the rows") { lib.rowsReady }
-        val zip = runBlocking { lib.buildBackupZip(BackupKind.FILE) }!!
+        val zip = VmHarness.onMain("the backup") { lib.buildBackupZip(BackupKind.FILE) }!!
         val bytes = zip.file.readBytes()
         zip.release()
         store.clear(); VmHarness.idle(); store = ViewModelStore()

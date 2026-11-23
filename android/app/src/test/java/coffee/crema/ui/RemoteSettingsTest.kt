@@ -15,7 +15,6 @@ import coffee.crema.ui.RemoteFixture.Companion.PROFILE_S
 import coffee.crema.ui.RemoteFixture.Companion.S
 import coffee.crema.ui.RemoteFixture.Companion.savedActiveBean
 import coffee.crema.ui.RemoteFixture.Companion.savedPrefs
-import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
@@ -137,7 +136,7 @@ class RemoteSettingsTest {
         }
         assertEquals(BEAN_P, savedActiveBean(), "the library keeps this device's active bean")
         // The backup carries this device's own settings.
-        val zip = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
+        val zip = assertNotNull(VmHarness.backupBytes(vm))
         val settings = backupSettings(zip)
         assertEquals(P.qcSteamTempC.toString(), settings["qcSteamTempC"]?.jsonPrimitive?.content?.let { it.toFloat().toString() })
         assertEquals(P.stopOnWeight.toString(), settings["stopOnWeight"]?.jsonPrimitive?.content)
@@ -304,7 +303,7 @@ class RemoteSettingsTest {
             return vm.ui.value.stopTargets?.let { it.weightConfiguredG to it.maxTimeS }
         }
         assertEquals(40f to 44f, core(), "after the snapshot")
-        val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
+        val backup = assertNotNull(VmHarness.backupBytes(vm))
         VmHarness.restore(vm, backup)
         assertEquals(40f to 44f, core(), "after a restore")
         vm.resetPreferences()
@@ -374,7 +373,7 @@ class RemoteSettingsTest {
         val vm = fixture.start()
         fixture.push()
         val shown = abOfUi(vm.ui.value)
-        val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
+        val backup = assertNotNull(VmHarness.backupBytes(vm))
         VmHarness.restore(vm, backup)
         assertEquals(shown, abOfUi(vm.ui.value), "after a restore")
         vm.resetPreferences()
