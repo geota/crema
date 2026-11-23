@@ -457,9 +457,7 @@ fn a_shot_gets_the_grind_before_it_once_then_the_reading() {
     feed(&mut core, &gap("ADJUSTMENTPURGE", 480, 11), 7_000);
     feed(&mut core, &gap("IDLE", 480, 11), 9_000);
     let start = 60_000;
-    let o = core
-        .grinder_observation_for_shot(start, Some("grinder:motto"))
-        .expect("an observation");
+    let o = observe(&mut core, start, Some("grinder:motto")).expect("an observation");
     assert_eq!(
         o.source,
         de1_domain::shot_grinder::ObservationSource::LastGrind
@@ -471,19 +469,27 @@ fn a_shot_gets_the_grind_before_it_once_then_the_reading() {
     assert_eq!(o.preset, Some(-1));
     assert_eq!(o.model.as_deref(), Some("bookoo-motto-80"));
     // The next shot doesn't reuse it: the reading at its start.
-    let o = core
-        .grinder_observation_for_shot(start + 1_000, Some("grinder:motto"))
-        .expect("the reading");
+    let o = observe(&mut core, start + 1_000, Some("grinder:motto")).expect("the reading");
     assert_eq!(
         o.source,
         de1_domain::shot_grinder::ObservationSource::AtShotStart
     );
     assert_eq!((o.grind_ms, o.ended_before_shot_ms), (None, None));
     // A shot on another grinder gets nothing from this one.
-    assert_eq!(
-        core.grinder_observation_for_shot(start, Some("grinder:niche")),
-        None
-    );
+    assert_eq!(observe(&mut core, start, Some("grinder:niche")), None);
+}
+
+/// What a shot starting at `start` gets, claimed as its take would.
+fn observe(
+    core: &mut CremaCore,
+    start: u64,
+    grinder: Option<&str>,
+) -> Option<de1_domain::shot_grinder::ShotGrinderObservation> {
+    let (o, at) = core.grinder_observation_for_shot(start, grinder);
+    if let Some(at) = at {
+        core.claim_taken_grind(&format!("shot:{start}"), at);
+    }
+    o
 }
 
 /// A grind from `from` to `to` at 5 Hz, then idle.
@@ -501,9 +507,7 @@ fn a_grind_older_than_ten_minutes_is_not_the_shots() {
     let mut core = following();
     grind(&mut core, 100, 5_100);
     let late = 5_100 + de1_domain::shot_grinder::GRIND_ATTRIBUTION_WINDOW_MS + 1;
-    let o = core
-        .grinder_observation_for_shot(late, Some("grinder:motto"))
-        .expect("reading");
+    let o = observe(&mut core, late, Some("grinder:motto")).expect("reading");
     assert_eq!(
         o.source,
         de1_domain::shot_grinder::ObservationSource::AtShotStart
@@ -512,15 +516,48 @@ fn a_grind_older_than_ten_minutes_is_not_the_shots() {
     let mut core = following();
     grind(&mut core, 100, 5_100);
     core.disconnect_grinder();
-    let o = core
-        .grinder_observation_for_shot(60_000, Some("grinder:motto"))
-        .expect("the grind");
+    let o = observe(&mut core, 60_000, Some("grinder:motto")).expect("the grind");
     assert_eq!(
         o.source,
         de1_domain::shot_grinder::ObservationSource::LastGrind
     );
+    assert_eq!(observe(&mut core, 61_000, Some("grinder:motto")), None);
+}
+
+/// Review #554 S2: a discarded shot gives its grind back; the discard's
+/// Undo claims it again.
+#[test]
+fn a_discarded_shot_gives_its_grind_back() {
+    let mut core = following();
+    grind(&mut core, 100, 5_100);
+    let first = observe(&mut core, 30_000, Some("grinder:motto")).expect("the grind");
     assert_eq!(
-        core.grinder_observation_for_shot(61_000, Some("grinder:motto")),
-        None
+        first.source,
+        de1_domain::shot_grinder::ObservationSource::LastGrind
+    );
+    // The aborted pull is discarded: the retry gets the grind.
+    core.release_shot_grind("shot:30000");
+    let retry = observe(&mut core, 40_000, Some("grinder:motto")).expect("the grind again");
+    assert_eq!(
+        retry.source,
+        de1_domain::shot_grinder::ObservationSource::LastGrind
+    );
+    // Another shot's id changes nothing.
+    core.release_shot_grind("shot:30000");
+    let next = observe(&mut core, 50_000, Some("grinder:motto")).expect("the reading");
+    assert_eq!(
+        next.source,
+        de1_domain::shot_grinder::ObservationSource::AtShotStart
+    );
+    // Undo of a discard claims it back.
+    let mut core = following();
+    grind(&mut core, 100, 5_100);
+    observe(&mut core, 30_000, Some("grinder:motto"));
+    core.release_shot_grind("shot:30000");
+    core.claim_shot_grind("shot:30000");
+    let after = observe(&mut core, 40_000, Some("grinder:motto")).expect("the reading");
+    assert_eq!(
+        after.source,
+        de1_domain::shot_grinder::ObservationSource::AtShotStart
     );
 }
