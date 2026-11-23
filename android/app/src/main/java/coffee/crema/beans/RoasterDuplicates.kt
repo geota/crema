@@ -103,13 +103,19 @@ fun planRoasterDelete(
  * the next sync PATCHes it), and clear the active bag if it was deleted. A
  * cascaded bag on Visualizer stays as a tombstone (deletedAt set, no photo),
  * as `deleteBean` keeps one, so the next pull doesn't add it back (#488
- * review S5). A roaster on Visualizer ([coffee.crema.core.RoasterDeletePlan.tombstoneRoaster])
+ * review S5), and so does one whose first upload is running
+ * ([firstUploadRunning], save-boundaries follow-up 61). A roaster on Visualizer ([coffee.crema.core.RoasterDeletePlan.tombstoneRoaster])
  * stays as a tombstone too ([roasterTombstone], #488 review SF1); bags a
  * "this device only" detach leaves under it keep their link. Pure.
  */
-fun applyRoasterDelete(library: BeanLibrary, plan: coffee.crema.core.RoasterDeletePlan, nowMs: Long): BeanLibrary {
+fun applyRoasterDelete(
+    library: BeanLibrary,
+    plan: coffee.crema.core.RoasterDeletePlan,
+    nowMs: Long,
+    firstUploadRunning: (String) -> Boolean = coffee.crema.visualizer.BagFirstUploads::running,
+): BeanLibrary {
     val deleted = plan.deletedBeanIds.toSet()
-    val tombstoned = plan.tombstonedBeanIds.orEmpty().toSet()
+    val tombstoned = plan.tombstonedBeanIds.orEmpty().toSet() + deleted.filter(firstUploadRunning)
     val detached = plan.detachedBeanIds.toSet()
     return library.copy(
         roasters = if (plan.tombstoneRoaster == true) {

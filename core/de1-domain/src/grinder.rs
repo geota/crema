@@ -568,7 +568,8 @@ pub fn grinders_for_names<S: AsRef<str>>(
 pub struct GrinderLibraryMigration {
     /// Grinder records to add.
     pub new_grinders: Vec<Grinder>,
-    /// Bags whose `grinds` it filled (they were `None`); `updated_at` is not
+    /// Bags whose `grinds` it filled (they were `None`, or the old grind was
+    /// still waiting: [`Bean::legacy_grind_pending`]); `updated_at` is not
     /// changed, since the migration isn't an edit.
     pub updated_beans: Vec<Bean>,
     /// When the grinders step ran: the grinder to make active (the one the
@@ -580,7 +581,8 @@ pub struct GrinderLibraryMigration {
     /// Why nothing ran: an input wasn't read ([`MigrationGate`]). `None` when
     /// the migration ran (even with nothing to do).
     pub skipped: Option<MigrationSkip>,
-    /// Bags left unmigrated (`grinds` still `None`) because the settings were
+    /// Bags left unmigrated (`grinds` still `None`, or the old grind still
+    /// waiting) because the settings were
     /// quarantined and the bag names no grinder of its own
     /// ([`MigrationGate::settings_quarantined`], PLAN follow-up 40): they
     /// migrate on a later load whose settings read.
@@ -644,7 +646,9 @@ pub enum MigrationSkip {
 ///    "Niche Zero" are one), keeping the first spelling. Each takes the
 ///    catalogue's verified scale when its name names an entry, else the
 ///    default. Active = the one `grinder_model` names, else none.
-/// 2. **Bags** with `grinds` = `None` (not deleted): see
+/// 2. **Bags** with `grinds` = `None`, or whose old grind is still waiting
+///    ([`Bean::legacy_grind_pending`], save-boundaries follow-up 60), not
+///    deleted: see
 ///    [`crate::bag_grind::migrate_bag_grinds`]. A grinder name with no record
 ///    yet (a bag imported later) gets one.
 ///
@@ -691,7 +695,8 @@ pub fn migrate_grinder_library(
             grinder_named(&out.new_grinders, grinder_model).map(|g| g.id.clone());
         all.clone_from(&out.new_grinders);
     }
-    for bean in live_beans().filter(|b| b.grinds.is_none()) {
+    let waiting = |b: &&Bean| b.grinds.is_none() || b.legacy_grind_pending == Some(true);
+    for bean in live_beans().filter(waiting) {
         if unknown_settings && grinder_key(&bean.grinder).is_empty() {
             out.left_for_settings += 1;
             continue;
@@ -1589,6 +1594,69 @@ mod tests {
                 .unwrap();
         assert!(out.updated_beans.is_empty());
         assert_eq!(out.left_for_settings, 1);
+    }
+
+    #[test]
+    fn a_quick_save_while_quarantined_leaves_the_old_grind_to_fold_in() {
+        // Save-boundaries follow-up 60: a Quick Save on a bag waiting for
+        // settings makes its list first; the old grind must still reach it.
+        let quarantined = MigrationGate {
+            settings_quarantined: true,
+            ..MigrationGate::READ
+        };
+        let ek = grinders_for_names(&[], &["EK43", "Niche Zero"], NOW);
+        let waiting = bag("b1", "", "14");
+        let saved = crate::bag_grind::save_bag_grind(&waiting, Some(&ek[0]), "9", NOW).bean;
+        assert_eq!(saved.legacy_grind_pending, Some(true));
+        // Still quarantined: it keeps waiting, its list untouched.
+        let m = migrate_grinder_library(&ek, std::slice::from_ref(&saved), "", quarantined, NOW);
+        assert!(m.updated_beans.is_empty());
+        assert_eq!(m.left_for_settings, 1);
+        // The settings grinder is known: the old grind joins the list.
+        let m = migrate_grinder_library(
+            &ek,
+            std::slice::from_ref(&saved),
+            "Niche Zero",
+            MigrationGate::READ,
+            NOW,
+        );
+        let [folded] = m.updated_beans.as_slice() else {
+            panic!("{m:?}");
+        };
+        let rows: Vec<_> = folded
+            .grinds
+            .as_deref()
+            .unwrap()
+            .iter()
+            .map(|r| (r.grinder_name.as_str(), r.grind.as_str()))
+            .collect();
+        assert_eq!(rows, [("EK43", "9"), ("Niche Zero", "14")]);
+        assert_eq!(folded.legacy_grind_pending, None, "cleared");
+        assert_eq!(folded.updated_at, saved.updated_at, "not an edit");
+        // Idempotent: the next load does nothing.
+        let again = migrate_grinder_library(
+            &ek,
+            std::slice::from_ref(folded),
+            "Niche Zero",
+            MigrationGate::READ,
+            NOW,
+        );
+        assert!(again.updated_beans.is_empty());
+        // A row the Save wrote for the same grinder is never overwritten.
+        let same = crate::bag_grind::save_bag_grind(&waiting, Some(&ek[1]), "11", NOW).bean;
+        let m = migrate_grinder_library(&ek, &[same], "Niche Zero", MigrationGate::READ, NOW);
+        let rows = m.updated_beans[0].grinds.as_deref().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].grind, "11");
+        assert_eq!(m.updated_beans[0].legacy_grind_pending, None);
+        // A bag migrated as usual is never marked, so a row the user removed
+        // since doesn't come back.
+        let mut migrated = waiting.clone();
+        migrated.grinds = Some(Vec::new());
+        let resaved = crate::bag_grind::save_bag_grind(&migrated, Some(&ek[0]), "9", NOW).bean;
+        assert_eq!(resaved.legacy_grind_pending, None);
+        let m = migrate_grinder_library(&ek, &[resaved], "Niche Zero", MigrationGate::READ, NOW);
+        assert!(m.updated_beans.is_empty());
     }
 
     #[test]

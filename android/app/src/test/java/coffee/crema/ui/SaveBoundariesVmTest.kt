@@ -48,8 +48,12 @@ class SaveBoundariesVmTest {
             linkedProfileId = linked, updatedAt = 1L,
         )
 
-    private fun vmWith(beans: List<coffee.crema.core.Bean> = listOf(bag("a")), active: String? = beans.firstOrNull()?.id): MainViewModel {
-        val library = BeanLibrary(beans, emptyList(), active)
+    private fun vmWith(
+        beans: List<coffee.crema.core.Bean> = listOf(bag("a")),
+        active: String? = beans.firstOrNull()?.id,
+        roasters: List<coffee.crema.core.Roaster> = emptyList(),
+    ): MainViewModel {
+        val library = BeanLibrary(beans, roasters, active)
         File(VmHarness.app().filesDir, "beanLibrary.json").writeText(coreJson.encodeToString(BeanLibrary.serializer(), library))
         val vm = VmHarness.build(store)
         VmHarness.idle()
@@ -414,6 +418,28 @@ class SaveBoundariesVmTest {
         assertTrue(VmHarness.ownState(vm).beans.withTombstones().none { it.id == "b" }, "no upload: removed outright")
     }
 
+    /** Save-boundaries follow-up 61: "Delete roaster and its bags" keeps a
+     *  tombstone for a bag whose first upload runs, as a single delete does. */
+    @Test
+    fun `the roaster cascade keeps a tombstone for a bag whose first upload runs`() {
+        val sey = coffee.crema.beans.newRoaster("Sey", 1).copy(id = "roaster:sey")
+        val vm = vmWith(
+            listOf(bag("a").copy(roasterId = sey.id), bag("b").copy(roasterId = sey.id), bag("c")),
+            active = "c",
+            roasters = listOf(sey),
+        )
+        coffee.crema.visualizer.BagFirstUploads.start("a")
+        try {
+            vm.deleteRoaster(sey.id, cascade = true)
+            VmHarness.idle()
+        } finally {
+            coffee.crema.visualizer.BagFirstUploads.done("a")
+        }
+        val rows = VmHarness.ownState(vm).beans.withTombstones()
+        assertNotNull(rows.single { it.id == "a" }.deletedAt, "kept, as a tombstone")
+        assertTrue(rows.none { it.id == "b" }, "no upload: removed outright")
+        assertEquals(listOf("c"), VmHarness.ownState(vm).beans.map { it.id })
+    }
 
     /** REVIEW-516 follow-up 1: the editor's Save over a bag tombstoned while
      *  it was open writes nothing to the tombstone, and says so. */

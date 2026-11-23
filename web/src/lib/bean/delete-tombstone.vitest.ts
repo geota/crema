@@ -5,8 +5,9 @@
  */
 
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { blankBean, blankRoaster, getBeanStore, type Bean } from './index';
+import { BeanLibraryStore } from './store.svelte';
 import { bagRoasterRemoteId } from './visualizer-sync';
 
 const library = getBeanStore();
@@ -80,6 +81,20 @@ describe('deleting a roaster with its bags', () => {
 		expect(library.allBeans.map((b) => [b.id, b.deletedAt != null])).toEqual([['bean:a', true]]);
 	});
 
+	it('keeps a tombstone for a bag whose first upload is running (save-boundaries follow-up 57)', () => {
+		library.upsertRoaster({ ...blankRoaster('X'), id: 'roaster:x' });
+		bag('bean:a', { roasterId: 'roaster:x' });
+		bag('bean:b', { roasterId: 'roaster:x' });
+		library.beginFirstUpload('bean:a');
+		library.deleteRoasterAndBeans('roaster:x', { localOnly: true });
+		expect(library.beans).toEqual([]);
+		expect(library.allBeans.map((b) => [b.id, b.deletedAt != null])).toEqual([['bean:a', true]]);
+		// The POST lands: the tombstone binds, so the next pull matches it by id.
+		library.bindFirstUpload('bean:a', 'vb-1');
+		library.endFirstUpload('bean:a');
+		expect(library.allBeans[0]).toMatchObject({ id: 'bean:a', visualizerId: 'vb-1' });
+	});
+
 	it('leaves a bag deleted earlier as its tombstone', () => {
 		library.upsertRoaster({ ...blankRoaster('X'), id: 'roaster:x' });
 		bag('bean:old', { roasterId: 'roaster:x', visualizerId: 'b0' });
@@ -148,5 +163,52 @@ describe('deleting a roaster on this device (#488 review SF1)', () => {
 		expect(library.deleteRoaster('roaster:x', { localOnly: true })).toBeNull();
 		expect(library.deleteRoasterAndBeans('roaster:x', { localOnly: true })).toBeNull();
 		expect(library.allRoasters).toEqual([first]);
+	});
+});
+
+describe('a delete in another tab during a first upload (save-boundaries follow-up 58)', () => {
+	/** Another tab: its own store over the same localStorage, with no mark of its own. */
+	function otherTab(): BeanLibraryStore {
+		return new BeanLibraryStore();
+	}
+
+	it('keeps a tombstone when another tab is uploading the bag', () => {
+		bag('bean:a');
+		library.beginFirstUpload('bean:a');
+		const other = otherTab();
+		other.deleteBean('bean:a');
+		expect(other.allBeans.map((b) => [b.id, b.deletedAt != null])).toEqual([['bean:a', true]]);
+		library.endFirstUpload('bean:a');
+		expect(localStorage.getItem('crema.beans.firstUploads.v1')).toBeNull();
+	});
+
+	it('the roaster cascade in another tab keeps one too', () => {
+		library.upsertRoaster({ ...blankRoaster('X'), id: 'roaster:x' });
+		bag('bean:a', { roasterId: 'roaster:x' });
+		library.beginFirstUpload('bean:a');
+		const other = otherTab();
+		other.deleteRoasterAndBeans('roaster:x', { localOnly: true });
+		expect(other.allBeans.map((b) => [b.id, b.deletedAt != null])).toEqual([['bean:a', true]]);
+		library.endFirstUpload('bean:a');
+	});
+
+	it('removes the bag once the upload ended, or when the mark is stale (a tab closed mid-POST)', () => {
+		bag('bean:a');
+		bag('bean:b');
+		library.beginFirstUpload('bean:a');
+		library.endFirstUpload('bean:a');
+		otherTab().deleteBean('bean:a');
+		expect(otherTab().allBeans.map((b) => b.id)).toEqual(['bean:b']);
+		vi.useFakeTimers({ now: Date.now() });
+		try {
+			library.beginFirstUpload('bean:b');
+			vi.setSystemTime(Date.now() + 11 * 60_000);
+			const other = otherTab();
+			other.deleteBean('bean:b');
+			expect(other.allBeans).toEqual([]);
+		} finally {
+			library.endFirstUpload('bean:b');
+			vi.useRealTimers();
+		}
 	});
 });

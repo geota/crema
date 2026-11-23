@@ -398,6 +398,61 @@ describe('BeanSync.runSync — a bag deleted while its first upload runs (#488 f
 		store.clearAll();
 	});
 
+	/** Visualizer lists one bag, as a later pull sees it (its crema id not round-tripped). */
+	const listing = (bag: Record<string, unknown>) =>
+		mkHttp((method, url) =>
+			method === 'GET' && isList(url, '/coffee_bags')
+				? { ok: true, json: { data: [bag], paging: { pages: 1 } } }
+				: { ok: true, json: { data: [], paging: { pages: 1 } } }
+		);
+
+	it('a POST that lands but whose reply is lost leaves a tombstone the next pull skips (save-boundaries follow-up 59)', async () => {
+		localStorage.setItem('crema.beans.sync.v1', JSON.stringify({ lastSyncAt: 0, premium: true }));
+		const store = getBeanStore();
+		store.clearAll();
+		store.upsertBean({ ...blankBean('bean:lost'), name: 'Gesha', roastedOn: '2026-09-01' });
+		// Visualizer makes the bag, then the reply never arrives (a 502 after commit).
+		const lost = mkHttp((method, url) => {
+			if (method === 'POST' && url.includes('/coffee_bags')) {
+				store.deleteBean('bean:lost');
+				return { ok: false, status: 502, body: 'Bad Gateway' };
+			}
+			return { ok: true, json: { data: [], paging: { pages: 1 } } };
+		});
+		await run(store, lost.layer);
+		const tomb = store.allBeans.find((b) => b.id === 'bean:lost');
+		expect(tomb?.deletedAt).toBeTypeOf('number');
+		expect(tomb?.visualizerId ?? null).toBeNull();
+		// The bag the POST made is matched by signature and stays out.
+		await run(store, listing({ id: 'vb-9', name: 'Gesha', roast_date: '2026-09-01' }).layer);
+		expect(store.beans).toEqual([]);
+		// Another roast date is another bag: it comes in.
+		await run(store, listing({ id: 'vb-10', name: 'Gesha', roast_date: '2026-10-01' }).layer);
+		expect(store.beans.map((b) => b.visualizerId)).toEqual(['vb-10']);
+		store.clearAll();
+	});
+
+	it('a bag the roaster cascade deletes mid-upload stays deleted (save-boundaries follow-up 57)', async () => {
+		localStorage.setItem('crema.beans.sync.v1', JSON.stringify({ lastSyncAt: 0, premium: true }));
+		const store = getBeanStore();
+		store.clearAll();
+		store.upsertRoaster({ ...blankRoaster('Sey'), id: 'roaster:sey' });
+		store.upsertBean({ ...blankBean('bean:cascade'), name: 'Gesha', roasterId: 'roaster:sey', roastedOn: '2026-09-01' });
+		const first = mkHttp((method, url) => {
+			if (method === 'POST' && url.includes('/coffee_bags')) {
+				store.deleteRoasterAndBeans('roaster:sey', { localOnly: true });
+				return { ok: true, json: { id: 'vb-8' } };
+			}
+			if (method === 'POST' && url.includes('/roasters')) return { ok: true, json: { id: 'vr-1', name: 'Sey' } };
+			return { ok: true, json: { data: [], paging: { pages: 1 } } };
+		});
+		await run(store, first.layer);
+		expect(store.allBeans.find((b) => b.id === 'bean:cascade')).toMatchObject({ visualizerId: 'vb-8' });
+		await run(store, listing({ id: 'vb-8', name: 'Gesha', roast_date: '2026-09-01', roaster_id: 'vr-1' }).layer);
+		expect(store.beans).toEqual([]);
+		store.clearAll();
+	});
+
 	it('a bag deleted after its upload ended is removed outright when it never bound', async () => {
 		localStorage.setItem('crema.beans.sync.v1', JSON.stringify({ lastSyncAt: 0, premium: true }));
 		const store = getBeanStore();

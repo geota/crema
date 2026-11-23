@@ -111,6 +111,9 @@ pub fn merge_bean_edit(base: &Bean, edited: &Bean, current: &Bean, now_unix_ms: 
         edited.grinds.as_deref(),
         current.grinds.as_deref(),
     );
+    if out.grinds.is_some() {
+        crate::bag_grind::mark_legacy_grind_pending(current, &mut out);
+    }
     out.id.clone_from(&current.id);
     out.created_at = current.created_at;
     out.updated_at = current.updated_at;

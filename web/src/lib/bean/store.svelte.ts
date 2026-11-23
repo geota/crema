@@ -93,6 +93,39 @@ const ACTIVE_KEY = 'crema.beans.activeBeanId.v1';
 export const ACTIVE_GRINDER_KEY = 'crema.grinders.activeId.v1';
 /** The pre-library single-bean key — read once for migration, then untouched. */
 const LEGACY_KEY = 'crema.bean.current.v1';
+/**
+ * The first uploads running in any tab (save-boundaries follow-up 58): bag id
+ * → when its POST started (unix ms). A delete in another tab reads it, so it
+ * keeps a tombstone as this tab's own mark makes it. Raw localStorage, best
+ * effort: it holds no user data, and a tab's own mark still holds without it.
+ */
+const FIRST_UPLOADS_KEY = 'crema.beans.firstUploads.v1';
+/** A mark older than this was left by a tab closed mid-POST: far past any request's timeout. */
+const FIRST_UPLOAD_STALE_MS = 10 * 60_000;
+
+function readFirstUploads(now: number): Record<string, number> {
+	try {
+		const raw = globalThis.localStorage?.getItem(FIRST_UPLOADS_KEY);
+		const v: unknown = raw ? JSON.parse(raw) : null;
+		if (!isJsonObject(v)) return {};
+		return Object.fromEntries(
+			Object.entries(v).filter(
+				(e): e is [string, number] => typeof e[1] === 'number' && now - e[1] < FIRST_UPLOAD_STALE_MS
+			)
+		);
+	} catch {
+		return {};
+	}
+}
+
+function writeFirstUploads(marks: Record<string, number>): void {
+	try {
+		if (Object.keys(marks).length === 0) globalThis.localStorage?.removeItem(FIRST_UPLOADS_KEY);
+		else globalThis.localStorage?.setItem(FIRST_UPLOADS_KEY, JSON.stringify(marks));
+	} catch {
+		// Storage full or blocked: this tab's own mark still holds.
+	}
+}
 
 /** Current schema version stamped in the envelope. */
 const LIBRARY_SCHEMA = 1;
@@ -221,8 +254,14 @@ export class BeanLibraryStore {
 	/**
 	 * Bags whose first Visualizer upload (the POST that binds them) is running
 	 * in this tab: a delete meanwhile leaves a tombstone (#488 follow-up 41).
+	 * Shared with other tabs through {@link FIRST_UPLOADS_KEY}.
 	 */
 	private readonly firstUploads = new Set<string>();
+
+	/** Whether bag `id`'s first upload is running, in this tab or another. */
+	private firstUploadRunning(id: string): boolean {
+		return this.firstUploads.has(id) || id in readFirstUploads(Date.now());
+	}
 
 	constructor() {
 		// Another tab's debit or edit is taken, not written back over (#333).
@@ -430,7 +469,8 @@ export class BeanLibraryStore {
 	 * hidden, with `deletedAt` set and its photo dropped, so the next pull
 	 * doesn't add it back (#488 review S5). That holds for both scopes, as the
 	 * remote DELETE is best-effort. So does a bag whose first upload is still
-	 * running ({@link beginFirstUpload}): the bag that upload makes is skipped
+	 * running ({@link beginFirstUpload}), in this tab or another (save-boundaries
+	 * follow-up 58): the bag that upload makes is skipped
 	 * by the next pull (the core matches the unbound tombstone by signature,
 	 * #488 follow-up 41), and the upload binds the tombstone when it lands.
 	 * Any other bag is removed outright.
@@ -445,7 +485,7 @@ export class BeanLibraryStore {
 		const doomed = this.envelope.beans.filter((b) => b.id === id && b.deletedAt == null);
 		if (doomed.length === 0) return;
 		const now = Date.now();
-		const keep = (b: Bean) => b.visualizerId != null || this.firstUploads.has(b.id);
+		const keep = (b: Bean) => b.visualizerId != null || this.firstUploadRunning(b.id);
 		const beans = this.envelope.beans.flatMap((b) =>
 			b.id !== id ? [b] : keep(b) ? [beanTombstone(b, now)] : []
 		);
@@ -747,9 +787,13 @@ export class BeanLibraryStore {
 		if (!plan) return null;
 		// GEN6: the whole cascade as ONE envelope update + ONE persist.
 		// A bag on Visualizer stays as a tombstone, as `deleteBean` keeps one
-		// (#488 review S5); the rest go.
+		// (#488 review S5), and so does one whose first upload is running
+		// (save-boundaries follow-up 57); the rest go.
 		const gone = new Set(plan.deletedBeanIds);
-		const kept = new Set(plan.tombstonedBeanIds ?? []);
+		const kept = new Set([
+			...(plan.tombstonedBeanIds ?? []),
+			...plan.deletedBeanIds.filter((b) => this.firstUploadRunning(b))
+		]);
 		const now = Date.now();
 		const doomed = this.envelope.beans.filter((b) => gone.has(b.id));
 		const beans = this.envelope.beans.flatMap((b) =>
@@ -973,6 +1017,8 @@ export class BeanLibraryStore {
 	/** The Visualizer sync is POSTing bag `id` for the first time (see {@link deleteBean}). */
 	beginFirstUpload(id: string): void {
 		this.firstUploads.add(id);
+		const now = Date.now();
+		writeFirstUploads({ ...readFirstUploads(now), [id]: now });
 	}
 
 	/**
@@ -989,6 +1035,8 @@ export class BeanLibraryStore {
 	/** The first upload of bag `id` ended, landed or not. */
 	endFirstUpload(id: string): void {
 		this.firstUploads.delete(id);
+		const { [id]: _ended, ...rest } = readFirstUploads(Date.now());
+		writeFirstUploads(rest);
 	}
 
 	/** Records for grinder names an import carried that no grinder has yet. */

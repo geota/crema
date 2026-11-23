@@ -159,6 +159,7 @@ pub fn save_bag_grind(
     }
     let (id, name) = grinder.map_or((NO_GRINDER_ID, ""), |g| (g.id.as_str(), g.name.as_str()));
     let mut bean = bag.clone();
+    mark_legacy_grind_pending(bag, &mut bean);
     let rows = bean.grinds.get_or_insert_with(Vec::new);
     match rows.iter_mut().find(|r| r.grinder_id == id) {
         Some(row) if same_grind(&row.grind, grind) => return unchanged(),
@@ -179,6 +180,16 @@ pub fn save_bag_grind(
     GrindSave {
         bean,
         changed: true,
+    }
+}
+
+/// A save that makes the list on a bag the migration hasn't reached
+/// (`grinds` `None`) with an old grind: mark that grind as still waiting
+/// ([`Bean::legacy_grind_pending`], save-boundaries follow-up 60), so the
+/// migration folds it in rather than skipping a bag that now has a list.
+pub(crate) fn mark_legacy_grind_pending(before: &Bean, after: &mut Bean) {
+    if before.grinds.is_none() && !before.grinder_setting.trim().is_empty() {
+        after.legacy_grind_pending = Some(true);
     }
 }
 
@@ -263,8 +274,11 @@ pub(crate) fn merge_bag_grinds(
 }
 
 /// One bag's part of the library migration (#488): its old `grinder_setting`
-/// becomes a saved grind, when `grinds` is `None`; else the bag comes back
-/// unchanged. The setting (when not blank) is saved for the grinder the bag's
+/// becomes a saved grind, when `grinds` is `None` or the old grind is still
+/// waiting ([`Bean::legacy_grind_pending`]: a save made the list first); else
+/// the bag comes back unchanged. Folded into a list, the row is added only
+/// when the list has none for that grinder (a saved row is never
+/// overwritten), starred only when no row is, and the mark is cleared. The setting (when not blank) is saved for the grinder the bag's
 /// `grinder` names, or, when that is blank, the one `grinder_model` names
 /// (today's Save writes the setting without a bag grinder); no name at all →
 /// the "no grinder" slot. A name with no record among `grinders` gets one,
@@ -280,11 +294,13 @@ pub fn migrate_bag_grinds(
     now_ms: i64,
 ) -> (Bean, Option<Grinder>) {
     let mut out = bean.clone();
-    if bean.grinds.is_some() {
+    let pending = bean.legacy_grind_pending == Some(true);
+    if bean.grinds.is_some() && !pending {
         return (out, None);
     }
+    out.legacy_grind_pending = None;
     if bean.grinder_setting.trim().is_empty() {
-        out.grinds = Some(Vec::new());
+        out.grinds.get_or_insert_with(Vec::new);
         return (out, None);
     }
     let own = !bean.grinder.trim().is_empty();
@@ -318,7 +334,14 @@ pub fn migrate_bag_grinds(
             grind: bean.grinder_setting.clone(),
         }
     };
-    out.grinds = Some(vec![row]);
+    match out.grinds.as_mut() {
+        None => out.grinds = Some(vec![row]),
+        Some(rows) if rows.iter().any(|r| r.grinder_id == row.grinder_id) => {}
+        Some(rows) => {
+            let starred = row.starred && !rows.iter().any(|r| r.starred);
+            rows.push(BagGrind { starred, ..row });
+        }
+    }
     (out, added)
 }
 
@@ -1583,7 +1606,12 @@ mod tests {
         let mut edited = base.clone();
         edited.grinds = Some(vec![row("grinder:a", "2", false)]);
         let out = crate::library_edit::merge_bean_edit(&base, &edited, &unmigrated, NOW);
+        assert_eq!(out.legacy_grind_pending, None, "no old grind to wait");
         assert_eq!(out.grinds.unwrap(), [row("grinder:a", "2", false)]);
+        // With an old grind, it waits for the migration (follow-up 60).
+        unmigrated.grinder_setting = "14".into();
+        let out = crate::library_edit::merge_bean_edit(&base, &edited, &unmigrated, NOW);
+        assert_eq!(out.legacy_grind_pending, Some(true));
     }
 
     // ── Selecting a bag (F6) ──
