@@ -542,6 +542,14 @@ export interface CremaCore {
 	 */
 	followedGrinderId(): string | null;
 	/**
+	 * The shell discarded shot `shotId` (an aborted pull, a cleaning run): the
+	 * grind before it goes back, so the next shot within the window gets it
+	 * (review #554 S2). Synchronous; a no-op for any other shot.
+	 */
+	releaseShotGrind(shotId: string): void;
+	/** The discard's Undo kept shot `shotId` after all: it claims its grind again. Synchronous. */
+	claimShotGrind(shotId: string): void;
+	/**
 	 * Tell the core which profile the DE1 should hold: the library
 	 * `CremaProfile` (`null` = no active profile) with the Quick Controls
 	 * overrides. Call on every activation, edit, override change and restore.
@@ -1307,6 +1315,12 @@ async function createCore(): Promise<CremaCore> {
 		},
 		followedGrinderId() {
 			return bridge.followed_grinder_id() ?? null;
+		},
+		releaseShotGrind(shotId) {
+			bridge.release_shot_grind(shotId);
+		},
+		claimShotGrind(shotId) {
+			bridge.claim_shot_grind(shotId);
 		},
 		async setDesiredProfile(profile, qc, nowMs) {
 			const sync = JSON.parse(

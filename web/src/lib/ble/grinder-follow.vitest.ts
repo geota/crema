@@ -4,8 +4,8 @@
  * real wasm core. The app gives the core the grinder's record link while the
  * beta is on, Brew's grind follows a steady collar, "Pause following" gives
  * the grind back to the user, a bag pick onto the followed grinder names the
- * collar's target instead of moving Brew's grind, and its Undo switches the
- * grinder back.
+ * collar's target instead of moving Brew's grind, and its Undo puts back the
+ * grind Brew had (review #554 S3).
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Effect } from 'effect';
@@ -201,7 +201,7 @@ describe('follow mode on Brew', () => {
 		expect(getBrewGrind().value).toBe('14');
 	});
 
-	it('a bag pick onto the followed grinder names the collar target, and its Undo switches back', async () => {
+	it('a bag pick onto the followed grinder names the collar target, and its Undo restores the old grind (S3)', async () => {
 		const t = await followingApp();
 		const lib = getBeanStore();
 		lib.upsertBean({
@@ -227,9 +227,10 @@ describe('follow mode on Brew', () => {
 		await t.tick();
 		expect(getBrewGrind().value).toBe('480');
 
-		// Undo puts the Niche back (and, with the core's S3 change, its grind).
+		// Undo puts the Niche back, and its grind (review #554 S3).
 		pick?.action?.run();
 		await settle();
 		expect(lib.activeGrinderId).toBe(t.niche.id);
+		expect(getBrewGrind().value).toBe('14');
 	});
 });
