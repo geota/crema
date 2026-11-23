@@ -3,9 +3,6 @@ package coffee.crema.machine
 import coffee.crema.core.HotWaterDose
 import coffee.crema.core.MachineRequest
 import coffee.crema.profiles.ProfileBounds
-import coffee.crema.ui.CoreBounds
-import coffee.crema.ui.HotWaterUi
-import coffee.crema.ui.QcBounds
 
 /**
  * A user's intent for the machine (DE1 + scale) or for the primary-owned
@@ -22,15 +19,19 @@ import coffee.crema.ui.QcBounds
  * - [LocalOnly]: never relayed. A mirror refuses it.
  *
  * Only [Relayable] commands have a wire form. [refusal] is each command's
- * argument check, which a primary runs on whatever a peer sends.
+ * argument check, which a primary runs on whatever a peer sends: the core's
+ * (`de1_relay_app::refusal`, through [MachineCommandCodec]), so both shells
+ * check, and word a refusal, alike.
  */
 sealed interface MachineCommand {
 
     /** Why this command's arguments can't be run, or null to run it. */
     fun refusal(): String? = null
 
-    /** A command with a wire form ([MachineCommandCodec]). */
-    sealed interface Relayable : MachineCommand
+    /** A command with a wire form ([MachineCommandCodec]), checked by the core. */
+    sealed interface Relayable : MachineCommand {
+        override fun refusal(): String? = MachineCommandCodec.refusal(this)
+    }
 
     /** Machine control, and Quick Controls' Save, which writes the hub's own
      *  library: a mirror forwards it, authority first, and applies nothing. */
@@ -104,36 +105,24 @@ sealed interface MachineCommand {
     data object TareScale : Control
 
     /** Select the active profile. A primary refuses an id its library lacks. */
-    data class SetActiveProfile(val id: String) : Config {
-        override fun refusal(): String? = idRefusal(id)
-    }
+    data class SetActiveProfile(val id: String) : Config
 
     /** Select the active bean, or none. A primary refuses an id its library lacks. */
-    data class SetActiveBean(val id: String?) : Config {
-        override fun refusal(): String? = id?.let(::idRefusal)
-    }
+    data class SetActiveBean(val id: String?) : Config
 
     /** Select the active grinder (#488), or none. [name] is the picked
      *  record's name: a primary refuses an id that isn't one of its own live
      *  grinders, or is one under another name (a record renamed since, or
      *  another device's grinder with the same slug id; follow-up 19, review
      *  F3, F8). A pick always carries its name. */
-    data class SetActiveGrinder(val id: String?, val name: String?) : Config {
-        override fun refusal(): String? = when {
-            id == null -> null
-            name == null -> idRefusal(id) ?: "a grinder pick needs its name"
-            else -> idRefusal(id) ?: nameRefusal(name)
-        }
-    }
+    data class SetActiveGrinder(val id: String?, val name: String?) : Config
 
     data class SetStopOnWeight(val on: Boolean) : Config
 
     data class SetAutoTare(val on: Boolean) : Config
 
     /** One Quick-Controls value, inside its stepper's range. */
-    data class SetQc(val field: QcField, val value: Float) : Config {
-        override fun refusal(): String? = field.refusal(value)
-    }
+    data class SetQc(val field: QcField, val value: Float) : Config
 
     /**
      * Brew's grind (#488 round 2), as text end to end: the stepper's number
@@ -145,43 +134,14 @@ sealed interface MachineCommand {
      * plain decimal or thirds, never an exponent, so "1e3" is a text grind,
      * kept as typed, as the core and the other shell read it.
      */
-    data class SetGrind(val grind: String) : Config {
-        override fun refusal(): String? {
-            val text = grind.trim()
-            val number = coffee.crema.beans.grindNumber(text)
-            return when {
-                text.isEmpty() -> "a grind is required"
-                // The raw value, ends included (REVIEW-526): no control or format
-                // characters (the bidi controls U+202A–202E, U+2066–2069, U+200E/F)
-                // anywhere, and the trimmed text no
-                // longer than a grind needs; [applyTo] stores it trimmed.
-                text.length > MAX_GRIND_LENGTH || grind.any { it.isISOControl() || Character.getType(it) == Character.FORMAT.toInt() } -> "malformed grind"
-                number != null && !number.within(0.0..MAX_GRIND) -> "grind out of range: $text"
-                else -> null
-            }
-        }
-    }
+    data class SetGrind(val grind: String) : Config
 
     /** The live Quick-Controls brew override, applied by the core to the next
      *  shot's upload. Profiles set the defaults, so the ranges are physical
      *  limits; the brew temperature's is the core's own temperature bound. The
      *  device holding the machine then clamps it into the active profile's range
      *  with the core (`normalizeBrewOverrides`), so no step leaves that bound. */
-    data class AdjustBrew(val dose: Double, val yieldOut: Double, val brewTemp: Double, val preinf: Double?) : Config {
-        override fun refusal(): String? {
-            // The ranges the Quick Controls themselves offer (the core's table,
-            // F8): the dose stepper's; for the yield, what the yield or ratio
-            // stepper reaches (0 = no weight target); the brew temperature's
-            // core bound. Pre-infusion's dial widens per profile (a profile's
-            // own longer pre-infusion), so it keeps the wire ceiling.
-            val q = CoreBounds.qc
-            val yieldRange = q.overrideYieldG.toRange()
-            val inRange = dose.within(q.doseG.min.toDouble()..q.doseG.max.toDouble()) &&
-                (yieldOut == 0.0 || yieldOut.within(yieldRange)) &&
-                brewTemp.within(0.0..maxBrewTempC()) && (preinf == null || preinf.within(0.0..MAX_PREINF_S))
-            return if (inRange) null else "brew override out of range"
-        }
-    }
+    data class AdjustBrew(val dose: Double, val yieldOut: Double, val brewTemp: Double, val preinf: Double?) : Config
 
     /** Drop the brew override: the active profile's recipe applies again. */
     data object ResetBrew : Config
@@ -194,14 +154,7 @@ sealed interface MachineCommand {
      * nothing until the hub's snapshot and message arrive. [copyName] names a
      * copy (a built-in's, or "Save as new…" when [asNew]).
      */
-    data class QuickSave(val copyName: String?, val asNew: Boolean) : Control {
-        override fun refusal(): String? = when {
-            copyName == null -> if (asNew) "Save as new needs a name" else null
-            copyName.isBlank() -> "a copy needs a name"
-            copyName.length > MAX_NAME_LENGTH || copyName.any { it.isISOControl() } -> "malformed name"
-            else -> null
-        }
-    }
+    data class QuickSave(val copyName: String?, val asNew: Boolean) : Control
 
     /** The debug panel's raw Espresso request: skips the start sequence, so it
      *  never leaves the device holding the machine. */
@@ -213,52 +166,25 @@ sealed interface MachineCommand {
     data class SetHotWaterDose(val dose: HotWaterDose) : LocalOnly
 }
 
-/** The Quick-Controls values a mirror may set, each with its stepper's bounds. */
-enum class QcField(val label: String, private val range: () -> ClosedFloatingPointRange<Double>) {
-    STEAM_TIME("steam time", { CoreBounds.qc.steamTimeS.toRange() }),
-    STEAM_FLOW("steam flow", { CoreBounds.qc.steamFlowMlS.toRange() }),
+/** The Quick-Controls values a mirror may set, each with its stepper's bounds
+ *  (the core's table; [refusal] is the core's check). */
+enum class QcField {
+    STEAM_TIME,
+    STEAM_FLOW,
     /** 0 turns the steam heater off; otherwise the stepper's range, which
      *  keeps out of the band the firmware snaps to off. */
-    STEAM_TEMP("steam temperature", { CoreBounds.qc.steamTempC.toRange() }),
-    HOT_WATER_TEMP("hot-water temperature", { QcBounds.WATER_TEMP_MIN_C..QcBounds.WATER_TEMP_MAX_C }),
+    STEAM_TEMP,
+    HOT_WATER_TEMP,
     /** The bare volume edit; its range is the core's hot-water volume range. */
-    HOT_WATER_VOLUME("hot-water volume", { HotWaterUi.bounds.volumeMl.let { it.min.toDouble()..it.max.toDouble() } }),
-    FLUSH_TIME("flush time", { CoreBounds.qc.flushTimeS.toRange() }),
-    FLUSH_TEMP("flush temperature", { CoreBounds.qc.flushTempC.toRange() });
+    HOT_WATER_VOLUME,
+    FLUSH_TIME,
+    FLUSH_TEMP;
 
-    /** Why [value] is out of bounds for this field, or null. The ranges are the
-     *  Quick Controls steppers' (the core's table, F8), hot water aside. */
-    fun refusal(value: Float): String? {
-        if (this == STEAM_TEMP && value == 0f) return null
-        return if (value.toDouble().within(range())) null else "$label out of range: $value"
-    }
+    /** Why [value] is out of bounds for this field, or null. */
+    fun refusal(value: Float): String? = MachineCommand.SetQc(this, value).refusal()
 }
 
-private fun coffee.crema.core.StepRange.toRange(): ClosedFloatingPointRange<Double> = min.toDouble()..max.toDouble()
-
 private val ASLEEP = setOf("Sleep", "GoingToSleep")
-private const val MAX_ID_LENGTH = 128
-private const val MAX_NAME_LENGTH = 128
-private const val MAX_PREINF_S = 300.0
-/** A sanity bound, not the scale: a typed grind outside the active scale is kept (#488). */
-private const val MAX_GRIND = 10_000.0
-/** The longest grind text: the core's `MAX_GRIND_NUMBER_LEN` (it has no separate text limit). */
-private const val MAX_GRIND_LENGTH = 32
-
 /** The core's temperature ceiling (`MAX_TEMPERATURE_C`, 100 °C), the one bound
  *  for a brew temperature on every path. */
 internal fun maxBrewTempC(): Double = ProfileBounds.INSTANCE.maxTemperatureC.toDouble()
-
-private fun idRefusal(id: String): String? = when {
-    id.isEmpty() -> "an id is required"
-    id.length > MAX_ID_LENGTH || id.any { it.isISOControl() } -> "malformed id"
-    else -> null
-}
-
-private fun nameRefusal(name: String): String? = when {
-    name.isBlank() -> "a name is required"
-    name.length > MAX_NAME_LENGTH || name.any { it.isISOControl() } -> "malformed name"
-    else -> null
-}
-
-private fun Double.within(range: ClosedFloatingPointRange<Double>): Boolean = isFinite() && this in range

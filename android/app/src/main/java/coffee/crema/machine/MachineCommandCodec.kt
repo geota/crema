@@ -1,14 +1,25 @@
 package coffee.crema.machine
 
-import coffee.crema.core.MachineRequest
+import coffee.crema.core.RelayCommand
+import coffee.crema.core.RelayDecoded
+import coffee.crema.core.RelayQcField
+import coffee.crema.core.relayCommandMethods
+import coffee.crema.core.relayCommandRefusal
+import coffee.crema.core.relayDecodeCommand
+import coffee.crema.core.relayEncodeCommand
+import coffee.crema.core.relayMachineStates
 
 /**
- * The relay's wire vocabulary for [MachineCommand]: today's `Frame.Control`
- * method names and argument strings, byte for byte (the golden fixtures in
- * `proxy-golden/v4/control/` pin them). [encode] is exhaustive over
- * [MachineCommand.Relayable], so a new relayable command without a wire form
- * doesn't compile; [MachineCommand.LocalOnly] has none, and neither has a
- * Quick Controls machine setting a remote doesn't send ([sentByRemotes]).
+ * The relay's wire vocabulary for [MachineCommand]: `Frame.Control` method
+ * names and argument strings, and the argument checks a primary runs on a
+ * relayed control. Both are the core's (`de1_relay_app`, PLAN 65), byte for
+ * byte what this shell sent before (the shared golden fixtures in
+ * `core/de1-relay-app/tests/golden/v4/control/` pin them); this object maps
+ * [MachineCommand] to the core's command and back. [encode] is exhaustive
+ * over [MachineCommand.Relayable], so a new relayable command without a
+ * mapping doesn't compile; [MachineCommand.LocalOnly] has no wire form, and
+ * neither has a Quick Controls machine setting a remote doesn't send
+ * ([sentByRemotes]).
  *
  * Two wire forms stand for more than one command until the protocol can say
  * more:
@@ -17,6 +28,10 @@ import coffee.crema.core.MachineRequest
  * - `machineState ESPRESSO` (an older build's debug button) decodes as
  *   [MachineCommand.StartShot], so a relayed shot always goes through the start
  *   sequence. Nothing encodes to it any more.
+ *
+ * Strings cross to the core as UTF-8, which has no lone surrogates: one
+ * (only a peer's escaped JSON can hold one) crosses as U+FFFD, the same
+ * length in UTF-16 units, so every length and character check is unchanged.
  */
 object MachineCommandCodec {
 
@@ -31,41 +46,9 @@ object MachineCommandCodec {
 
     /** [cmd]'s wire form, or null for a machine setting that isn't relayed
      *  (a remote keeps it read-only, so it never reaches the wire). */
-    fun encode(cmd: MachineCommand.Relayable): Wire? = when (cmd) {
-        MachineCommand.StartShot -> Wire(START_SHOT, "")
-        is MachineCommand.StateRequest -> Wire(MACHINE_STATE, cmd.request.name)
-        MachineCommand.CancelMaintenance -> Wire(CANCEL_MAINTENANCE, "")
-        MachineCommand.TareScale -> Wire(TARE_SCALE, "")
-        is MachineCommand.SetActiveProfile -> Wire(SET_ACTIVE_PROFILE, cmd.id)
-        // No bean travels as an empty argument.
-        is MachineCommand.SetActiveBean -> Wire(SET_ACTIVE_BEAN, cmd.id.orEmpty())
-        // `<id>\n<name>`: the hub checks it is the same record (follow-up 19).
-        // Neither may hold a control character, so the first newline splits.
-        // No grinder travels as an empty argument, like no bean.
-        is MachineCommand.SetActiveGrinder ->
-            Wire(SET_ACTIVE_GRINDER, cmd.id?.let { id -> cmd.name?.let { "$id$GRINDER_NAME$it" } ?: id }.orEmpty())
-        // `` = Save; `copy:<name>` = a built-in's copy; `new:<name>` = Save as new.
-        is MachineCommand.QuickSave -> Wire(
-            QUICK_SAVE,
-            when {
-                cmd.copyName == null -> ""
-                cmd.asNew -> "$SAVE_AS_NEW${cmd.copyName}"
-                else -> "$SAVE_COPY${cmd.copyName}"
-            },
-        )
-        is MachineCommand.SetStopOnWeight -> Wire(SET_STOP_ON_WEIGHT, cmd.on.toString())
-        is MachineCommand.SetAutoTare -> Wire(SET_AUTO_TARE, cmd.on.toString())
-        // No Quick Controls machine setting has a wire form (relay v4 R4).
-        is MachineCommand.SetQc -> null
-        // The grind as text ("14.5", "2.1.3", "4⅓"), end to end (#488 round 2).
-        is MachineCommand.SetGrind -> Wire(SET_QC_GRIND, cmd.grind)
-        // `dose,yield,temp,preinf`, preinf empty = none.
-        is MachineCommand.AdjustBrew ->
-            Wire(QUICK_ADJUST_BREW, "${cmd.dose},${cmd.yieldOut},${cmd.brewTemp},${cmd.preinf ?: ""}")
-        MachineCommand.ResetBrew -> Wire(RESET_BREW, "")
-    }
+    fun encode(cmd: MachineCommand.Relayable): Wire? =
+        relayEncodeCommand(cmd.toCore())?.let { Wire(it.method, it.args) }
 
-    /** Parse a relayed control and check its arguments. Nothing here applies it. */
     /**
      * What an accepted control's reply carries (`Frame.ControlOk.result`): a
      * peer's bag pick answers with the core's selection as JSON (F6), so the
@@ -88,118 +71,109 @@ object MachineCommandCodec {
             .getOrDefault(CommandOutcome.Accepted)
     }
 
-    fun decode(method: String, args: String): Decoded {
-        val command = parse(method, args) ?: return Decoded.Invalid(parseRefusal(method, args))
-        return command.refusal()?.let { Decoded.Invalid(it) } ?: Decoded.Valid(command)
-    }
+    /** Parse a relayed control and check its arguments (the core's
+     *  `decode_command`). Nothing here applies it, and the library lookup
+     *  ([LocalMachine.unknownReference]) comes after. */
+    fun decode(method: String, args: String): Decoded =
+        when (val decoded = relayDecodeCommand(method.wellFormed(), args.wellFormed())) {
+            is RelayDecoded.Valid -> Decoded.Valid(decoded.command.toMachineCommand())
+            is RelayDecoded.Invalid -> Decoded.Invalid(decoded.reason)
+        }
+
+    /** Why [cmd]'s arguments can't be run, or null: [MachineCommand.refusal]. */
+    internal fun refusal(cmd: MachineCommand.Relayable): String? = relayCommandRefusal(cmd.toCore())
 
     /** Every method a primary accepts. */
-    val METHODS: Set<String> by lazy {
-        setOf(
-            START_SHOT, MACHINE_STATE, CANCEL_MAINTENANCE, TARE_SCALE, SET_ACTIVE_PROFILE,
-            SET_ACTIVE_BEAN, SET_STOP_ON_WEIGHT, SET_AUTO_TARE, QUICK_ADJUST_BREW, RESET_BREW,
-            SET_ACTIVE_GRINDER, QUICK_SAVE, SET_QC_GRIND,
-        )
-    }
+    val METHODS: Set<String> by lazy { relayCommandMethods().toSet() }
 
     /** The machine states a `machineState` control may carry. */
-    val RELAYABLE_STATES: Set<String> get() = stateRequests.keys
+    val RELAYABLE_STATES: Set<String> by lazy { relayMachineStates().toSet() }
 
-    private val stateRequests: Map<String, MachineCommand.Relayable> by lazy {
-        buildMap {
-            // Wake shares Stop's IDLE and is left out: IDLE decodes as Stop.
-            for (cmd in listOf(
-                MachineCommand.Stop, MachineCommand.Sleep, MachineCommand.StartSteam, MachineCommand.StartHotWater,
-                MachineCommand.StartFlush, MachineCommand.StartSteamRinse, MachineCommand.StartDescale,
-                MachineCommand.StartClean,
-            )) put(cmd.request.name, cmd)
-            put(MachineRequest.ESPRESSO.name, MachineCommand.StartShot)
+    private fun MachineCommand.Relayable.toCore(): RelayCommand = when (this) {
+        MachineCommand.StartShot -> RelayCommand.StartShot
+        MachineCommand.Stop -> RelayCommand.Stop
+        MachineCommand.Wake -> RelayCommand.Wake
+        MachineCommand.Sleep -> RelayCommand.Sleep
+        MachineCommand.StartSteam -> RelayCommand.StartSteam
+        MachineCommand.StartHotWater -> RelayCommand.StartHotWater
+        MachineCommand.StartFlush -> RelayCommand.StartFlush
+        MachineCommand.StartSteamRinse -> RelayCommand.StartSteamRinse
+        MachineCommand.StartDescale -> RelayCommand.StartDescale
+        MachineCommand.StartClean -> RelayCommand.StartClean
+        MachineCommand.CancelMaintenance -> RelayCommand.CancelMaintenance
+        MachineCommand.TareScale -> RelayCommand.TareScale
+        is MachineCommand.SetActiveProfile -> RelayCommand.SetActiveProfile(id.wellFormed())
+        is MachineCommand.SetActiveBean -> RelayCommand.SetActiveBean(id?.wellFormed())
+        is MachineCommand.SetActiveGrinder -> RelayCommand.SetActiveGrinder(id?.wellFormed(), name?.wellFormed())
+        is MachineCommand.SetStopOnWeight -> RelayCommand.SetStopOnWeight(on)
+        is MachineCommand.SetAutoTare -> RelayCommand.SetAutoTare(on)
+        is MachineCommand.SetQc -> RelayCommand.SetQc(field.toCore(), value)
+        is MachineCommand.SetGrind -> RelayCommand.SetGrind(grind.wellFormed())
+        is MachineCommand.AdjustBrew -> RelayCommand.AdjustBrew(dose, yieldOut, brewTemp, preinf)
+        MachineCommand.ResetBrew -> RelayCommand.ResetBrew
+        is MachineCommand.QuickSave -> RelayCommand.QuickSave(copyName?.wellFormed(), asNew)
+    }
+
+    private fun RelayCommand.toMachineCommand(): MachineCommand.Relayable = when (this) {
+        RelayCommand.StartShot -> MachineCommand.StartShot
+        RelayCommand.Stop -> MachineCommand.Stop
+        RelayCommand.Wake -> MachineCommand.Wake
+        RelayCommand.Sleep -> MachineCommand.Sleep
+        RelayCommand.StartSteam -> MachineCommand.StartSteam
+        RelayCommand.StartHotWater -> MachineCommand.StartHotWater
+        RelayCommand.StartFlush -> MachineCommand.StartFlush
+        RelayCommand.StartSteamRinse -> MachineCommand.StartSteamRinse
+        RelayCommand.StartDescale -> MachineCommand.StartDescale
+        RelayCommand.StartClean -> MachineCommand.StartClean
+        RelayCommand.CancelMaintenance -> MachineCommand.CancelMaintenance
+        RelayCommand.TareScale -> MachineCommand.TareScale
+        is RelayCommand.SetActiveProfile -> MachineCommand.SetActiveProfile(id)
+        is RelayCommand.SetActiveBean -> MachineCommand.SetActiveBean(id)
+        is RelayCommand.SetActiveGrinder -> MachineCommand.SetActiveGrinder(id, name)
+        is RelayCommand.SetStopOnWeight -> MachineCommand.SetStopOnWeight(on)
+        is RelayCommand.SetAutoTare -> MachineCommand.SetAutoTare(on)
+        is RelayCommand.SetQc -> MachineCommand.SetQc(field.toQcField(), value)
+        is RelayCommand.SetGrind -> MachineCommand.SetGrind(grind)
+        is RelayCommand.AdjustBrew -> MachineCommand.AdjustBrew(dose, yieldOut, brewTemp, preinf)
+        RelayCommand.ResetBrew -> MachineCommand.ResetBrew
+        is RelayCommand.QuickSave -> MachineCommand.QuickSave(copyName, asNew)
+    }
+
+    private fun QcField.toCore(): RelayQcField = when (this) {
+        QcField.STEAM_TIME -> RelayQcField.STEAM_TIME
+        QcField.STEAM_FLOW -> RelayQcField.STEAM_FLOW
+        QcField.STEAM_TEMP -> RelayQcField.STEAM_TEMP
+        QcField.HOT_WATER_TEMP -> RelayQcField.HOT_WATER_TEMP
+        QcField.HOT_WATER_VOLUME -> RelayQcField.HOT_WATER_VOLUME
+        QcField.FLUSH_TIME -> RelayQcField.FLUSH_TIME
+        QcField.FLUSH_TEMP -> RelayQcField.FLUSH_TEMP
+    }
+
+    private fun RelayQcField.toQcField(): QcField = when (this) {
+        RelayQcField.STEAM_TIME -> QcField.STEAM_TIME
+        RelayQcField.STEAM_FLOW -> QcField.STEAM_FLOW
+        RelayQcField.STEAM_TEMP -> QcField.STEAM_TEMP
+        RelayQcField.HOT_WATER_TEMP -> QcField.HOT_WATER_TEMP
+        RelayQcField.HOT_WATER_VOLUME -> QcField.HOT_WATER_VOLUME
+        RelayQcField.FLUSH_TIME -> QcField.FLUSH_TIME
+        RelayQcField.FLUSH_TEMP -> QcField.FLUSH_TEMP
+    }
+
+    /** This text with each lone surrogate as U+FFFD, so it can cross as UTF-8. */
+    private fun String.wellFormed(): String {
+        if (none { it.isSurrogate() }) return this
+        val out = StringBuilder(length)
+        var i = 0
+        while (i < length) {
+            val c = this[i]
+            if (c.isHighSurrogate() && i + 1 < length && this[i + 1].isLowSurrogate()) {
+                out.append(c).append(this[i + 1])
+                i += 2
+                continue
+            }
+            out.append(if (c.isSurrogate()) '\uFFFD' else c)
+            i++
         }
+        return out.toString()
     }
-
-    private fun parse(method: String, args: String): MachineCommand.Relayable? {
-        return when (method) {
-            START_SHOT -> noArgs(args, MachineCommand.StartShot)
-            CANCEL_MAINTENANCE -> noArgs(args, MachineCommand.CancelMaintenance)
-            TARE_SCALE -> noArgs(args, MachineCommand.TareScale)
-            RESET_BREW -> noArgs(args, MachineCommand.ResetBrew)
-            MACHINE_STATE -> stateRequests[args]
-            SET_ACTIVE_PROFILE -> MachineCommand.SetActiveProfile(args)
-            SET_ACTIVE_BEAN -> MachineCommand.SetActiveBean(args.ifEmpty { null })
-            SET_ACTIVE_GRINDER -> grinderPick(args)
-            SET_QC_GRIND -> MachineCommand.SetGrind(args)
-            QUICK_SAVE -> quickSave(args)
-            SET_STOP_ON_WEIGHT -> flag(args)?.let { MachineCommand.SetStopOnWeight(it) }
-            SET_AUTO_TARE -> flag(args)?.let { MachineCommand.SetAutoTare(it) }
-            QUICK_ADJUST_BREW -> brew(args)
-            else -> null
-        }
-    }
-
-    /** Why [parse] found nothing to run. */
-    private fun parseRefusal(method: String, args: String): String = when {
-        method == MACHINE_STATE -> "machine state not relayable: ${args.take(32)}"
-        method == SET_STOP_ON_WEIGHT || method == SET_AUTO_TARE -> "$method needs true or false"
-        method == QUICK_ADJUST_BREW -> "quickAdjustBrew needs dose,yield,temp[,preinf]"
-        method == QUICK_SAVE -> "quickSave takes nothing, copy:<name> or new:<name>"
-        method in METHODS -> "$method takes no arguments"
-        else -> "unknown relayed control: ${method.take(32)}"
-    }
-
-    private fun noArgs(args: String, cmd: MachineCommand.Relayable) = cmd.takeIf { args.isEmpty() }
-
-    private fun flag(args: String): Boolean? = when (args) {
-        "true" -> true
-        "false" -> false
-        else -> null
-    }
-
-    /** `` = none, `<id>\n<name>` = that grinder; a bare `<id>` (no name) is
-     *  decoded and then refused ([MachineCommand.SetActiveGrinder.refusal]). */
-    private fun grinderPick(args: String): MachineCommand.SetActiveGrinder {
-        if (args.isEmpty()) return MachineCommand.SetActiveGrinder(null, null)
-        val cut = args.indexOf(GRINDER_NAME)
-        return if (cut < 0) {
-            MachineCommand.SetActiveGrinder(args, null)
-        } else {
-            MachineCommand.SetActiveGrinder(args.substring(0, cut), args.substring(cut + 1))
-        }
-    }
-
-    /** `` = Save, `copy:<name>` = a named copy, `new:<name>` = Save as new. */
-    private fun quickSave(args: String): MachineCommand.QuickSave? = when {
-        args.isEmpty() -> MachineCommand.QuickSave(copyName = null, asNew = false)
-        args.startsWith(SAVE_COPY) -> MachineCommand.QuickSave(args.removePrefix(SAVE_COPY), asNew = false)
-        args.startsWith(SAVE_AS_NEW) -> MachineCommand.QuickSave(args.removePrefix(SAVE_AS_NEW), asNew = true)
-        else -> null
-    }
-
-    /** `dose,yield,temp[,preinf]`, preinf empty or absent = none. */
-    private fun brew(args: String): MachineCommand.AdjustBrew? {
-        val p = args.split(",")
-        if (p.size !in 3..4) return null
-        val dose = p[0].toDoubleOrNull() ?: return null
-        val yieldOut = p[1].toDoubleOrNull() ?: return null
-        val brewTemp = p[2].toDoubleOrNull() ?: return null
-        val preinfText = p.getOrNull(3)?.takeIf { it.isNotEmpty() }
-        val preinf = preinfText?.let { it.toDoubleOrNull() ?: return null }
-        return MachineCommand.AdjustBrew(dose, yieldOut, brewTemp, preinf)
-    }
-
-    private const val START_SHOT = "startShot"
-    private const val MACHINE_STATE = "machineState"
-    private const val CANCEL_MAINTENANCE = "cancelMaintenance"
-    private const val TARE_SCALE = "tareScale"
-    private const val SET_ACTIVE_PROFILE = "setActiveProfile"
-    private const val SET_ACTIVE_BEAN = "setActiveBean"
-    private const val SET_STOP_ON_WEIGHT = "setStopOnWeight"
-    private const val SET_AUTO_TARE = "setAutoTare"
-    private const val QUICK_ADJUST_BREW = "quickAdjustBrew"
-    private const val RESET_BREW = "resetBrew"
-    private const val SET_ACTIVE_GRINDER = "setActiveGrinder"
-    private const val QUICK_SAVE = "quickSave"
-    private const val SET_QC_GRIND = "setQcGrind"
-    private const val GRINDER_NAME = '\n'
-    private const val SAVE_COPY = "copy:"
-    private const val SAVE_AS_NEW = "new:"
 }

@@ -10,6 +10,7 @@ members = [
     "de1-domain",
     "de1-app",
     "de1-relay",
+    "de1-relay-app",
     "de1-ffi",
     "de1-wasm",
     "de1-history",
@@ -17,7 +18,7 @@ members = [
 ]
 # The cargo-fuzz project builds on nightly with its own lockfile. The model
 # tests have their own lockfiles too: proptest would fail `cargo deny check bans`.
-exclude = ["de1-relay/fuzz", "de1-model", "de1-history-model"]
+exclude = ["de1-relay/fuzz", "de1-relay-app/fuzz", "de1-relay-app-model", "de1-model", "de1-history-model"]
 
 [workspace.package]
 edition = "2024"
