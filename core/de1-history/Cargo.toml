@@ -21,7 +21,7 @@ unicode-normalization = "0.1.24"
 # The store (SPEC §1, decision B): SQLite compiled in, so both shells run one
 # SQLite version with FTS5 and trigram. Natively `bundled` builds it through
 # `libsqlite3-sys`; on wasm32 (C4) it is `sqlite-wasm-rs`, below.
-rusqlite = { version = "=0.42.0", default-features = false, features = ["bundled", "cache", "backup"], optional = true }
+rusqlite = { version = "=0.43.0", default-features = false, features = ["bundled", "cache", "backup"], optional = true }
 
 # On wasm32 the store runs over `sqlite-wasm-rs`, which compiles the same
 # SQLite 3.54.1 with `cc` (PLAN C4, N10: exact pins, each bump's diff read).
@@ -29,7 +29,7 @@ rusqlite = { version = "=0.42.0", default-features = false, features = ["bundled
 # randomness, sleep). The VFSes it runs on are the shell's: `memvfs` in Node
 # tests, the `sahpool` pools in `de1-history-wasm`.
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
-rusqlite = { version = "=0.42.0", default-features = false, features = ["ffi-sqlite-wasm-rs", "cache", "backup"], optional = true }
+rusqlite = { version = "=0.43.0", default-features = false, features = ["ffi-sqlite-wasm-rs", "cache", "backup"], optional = true }
 sqlite-wasm-rs = { version = "=0.6.3", default-features = false, features = ["wasm-bindgen"], optional = true }
 # `de1-domain`'s `uuid` needs a randomness source on wasm32, as in `de1-wasm`.
 uuid = { version = "1", features = ["js"] }
