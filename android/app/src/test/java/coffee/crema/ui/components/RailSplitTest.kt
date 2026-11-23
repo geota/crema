@@ -112,7 +112,13 @@ class RailSplitTest {
     fun `the split thresholds sit inside each density`() {
         assertTrue(SPLIT_RAIL_FROM_DP > COMPACT_RAIL_BELOW_DP)
         assertTrue(SPLIT_COMPACT_RAIL_FROM_DP < COMPACT_RAIL_BELOW_DP)
-        assertFalse(railSplitsDevices(RailDensity.Regular, SPLIT_RAIL_FROM_DP - 0.5f))
+        assertTrue(SPLIT_SHORT_RAIL_FROM_DP in COMPACT_RAIL_BELOW_DP..SPLIT_RAIL_FROM_DP)
+        assertEquals(RailLayout(split = true), railLayout(RailDensity.Regular, SPLIT_RAIL_FROM_DP))
+        // Under it, the split holds with ~64dp items (a 10" tablet in landscape, ≈730dp).
+        assertEquals(RailLayout(split = true, itemHeightDp = SHORT_RAIL_ITEM_DP), railLayout(RailDensity.Regular, SPLIT_RAIL_FROM_DP - 0.5f))
+        assertEquals(RailLayout(split = true, itemHeightDp = SHORT_RAIL_ITEM_DP), railLayout(RailDensity.Regular, 730f))
+        assertEquals(RailLayout(split = true, itemHeightDp = SHORT_RAIL_ITEM_DP), railLayout(RailDensity.Regular, SPLIT_SHORT_RAIL_FROM_DP))
+        assertFalse(railSplitsDevices(RailDensity.Regular, SPLIT_SHORT_RAIL_FROM_DP - 0.5f))
         assertTrue(railSplitsDevices(RailDensity.Regular, SPLIT_RAIL_FROM_DP))
         assertFalse(railSplitsDevices(RailDensity.Compact, SPLIT_COMPACT_RAIL_FROM_DP - 0.5f))
         assertTrue(railSplitsDevices(RailDensity.Compact, SPLIT_COMPACT_RAIL_FROM_DP))
@@ -138,12 +144,19 @@ class RailSplitTest {
     fun `the regular rail fits all seven items at its split height`() = assertFitsAt(SPLIT_RAIL_FROM_DP, compact = false)
 
     @Test
+    fun `the regular rail with short items fits all seven at its split height`() {
+        assertFitsAt(SPLIT_SHORT_RAIL_FROM_DP, compact = false)
+        val h = item("Grinder", false).getUnclippedBoundsInRoot().let { it.bottom - it.top }
+        assertTrue(h.value <= SHORT_RAIL_ITEM_DP + 0.5f, "a short item is $h")
+    }
+
+    @Test
     fun `the compact rail fits all seven items at its split height`() =
         assertFitsAt(SPLIT_COMPACT_RAIL_FROM_DP, compact = true)
 
     @Test
     fun `a regular rail under the split height keeps one Devices item`() {
-        rail((SPLIT_RAIL_FROM_DP - 1f).dp)
+        rail((SPLIT_SHORT_RAIL_FROM_DP - 1f).dp)
         compose.onNodeWithText("Devices").assertExists()
         compose.onNodeWithText("Grinder").assertDoesNotExist()
     }

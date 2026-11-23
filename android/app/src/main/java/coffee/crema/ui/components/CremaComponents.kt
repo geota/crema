@@ -2306,20 +2306,36 @@ fun railDensity(heightDp: Float): RailDensity =
     if (heightDp < COMPACT_RAIL_BELOW_DP) RailDensity.Compact else RailDensity.Regular
 
 /**
- * The heights (dp) from which each density fits seven items (Devices split into
+ * The heights (dp) from which each layout fits seven items (Devices split into
  * Scale and Grinder) plus both pips without scrolling. Regular: the wordmark,
- * seven 75dp labelled items and the stacked pips measure ≈755dp; compact:
- * 4 + 7×48 + 48 + 4 = 392dp. Each keeps a little headroom; RailSplitTest renders
- * both at their threshold and checks the last item isn't clipped.
+ * seven 75dp labelled items and the stacked pips measure ≈755dp; with the
+ * items held to [SHORT_RAIL_ITEM_DP] (the owner's ~64dp, so a 10" tablet in
+ * landscape, ≈730dp of rail, splits) ≈678dp; compact: 4 + 7×48 + 48 + 4 =
+ * 392dp. Each keeps a little headroom; RailSplitTest renders each at its
+ * threshold and checks the last item isn't clipped.
  */
 const val SPLIT_RAIL_FROM_DP = 768f
+const val SPLIT_SHORT_RAIL_FROM_DP = 696f
 const val SPLIT_COMPACT_RAIL_FROM_DP = 416f
 
-/** Does a rail of [heightDp] at [density] have room for Scale and Grinder? */
-fun railSplitsDevices(density: RailDensity, heightDp: Float): Boolean = when (density) {
-    RailDensity.Regular -> heightDp >= SPLIT_RAIL_FROM_DP
-    RailDensity.Compact -> heightDp >= SPLIT_COMPACT_RAIL_FROM_DP
+/** The labelled item height a split regular rail uses below [SPLIT_RAIL_FROM_DP]. */
+const val SHORT_RAIL_ITEM_DP = 64f
+
+/** How the rail shows Devices: split or not, and the labelled item height (null = M3's own). */
+data class RailLayout(val split: Boolean, val itemHeightDp: Float? = null)
+
+/** The layout for a rail of [heightDp] at [density] (JVM-tested in RailSplitTest). */
+fun railLayout(density: RailDensity, heightDp: Float): RailLayout = when (density) {
+    RailDensity.Regular -> when {
+        heightDp >= SPLIT_RAIL_FROM_DP -> RailLayout(split = true)
+        heightDp >= SPLIT_SHORT_RAIL_FROM_DP -> RailLayout(split = true, itemHeightDp = SHORT_RAIL_ITEM_DP)
+        else -> RailLayout(split = false)
+    }
+    RailDensity.Compact -> RailLayout(split = heightDp >= SPLIT_COMPACT_RAIL_FROM_DP)
 }
+
+/** Does a rail of [heightDp] at [density] have room for Scale and Grinder? */
+fun railSplitsDevices(density: RailDensity, heightDp: Float): Boolean = railLayout(density, heightDp).split
 
 /**
  * @param devicesTab the Devices tab on show or used last (`MainUiState.devicesTab`).
@@ -2342,13 +2358,14 @@ fun CremaNavigationRail(
     BoxWithConstraints(Modifier.fillMaxHeight().messageAnchor(MessageAnchorSlot.Rail)) {
         val bounded = constraints.hasBoundedHeight
         val density = if (bounded) railDensity(maxHeight.value) else RailDensity.Regular
-        val items = railItems(split = bounded && railSplitsDevices(density, maxHeight.value))
+        val layout = if (bounded) railLayout(density, maxHeight.value) else RailLayout(split = false)
+        val items = railItems(split = layout.split)
         val nav = RailNav(active, devicesTab) { item ->
             item.devicesTab?.let(onOpenDevicesTab)
             onNav(item.id)
         }
         when (density) {
-            RailDensity.Regular -> RegularRail(items, nav, machineConnected, scaleConnected, onConnect)
+            RailDensity.Regular -> RegularRail(items, nav, machineConnected, scaleConnected, onConnect, layout.itemHeightDp)
             RailDensity.Compact -> CompactRail(items, nav, machineConnected, scaleConnected, onConnect)
         }
     }
@@ -2366,6 +2383,8 @@ private fun RegularRail(
     machineConnected: Boolean,
     scaleConnected: Boolean,
     onConnect: (String) -> Unit,
+    /** A shorter labelled item, so a split rail fits ([railLayout]); null = M3's height. */
+    itemHeightDp: Float? = null,
 ) {
     val containerColor = NavigationRailDefaults.ContainerColor
     NavigationRail(
@@ -2394,6 +2413,7 @@ private fun RegularRail(
                 NavigationRailItem(
                     selected = nav.selected(item),
                     onClick = { nav.open(item) },
+                    modifier = if (itemHeightDp != null) Modifier.height(itemHeightDp.dp) else Modifier,
                     icon = { PhIcon(item.icon, sizeDp = 24) },
                     label = { Text(item.label, style = MaterialTheme.typography.labelMedium) },
                     colors = NavigationRailItemDefaults.colors(
