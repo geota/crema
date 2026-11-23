@@ -24,6 +24,7 @@ pub mod error;
 pub mod event;
 pub mod firmware_flash;
 pub mod firmware_info;
+pub mod grinder;
 #[cfg(test)]
 mod hds_sleep_tests;
 mod idle_sleep;
@@ -52,6 +53,7 @@ mod sweep;
 mod unknown_substate_tests;
 
 pub use calibration_guard::CalibrationRefusal;
+pub use de1_device::{DeviceKind, DeviceMatch, ScanFilters};
 pub use de1_domain::{FirmwareBuildReport, FirmwareBuildStatus};
 pub use de1_uuids::{
     De1SeedRead, De1Subscription, De1Uuids, connect_identity_registers,
@@ -67,6 +69,7 @@ pub use firmware_flash::{
     FLASHABLE_MODELS, FirmwareFlash, FlashAction, FlashBlocker, FlashFailure, FlashPhase,
     FlashShellConditions, FlashStartError, FlashStatus, FlashStep,
 };
+pub use grinder::{RECENT_GRINDS, device_scan_filters, identify_device};
 pub use machine_requests::{
     MAX_HOLD, MachineRequestDrop, MachineRequestRefusal, PROFILE_DOWNLOAD_GUARD,
 };
@@ -604,6 +607,9 @@ pub struct CremaCore {
     limit_from_ml: f32,
     /// The connected scale's codec, once identified.
     scale: Option<Scale>,
+    /// The connected grinder: its driver, grind detection and recent grinds.
+    /// A device link like the scale's, kept across a DE1 reset.
+    grinder: grinder::GrinderSlot,
     /// Smooths the scale stream into weight + flow for display.
     flow: FlowEstimator,
     /// Rejects physically impossible single-sample weight jumps during a
@@ -1152,6 +1158,7 @@ impl CremaCore {
             flow_began_on_unknown: false,
             limit_from_ml: 0.0,
             scale: None,
+            grinder: grinder::GrinderSlot::default(),
             flow: FlowEstimator::new(FlowAlgorithm::default()),
             weight_gate: WeightSpikeGate::new(),
             auto_tare: true,
@@ -3283,7 +3290,13 @@ impl CremaCore {
         // mirror recording every shot it watches just litters its captures dir
         // and feeds the replay-primary's "newest capture" loop (issue 14).
         if !self.read_only {
-            self.capture.record(source, data, now_ms);
+            // The grinder's bytes go through its driver's redaction first:
+            // its serial and Wi-Fi name never reach a capture.
+            if source == Source::GrinderNotify {
+                self.capture_grinder(data, now_ms);
+            } else {
+                self.capture.record(source, data, now_ms);
+            }
         }
         let now = ms_to_duration(now_ms);
         self.clock = self.clock.max(now);
@@ -3306,6 +3319,7 @@ impl CremaCore {
                     out.events.push(Event::ScaleButtonPressed { button });
                 }
             }
+            Source::GrinderNotify => self.handle_grinder_notify(data, now_ms, &mut out),
         }
         // Any notification advances the clock the `ErrorNoAc` settle runs on
         // (the tank level streams ~2-4 Hz even at idle), and a late firmware
@@ -3396,6 +3410,8 @@ impl CremaCore {
         self.clock = self.clock.max(now);
         let mut out = CoreOutput::default();
         self.poll_scale_watch(now, &mut out);
+        // The grinder's first-reading and silence deadlines.
+        self.tick_grinder(now_ms, &mut out);
         // A scale going stale or dead changes the legs with no reading.
         self.refresh_auto_stop_targets();
         // An owed stop is retried on the clock, with no telemetry at all.
@@ -3601,6 +3617,9 @@ impl CremaCore {
         // (and its one-shot config-query latch) across; the scale's own drop
         // path ([`disconnect_scale`](Self::disconnect_scale)) still clears it.
         let scale = self.scale.take();
+        // The grinder is a device link too, with its own drop path
+        // ([`disconnect_grinder`](Self::disconnect_grinder)).
+        let grinder = std::mem::take(&mut self.grinder);
         // The scale link outlives a DE1 reset, but a fresh reading is needed
         // before it counts again; a dead report stays reported.
         let mut scale_watch = self.scale_watch;
@@ -3668,6 +3687,7 @@ impl CremaCore {
         self.read_only = read_only;
         self.brew_session = brew_session;
         self.scale = scale;
+        self.grinder = grinder;
         self.scale_watch = scale_watch;
         self.hds = hds;
         self.scale_config_queried = scale_config_queried;

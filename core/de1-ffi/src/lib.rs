@@ -26,7 +26,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use de1_app::{CoreOutput, CremaCore, Source};
+use de1_app::{CoreOutput, CremaCore, DeviceKind, Source};
 use de1_domain::Profile;
 use de1_protocol::{CalTarget, MachineState, MmrRegister};
 
@@ -111,6 +111,9 @@ pub enum NotificationSource {
     /// The scale's on-scale button characteristic (Skale II `EF82`) —
     /// mirrors `de1_app::Source::ScaleButton`.
     ScaleButton,
+    /// The connected grinder's notify characteristic — mirrors
+    /// `de1_app::Source::GrinderNotify`.
+    GrinderNotify,
 }
 
 impl From<NotificationSource> for Source {
@@ -129,6 +132,7 @@ impl From<NotificationSource> for Source {
             NotificationSource::De1FrameAck => Source::De1FrameAck,
             NotificationSource::De1HeaderAck => Source::De1HeaderAck,
             NotificationSource::ScaleButton => Source::ScaleButton,
+            NotificationSource::GrinderNotify => Source::GrinderNotify,
         }
     }
 }
@@ -2786,6 +2790,32 @@ pub fn scale_scan_uuids() -> String {
         .unwrap_or_else(|_| r#"{"service_uuids":[],"name_prefixes":[]}"#.to_owned())
 }
 
+/// The pre-connect scan filters for one device kind (`"Scale"`,
+/// `"Grinder"`) or, for `None`, every kind (Android's one scanner) — as JSON
+/// `{"name_prefixes":[…],"service_uuids":[…]}`. An unknown kind gets empty
+/// filters. See [`de1_app::device_scan_filters`].
+#[uniffi::export]
+pub fn device_scan_filters(kind: Option<String>) -> String {
+    let kind = match kind.as_deref() {
+        None => None,
+        Some("Scale") => Some(DeviceKind::Scale),
+        Some("Grinder") => Some(DeviceKind::Grinder),
+        Some(_) => return r#"{"name_prefixes":[],"service_uuids":[]}"#.to_owned(),
+    };
+    serde_json::to_string(&de1_app::device_scan_filters(kind))
+        .unwrap_or_else(|_| r#"{"name_prefixes":[],"service_uuids":[]}"#.to_owned())
+}
+
+/// What a scanned device is: a `DeviceMatch` JSON (`{"kind":"Grinder",
+/// "model":"bookoo-motto-80"}`), or `None` when no kind knows it. Scales are
+/// tried first. The shared scanner routes a match to its kind's manager. See
+/// [`de1_app::identify_device`].
+#[uniffi::export]
+pub fn identify_device(advertised_name: String, service_uuids: Vec<String>) -> Option<String> {
+    de1_app::identify_device(&advertised_name, &service_uuids)
+        .and_then(|m| serde_json::to_string(&m).ok())
+}
+
 /// Fold a JSON array of `src:"META"` payload objects into a merged
 /// `ReplayMeta` JSON. See [`de1_domain::fold_meta_jsonl_json`] for
 /// the canonical implementation.
@@ -3892,6 +3922,59 @@ impl CremaBridge {
     /// link drops. See [`de1_app::CremaCore::disconnect_scale`].
     pub fn disconnect_scale(&self) {
         self.core().disconnect_scale();
+    }
+
+    /// Identify and connect a grinder from its BLE `advertised_name` and
+    /// discovered GATT `service_uuids`. Returns its model id, or `None` if
+    /// nothing matched. A second connect replaces the first. See
+    /// [`de1_app::CremaCore::connect_grinder`].
+    pub fn connect_grinder(
+        &self,
+        advertised_name: String,
+        service_uuids: Vec<String>,
+    ) -> Option<String> {
+        self.core()
+            .connect_grinder(&advertised_name, &service_uuids)
+    }
+
+    /// The shell subscribed to the grinder's notify characteristic: returns a
+    /// `CoreOutput` JSON whose `WriteGrinder` commands (the handshake) go out
+    /// in order, with response. `max_packet` is `min(MTU - 3, 512)` after the
+    /// MTU request, or 20 when unknown. See
+    /// [`de1_app::CremaCore::grinder_subscribed`].
+    pub fn grinder_subscribed(&self, max_packet: u32, now_ms: u64) -> String {
+        let out = self.core().grinder_subscribed(max_packet, now_ms);
+        self.emit(out)
+    }
+
+    /// The grinder link dropped or the user disconnected: drop its driver.
+    /// Returns a `CoreOutput` JSON that may carry a `GrindCompleted` for a
+    /// grind the drop cut off. See [`de1_app::CremaCore::disconnect_grinder`].
+    pub fn disconnect_grinder(&self) -> String {
+        let out = self.core().disconnect_grinder();
+        self.emit(out)
+    }
+
+    /// The connected grinder's GATT UUIDs, a `GrinderUuids` JSON, or `None`
+    /// with no grinder.
+    pub fn grinder_uuids(&self) -> Option<String> {
+        self.core()
+            .grinder_uuids()
+            .and_then(|uuids| serde_json::to_string(&uuids).ok())
+    }
+
+    /// What the connected grinder reports and accepts, a
+    /// `GrinderCapabilities` JSON, or `None` with no grinder.
+    pub fn grinder_capabilities(&self) -> Option<String> {
+        self.core()
+            .grinder_capabilities()
+            .and_then(|caps| serde_json::to_string(&caps).ok())
+    }
+
+    /// The last 20 completed grinds and purges, oldest first, as a
+    /// `GrindSession[]` JSON. In memory only.
+    pub fn recent_grinds(&self) -> String {
+        serde_json::to_string(self.core().recent_grinds()).unwrap_or_else(|_| "[]".to_owned())
     }
 
     /// Whether a user Disconnect should ask first: the machine is pouring and
@@ -5145,6 +5228,70 @@ mod tests {
         assert_eq!(caps["volume"]["max"], 3);
         assert_eq!(caps["reports_flow"], true);
         assert_eq!(caps["reports_timer"], true);
+    }
+
+    #[test]
+    fn a_grinder_connects_handshakes_and_reports_over_the_bridge() {
+        let filters: serde_json::Value =
+            serde_json::from_str(&device_scan_filters(Some("Grinder".to_owned()))).unwrap();
+        assert_eq!(
+            filters["name_prefixes"],
+            serde_json::json!(["BOOKOO MT80 "])
+        );
+        let all: serde_json::Value = serde_json::from_str(&device_scan_filters(None)).unwrap();
+        assert!(all["name_prefixes"].as_array().unwrap().len() > 1);
+        let none: serde_json::Value =
+            serde_json::from_str(&device_scan_filters(Some("Toaster".to_owned()))).unwrap();
+        assert_eq!(none["name_prefixes"], serde_json::json!([]));
+        let m: serde_json::Value = serde_json::from_str(
+            &identify_device("BOOKOO MT80 0011aabb".to_owned(), vec![]).expect("a grinder"),
+        )
+        .unwrap();
+        assert_eq!(
+            m,
+            serde_json::json!({"kind": "Grinder", "model": "bookoo-motto-80"})
+        );
+        let bridge = CremaBridge::new();
+        assert!(bridge.grinder_uuids().is_none());
+        assert_eq!(
+            bridge
+                .connect_grinder("BOOKOO MT80 0011aabb".to_owned(), vec![])
+                .as_deref(),
+            Some("bookoo-motto-80")
+        );
+        let uuids: serde_json::Value =
+            serde_json::from_str(&bridge.grinder_uuids().unwrap()).unwrap();
+        assert_eq!(uuids["write_with_response"], true);
+        let caps: serde_json::Value =
+            serde_json::from_str(&bridge.grinder_capabilities().unwrap()).unwrap();
+        assert_eq!(caps["setting"]["unit"], "μm");
+        let out: serde_json::Value =
+            serde_json::from_str(&bridge.grinder_subscribed(20, 0)).unwrap();
+        let writes = out["commands"].as_array().unwrap();
+        assert_eq!(writes.len(), 4);
+        assert_eq!(writes[0]["type"], "WriteGrinder");
+        let period =
+            br#"{"broadcast":{"periodInfo":{"bladeGap":480,"grindRpm":900,"devState":"IDLE"}}}"#;
+        let mut frame = vec![0xA5, 0x01, 0x01, 0x00];
+        frame.extend_from_slice(&u16::try_from(period.len()).unwrap().to_le_bytes());
+        frame.extend_from_slice(&[0, 0]);
+        frame.extend_from_slice(period);
+        let out: serde_json::Value = serde_json::from_str(&bridge.on_notification(
+            NotificationSource::GrinderNotify,
+            frame,
+            100,
+        ))
+        .unwrap();
+        assert_eq!(out["events"][0]["type"], "GrinderReady");
+        assert_eq!(out["events"][1]["type"], "GrinderReading");
+        assert_eq!(
+            out["events"][1]["content"]["reading"]["setting"]["value"],
+            "480"
+        );
+        assert_eq!(bridge.recent_grinds(), "[]");
+        let out: serde_json::Value = serde_json::from_str(&bridge.disconnect_grinder()).unwrap();
+        assert_eq!(out["events"], serde_json::json!([]));
+        assert!(bridge.grinder_uuids().is_none());
     }
 
     #[test]

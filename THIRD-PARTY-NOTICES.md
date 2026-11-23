@@ -121,6 +121,44 @@ Two upstream `.tcl` profiles are retained verbatim as **parser test fixtures**
 licensed GPL-3.0; Crema is GPL-3.0-or-later, so this use is license-compatible. See
 [`core/de1-domain/profiles/README.md`](core/de1-domain/profiles/README.md).
 
+## BOOKOO Motto 80 protocol — BOOKOO (MIT) and Sabotage1 (GPL-3.0-or-later)
+
+Crema's Motto 80 grinder driver (`core/de1-grinder/src/bookoo_motto80.rs`) ports the
+framing, handshake and message model of BOOKOO's published Bluetooth protocol and its
+example client (`bookoo_motto80/README.md` and `bookoo_motto80/mt80_gatt_client.py` in
+<https://github.com/BooKooCode/OpenSource>, commit `76458a1`; documentation Copyright
+© 2024 DGSSL BOOKOO TECH LTD.). The driver's test vectors use the README's example
+messages. That repository is licensed under the MIT License:
+
+```text
+MIT License
+
+Copyright (c) 2024 BooKoo
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+The driver also follows the decaid Motto 80 plugin by Roy Ackerman
+(<https://github.com/Sabotage1/decaid-bookoo-motto80>, v0.1.0, commit `6a09335`,
+Copyright (C) 2026 Roy Ackerman, GPL-3.0-or-later) for its name match, firmware gate,
+field ranges and timeouts. GPL-3.0-or-later, like Crema.
+
 ## Built-in brew recipes — credits
 
 Crema's built-in guided-brew recipes (`core/de1-domain/recipes/builtin.json`) are

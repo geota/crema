@@ -1,0 +1,303 @@
+//! The connected grinder through the core: identify, handshake, readings,
+//! grind detection, link health, capture redaction.
+
+use de1_grinder::bookoo_motto80::{self, encode};
+use de1_grinder::{GrindEnd, GrinderLinkDeadReason, GrinderState, RunKind};
+
+use super::*;
+
+const NAME: &str = "BOOKOO MT80 1a2b3c4d";
+const SERIAL: &str = "SN0000000MT12355";
+const SSID: &str = "BK-WIFI";
+
+fn period(state: &str, total: u32) -> String {
+    format!(
+        r#"{{"broadcast":{{"periodInfo":{{"feedingRpm":40,"bladeGap":480,"grindRpm":900,"humidity":30,"devState":"{state}","netState":"CONNECTED","totalGrinds":{total},"selectPreset":-1}}}}}}"#
+    )
+}
+
+fn base() -> String {
+    format!(
+        r#"{{"broadcast":{{"baseInfo":{{"releaseVer":103111020,"snCode":"{SERIAL}","wifiName":"{SSID}"}}}}}}"#
+    )
+}
+
+fn connected() -> CremaCore {
+    let mut core = CremaCore::new();
+    assert_eq!(
+        core.connect_grinder(NAME, &[]).as_deref(),
+        Some(bookoo_motto80::MODEL)
+    );
+    core.grinder_subscribed(20, 0);
+    core
+}
+
+/// Feed one message as 20-byte notifications at `now`.
+fn feed(core: &mut CremaCore, message: &str, now: u64) -> Vec<Event> {
+    encode(message.as_bytes(), 1, 20)
+        .iter()
+        .flat_map(|f| core.on_notification(Source::GrinderNotify, f, now).events)
+        .collect()
+}
+
+fn grinds(events: &[Event]) -> Vec<&GrindSession> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::GrindCompleted { session } => Some(session),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_motto_is_a_grinder_and_a_bookoo_scale_is_a_scale() {
+    let m = identify_device(NAME, &[]).expect("grinder");
+    assert_eq!(
+        (m.kind, m.model.as_str()),
+        (DeviceKind::Grinder, "bookoo-motto-80")
+    );
+    let m = identify_device("bookoo mt80 00000000", &[]).expect("any case");
+    assert_eq!(m.kind, DeviceKind::Grinder);
+    let m = identify_device("BOOKOO_SC 1234", &[]).expect("scale");
+    assert_eq!((m.kind, m.model.as_str()), (DeviceKind::Scale, "Bookoo"));
+    // The service the Motto doesn't advertise still identifies it once found.
+    let services = [bookoo_motto80::SERVICE.to_uppercase()];
+    let m = identify_device("Phone", &services).expect("by service");
+    assert_eq!(m.kind, DeviceKind::Grinder);
+    assert!(identify_device("BOOKOO_EM 1234", &[]).is_none());
+    assert!(identify_device("BOOKOO MT80", &[]).is_none());
+}
+
+#[test]
+fn no_name_matches_two_kinds() {
+    let scales = device_scan_filters(Some(DeviceKind::Scale));
+    let grinders = device_scan_filters(Some(DeviceKind::Grinder));
+    for prefix in &grinders.name_prefixes {
+        for suffix in ["", "12345678", " x"] {
+            let name = format!("{prefix}{suffix}");
+            assert!(
+                Scale::identify(&name, &[]).is_none(),
+                "{name} is a scale too"
+            );
+        }
+    }
+    for prefix in &scales.name_prefixes {
+        for suffix in ["", "12345678", " x"] {
+            let name = format!("{prefix}{suffix}");
+            assert!(
+                GrinderDriver::identify(&name, &[]).is_none(),
+                "{name} is a grinder too"
+            );
+        }
+    }
+    for service in &grinders.service_uuids {
+        assert!(!scales.service_uuids.contains(service));
+    }
+}
+
+#[test]
+fn scan_filters_per_kind_and_together() {
+    let grinders = device_scan_filters(Some(DeviceKind::Grinder));
+    assert_eq!(grinders.name_prefixes, ["BOOKOO MT80 "]);
+    assert_eq!(grinders.service_uuids, [bookoo_motto80::SERVICE]);
+    let scales = device_scan_filters(Some(DeviceKind::Scale));
+    assert_eq!(scales.name_prefixes, Scale::scan_uuids().name_prefixes);
+    let all = device_scan_filters(None);
+    assert_eq!(
+        all.name_prefixes.len(),
+        scales.name_prefixes.len() + grinders.name_prefixes.len()
+    );
+    assert!(all.service_uuids.contains(&bookoo_motto80::SERVICE));
+}
+
+#[test]
+fn an_unknown_device_connects_nothing() {
+    let mut core = CremaCore::new();
+    assert_eq!(core.connect_grinder("Some Phone", &[]), None);
+    assert!(core.grinder_uuids().is_none());
+    assert!(core.grinder_capabilities().is_none());
+    assert!(core.grinder_subscribed(20, 0).commands.is_empty());
+    let out = core.on_notification(Source::GrinderNotify, &[0xA5, 1, 0, 0, 1, 0, 0, 0, b'x'], 0);
+    assert!(out.events.is_empty());
+    assert!(
+        core.on_tick(60_000)
+            .events
+            .iter()
+            .all(|e| !matches!(e, Event::GrinderLinkDead { .. }))
+    );
+}
+
+#[test]
+fn the_handshake_goes_out_as_grinder_writes() {
+    let mut core = CremaCore::new();
+    core.connect_grinder(NAME, &[]);
+    let uuids = core.grinder_uuids().expect("uuids");
+    assert_eq!(uuids.notify, bookoo_motto80::TX);
+    assert_eq!(uuids.write, bookoo_motto80::RX);
+    assert!(uuids.write_with_response);
+    let caps = core.grinder_capabilities().expect("caps");
+    assert!(caps.reports_state);
+    assert_eq!(caps.commands, de1_grinder::GrinderCommands::default());
+    let out = core.grinder_subscribed(20, 0);
+    let writes: Vec<&[u8]> = out
+        .commands
+        .iter()
+        .map(|c| match c {
+            Command::WriteGrinder { data } => data.as_slice(),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(writes.len(), 4);
+    assert_eq!(
+        writes[0][..8],
+        [0xA5, 0x01, 0x01, 0x00, 0x2B, 0x00, 0x00, 0x00]
+    );
+    // At a negotiated MTU the handshake is one write.
+    let mut core = CremaCore::new();
+    core.connect_grinder(NAME, &[]);
+    assert_eq!(core.grinder_subscribed(244, 0).commands.len(), 1);
+}
+
+#[test]
+fn a_read_only_mirror_writes_nothing_to_the_grinder() {
+    let mut core = CremaCore::new();
+    core.set_read_only(true);
+    core.connect_grinder(NAME, &[]);
+    assert!(core.grinder_subscribed(20, 0).commands.is_empty());
+}
+
+#[test]
+fn readings_flow_and_a_grind_is_detected() {
+    let mut core = connected();
+    let events = feed(&mut core, &base(), 100);
+    assert!(events.is_empty(), "{events:?}");
+    let events = feed(&mut core, &period("IDLE", 10), 300);
+    let Event::GrinderReady { info } = &events[0] else {
+        panic!("{events:?}");
+    };
+    assert_eq!(info.firmware.as_deref(), Some("1.3.11.1020"));
+    assert_eq!(info.serial.as_deref(), Some(SERIAL));
+    let Event::GrinderReading { reading } = &events[1] else {
+        panic!("{events:?}");
+    };
+    assert_eq!(reading.state, GrinderState::Idle);
+    let mut t = 500;
+    while t <= 8_500 {
+        assert!(grinds(&feed(&mut core, &period("GRINDING", 10), t)).is_empty());
+        t += 200;
+    }
+    let events = feed(&mut core, &period("IDLE", 11), 8_700);
+    let done = grinds(&events);
+    assert_eq!(done.len(), 1);
+    let s = done[0];
+    assert_eq!(
+        (s.kind, s.started_at, s.ended_at),
+        (RunKind::Grind, 500, 8_700)
+    );
+    assert_eq!(s.setting.as_ref().map(|v| v.value.as_str()), Some("480"));
+    assert_eq!(s.grind_rpm, Some(900));
+    assert_eq!(s.counted, Some(true));
+    assert_eq!(core.recent_grinds().len(), 1);
+    // A purge is reported as a purge.
+    feed(&mut core, &period("ADJUSTMENTPURGE", 11), 9_000);
+    let events = feed(&mut core, &period("IDLE", 11), 11_000);
+    assert_eq!(grinds(&events)[0].kind, RunKind::Purge);
+    assert_eq!(core.recent_grinds().len(), 2);
+}
+
+#[test]
+fn only_the_last_twenty_runs_are_kept() {
+    let mut core = connected();
+    let mut t = 0;
+    for i in 0..25 {
+        feed(&mut core, &period("GRINDING", i), t);
+        feed(&mut core, &period("IDLE", i + 1), t + 1_000);
+        t += 2_000;
+    }
+    assert_eq!(core.recent_grinds().len(), RECENT_GRINDS);
+    assert_eq!(core.recent_grinds()[0].started_at, 5 * 2_000);
+}
+
+#[test]
+fn silence_kills_the_link_and_a_drop_ends_the_grind() {
+    let mut core = connected();
+    feed(&mut core, &period("GRINDING", 3), 1_000);
+    feed(&mut core, &period("GRINDING", 3), 3_000);
+    assert!(
+        !core
+            .on_tick(7_999)
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::GrinderLinkDead { .. }))
+    );
+    let out = core.on_tick(8_000);
+    assert!(out.events.contains(&Event::GrinderLinkDead {
+        reason: GrinderLinkDeadReason::Silent
+    }));
+    let out = core.disconnect_grinder();
+    let done = grinds(&out.events);
+    assert_eq!(done.len(), 1);
+    assert_eq!(
+        (done[0].ended_at, done[0].ended_by),
+        (3_000, GrindEnd::LinkLost)
+    );
+    assert!(core.grinder_uuids().is_none());
+    assert!(core.disconnect_grinder().events.is_empty());
+}
+
+#[test]
+fn no_first_reading_is_reported_on_the_tick() {
+    let mut core = connected();
+    assert!(core.on_tick(4_000).events.is_empty());
+    assert!(
+        core.on_tick(5_000)
+            .events
+            .contains(&Event::GrinderLinkDead {
+                reason: GrinderLinkDeadReason::NoFirstReading
+            })
+    );
+}
+
+#[test]
+fn old_firmware_is_unsupported() {
+    let mut core = connected();
+    let old = base().replace("103111020", "102040416");
+    let events = feed(&mut core, &old, 100);
+    assert_eq!(
+        events,
+        [Event::GrinderUnsupported {
+            firmware: "1.2.4.0416".into(),
+            minimum: "1.2.19.0820".into(),
+        }]
+    );
+}
+
+#[test]
+fn a_de1_reset_keeps_the_grinder() {
+    let mut core = connected();
+    feed(&mut core, &period("IDLE", 1), 100);
+    feed(&mut core, &period("GRINDING", 1), 300);
+    core.reset();
+    assert!(core.grinder_uuids().is_some());
+    let events = feed(&mut core, &period("IDLE", 2), 2_000);
+    assert_eq!(grinds(&events).len(), 1);
+}
+
+#[test]
+fn the_capture_never_holds_the_serial_or_the_ssid() {
+    let mut core = connected();
+    feed(&mut core, &base(), 100);
+    for i in 0..10 {
+        feed(&mut core, &period("IDLE", 1), 200 + i * 200);
+    }
+    let jsonl = core.capture_slice_jsonl(0, 10_000);
+    let lines: Vec<&str> = jsonl.lines().filter(|l| l.contains("GRINDER_TX")).collect();
+    // The base info and two copies of an unchanged reading (once a second).
+    assert_eq!(lines.len(), 3, "{jsonl}");
+    let hex = |s: &str| s.bytes().map(|b| format!("{b:02x}")).collect::<String>();
+    for secret in [SERIAL, SSID, "MT12355"] {
+        assert!(!jsonl.contains(&hex(secret)), "{secret} leaked");
+    }
+    assert!(jsonl.contains(&hex("REDACTED")));
+}

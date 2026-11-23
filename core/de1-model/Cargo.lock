@@ -135,12 +135,22 @@ dependencies = [
 name = "de1-app"
 version = "0.1.0"
 dependencies = [
+ "de1-device",
  "de1-domain",
+ "de1-grinder",
  "de1-protocol",
  "de1-scale",
  "serde",
  "serde_json",
  "thiserror",
+ "typeshare-annotation",
+]
+
+[[package]]
+name = "de1-device"
+version = "0.1.0"
+dependencies = [
+ "serde",
  "typeshare-annotation",
 ]
 
@@ -156,6 +166,16 @@ dependencies = [
  "thiserror",
  "typeshare-annotation",
  "uuid",
+]
+
+[[package]]
+name = "de1-grinder"
+version = "0.1.0"
+dependencies = [
+ "de1-device",
+ "serde",
+ "serde_json",
+ "typeshare-annotation",
 ]
 
 [[package]]

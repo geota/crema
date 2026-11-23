@@ -325,6 +325,11 @@ jobs:
             crate: de1-relay-app
           - target: fuzz_decode_frame
             crate: de1-relay-app
+          # The Motto 80 grinder driver (de1-grinder): its own cargo-fuzz project.
+          - target: fuzz_motto_notifications
+            crate: de1-grinder
+          - target: fuzz_motto_round_trip
+            crate: de1-grinder
     steps:
       - name: Checkout
         uses: actions/checkout@v7

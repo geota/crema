@@ -11,6 +11,8 @@ authors.workspace = true
 de1-protocol = { path = "../de1-protocol" }
 de1-domain = { path = "../de1-domain" }
 de1-scale = { path = "../de1-scale", features = ["serde"] }
+de1-device = { path = "../de1-device" }
+de1-grinder = { path = "../de1-grinder" }
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true

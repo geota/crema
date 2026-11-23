@@ -1,0 +1,18 @@
+[package]
+name = "de1-grinder"
+version = "0.1.0"
+description = "Sans-IO Bluetooth LE drivers for the connected grinders Crema supports, and grind detection"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+de1-device = { path = "../de1-device" }
+serde.workspace = true
+serde_json.workspace = true
+# The #[typeshare] attribute only: the macro crate, without the runtime crate's chrono (RUSTSEC-2026-0543).
+typeshare = { package = "typeshare-annotation", version = "1.0.5" }
+
+[lints]
+workspace = true

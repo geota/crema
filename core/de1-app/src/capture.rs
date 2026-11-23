@@ -302,6 +302,8 @@ fn source_name(source: Source) -> &'static str {
         Source::ScaleWeight => "SCALE_WEIGHT",
         Source::ScaleCommand => "SCALE_FF12",
         Source::ScaleButton => "SCALE_BUTTON",
+        // Redacted and reshaped by the grinder's driver before it is recorded.
+        Source::GrinderNotify => "GRINDER_TX",
     }
 }
 

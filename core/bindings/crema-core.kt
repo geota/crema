@@ -2200,6 +2200,50 @@ data class EventScaleLinkDeadInner (
 	val reason: ScaleLinkDeadReason
 )
 
+/// Generated type representing the anonymous struct variant `GrinderReady` of the `Event` Rust enum
+@Serializable
+data class EventGrinderReadyInner (
+	/// What the grinder has said about itself so far.
+	val info: GrinderInfo
+)
+
+/// Generated type representing the anonymous struct variant `GrinderReading` of the `Event` Rust enum
+@Serializable
+data class EventGrinderReadingInner (
+	/// The decoded reading.
+	val reading: GrinderReading
+)
+
+/// Generated type representing the anonymous struct variant `GrinderInfoChanged` of the `Event` Rust enum
+@Serializable
+data class EventGrinderInfoChangedInner (
+	/// Everything it has said about itself.
+	val info: GrinderInfo
+)
+
+/// Generated type representing the anonymous struct variant `GrinderLinkDead` of the `Event` Rust enum
+@Serializable
+data class EventGrinderLinkDeadInner (
+	/// Which rule tripped.
+	val reason: GrinderLinkDeadReason
+)
+
+/// Generated type representing the anonymous struct variant `GrinderUnsupported` of the `Event` Rust enum
+@Serializable
+data class EventGrinderUnsupportedInner (
+	/// The firmware it reported, for display.
+	val firmware: String,
+	/// The oldest firmware that works, for display.
+	val minimum: String
+)
+
+/// Generated type representing the anonymous struct variant `GrindCompleted` of the `Event` Rust enum
+@Serializable
+data class EventGrindCompletedInner (
+	/// The completed run.
+	val session: GrindSession
+)
+
 /// Generated type representing the anonymous struct variant `SawAutoZeroed` of the `Event` Rust enum
 @Serializable
 data class EventSawAutoZeroedInner (
@@ -2707,6 +2751,35 @@ sealed class Event {
 	@Serializable
 	@SerialName("ScaleLinkDead")
 	data class ScaleLinkDead(val content: EventScaleLinkDeadInner): Event()
+	/// The connected grinder answered: its first valid reading after the
+	/// handshake (a [`GrinderReading`](Self::GrinderReading) follows).
+	@Serializable
+	@SerialName("GrinderReady")
+	data class GrinderReady(val content: EventGrinderReadyInner): Event()
+	/// A reading from the connected grinder (the Motto 80 sends five a
+	/// second).
+	@Serializable
+	@SerialName("GrinderReading")
+	data class GrinderReading(val content: EventGrinderReadingInner): Event()
+	/// The grinder reported its firmware or serial after it was ready.
+	@Serializable
+	@SerialName("GrinderInfoChanged")
+	data class GrinderInfoChanged(val content: EventGrinderInfoChangedInner): Event()
+	/// The grinder link looks dead. The shell drops the link and reconnects
+	/// (a reconnect builds a new driver and handshakes again).
+	@Serializable
+	@SerialName("GrinderLinkDead")
+	data class GrinderLinkDead(val content: EventGrinderLinkDeadInner): Event()
+	/// Crema can't use this grinder: its firmware is too old. The shell drops
+	/// the link and does not retry; the user updates it in the vendor's app.
+	@Serializable
+	@SerialName("GrinderUnsupported")
+	data class GrinderUnsupported(val content: EventGrinderUnsupportedInner): Event()
+	/// A grind or purge on the connected grinder finished (or was cut off by
+	/// a drop). The core also keeps the last 20 (`CremaCore::recent_grinds`).
+	@Serializable
+	@SerialName("GrindCompleted")
+	data class GrindCompleted(val content: EventGrindCompletedInner): Event()
 	/// The untared-cup guard latched a virtual zero: a heavy reading right
 	/// after first flow held still, so it was a cup landing after the tare —
 	/// every later reading this shot is netted against it and stop-at-weight
@@ -2961,6 +3034,13 @@ data class CommandWriteScaleInner (
 	val data: List<UByte>
 )
 
+/// Generated type representing the anonymous struct variant `WriteGrinder` of the `Command` Rust enum
+@Serializable
+data class CommandWriteGrinderInner (
+	/// The bytes to write.
+	val data: List<UByte>
+)
+
 /// A BLE write the shell should perform on the core's behalf.
 /// 
 /// The core owns the protocol, so a command carries the exact bytes; the shell
@@ -2975,6 +3055,13 @@ sealed class Command {
 	@Serializable
 	@SerialName("WriteScale")
 	data class WriteScale(val content: CommandWriteScaleInner): Command()
+	/// Write `data` to the connected grinder's write characteristic
+	/// (`GrinderUuids::write`), with or without response as
+	/// `GrinderUuids::write_with_response` says, in the order given. Today
+	/// only the connect handshake.
+	@Serializable
+	@SerialName("WriteGrinder")
+	data class WriteGrinder(val content: CommandWriteGrinderInner): Command()
 	/// Stop the machine: write Idle to the requested-state characteristic
 	/// (`0x02`) now, on the urgent lane, ahead of anything queued. Only the
 	/// core emits it, and only while a flow session is open. A shell keeps at
@@ -3192,6 +3279,26 @@ data class DetectorResults (
 	val grindCoverage: String,
 	/// Profile frame 0 appears to have been skipped.
 	val skipFirstFrame: Boolean
+)
+
+/// What a Bluetooth device is, beside the DE1.
+@Serializable
+enum class DeviceKind(val string: String) {
+	/// A coffee scale (`de1-scale`).
+	@SerialName("Scale")
+	Scale("Scale"),
+	/// A grinder (`de1-grinder`).
+	@SerialName("Grinder")
+	Grinder("Grinder"),
+}
+
+/// A scan match: the kind and the model id its driver is built from.
+@Serializable
+data class DeviceMatch (
+	/// Which kind of device matched.
+	val kind: DeviceKind,
+	/// The model id (a scale's label, a grinder's catalogue id).
+	val model: String
 )
 
 /// A row that failed this run and may hold the cursor.
@@ -3821,6 +3928,92 @@ data class GrindSave (
 	val changed: Boolean
 )
 
+/// What a run was.
+@Serializable
+enum class RunKind(val string: String) {
+	/// A dose was ground.
+	@SerialName("Grind")
+	Grind("Grind"),
+	/// The grinder cleared its chamber. Never a shot's grind.
+	@SerialName("Purge")
+	Purge("Purge"),
+}
+
+/// The grinder's dial as it reported it.
+@Serializable
+data class ObservedSetting (
+	/// The value as text ("500"), always present.
+	val value: String,
+	/// The value as a number, when the setting is numeric.
+	val number: Float? = null
+)
+
+/// Generated type representing the anonymous struct variant `Slot` of the `PresetSlot` Rust enum
+@Serializable
+data class PresetSlotSlotInner (
+	/// The preset's index on the grinder (0-based).
+	val index: UByte
+)
+
+/// Which of the grinder's presets is selected.
+@Serializable
+sealed class PresetSlot {
+	/// No preset: the grinder's manual mode (the Motto's "N mode").
+	@Serializable
+	@SerialName("Manual")
+	object Manual: PresetSlot()
+	/// A user preset.
+	@Serializable
+	@SerialName("Slot")
+	data class Slot(val content: PresetSlotSlotInner): PresetSlot()
+}
+
+/// How a run ended.
+@Serializable
+enum class GrindEnd(val string: String) {
+	/// The grinder reported another state.
+	@SerialName("StateChange")
+	StateChange("StateChange"),
+	/// The link dropped mid-run.
+	@SerialName("LinkLost")
+	LinkLost("LinkLost"),
+}
+
+/// One completed grind or purge.
+@Serializable
+data class GrindSession (
+	/// Grind or purge.
+	val kind: RunKind,
+	/// The first reading in the run (ms, the core's clock).
+	val started_at: Long,
+	/// The first reading after it, or the last one in it when the link
+	/// dropped.
+	val ended_at: Long,
+	/// `ended_at - started_at`, ±200 ms at 5 Hz.
+	val duration_ms: UInt,
+	/// The dial at the start.
+	val setting: ObservedSetting? = null,
+	/// The dial moved during the run.
+	val setting_changed: Boolean,
+	/// Median grinding speed over the run, rpm.
+	val grind_rpm: UInt? = null,
+	/// Slowest grinding speed seen, rpm.
+	val grind_rpm_min: UInt? = null,
+	/// Fastest grinding speed seen, rpm.
+	val grind_rpm_max: UInt? = null,
+	/// Median feeder speed over the run, rpm.
+	val feed_rpm: UInt? = null,
+	/// The preset at the start.
+	val preset: PresetSlot? = null,
+	/// Humidity at the start, %.
+	val humidity_pct: UByte? = null,
+	/// The lifetime count went up during the run. `None` when the grinder
+	/// doesn't report one.
+	val counted: Boolean? = null,
+	/// How it ended.
+	val ended_by: GrindEnd
+)
+
 /// How [`add_grinder`] got its grinder.
 @Serializable
 enum class GrinderAddKind(val string: String) {
@@ -3852,6 +4045,123 @@ data class GrinderArchive (
 	/// The active-grinder pointer afterwards: cleared when it was this one
 	/// (review F5), else as it was.
 	val activeGrinderId: String? = null
+)
+
+/// Generated type representing the anonymous struct variant `Numeric` of the `SettingKind` Rust enum
+@Serializable
+data class SettingKindNumericInner (
+	/// Smallest value.
+	val min: Float,
+	/// Largest value.
+	val max: Float,
+	/// The step between values.
+	val step: Float
+)
+
+/// Generated type representing the anonymous struct variant `Enumerated` of the `SettingKind` Rust enum
+@Serializable
+data class SettingKindEnumeratedInner (
+	/// The values, in dial order.
+	val values: List<String>
+)
+
+/// What kind of value a grinder's dial is.
+@Serializable
+sealed class SettingKind {
+	/// A number in a range.
+	@Serializable
+	@SerialName("Numeric")
+	data class Numeric(val content: SettingKindNumericInner): SettingKind()
+	/// One of a fixed list of values.
+	@Serializable
+	@SerialName("Enumerated")
+	data class Enumerated(val content: SettingKindEnumeratedInner): SettingKind()
+	/// Text with no structure Crema knows.
+	@Serializable
+	@SerialName("Opaque")
+	object Opaque: SettingKind()
+}
+
+/// What a grinder tells us about its dial.
+@Serializable
+data class SettingObservation (
+	/// The kind of value.
+	val kind: SettingKind,
+	/// The unit ("μm"), empty when unitless.
+	val unit: String,
+	/// The unit is a real physical one (μm), not a raw coordinate.
+	val calibrated: Boolean,
+	/// The value reflects the burrs, not just a stored number.
+	val physical: Boolean
+)
+
+/// What a grinder tells us about one of its speeds.
+@Serializable
+data class RpmObservation (
+	/// Smallest value reported, rpm.
+	val min: UInt,
+	/// Largest value reported, rpm.
+	val max: UInt,
+	/// The value is the measured motor speed, not the setpoint.
+	val measured: Boolean
+)
+
+/// A settable range.
+@Serializable
+data class GrinderRange (
+	/// Smallest value.
+	val min: UInt,
+	/// Largest value.
+	val max: UInt
+)
+
+/// What a grinder accepts. Nothing yet: every grinder is read-only in Crema.
+@Serializable
+data class GrinderCommands (
+	/// Starting and stopping a grind. Never true without the vendor's own
+	/// safety statement.
+	val start_stop: Boolean,
+	/// Setting the dial (motorised dials only).
+	val set_setting: SettingKind? = null,
+	/// Setting the grinding speed.
+	val set_grind_rpm: GrinderRange? = null,
+	/// Setting the bean-feeder speed.
+	val set_feed_rpm: GrinderRange? = null,
+	/// Selecting a preset: how many there are.
+	val select_preset: UByte? = null
+)
+
+/// What a connected grinder reports and accepts. Static per model.
+@Serializable
+data class GrinderCapabilities (
+	/// What it says about its dial.
+	val setting: SettingObservation? = null,
+	/// What it says about its grinding speed.
+	val grind_rpm: RpmObservation? = null,
+	/// What it says about its bean-feeder speed.
+	val feed_rpm: RpmObservation? = null,
+	/// It reports whether it is grinding (grind detection needs this).
+	val reports_state: Boolean,
+	/// It reports a lifetime grind count.
+	val reports_grind_count: Boolean,
+	/// It reports humidity.
+	val reports_humidity: Boolean,
+	/// It reports the dose weight.
+	val reports_weight: Boolean,
+	/// What it accepts.
+	val commands: GrinderCommands
+)
+
+/// What a grinder says about itself.
+@Serializable
+data class GrinderInfo (
+	/// The model id (the grinder catalogue's id, e.g. `bookoo-motto-80`).
+	val model: String,
+	/// Firmware version for display, once the grinder reported it.
+	val firmware: String? = null,
+	/// The grinder's serial number, as it reported it. Held in memory like a
+	/// scale's serial (`Event::ScaleConfig`); redacted from captures.
+	val serial: String? = null
 )
 
 /// Why [`migrate_grinder_library`] ran nothing.
@@ -3953,6 +4263,75 @@ data class GrinderPickRow (
 	val lastShot: String? = null
 )
 
+/// What the grinder is doing.
+@Serializable
+enum class GrinderState(val string: String) {
+	/// Idle.
+	@SerialName("Idle")
+	Idle("Idle"),
+	/// Grinding a dose.
+	@SerialName("Grinding")
+	Grinding("Grinding"),
+	/// Clearing the chamber (a purge or a reverse): not a dose.
+	@SerialName("Purging")
+	Purging("Purging"),
+	/// Busy with something else: applying settings, the start-up guide.
+	@SerialName("Busy")
+	Busy("Busy"),
+	/// Updating its firmware: expect a drop, write nothing.
+	@SerialName("Updating")
+	Updating("Updating"),
+	/// A warning on the grinder.
+	@SerialName("Warning")
+	Warning("Warning"),
+	/// A state this build doesn't know (the raw string is kept).
+	@SerialName("Unknown")
+	Unknown("Unknown"),
+}
+
+/// Device configuration a grinder reports alongside its telemetry: shown on
+/// the Devices page, never logged with a shot.
+@Serializable
+data class GrinderSettings (
+	/// Cup detection is on.
+	val cup_detect: Boolean? = null,
+	/// The grinder stops on its own (auto stop) is on.
+	val auto_stop: Boolean? = null,
+	/// Faster clearing of retained grounds is on.
+	val fast_clean: Boolean? = null,
+	/// Display brightness, 1–5.
+	val brightness: UByte? = null,
+	/// Sleep timeout, seconds.
+	val standby_s: UShort? = null,
+	/// The grinder's own Wi-Fi is connected. The network's name is never kept.
+	val wifi_connected: Boolean? = null
+)
+
+/// One decoded snapshot from a grinder.
+@Serializable
+data class GrinderReading (
+	/// When it arrived (the core's clock, ms).
+	val at_ms: Long,
+	/// What the grinder is doing.
+	val state: GrinderState,
+	/// The grinder's own state string, for diagnostics.
+	val raw_state: String,
+	/// The dial, when reported and in range.
+	val setting: ObservedSetting? = null,
+	/// Grinding speed, rpm, when reported and in range.
+	val grind_rpm: UInt? = null,
+	/// Bean-feeder speed, rpm, when reported and in range.
+	val feed_rpm: UInt? = null,
+	/// Relative humidity, %, when reported and in range.
+	val humidity_pct: UByte? = null,
+	/// The grinder's lifetime grind count.
+	val total_grinds: Long? = null,
+	/// The selected preset, when reported.
+	val preset: PresetSlot? = null,
+	/// Device configuration (Devices page only).
+	val settings: GrinderSettings
+)
+
 /// What [`resolve_grinder_switch`] reads.
 @Serializable
 data class GrinderSwitchInput (
@@ -3964,6 +4343,20 @@ data class GrinderSwitchInput (
 	val grinders: List<Grinder>,
 	/// The bag's newest grind per grinder, from the history.
 	val lastGrinds: List<LastGrind>
+)
+
+/// The GATT UUIDs a shell needs for a connected grinder.
+@Serializable
+data class GrinderUuids (
+	/// The grinder's service.
+	val service: String,
+	/// Subscribe to this one; its notifications go to the core as
+	/// `Source::GrinderNotify`.
+	val notify: String,
+	/// `Command::WriteGrinder` bytes go here.
+	val write: String,
+	/// Write with response (true) or without.
+	val write_with_response: Boolean
 )
 
 /// The user's Visualizer sync **preferences** — the portable, cross-shell
@@ -6968,6 +7361,21 @@ sealed class FlashBlocker {
 	@Serializable
 	@SerialName("LowPower")
 	object LowPower: FlashBlocker()
+}
+
+/// Why a grinder link counts as dead. The shell drops the link and
+/// reconnects.
+@Serializable
+enum class GrinderLinkDeadReason(val string: String) {
+	/// Nothing valid arrived within 5 s of the handshake.
+	@SerialName("NoFirstReading")
+	NoFirstReading("NoFirstReading"),
+	/// No valid reading for 5 s.
+	@SerialName("Silent")
+	Silent("Silent"),
+	/// Too many malformed frames in a row.
+	@SerialName("Malformed")
+	Malformed("Malformed"),
 }
 
 /// What the shell saw the user do. Every kind restarts the countdown the

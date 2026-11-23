@@ -1,0 +1,16 @@
+[package]
+name = "de1-device"
+version = "0.1.0"
+description = "What Crema's Bluetooth devices share: kinds, the scan registry, link health, firmware versions"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde.workspace = true
+# The #[typeshare] attribute only: the macro crate, without the runtime crate's chrono (RUSTSEC-2026-0543).
+typeshare = { package = "typeshare-annotation", version = "1.0.5" }
+
+[lints]
+workspace = true

@@ -10,6 +10,8 @@ use de1_protocol::{CalCommand, CalTarget, MachineState, MmrRegister, SubState};
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
+use de1_grinder::{GrindSession, GrinderInfo, GrinderLinkDeadReason, GrinderReading};
+
 use crate::error::AppError;
 
 /// Which BLE characteristic an incoming notification came from.
@@ -82,6 +84,9 @@ pub enum Source {
     /// the core decodes them via `Scale::parse_button` into
     /// [`Event::ScaleButtonPressed`].
     ScaleButton,
+    /// The connected grinder's notify characteristic
+    /// (`de1_grinder::GrinderUuids::notify`; the Motto 80's TX).
+    GrinderNotify,
 }
 
 /// Something the core observed that the UI may want to react to.
@@ -508,6 +513,43 @@ pub enum Event {
     ScaleLinkDead {
         /// Which rule tripped.
         reason: ScaleLinkDeadReason,
+    },
+    /// The connected grinder answered: its first valid reading after the
+    /// handshake (a [`GrinderReading`](Self::GrinderReading) follows).
+    GrinderReady {
+        /// What the grinder has said about itself so far.
+        info: GrinderInfo,
+    },
+    /// A reading from the connected grinder (the Motto 80 sends five a
+    /// second).
+    GrinderReading {
+        /// The decoded reading.
+        reading: GrinderReading,
+    },
+    /// The grinder reported its firmware or serial after it was ready.
+    GrinderInfoChanged {
+        /// Everything it has said about itself.
+        info: GrinderInfo,
+    },
+    /// The grinder link looks dead. The shell drops the link and reconnects
+    /// (a reconnect builds a new driver and handshakes again).
+    GrinderLinkDead {
+        /// Which rule tripped.
+        reason: GrinderLinkDeadReason,
+    },
+    /// Crema can't use this grinder: its firmware is too old. The shell drops
+    /// the link and does not retry; the user updates it in the vendor's app.
+    GrinderUnsupported {
+        /// The firmware it reported, for display.
+        firmware: String,
+        /// The oldest firmware that works, for display.
+        minimum: String,
+    },
+    /// A grind or purge on the connected grinder finished (or was cut off by
+    /// a drop). The core also keeps the last 20 (`CremaCore::recent_grinds`).
+    GrindCompleted {
+        /// The completed run.
+        session: GrindSession,
     },
     /// The untared-cup guard latched a virtual zero: a heavy reading right
     /// after first flow held still, so it was a cup landing after the tare —
@@ -1019,6 +1061,14 @@ pub enum Command {
     },
     /// Write `data` to the connected scale's command characteristic.
     WriteScale {
+        /// The bytes to write.
+        data: Vec<u8>,
+    },
+    /// Write `data` to the connected grinder's write characteristic
+    /// (`GrinderUuids::write`), with or without response as
+    /// `GrinderUuids::write_with_response` says, in the order given. Today
+    /// only the connect handshake.
+    WriteGrinder {
         /// The bytes to write.
         data: Vec<u8>,
     },
