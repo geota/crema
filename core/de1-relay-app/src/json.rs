@@ -11,7 +11,8 @@
 //! - a string's raw characters are kept as they are, control characters
 //!   included; its escapes are `\b \t \n \f \r \/ \" \\` and `\uXXXX`;
 //! - a duplicate key keeps its last value;
-//! - at most 400 nested objects and arrays;
+//! - at most 400 nested objects and arrays, read with a heap stack, not
+//!   recursion, so a deep frame costs no call stack in any build;
 //! - nothing but whitespace may follow the value.
 //!
 //! One difference: an escaped lone surrogate (`\ud800` not followed by an
@@ -40,6 +41,24 @@ pub enum Value {
     Array(Vec<Value>),
     /// An object: its keys in first-seen order, each with its last value.
     Object(Vec<(String, Value)>),
+}
+
+/// Dropped iteratively, like it is read: a 400-deep value never recurses.
+impl Drop for Value {
+    fn drop(&mut self) {
+        fn children(v: &mut Value, into: &mut Vec<Value>) {
+            match v {
+                Value::Array(items) => into.append(items),
+                Value::Object(entries) => into.extend(entries.drain(..).map(|(_, v)| v)),
+                Value::Null | Value::Literal { .. } => {}
+            }
+        }
+        let mut pending = Vec::new();
+        children(self, &mut pending);
+        while let Some(mut v) = pending.pop() {
+            children(&mut v, &mut pending);
+        }
+    }
 }
 
 impl Value {
@@ -112,7 +131,42 @@ fn is_ws(c: char) -> bool {
 struct Reader<'a> {
     src: &'a str,
     pos: usize,
-    depth: usize,
+}
+
+/// An object or array being read: what [`Reader::read`] keeps on its heap
+/// stack in place of a recursive call.
+struct Open {
+    /// `Some` for an object: the key whose value comes next.
+    key: Option<String>,
+    /// An object's entries, keys in first-seen order.
+    entries: Vec<(String, Value)>,
+    /// Where each key's entry is, so a duplicate replaces it (last wins) in
+    /// constant time: a hostile object's thousands of keys stay linear.
+    index: HashMap<String, usize>,
+    /// An array's items.
+    items: Vec<Value>,
+    /// The last token read: its opening bracket, a comma or its closing one.
+    last: Token,
+}
+
+impl Open {
+    fn new(bracket: Token) -> Self {
+        Self {
+            key: (bracket == Token::BeginObj).then(String::new),
+            entries: Vec::new(),
+            index: HashMap::new(),
+            items: Vec::new(),
+            last: bracket,
+        }
+    }
+
+    fn into_value(self) -> Value {
+        if self.key.is_some() {
+            Value::Object(self.entries)
+        } else {
+            Value::Array(self.items)
+        }
+    }
 }
 
 impl Reader<'_> {
@@ -160,111 +214,124 @@ impl Reader<'_> {
         )
     }
 
+    /// One JSON value. Iterative: nested objects and arrays live on a heap
+    /// stack ([`Open`]), never the call stack, so a 400-deep frame needs no
+    /// more stack than a flat one (kotlinx, too, switched to heap-based
+    /// recursion past depth 200).
     fn read(&mut self) -> Result<Value, JsonError> {
-        match self.peek() {
-            Token::Str => Ok(Value::Literal {
-                content: self.string()?,
-                quoted: true,
-            }),
-            Token::Other => {
-                let start = self.pos;
-                while self
-                    .peek_char()
-                    .is_some_and(|c| token_of(c) == Token::Other)
-                {
-                    self.pos += self.peek_char().map_or(1, char::len_utf8);
-                }
-                let content = &self.src[start..self.pos];
-                Ok(if content == "null" {
-                    Value::Null
-                } else {
-                    Value::Literal {
-                        content: content.to_owned(),
-                        quoted: false,
+        let mut stack: Vec<Open> = Vec::new();
+        loop {
+            // A value starts here.
+            let mut value = match self.peek() {
+                Token::Str => Value::Literal {
+                    content: self.string()?,
+                    quoted: true,
+                },
+                Token::Other => self.literal(),
+                open @ (Token::BeginObj | Token::BeginList) => {
+                    if stack.len() + 1 > MAX_NESTING {
+                        return fail("JSON input is too nested");
                     }
-                })
-            }
-            Token::BeginObj => self.nested(Self::object),
-            Token::BeginList => self.nested(Self::array),
-            _ => fail("cannot read a JSON element here"),
-        }
-    }
-
-    fn nested(
-        &mut self,
-        read: fn(&mut Self) -> Result<Value, JsonError>,
-    ) -> Result<Value, JsonError> {
-        self.depth += 1;
-        if self.depth > MAX_NESTING {
-            return fail("JSON input is too nested");
-        }
-        let v = read(self)?;
-        self.depth -= 1;
-        Ok(v)
-    }
-
-    fn object(&mut self) -> Result<Value, JsonError> {
-        self.expect(Token::BeginObj)?;
-        if self.peek() == Token::Comma {
-            return fail("unexpected leading comma");
-        }
-        let mut entries: Vec<(String, Value)> = Vec::new();
-        // Where each key's entry is, so a duplicate replaces it (last wins)
-        // in constant time: a hostile object's thousands of keys stay linear.
-        let mut index: HashMap<String, usize> = HashMap::new();
-        let mut last = Token::BeginObj;
-        while self.can_consume_value() {
-            if self.peek() != Token::Str {
-                return fail("expected a quoted key");
-            }
-            let key = self.string()?;
-            self.expect(Token::Colon)?;
-            let value = self.read()?;
-            match index.get(&key) {
-                Some(&at) => entries[at].1 = value,
-                None => {
-                    index.insert(key.clone(), entries.len());
-                    entries.push((key, value));
+                    self.expect(open)?;
+                    if self.peek() == Token::Comma {
+                        return fail("unexpected leading comma");
+                    }
+                    let mut container = Open::new(open);
+                    if self.advance(&mut container)? {
+                        stack.push(container);
+                        continue;
+                    }
+                    container.into_value()
                 }
-            }
-            last = self.next_token();
-            match last {
-                Token::Comma => {}
-                Token::EndObj => break,
-                _ => return fail("expected the end of the object or a comma"),
+                _ => return fail("cannot read a JSON element here"),
+            };
+            // Hand the value to its container, closing every container it
+            // completes, until one wants another value.
+            loop {
+                let Some(top) = stack.last_mut() else {
+                    return Ok(value);
+                };
+                if !self.accept(top, value)? && self.advance(top)? {
+                    break;
+                }
+                let done = stack.pop().ok_or_else(|| JsonError("empty stack".into()))?;
+                value = done.into_value();
             }
         }
-        match last {
+    }
+
+    /// An unquoted literal (`null` aside, kept as text for the field that
+    /// reads it).
+    fn literal(&mut self) -> Value {
+        let start = self.pos;
+        while self
+            .peek_char()
+            .is_some_and(|c| token_of(c) == Token::Other)
+        {
+            self.pos += self.peek_char().map_or(1, char::len_utf8);
+        }
+        let content = &self.src[start..self.pos];
+        if content == "null" {
+            Value::Null
+        } else {
+            Value::Literal {
+                content: content.to_owned(),
+                quoted: false,
+            }
+        }
+    }
+
+    /// Move `open` on after its opening bracket or a comma: `true` when it
+    /// wants a value (an object's key and colon read), `false` when it is
+    /// closed (`{}` / `[]`). A comma followed by the end is a trailing comma.
+    fn advance(&mut self, open: &mut Open) -> Result<bool, JsonError> {
+        if self.can_consume_value() {
+            if let Some(key) = &mut open.key {
+                if self.peek() != Token::Str {
+                    return fail("expected a quoted key");
+                }
+                *key = self.string()?;
+                self.expect(Token::Colon)?;
+            }
+            return Ok(true);
+        }
+        match open.last {
             Token::BeginObj => self.expect(Token::EndObj)?,
-            Token::Comma => return fail("trailing comma"),
-            _ => {}
-        }
-        Ok(Value::Object(entries))
-    }
-
-    fn array(&mut self) -> Result<Value, JsonError> {
-        self.expect(Token::BeginList)?;
-        if self.peek() == Token::Comma {
-            return fail("unexpected leading comma");
-        }
-        let mut items = Vec::new();
-        let mut last = Token::BeginList;
-        while self.can_consume_value() {
-            items.push(self.read()?);
-            last = self.next_token();
-            if last != Token::Comma {
-                if last != Token::EndList {
-                    return fail("expected the end of the array or a comma");
-                }
-                break;
-            }
-        }
-        match last {
             Token::BeginList => self.expect(Token::EndList)?,
             Token::Comma => return fail("trailing comma"),
             _ => {}
         }
-        Ok(Value::Array(items))
+        Ok(false)
+    }
+
+    /// Give `open` its next value, then read the comma or the closing
+    /// bracket: `true` when that closed it.
+    fn accept(&mut self, open: &mut Open, value: Value) -> Result<bool, JsonError> {
+        match &mut open.key {
+            Some(key) => {
+                let key = std::mem::take(key);
+                match open.index.get(&key) {
+                    Some(&at) => open.entries[at].1 = value,
+                    None => {
+                        open.index.insert(key.clone(), open.entries.len());
+                        open.entries.push((key, value));
+                    }
+                }
+            }
+            None => open.items.push(value),
+        }
+        open.last = self.next_token();
+        let close = if open.key.is_some() {
+            Token::EndObj
+        } else {
+            Token::EndList
+        };
+        match open.last {
+            Token::Comma => Ok(false),
+            t if t == close => Ok(true),
+            _ if open.key.is_some() => fail("expected the end of the object or a comma"),
+            _ => fail("expected the end of the array or a comma"),
+        }
     }
 
     /// A quoted string, the reader at its opening quote.
@@ -359,11 +426,7 @@ impl Reader<'_> {
 /// When kotlinx would throw: malformed JSON, nesting past 400, or anything
 /// but whitespace after the value.
 pub fn parse(text: &str) -> Result<Value, JsonError> {
-    let mut r = Reader {
-        src: text,
-        pos: 0,
-        depth: 0,
-    };
+    let mut r = Reader { src: text, pos: 0 };
     let v = r.read()?;
     if r.next_token() != Token::Eof {
         return fail("expected the end of the input");
@@ -579,38 +642,72 @@ mod tests {
         assert!(parse(&deep(401)).is_err());
     }
 
-    /// A hostile peer's object with as many distinct keys as fit in a
-    /// 64 KiB message, plus duplicates of each, reads in linear time.
+    /// A hostile peer's object with as many keys as fit in one relay
+    /// message (up to 1 MiB once reassembled): 40,000 distinct keys, then
+    /// 20,000 duplicates, read in linear time.
     #[test]
-    fn thousands_of_keys_read_quickly() {
-        let keys = 5_000;
+    fn a_megabyte_of_keys_reads_quickly() {
+        let (keys, dups) = (40_000, 20_000);
         let mut text = String::from("{\"type\":\"event\",\"text\":\"x\"");
         for i in 0..keys {
             text.push_str(&format!(",\"k{i}\":{i}"));
         }
-        for i in 0..keys {
+        for i in 0..dups {
             text.push_str(&format!(",\"k{i}\":-{i}"));
         }
         text.push('}');
-        assert!(text.len() < 2 * 65_536, "{}", text.len());
+        assert!(text.len() < 1 << 20, "{}", text.len());
         let start = std::time::Instant::now();
-        let Value::Object(entries) = parse(&text).unwrap() else {
-            panic!("object")
-        };
+        let v = parse(&text).unwrap();
         assert!(
-            start.elapsed() < std::time::Duration::from_secs(1),
+            start.elapsed() < std::time::Duration::from_secs(2),
             "{:?}",
             start.elapsed()
         );
+        let Value::Object(entries) = &v else {
+            panic!("object")
+        };
         assert_eq!(entries.len(), keys + 2);
         assert_eq!(entries[2], ("k0".into(), lit("-0", false)));
         assert_eq!(
             entries[keys + 1],
             (
                 format!("k{}", keys - 1),
-                lit(&format!("-{}", keys - 1), false)
+                lit(&format!("{}", keys - 1), false)
             )
         );
+    }
+
+    /// 400 nested objects and arrays (the limit) read, compare and drop on
+    /// a thread with a 64 KiB stack: nothing here recurses.
+    #[test]
+    fn the_deepest_frames_need_no_stack() {
+        let worker = std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let arrays = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));
+                let objects = |n: usize| format!("{}1{}", "{\"a\":".repeat(n), "}".repeat(n));
+                let mixed =
+                    |n: usize| format!("{}1{}", "[{\"a\":".repeat(n / 2), "}]".repeat(n / 2));
+                for deep in [arrays, objects, mixed] {
+                    assert!(parse(&deep(400)).is_ok());
+                    assert!(parse(&deep(402)).is_err());
+                    // The frame object itself is the first of the 400 levels.
+                    let frame = |n| {
+                        format!(
+                            "{{\"type\":\"event\",\"text\":\"x\",\"extra\":{}}}",
+                            deep(n)
+                        )
+                    };
+                    assert!(crate::decode_frame(&frame(398)).is_ok());
+                    assert!(crate::decode_frame(&frame(399)).is_ok());
+                    assert!(crate::decode_frame(&frame(400)).is_err());
+                }
+                assert!(parse(&arrays(401)).is_err());
+                assert!(parse(&objects(401)).is_err());
+            })
+            .expect("thread");
+        worker.join().expect("no stack overflow");
     }
 
     #[test]
