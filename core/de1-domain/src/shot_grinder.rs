@@ -201,6 +201,90 @@ pub fn split_visualizer_grind_json(text: &str) -> String {
     serde_json::json!({ "setting": setting, "grindRpm": rpm }).to_string()
 }
 
+/// A grind text with its trailing speed set to `rpm` (REVIEW-554: editing a
+/// shot's RPM): "15 1200rpm" with 1100 is "15 1100rpm", never "15 1200rpm
+/// 1100rpm"; with no speed it is "15", and "1200rpm" is `None`. A text that
+/// names no speed ("480", "18 clicks") comes back as it is: the speed rides
+/// beside it ([`StoredShot::grind_rpm`]) and Visualizer gets "480 1100rpm"
+/// ([`visualizer_grind_text`]).
+#[must_use]
+pub fn grind_with_rpm(text: Option<&str>, rpm: Option<u32>) -> Option<String> {
+    let text = text?;
+    let (setting, had) = split_visualizer_grind(text);
+    if had.is_none() || had == rpm {
+        return Some(text.to_owned());
+    }
+    match (setting.is_empty(), rpm) {
+        (true, None) => None,
+        (true, Some(rpm)) => Some(format!("{rpm}rpm")),
+        (false, None) => Some(setting),
+        (false, Some(rpm)) => Some(format!("{setting} {rpm}rpm")),
+    }
+}
+
+/// What a shot's grind becomes when its speed is edited ([`rpm_edit_grind`]).
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpmEditGrind {
+    /// The shot's own grind (`metadata.grinder_setting`) after the edit.
+    pub grinder_setting: Option<String>,
+    /// Drop the bean snapshot's legacy grind (`bean.grinder_setting`) too:
+    /// it held only the speed being cleared, and would otherwise come back
+    /// as the shot's grind.
+    pub clear_bean_grind: bool,
+}
+
+/// The grind a shot keeps when its speed is edited to `rpm` (REVIEW-557 M1):
+/// the effective grind (the shot's own, `own`, else its bean snapshot's,
+/// `bean_grind`) with its trailing speed replaced or dropped
+/// ([`grind_with_rpm`]); `own` as it is when that changes nothing. Clearing
+/// the speed of a grind that is only a speed ("1200rpm") clears the grind,
+/// and a snapshot grind that is only a speed goes with it, so the cleared
+/// speed doesn't come back from the snapshot (REVIEW-555 recheck). A
+/// snapshot that names a dial is never dropped.
+#[must_use]
+pub fn rpm_edit_grind(
+    own: Option<&str>,
+    bean_grind: Option<&str>,
+    rpm: Option<u32>,
+) -> RpmEditGrind {
+    fn present(s: Option<&str>) -> Option<&str> {
+        s.map(str::trim).filter(|s| !s.is_empty())
+    }
+    let effective = present(own).or_else(|| present(bean_grind));
+    let edited = grind_with_rpm(effective, rpm);
+    if edited.as_deref() == effective {
+        return RpmEditGrind {
+            grinder_setting: own.map(str::to_owned),
+            clear_bean_grind: false,
+        };
+    }
+    let clear_bean_grind = edited.is_none()
+        && present(bean_grind).is_some_and(|b| grind_with_rpm(Some(b), None).is_none());
+    RpmEditGrind {
+        grinder_setting: edited,
+        clear_bean_grind,
+    }
+}
+
+/// [`rpm_edit_grind`] as JSON: an [`RpmEditGrind`].
+#[must_use]
+pub fn rpm_edit_grind_json(
+    own: Option<&str>,
+    bean_grind: Option<&str>,
+    rpm: Option<u32>,
+) -> String {
+    serde_json::to_string(&rpm_edit_grind(own, bean_grind, rpm)).unwrap_or_default()
+}
+
+/// The speed a shot keeps when its grind is edited to `grind` (REVIEW-557
+/// M1): one the grind names ("15 1300rpm") wins, else `had`.
+#[must_use]
+pub fn grind_edit_rpm(grind: Option<&str>, had: Option<u32>) -> Option<u32> {
+    grind.and_then(|g| split_visualizer_grind(g).1).or(had)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,5 +464,76 @@ mod tests {
         s.grind_rpm = Some(650);
         take_rpm_from_grind(&mut s);
         assert_eq!(s.grind_rpm, Some(650), "a speed it has is kept");
+    }
+
+    #[test]
+    fn a_speed_edit_replaces_the_trailing_speed() {
+        // REVIEW-554 recheck: an imported "15 1200rpm" edited to 1100.
+        for (text, rpm, out) in [
+            (Some("15 1200rpm"), Some(1100), Some("15 1100rpm")),
+            (Some("15 1200rpm"), Some(1200), Some("15 1200rpm")),
+            (Some("15 1200rpm"), None, Some("15")),
+            (Some("1200rpm"), Some(800), Some("800rpm")),
+            (Some("1200rpm"), None, None),
+            (Some("480"), Some(700), Some("480")),
+            (Some("18 clicks"), None, Some("18 clicks")),
+            (None, Some(700), None),
+        ] {
+            assert_eq!(
+                grind_with_rpm(text, rpm).as_deref(),
+                out,
+                "{text:?} {rpm:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_speed_edit_on_a_shot_follows_its_effective_grind() {
+        let edit = |own, bean, rpm| rpm_edit_grind(own, bean, rpm);
+        let kept = |g: Option<&str>| RpmEditGrind {
+            grinder_setting: g.map(str::to_owned),
+            clear_bean_grind: false,
+        };
+        // A pulled shot whose grind lives on the snapshot.
+        assert_eq!(
+            edit(None, Some("480 700rpm"), Some(800)),
+            kept(Some("480 800rpm"))
+        );
+        assert_eq!(edit(None, Some("480 700rpm"), None), kept(Some("480")));
+        // Nothing changes in the text: the shot's own grind stays as it is.
+        assert_eq!(edit(None, Some("480"), Some(700)), kept(None));
+        assert_eq!(edit(Some("480"), None, Some(700)), kept(Some("480")));
+        assert_eq!(
+            edit(Some("15 1200rpm"), None, Some(1100)),
+            kept(Some("15 1100rpm"))
+        );
+        // REVIEW-555 recheck: clearing a speed-only grind sticks; the
+        // snapshot that held only that speed goes too.
+        assert_eq!(
+            edit(None, Some("1200rpm"), None),
+            RpmEditGrind {
+                grinder_setting: None,
+                clear_bean_grind: true
+            }
+        );
+        assert_eq!(
+            edit(Some("1200rpm"), Some("1200rpm"), None),
+            RpmEditGrind {
+                grinder_setting: None,
+                clear_bean_grind: true
+            }
+        );
+        // A snapshot that names a dial is never dropped.
+        assert_eq!(edit(Some("1200rpm"), Some("2.4"), None), kept(None));
+        let json = rpm_edit_grind_json(None, Some("1200rpm"), None);
+        assert_eq!(json, r#"{"grinderSetting":null,"clearBeanGrind":true}"#);
+    }
+
+    #[test]
+    fn a_grind_edit_takes_the_speed_it_names() {
+        assert_eq!(grind_edit_rpm(Some("15 1300rpm"), Some(1200)), Some(1300));
+        assert_eq!(grind_edit_rpm(Some("16"), Some(1200)), Some(1200));
+        assert_eq!(grind_edit_rpm(None, Some(1200)), Some(1200));
+        assert_eq!(grind_edit_rpm(Some("481"), None), None);
     }
 }

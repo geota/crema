@@ -91,6 +91,23 @@ describe('History speed and grind edits (REVIEW-557 M1)', () => {
 		expect(grindLabel(s)).toBe('Grind 480');
 	});
 
+	it('a pulled shot whose grind is only a speed, speed cleared: it stays cleared (REVIEW-555 recheck)', () => {
+		const s = editShotRpm(
+			{ metadata: { grinderSetting: null }, bean: { name: 'Bag', grinderSetting: '1200rpm' }, grindRpm: 1200 } as unknown as StoredShot,
+			null
+		);
+		expect(s.metadata.grinderSetting).toBeNull();
+		expect(s.bean).toEqual({ name: 'Bag' });
+		expect(s.grindRpm).toBeUndefined();
+		expect(grindLabel(s)).toBeNull();
+		// A snapshot that names a dial stays.
+		const dial = editShotRpm(
+			{ metadata: { grinderSetting: '1200rpm' }, bean: { grinderSetting: '2.4' }, grindRpm: 1200 } as unknown as StoredShot,
+			null
+		);
+		expect(dial.bean?.grinderSetting).toBe('2.4');
+	});
+
 	it('a typed grind, speed to 800 or cleared', () => {
 		expect(editShotRpm(typed(), 800)).toMatchObject({ grindRpm: 800, metadata: { grinderSetting: '15 800rpm' } });
 		const cleared = editShotRpm(typed(), null);

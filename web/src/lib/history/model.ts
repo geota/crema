@@ -30,7 +30,8 @@ import type {
 	BrewHistoryStats,
 	BrewSeries,
 	BrewStatInput,
-	PourAverages
+	PourAverages,
+	RpmEditGrind
 } from '#lib/core/crema-core.js';
 import {
 	peaksForShot as wasmPeaksForShot,
@@ -38,6 +39,8 @@ import {
 	historyStats as wasmHistoryStats,
 	brewHistoryStats as wasmBrewHistoryStats,
 	ratioForMethod as wasmRatioForMethod,
+	grindEditRpm,
+	rpmEditGrindJson,
 	splitVisualizerGrindJson,
 	uploadRefusedNoSamples as wasmUploadRefusedNoSamples,
 	uploadRefusedShot as wasmUploadRefusedShot
@@ -45,7 +48,6 @@ import {
 import type { TelemetrySample } from '#lib/state/index.js';
 import { filenameStamp } from '#lib/utils/download.js';
 import { fromWire } from './telemetry-wire';
-import { withGrindRpm } from '#lib/bean/grinder.js';
 
 /**
  * A snapshot of the current bean at the moment a shot was pulled. Stored on
@@ -781,23 +783,29 @@ function endsInSpeed(text: string, rpm: number): boolean {
 
 /**
  * The grind a shot keeps when its speed is edited to `rpm` (REVIEW-557 M1,
- * Android's `rpmEditGrind`): the effective grind (a pulled shot's lives on its
- * bean snapshot) with its trailing speed replaced or dropped; the stored grind
- * as it is when that changes nothing.
+ * the core's `rpm_edit_grind`): the effective grind (a pulled shot's may live
+ * on its bean snapshot) with its trailing speed replaced or dropped; the
+ * stored grind as it is when that changes nothing. `clearBeanGrind`: the
+ * snapshot held only the speed being cleared and goes too, so it doesn't come
+ * back (REVIEW-555 recheck).
  */
-export function rpmEditGrind(shot: Pick<StoredShot, 'metadata' | 'bean'>, rpm: number | null): string | null {
-	const effective = effectiveGrindSetting(shot);
-	const edited = withGrindRpm(effective, rpm);
-	return edited !== effective ? edited : (shot.metadata?.grinderSetting ?? null);
+export function rpmEditGrind(
+	shot: Pick<StoredShot, 'metadata' | 'bean'>,
+	rpm: number | null
+): { grinderSetting: string | null; clearBeanGrind: boolean } {
+	const edit = JSON.parse(
+		rpmEditGrindJson(shot.metadata?.grinderSetting ?? undefined, shot.bean?.grinderSetting ?? undefined, rpm ?? undefined)
+	) as RpmEditGrind;
+	return { grinderSetting: edit.grinderSetting ?? null, clearBeanGrind: edit.clearBeanGrind };
 }
 
 /**
  * The speed a shot keeps when its grind is edited to `grind` (REVIEW-557 M1,
- * Android's `grindEditSpeed`): one typed in the grind ("15 1300rpm") wins,
+ * the core's `grind_edit_rpm`): one typed in the grind ("15 1300rpm") wins,
  * else the one it had.
  */
 export function grindEditSpeed(grind: string | null, had: number | null): number | null {
-	return (grind != null ? trailingSpeed(grind) : null) ?? had;
+	return grindEditRpm(grind ?? undefined, had ?? undefined) ?? null;
 }
 
 /** `shot` with `grindRpm` set to `rpm`, or without it for `null`. */
@@ -827,7 +835,11 @@ export function editShotRpm<T extends Pick<StoredShot, 'metadata' | 'bean' | 'gr
 	rpm: number | null
 ): T {
 	const next = withSpeed(shot, rpm);
-	return { ...next, metadata: { ...shot.metadata, grinderSetting: rpmEditGrind(shot, rpm) } };
+	const { grinderSetting, clearBeanGrind } = rpmEditGrind(shot, rpm);
+	const edited = { ...next, metadata: { ...shot.metadata, grinderSetting } };
+	if (!clearBeanGrind || !shot.bean) return edited;
+	const { grinderSetting: _cleared, ...bean } = shot.bean;
+	return { ...edited, bean };
 }
 
 /**

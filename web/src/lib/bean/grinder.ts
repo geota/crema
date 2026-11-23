@@ -62,6 +62,7 @@ import {
 	grindNumber as wasmGrindNumber,
 	grindScaleRefusalJson,
 	grindTextJson,
+	grindWithRpm,
 	lastGrindsFromRowsJson,
 	matchGrindersJson,
 	mergeGrinderEditJson,
@@ -74,7 +75,6 @@ import {
 	restoreGrinderJson,
 	sameGrind as wasmSameGrind,
 	saveBagGrindJson,
-	splitVisualizerGrindJson,
 	stageGrinderPickJson,
 	stagedGrindersOnSaveJson
 } from '#lib/wasm/de1_wasm.js';
@@ -347,18 +347,11 @@ export function hasVariableSpeed(grinder: Pick<Grinder, 'presetId'> | null | und
  * shot's RPM): "15 1200rpm" with 1100 is "15 1100rpm", never "15 1200rpm
  * 1100rpm"; with no speed, "15 1200rpm" is "15". A text that names no speed
  * ("480", "18 clicks") is returned as it is: the speed rides beside it
- * (`grindRpm`) and Visualizer gets "480 1100rpm" (owner decision 6). The split
- * is the core's (`split_visualizer_grind`).
+ * (`grindRpm`) and Visualizer gets "480 1100rpm" (owner decision 6). The
+ * core's `grind_with_rpm`.
  */
 export function withGrindRpm(text: string | null | undefined, rpm: number | null): string | null {
-	if (text == null) return null;
-	const { setting, grindRpm } = JSON.parse(splitVisualizerGrindJson(text)) as {
-		setting: string;
-		grindRpm: number | null;
-	};
-	if (grindRpm == null || grindRpm === rpm) return text;
-	const next = [setting, rpm != null ? `${rpm}rpm` : ''].filter(Boolean).join(' ');
-	return next === '' ? null : next;
+	return grindWithRpm(text ?? undefined, rpm ?? undefined) ?? null;
 }
 
 /** `grind` with the scale's unit (`de1_domain::format_grind`): "480 μm", "2.1.3" as typed, "—" for none. */

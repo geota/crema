@@ -5783,6 +5783,18 @@ export interface RoasterPushItem {
 	create: boolean;
 }
 
+/** What a shot's grind becomes when its speed is edited ([`rpm_edit_grind`]). */
+export interface RpmEditGrind {
+	/** The shot's own grind (`metadata.grinder_setting`) after the edit. */
+	grinderSetting?: string;
+	/**
+	 * Drop the bean snapshot's legacy grind (`bean.grinder_setting`) too:
+	 * it held only the speed being cleared, and would otherwise come back
+	 * as the shot's grind.
+	 */
+	clearBeanGrind: boolean;
+}
+
 /**
  * What a connected scale can do, beyond reporting a bare weight.
  * 
