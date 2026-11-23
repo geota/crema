@@ -214,22 +214,7 @@ fn case() -> impl Strategy<Value = Case> {
                 pace,
                 (untared_cup_g, tare_latency_ms),
             )| {
-                // A step or a bump while the scale is still slow is §3.5's
-                // known limit: the disturbance check assumes 5 to 10 Hz. So a
-                // paced case draws neither until a scale op ends its pace;
-                // after that, at 10 Hz, both are judged (REVIEW-451 S1 and N1).
-                let mut paced = pace.is_some();
-                let ops = ops
-                    .into_iter()
-                    .filter(|op| match op {
-                        Op::Scale(ScaleMode::StepUp { .. } | ScaleMode::Bump { .. }) => !paced,
-                        Op::Scale(_) | Op::ScaleConnect => {
-                            paced = false;
-                            true
-                        }
-                        _ => true,
-                    })
-                    .collect();
+                let ops = without_slow_scale_disturbances(pace.is_some(), ops);
                 Case {
                     params: De1Params {
                         unknown_pour,
@@ -247,6 +232,36 @@ fn case() -> impl Strategy<Value = Case> {
                 }
             },
         )
+}
+
+/// A step or a bump while the scale is still slow is §3.5's known limit: the
+/// disturbance check assumes 5 to 10 Hz. So a paced case draws neither until
+/// a scale op ends its pace and the scale has read at 10 Hz at least once (an
+/// `Advance`, 100 ms or more); after that, both are judged (REVIEW-451 S1 and
+/// N1). A bump drawn on the very instant the pace ends lands in the slow
+/// scale's last gap: its first reading is the first after up to 1.4 s of
+/// silence, a load that landed while the scale wasn't reporting, the same
+/// limit (the 2026-11-23 case, `a_bump_as_a_slow_scale_turns_healthy_is_the_known_limit`).
+fn without_slow_scale_disturbances(paced: bool, ops: Vec<Op>) -> Vec<Op> {
+    // Until the pace has ended and the scale has read at 10 Hz.
+    let mut slow = paced;
+    let mut ended = false;
+    ops.into_iter()
+        .filter(|op| match op {
+            Op::Scale(ScaleMode::StepUp { .. } | ScaleMode::Bump { .. }) => !slow,
+            Op::Scale(_) | Op::ScaleConnect => {
+                ended = true;
+                true
+            }
+            Op::Advance { .. } => {
+                if ended {
+                    slow = false;
+                }
+                true
+            }
+            _ => true,
+        })
+        .collect()
 }
 
 fn run(case: &Case) -> World {
@@ -1847,4 +1862,85 @@ fn a_shot_whose_start_was_lost_on_a_live_link_is_its_own_session() {
     world.apply(&Op::Advance { ms: 60_000 });
     assert_eq!(world.coverage.replaced, 1, "B is a new session");
     assert!(world.violations.is_empty(), "{:?}", world.violations);
+}
+
+/// 2026-11-23 (CI run 45181334811): a 6 g bump drawn on the instant a slow
+/// scale (one reading every 1.2 s) turned healthy. Its first reading is the
+/// first after the pace's last gap, so the load landed while the scale wasn't
+/// reporting: §3.5's known limit for a bump on a slow scale. The disturbance
+/// check took the 6 g step as a disturbance, and the estimate stopped the 36 g
+/// shot at a true 28.8 g, the top of that limit's documented 24.8 to 28.8 g.
+/// One 10 Hz reading before the bump (100 ms), and it's judged, and holds.
+/// The generator no longer draws the first shape
+/// ([`without_slow_scale_disturbances`]); this pins both, so a core change
+/// that lifts the limit, or breaks the 10 Hz case, shows here.
+#[test]
+fn a_bump_as_a_slow_scale_turns_healthy_is_the_known_limit() {
+    let case = |gap_ms: Option<u64>| Case {
+        params: De1Params {
+            preinfusion: false,
+            ending: Ending::Prompt,
+            idle_ignored: 0,
+            two_tap_steam: false,
+            unknown_pour: false,
+            heating_ms: 1_000,
+        },
+        headspace_ml: 50.0,
+        lane_timeout_ms: 5_000,
+        read_only: false,
+        pre_flush: false,
+        pace: Some(Pace {
+            mode: ScaleMode::Sparse { every_ms: 1_200 },
+            stall_at_g: None,
+        }),
+        untared_cup_g: None,
+        tare_latency_ms: 200,
+        ops: [
+            Op::UserStop,
+            Op::Advance { ms: 100 },
+            Op::Advance { ms: 200 },
+            Op::GroupHead(MachineState::Espresso),
+            Op::Advance { ms: 8_900 },
+            Op::Advance { ms: 24_300 },
+            Op::Scale(ScaleMode::Healthy),
+        ]
+        .into_iter()
+        .chain(gap_ms.map(|ms| Op::Advance { ms }))
+        .chain([
+            Op::Scale(ScaleMode::Bump {
+                grams: 6.0,
+                ms: 1_200,
+            }),
+            Op::Advance { ms: 100 },
+        ])
+        .collect(),
+    };
+    let limit = run(&case(None));
+    let found: Vec<String> = limit.violations.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        found,
+        ["I13 at 42200 ms: EstimatedWeight stop at a true 28.800158 g of 36 g"],
+        "the known limit's shape (if this now holds, the generator rule can go)"
+    );
+    for gap_ms in [100, 500, 2_000] {
+        let world = run(&case(Some(gap_ms)));
+        assert!(
+            world.violations.is_empty(),
+            "{gap_ms} ms at 10 Hz first: {:?}",
+            world.violations
+        );
+    }
+    // The generator draws the bump only once the scale has read at 10 Hz.
+    let drawn = without_slow_scale_disturbances(true, case(None).ops);
+    assert!(
+        !drawn
+            .iter()
+            .any(|op| matches!(op, Op::Scale(ScaleMode::Bump { .. })))
+    );
+    let drawn = without_slow_scale_disturbances(true, case(Some(100)).ops);
+    assert!(
+        drawn
+            .iter()
+            .any(|op| matches!(op, Op::Scale(ScaleMode::Bump { .. })))
+    );
 }
