@@ -44,6 +44,24 @@ class RoasterDeleteTest {
         assertNull(out.activeBeanId)
     }
 
+    /** Save-boundaries follow-up 61: a bag whose first upload runs stays a tombstone too. */
+    @Test
+    fun `cascade keeps a tombstone for a bag whose first upload runs`() {
+        val plan = RoasterDeletePlan(sey.id, listOf(a.id, b.id), emptyList(), listOf("vz-a"), "vz-r", null, listOf(a.id))
+        val out = applyRoasterDelete(lib, plan, nowMs = 99, firstUploadRunning = { it == b.id })
+        assertEquals(listOf(a.id, b.id, c.id), out.beans.map { it.id })
+        assertEquals(99L, out.beans.single { it.id == b.id }.deletedAt)
+        assertNull(out.beans.single { it.id == b.id }.visualizerId)
+        // By default it asks the sync's marks.
+        coffee.crema.visualizer.BagFirstUploads.start(b.id)
+        try {
+            assertEquals(listOf(a.id, b.id, c.id), applyRoasterDelete(lib, plan, nowMs = 99).beans.map { it.id })
+        } finally {
+            coffee.crema.visualizer.BagFirstUploads.done(b.id)
+        }
+        assertEquals(listOf(a.id, c.id), applyRoasterDelete(lib, plan, nowMs = 99).beans.map { it.id })
+    }
+
     /** #488 review S5: a bag on Visualizer stays a tombstone, so the next pull can't add it back. */
     @Test
     fun `cascade keeps a tombstone for each bag on Visualizer`() {

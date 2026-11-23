@@ -139,8 +139,10 @@ class BeanSyncTest {
     private var postHook: (String) -> Unit = {}
 
     private val fake = FakeCore(json)
+    /** Every `reconcileBeans` payload the sync hands the core. */
+    private val reconciled = mutableListOf<String>()
     private val core = object : BeanSyncCore by fake {
-        override fun reconcileBeans(payload: String): String = fake.reconcileBeans(payload).also {
+        override fun reconcileBeans(payload: String): String = fake.reconcileBeans(payload.also { reconciled += it }).also {
             val hook = afterBagPlan
             afterBagPlan = {}
             hook()
@@ -779,6 +781,42 @@ class BeanSyncTest {
         assertFalse(BagFirstUploads.running(b.id))
         assertEquals("vz-1", library.beans.single { it.id == a.id }.visualizerId)
         assertNotNull(library.beans.single { it.id == b.id }.deletedAt)
+    }
+
+    /** Save-boundaries follow-up 59: the create lands on Visualizer but its reply is lost. */
+    @Test
+    fun `a create that lands but whose reply is lost leaves an unbound tombstone for the core to match`() {
+        val a = bean("Gesha").copy(roastedOn = "2026-09-01")
+        library = BeanLibrary(beans = listOf(a), roasters = emptyList())
+        postHook = { path ->
+            // Deleted while the create runs: the library keeps a tombstone (#41).
+            if (path == "/coffee_bags" && BagFirstUploads.running(a.id)) {
+                library = library.copy(beans = library.beans.map { if (it.id == a.id) coffee.crema.beans.beanTombstone(it, 9_000) else it })
+            }
+        }
+        writeStatus = HttpStatusCode.BadGateway
+        run(premium = true)
+        assertFalse("done once the create failed", BagFirstUploads.running(a.id))
+        val tomb = library.beans.single { it.id == a.id }
+        assertNotNull(tomb.deletedAt)
+        assertNull("no reply, so nothing to bind", tomb.visualizerId)
+        // The next run: Visualizer lists the bag that create made. The tombstone
+        // reaches the core's reconcile with its signature (name, roast date), so
+        // `reconcile_pulled_bags` skips the bag, and it is never sent again.
+        writeStatus = HttpStatusCode.Created
+        requests.clear()
+        reconciled.clear()
+        remoteBags = listOf(buildJsonObject { put("id", "vz-9"); put("name", "Gesha"); put("roast_date", "2026-09-01") })
+        run(premium = true)
+        assertTrue("never created again: ${writes()}", writes().none { it.method == "POST" && it.path == "/coffee_bags" })
+        val local = json.decodeFromJsonElement(
+            ListSerializer(Bean.serializer()),
+            json.parseToJsonElement(reconciled.single()).jsonObject["local"]!!,
+        )
+        val sent = local.single { it.id == a.id }
+        assertNotNull(sent.deletedAt)
+        assertNull(sent.visualizerId)
+        assertEquals("Gesha" to "2026-09-01", sent.name to sent.roastedOn)
     }
 }
 
