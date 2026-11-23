@@ -128,7 +128,7 @@ import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.brewPickLock
 import coffee.crema.ui.estimateLabel
 import coffee.crema.ui.headerLine
-import coffee.crema.ui.selectedRecipe
+import coffee.crema.ui.manualRecipe
 import androidx.compose.ui.platform.testTag
 import coffee.crema.ui.StopTargetsView
 import coffee.crema.ui.components.CremaAnchoredPopup
@@ -187,7 +187,7 @@ fun BrewScreen(
     val espressoActive = ui.machineStateName == MachineState.Espresso
     var quickOpen by remember { mutableStateOf(false) }
     // Brew's mode follows the selection (brew-modes §2): a recipe is Manual.
-    val manualRecipe = ui.selectedRecipe()
+    val manualRecipe = ui.manualRecipe()
     val pickLock = ui.brewPickLock()
     val pickRecipes = remember(ui.brewRecipes, ui.builtinRecipes, ui.hiddenBuiltinRecipes) {
         coffee.crema.ui.brewlog.visibleBrewRecipes(ui.brewRecipes, "", ui.builtinRecipes, ui.hiddenBuiltinRecipes)
@@ -221,7 +221,8 @@ fun BrewScreen(
                 active = active,
                 brewParams = ui.brewParams,
                 profiles = ui.profiles,
-                onSelectProfile = vm::setActiveProfile,
+                // Brew's picker: the one place a profile pick leaves Manual (§2).
+                onSelectProfile = vm::pickProfile,
                 recipe = manualRecipe,
                 recipes = pickRecipes,
                 onPickRecipe = vm::pickRecipe,

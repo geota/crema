@@ -85,6 +85,16 @@ fun MainUiState.selectedRecipe(): BrewRecipe? {
     return builtinRecipes.firstOrNull { it.id == sel.id } ?: brewRecipes.firstOrNull { it.id == sel.id && it.deletedAt == null }
 }
 
+/**
+ * The recipe Brew's Manual page shows: the selected one, else a guided brew's
+ * own while one exists (armed, running, paused or finished and unsaved). A
+ * brew whose recipe was deleted mid-way, or a selection that changed under a
+ * finished brew, keeps its page and its Finish / Save brew (REVIEW-532, as
+ * web #531). Null = Espresso's page.
+ */
+fun MainUiState.manualRecipe(): BrewRecipe? =
+    selectedRecipe() ?: guidedBrew.recipe?.takeIf { guidedBrew.phase != "idle" }
+
 /** The stored pair the core reads and writes. */
 fun MainUiState.storedBrewSelection(): StoredBrewSelection = StoredBrewSelection(activeProfileId, activeRecipeId)
 

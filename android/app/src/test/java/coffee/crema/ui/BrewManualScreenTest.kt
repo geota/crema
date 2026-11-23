@@ -139,6 +139,29 @@ class BrewManualScreenTest {
         vm.brewSessionCancel()
     }
 
+    /** REVIEW-532 round 2: the running recipe deleted mid-brew, then finished: Finish and Save brew… stay reachable. */
+    @Test
+    fun `a brew whose recipe is deleted keeps its Manual page to Finish and Save`() {
+        val vm = vm()
+        val copy = vm.duplicateBrewRecipe(VmHarness.ownState(vm).builtinRecipes.first().id)!!
+        vm.pickRecipe(copy.id)
+        tablet(vm)
+        compose.onNodeWithTag("manual-start-brew").performClick()
+        VmHarness.drainCoreLane(vm)
+        compose.waitForIdle()
+        vm.deleteBrewRecipe(copy.id)
+        compose.waitForIdle()
+        compose.onNodeWithTag("manual-page").assertExists()
+        compose.onNodeWithTag("guided-finish").performClick()
+        VmHarness.drainCoreLane(vm)
+        compose.waitForIdle()
+        assertEquals("done", VmHarness.ownState(vm).guidedBrew.phase)
+        compose.onNodeWithTag("guided-save").assertExists()
+        vm.brewSessionClearSummary()
+        compose.waitForIdle()
+        compose.onNodeWithTag("manual-page").assertDoesNotExist()
+    }
+
     @Test
     fun `Devices - Scale only weighs, on the tablet`() {
         val vm = vm()

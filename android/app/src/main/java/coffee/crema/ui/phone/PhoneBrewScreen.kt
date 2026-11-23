@@ -82,7 +82,7 @@ import coffee.crema.ui.unsavedGrindExplanation
 import coffee.crema.ui.remoteBrewCue
 import coffee.crema.ui.activeProfile
 import coffee.crema.ui.MainViewModel
-import coffee.crema.ui.selectedRecipe
+import coffee.crema.ui.manualRecipe
 import coffee.crema.ui.brewPickLock
 import kotlin.math.roundToInt
 import androidx.compose.ui.platform.testTag
@@ -124,7 +124,7 @@ fun PhoneBrewScreen(
     val running = ui.shotInProgress
     val espressoActive = ui.machineStateName == MachineState.Espresso
     // Brew's mode follows the selection (brew-modes §2): a recipe is Manual.
-    val manualRecipe = ui.selectedRecipe()
+    val manualRecipe = ui.manualRecipe()
 
     var quickOpen by remember { mutableStateOf(false) }
     var devicesOpen by remember { mutableStateOf(false) }
@@ -193,7 +193,8 @@ fun PhoneBrewScreen(
                         pickLock = ui.brewPickLock(),
                         onPickRecipe = { vm.pickRecipe(it); swapOpen = false },
                         onAllRecipes = { swapOpen = false; onNav("profiles") },
-                        onSelectProfile = { vm.setActiveProfile(it); swapOpen = false },
+                        // Brew's picker: the one place a profile pick leaves Manual (§2).
+                        onSelectProfile = { vm.pickProfile(it); swapOpen = false },
                         onSelectBean = { vm.setActiveBean(it); swapOpen = false },
                         onAllProfiles = { swapOpen = false; onNav("profiles") },
                         onAllBeans = { swapOpen = false; onNav("beans") },

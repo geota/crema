@@ -1550,15 +1550,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Select the Brew header's active profile. (M1: display only — uploading the
      *  profile to the DE1 on Coffee is the M2 gated-start sequence.) Persisted
      *  (AppPrefs.activeProfileId) so the selection survives a restart. */
-    fun setActiveProfile(id: String) {
+    fun setActiveProfile(id: String) = setActiveProfile(id) {}
+
+    private fun setActiveProfile(id: String, onOutcome: (CommandOutcome) -> Unit) {
         // Picking a profile resolves "Can't start shot" (web `selectFavorite`).
         _ui.update { it.copy(shotStartError = null) }
-        machine.execute(MachineCommand.SetActiveProfile(id)) { outcome ->
-            // A profile pick is Espresso (brew-modes §2): the core's pick
-            // clears the recipe once the profile took (on a remote, once the
-            // hub took it), so a refusal leaves Manual as it was.
-            if (outcome !is CommandOutcome.Refused) leaveManualFor(id)
-        }
+        machine.execute(MachineCommand.SetActiveProfile(id), onOutcome)
+    }
+
+    /**
+     * A profile picked in Brew's picker (brew-modes §2): the only profile
+     * change that leaves Manual. Once the profile took (on a remote, once the
+     * hub took it), the core's pick clears the recipe; a refusal leaves Manual
+     * as it was. Every other profile change (a bag's linked profile, the
+     * Profiles page, Quick Controls, a peer) only updates the stored profile
+     * and leaves Manual on, as web does (#531) and as follow_hub_profile does.
+     */
+    fun pickProfile(id: String) = setActiveProfile(id) { outcome ->
+        if (outcome !is CommandOutcome.Refused) leaveManualFor(id)
     }
 
     /** A profile pick took: store the core's pick, which clears the recipe. */
