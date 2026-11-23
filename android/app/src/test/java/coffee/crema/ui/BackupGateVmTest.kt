@@ -163,7 +163,7 @@ class BackupGateVmTest {
     fun aManualBackupGoesAheadAndSaysWhatIsMissing() {
         library.writeText("not json")
         val vm = vm()
-        val bytes = runBlocking { vm.buildBackupZipBytes() }
+        val bytes = VmHarness.backupBytes(vm)
         VmHarness.idle()
         // An empty library on top of the defaults may still be nothing to back up;
         // either way the user hears what the backup can't hold.

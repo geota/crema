@@ -122,7 +122,7 @@ class GrinderLibraryVmTest {
         VmHarness.idle()
         assertEquals(scale, again.grinder(added.id).scale, "a settings reset doesn't touch library records")
 
-        val backup = assertNotNull(runBlocking { again.buildBackupZipBytes() })
+        val backup = assertNotNull(VmHarness.backupBytes(again))
         // A used device: its own bag and a setting changed, then the backup merged in.
         writeLibraryAfter = BeanLibrary(listOf(bag("other", grinds = emptyList())))
         val used = freshDevice()
@@ -183,7 +183,7 @@ class GrinderLibraryVmTest {
         val again = reopen()
         assertEquals(grinds, again.bean("a").grinds, "after a reload")
 
-        val backup = assertNotNull(runBlocking { again.buildBackupZipBytes() })
+        val backup = assertNotNull(VmHarness.backupBytes(again))
         val exported = assertNotNull(again.beansLibraryJson())
         val restored = freshDevice()
         VmHarness.restore(restored, backup, MainViewModel.RestoreMode.WIPE)
@@ -205,7 +205,7 @@ class GrinderLibraryVmTest {
         val grinds = listOf(BagGrind(niche.id, niche.name, "14", starred = true))
         writeLibrary(BeanLibrary(listOf(bag("a", grinds = grinds)), grinders = listOf(niche)))
         val vm = vm()
-        val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
+        val backup = assertNotNull(VmHarness.backupBytes(vm))
         val older = stripGrinds(backup)
         VmHarness.restore(vm, older, MainViewModel.RestoreMode.WIPE)
         assertEquals(grinds, vm.bean("a").grinds)
