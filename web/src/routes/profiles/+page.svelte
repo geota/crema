@@ -26,6 +26,7 @@
 	 */
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import {
 		getProfileStore,
 		importProfileFiles,
@@ -208,6 +209,16 @@
 
 	/** Whether the "Hidden" status is active. */
 	const showingHidden = $derived(status === 'hidden');
+	/**
+	 * Recipes only (`?filter=recipes`): Brew's "All recipes →" opens the
+	 * library on its recipes, with the profiles out of the way. In the URL, so
+	 * the link (and a reload, and Back) lands on the same view.
+	 */
+	const recipesOnly = $derived(page.url.searchParams.get('filter') === 'recipes');
+	/** Leave the recipes-only view for the whole library, in place. */
+	function showWholeLibrary(): void {
+		void goto(resolve('/profiles'), { replaceState: true });
+	}
 	/** Status chip counts — given the facet and the search. */
 	const statusCounts = $derived(profileStatusCounts(filterInput));
 
@@ -890,7 +901,17 @@
 		</div>
 	{/if}
 
-	{#if phoneLayout.current}
+	{#if recipesOnly}
+		<div class="pp-only" role="status">
+			<span>Showing recipes only</span>
+			<button type="button" class="pp-link" onclick={showWholeLibrary}>Show profiles too</button>
+		</div>
+		{#if phoneLayout.current}
+			<div class="pp-plist">
+				<PhoneSearch bind:value={q} label="Search recipes" placeholder="Search recipes" />
+			</div>
+		{/if}
+	{:else if phoneLayout.current}
 		<PhoneChipRow label="Filter profiles" chips={phoneChips} onselect={onFilterPill}>
 			{#snippet trailing()}
 				<PhoneSortPill
@@ -977,14 +998,14 @@
 	     A separate section, not rows in the machine grid: selecting a
 	     profile uploads it to the DE1; a recipe never touches the
 	     machine. Hidden while browsing the Hidden archive. -->
-	{#if !showingHidden}
-		<div class="pp-recipes" id="recipes">
+	{#if recipesOnly || !showingHidden}
+		<div class="pp-recipes" class:pp-recipes-only={recipesOnly} id="recipes">
 			<div class="pp-recipes-head">
 				<div>
 					<div class="t-eyebrow" style="color:var(--fg-3)">Guided brews</div>
 					<div class="pp-recipes-title">Brew recipes</div>
 					<div class="pp-sub">
-						Step plans you follow by hand — pick one on the Manual tab of Brew's Profile picker.
+						Step plans you follow by hand — pick one under Manual recipes in Brew's picker.
 					</div>
 				</div>
 				<button class="pp-btn pp-btn-secondary" onclick={newRecipe}>
@@ -1136,7 +1157,11 @@
 </div>
 
 {#if phoneLayout.current}
-	<PhoneFab label="New" title="New profile" onclick={() => goto(resolve('profiles/new'))} />
+	{#if recipesOnly}
+		<PhoneFab label="New" title="New recipe" onclick={newRecipe} />
+	{:else}
+		<PhoneFab label="New" title="New profile" onclick={() => goto(resolve('profiles/new'))} />
+	{/if}
 	<PhoneOverflowSheet
 		open={menuFor !== null}
 		title={menuFor?.name || 'Untitled profile'}
@@ -1391,6 +1416,20 @@
 	.pp-recipes {
 		padding: 8px var(--page-pad-x) 48px;
 		border-top: 1px solid rgba(var(--tint-rgb), 0.05);
+	}
+	/* Recipes only (`?filter=recipes`): the note that says so, and its way out. */
+	.pp-only {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 12px;
+		padding: 0 var(--page-pad-x) 12px;
+		color: var(--fg-muted);
+		font-family: var(--font-sans);
+		font-size: 13px;
+	}
+	.pp-recipes-only {
+		border-top: 0;
 	}
 	.pp-recipes-head {
 		display: flex;

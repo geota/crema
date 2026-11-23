@@ -51,21 +51,32 @@ function applyChange(c: SelectionChange): void {
  */
 export type ShotInProgress = boolean | (() => boolean);
 
+/**
+ * What runs at a pick: a DE1 shot, and a guided brew on this device (armed,
+ * running or paused). Either holds the linked profile back; the core's notice
+ * names the brew ("Brew in progress") when one runs.
+ */
+export interface PickBusy {
+	shotInProgress?: ShotInProgress;
+	brewInProgress?: ShotInProgress;
+}
+
 function shotRunning(s: ShotInProgress | undefined): boolean {
 	return typeof s === 'function' ? s() : s === true;
 }
 
 /**
  * Select bag `id`. Resolves once the change (if any) is applied. With a shot
- * in progress the core leaves the linked profile out (`setActive` uploads to
- * the DE1), and its notice says so. Picking the bag that is already selected changes
- * nothing (FINAL N7): an unsaved grind on Brew stays.
+ * or a guided brew in progress the core leaves the linked profile out
+ * (`setActive` uploads to the DE1), and its notice says so. Picking the bag
+ * that is already selected changes nothing (FINAL N7): an unsaved grind on
+ * Brew stays.
  *
  * Undo puts back only the parts still as the pick set them (the core's
  * `bag_selection_undo`): a dial, grinder or profile change made since
- * stands, and with a shot in progress the profile stays (FINAL S9).
+ * stands, and with a shot or a brew in progress the profile stays (FINAL S9).
  */
-export async function activateBean(id: string, opts: { shotInProgress?: ShotInProgress } = {}): Promise<void> {
+export async function activateBean(id: string, opts: PickBusy = {}): Promise<void> {
 	const library = getBeanStore();
 	const before = library.activeBeanId;
 	library.setActiveBean(id);
@@ -77,6 +88,7 @@ export async function activateBean(id: string, opts: { shotInProgress?: ShotInPr
 	const linked = linkedId ? profiles.get(linkedId) : undefined;
 	const linkedMissing = linkedId != null && !linked;
 	const shotInProgress = shotRunning(opts.shotInProgress);
+	const brewInProgress = shotRunning(opts.brewInProgress);
 
 	const history = await bagLastGrinds(id);
 	// Another bag picked meanwhile: that selection is the one that counts.
@@ -90,6 +102,7 @@ export async function activateBean(id: string, opts: { shotInProgress?: ShotInPr
 		linkedProfileMissing: linkedMissing,
 		linkedProfileName: linked?.name,
 		shotInProgress,
+		brewInProgress,
 		activeGrinderId: library.activeGrinderId ?? undefined,
 		grind: brewGrind ?? undefined,
 		grinders: library.allGrinders,
@@ -107,7 +120,8 @@ export async function activateBean(id: string, opts: { shotInProgress?: ShotInPr
 					profileId: profiles.activeId ?? undefined,
 					grinderId: library.activeGrinderId ?? undefined,
 					grind: getBrewGrind().value ?? undefined,
-					shotInProgress: shotRunning(opts.shotInProgress)
+					// A guided brew holds the profile as a shot does.
+					shotInProgress: shotRunning(opts.shotInProgress) || shotRunning(opts.brewInProgress)
 				})
 			)
 		);

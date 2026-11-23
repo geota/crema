@@ -88,6 +88,14 @@ describe('activateBean with a hidden built-in linked profile', () => {
 		expect(t.profiles.activeId).not.toBe(t.builtin.id);
 		expect(t.toasts()).toEqual([`Shot in progress \u2014 \u201c${t.builtin.name}\u201d not loaded`]);
 	});
+
+	it('mid-brew: a guided brew holds the profile back and the notice names the brew', async () => {
+		const t = await setup();
+		await t.activateBean('bean-1', { brewInProgress: () => true });
+		expect(t.activated, 'nothing sent to the DE1').toEqual([]);
+		expect(t.profiles.activeId).not.toBe(t.builtin.id);
+		expect(t.toasts()).toEqual([`Brew in progress \u2014 \u201c${t.builtin.name}\u201d not loaded`]);
+	});
 });
 
 describe('selecting a bag is one change (#488, review F6)', () => {
@@ -245,6 +253,18 @@ describe('the bag-pick Undo keeps later changes (REVIEW-CORE H4, FINAL S9)', () 
 		await t.activateBean('bean-1', { shotInProgress: () => shot });
 		expect(t.profiles.activeId).toBe(t.builtin.id);
 		shot = true;
+		t.activated.length = 0;
+		t.undo();
+		expect(t.profiles.activeId).toBe(t.builtin.id);
+		expect(t.activated, 'nothing sent to the DE1').toEqual([]);
+	});
+
+	it('with a guided brew running at Undo the profile stays too', async () => {
+		const t = await undoSetup();
+		let brew = false;
+		await t.activateBean('bean-1', { brewInProgress: () => brew });
+		expect(t.profiles.activeId).toBe(t.builtin.id);
+		brew = true;
 		t.activated.length = 0;
 		t.undo();
 		expect(t.profiles.activeId).toBe(t.builtin.id);

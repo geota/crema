@@ -36,7 +36,8 @@ fun AppNavHost(
      *  `onNav` from this host while the caller binds the ViewModel + connect. */
     brewContent: @Composable (onNav: (String) -> Unit) -> Unit,
     /** The live Profiles library, wired to the ViewModel by the caller. */
-    profilesContent: @Composable (onNav: (String) -> Unit) -> Unit,
+    /** Profiles; `filter` is its nav argument (`recipes` = the recipes only, [NavRestore.PROFILES_PATTERN]). */
+    profilesContent: @Composable (onNav: (String) -> Unit, filter: String?) -> Unit,
     /** The live Beans library, wired to the ViewModel by the caller. */
     beansContent: @Composable (onNav: (String) -> Unit) -> Unit,
     /** The live History (shot log), wired to the ViewModel by the caller. */
@@ -71,9 +72,10 @@ fun AppNavHost(
     val onNav: (String) -> Unit = { dest ->
         nav.navigate(dest) {
             launchSingleTop = true
-            if (dest in railRoutes) {
+            if (NavRestore.baseRoute(dest) in railRoutes) {
                 popUpTo(nav.graph.startDestinationId) { saveState = true }
-                restoreState = true
+                // A tab with arguments (`profiles?filter=recipes`) opens fresh on them.
+                restoreState = NavRestore.restoresState(dest)
             }
         }
     }
@@ -85,7 +87,7 @@ fun AppNavHost(
             NavHost(navController = nav, startDestination = "brew") {
                 // The hero dashboard, wired to live VM telemetry by the caller.
                 composable("brew") { brewContent(onNav) }
-                composable("profiles") { profilesContent(onNav) }
+                profilesDestination { filter -> profilesContent(onNav, filter) }
                 composable("beans") { beansContent(onNav) }
                 composable("history") { historyContent(onNav) }
                 // The fully-designed exemplar, wired to live VM state by the caller.

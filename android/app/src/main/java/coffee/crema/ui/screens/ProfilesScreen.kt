@@ -108,7 +108,10 @@ fun ProfilesScreen(
     vm: MainViewModel,
     onNav: (String) -> Unit,
     onConnect: (String) -> Unit,
+    /** The nav argument: `recipes` shows the recipes only (Brew's recipe library link). */
+    filter: String? = null,
 ) {
+    val recipesOnly = coffee.crema.ui.NavRestore.recipesOnly(filter)
     val ui by vm.ui.collectAsStateWithLifecycle()
     val connected = ui.bleState == De1BleManager.State.READY
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
@@ -220,58 +223,69 @@ fun ProfilesScreen(
                     CremaButton(onClick = { vm.startNewProfile(); onNav("profile-edit") }, icon = "plus", label = "New profile")
                 }
             }
-            // Filter chips (left) + sort selector (right) on one polished row.
-            Row(
-                Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Status (All / Pinned / Hidden) and Roast are independent
-                    // axes (#124) — Hidden + Light is hidden light-roast
-                    // profiles — with faceted counts.
-                    val statuses = buildList {
-                        add("all" to "All"); add("pinned" to "Pinned")
-                        // Hidden status only appears once there's something archived.
-                        if (ui.hiddenProfileIds.isNotEmpty()) add("hidden" to "Hidden")
-                    }
-                    statuses.forEach { (id, label) ->
-                        CremaFilterChip(
-                            label = label,
-                            selected = effectiveFilter == id,
-                            count = chipCounts[id] ?: 0,
-                            onClick = { filter = if (filter == id && id != "all") "all" else id },
-                        )
-                    }
-                    listOf("light" to "Light", "medium" to "Medium", "dark" to "Dark").forEach { (id, label) ->
-                        CremaFilterChip(
-                            label = label,
-                            selected = roastFilter == id,
-                            count = chipCounts[id] ?: 0,
-                            onClick = { roastFilter = if (roastFilter == id) null else id },
-                        )
-                    }
-                }
-                CremaSortControl(
-                    keys = listOf(
-                        SortKey("name", "Name", "sort-ascending"),
-                        SortKey("roast", "Roast", "fire"),
-                        SortKey("pinned", "Pinned", "star"),
-                    ),
-                    selectedKey = sort,
-                    descending = sortDesc,
-                    onKeyChange = { sort = it },
-                    onToggleDirection = { sortDesc = !sortDesc },
+            // Recipes only: the note that says so, and its way out; the
+            // profile filters have nothing to filter.
+            if (recipesOnly) {
+                RecipesOnlyNote(
+                    onShowAll = { onNav(coffee.crema.ui.NavRestore.PROFILES_ALL) },
+                    modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
                 )
+            } else {
+                // Filter chips (left) + sort selector (right) on one polished row.
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // Status (All / Pinned / Hidden) and Roast are independent
+                        // axes (#124) — Hidden + Light is hidden light-roast
+                        // profiles — with faceted counts.
+                        val statuses = buildList {
+                            add("all" to "All"); add("pinned" to "Pinned")
+                            // Hidden status only appears once there's something archived.
+                            if (ui.hiddenProfileIds.isNotEmpty()) add("hidden" to "Hidden")
+                        }
+                        statuses.forEach { (id, label) ->
+                            CremaFilterChip(
+                                label = label,
+                                selected = effectiveFilter == id,
+                                count = chipCounts[id] ?: 0,
+                                onClick = { filter = if (filter == id && id != "all") "all" else id },
+                            )
+                        }
+                        listOf("light" to "Light", "medium" to "Medium", "dark" to "Dark").forEach { (id, label) ->
+                            CremaFilterChip(
+                                label = label,
+                                selected = roastFilter == id,
+                                count = chipCounts[id] ?: 0,
+                                onClick = { roastFilter = if (roastFilter == id) null else id },
+                            )
+                        }
+                    }
+                    CremaSortControl(
+                        keys = listOf(
+                            SortKey("name", "Name", "sort-ascending"),
+                            SortKey("roast", "Roast", "fire"),
+                            SortKey("pinned", "Pinned", "star"),
+                        ),
+                        selectedKey = sort,
+                        descending = sortDesc,
+                        onKeyChange = { sort = it },
+                        onToggleDirection = { sortDesc = !sortDesc },
+                    )
+                }
             }
             // Scroll position per facet + sort (issue #123), kept in ListMemory
             // across the profile editor route and a host swap.
+            val shownProfiles = if (recipesOnly) emptyList() else sorted
             val gridState = rememberGridMemoryState(
-                profilesListKey(effectiveFilter, roastFilter, sort, sortDesc, showHiddenRecipes),
-                sorted.size + recipes.size,
+                profilesListKey(effectiveFilter, roastFilter, sort, sortDesc, showHiddenRecipes) + if (recipesOnly) "|recipes" else "",
+                shownProfiles.size + recipes.size,
             ) { k ->
-                sorted.indexOfFirst { it.id == k }.takeIf { it >= 0 }
-                    ?: recipes.indexOfFirst { it.id == k }.takeIf { it >= 0 && effectiveFilter != "hidden" }?.plus(sorted.size + 2)
+                shownProfiles.indexOfFirst { it.id == k }.takeIf { it >= 0 }
+                    ?: recipes.indexOfFirst { it.id == k }.takeIf { it >= 0 && (recipesOnly || effectiveFilter != "hidden") }
+                        ?.plus(shownProfiles.size + 2)
             }
             LazyVerticalGrid(
                 state = gridState,
@@ -283,7 +297,7 @@ fun ProfilesScreen(
                 verticalArrangement = Arrangement.spacedBy(CremaCardSpec.gridGap),
                 contentPadding = CremaCardSpec.gridContentPadding,
             ) {
-                items(sorted, key = { it.id }) { profile ->
+                items(shownProfiles, key = { it.id }) { profile ->
                     ProfileCard(
                         profile = profile,
                         isActive = profile.id == ui.activeProfileId,
@@ -308,7 +322,7 @@ fun ProfilesScreen(
                     )
                 }
                 // ── Brew recipes section (hidden while browsing the archive).
-                if (effectiveFilter != "hidden") {
+                if (recipesOnly || effectiveFilter != "hidden") {
                     item(key = "recipes-head", span = { GridItemSpan(maxLineSpan) }) {
                         Row(
                             Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 2.dp),
@@ -322,7 +336,7 @@ fun ProfilesScreen(
                                     color = MaterialTheme.colorScheme.onSurface,
                                 )
                                 Text(
-                                    "Step plans you follow by hand — run them from the Scale screen's Brew tab.",
+                                    "Step plans you follow by hand — pick one under Manual recipes in Brew's picker.",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -387,6 +401,27 @@ fun ProfilesScreen(
     }
 
     coffee.crema.ui.brewlog.RecipeEditorSheet(vm, owner = coffee.crema.ui.brewlog.RecipeEditOwner.PROFILES)
+}
+
+/**
+ * "Showing recipes only · Show profiles too": Profiles opened on its recipes
+ * (`profiles?filter=recipes`, Brew's "All recipes →"), with the way back to
+ * the whole library. Both shells' Profiles screens.
+ */
+@Composable
+internal fun RecipesOnlyNote(onShowAll: () -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier.fillMaxWidth().testTag("profiles-recipes-only"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            "Showing recipes only",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        CremaButton(onClick = onShowAll, variant = CremaButtonVariant.Text, label = "Show profiles too")
+    }
 }
 
 @Composable

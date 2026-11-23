@@ -214,11 +214,15 @@ class BrewModeVmTest {
         assertEquals("b", vm.own().activeBeanId)
         vm.assertStillManual(recipe, profile, "relayed bag pick")
 
-        // The hub's own bag pick, during its own pour-over, the same.
+        // The hub's own bag pick, during its own pour-over, the same, and the
+        // core's notice names the brew, not a shot.
         vm.setActiveBean("a")
         vm.setActiveBean("b")
         VmHarness.idle()
         vm.assertStillManual(recipe, profile, "local bag pick")
+        val notice = "Brew in progress \u2014 \u201c${linked.name}\u201d not loaded"
+        assertTrue(notice in vm.own().userMessages, "${vm.own().userMessages}")
+        assertTrue(vm.own().userMessages.none { it.startsWith("Shot in progress") }, "${vm.own().userMessages}")
         vm.brewSessionCancel()
     }
 

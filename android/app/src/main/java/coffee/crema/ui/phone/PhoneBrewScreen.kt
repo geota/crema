@@ -192,11 +192,11 @@ fun PhoneBrewScreen(
                         selectedRecipeId = manualRecipe?.id,
                         pickLock = ui.brewPickLock(),
                         onPickRecipe = { vm.pickRecipe(it); swapOpen = false },
-                        onAllRecipes = { swapOpen = false; onNav("profiles") },
+                        onAllRecipes = { swapOpen = false; onNav(coffee.crema.ui.NavRestore.PROFILES_RECIPES) },
                         // Brew's picker: the one place a profile pick leaves Manual (§2).
                         onSelectProfile = { vm.pickProfile(it); swapOpen = false },
                         onSelectBean = { vm.setActiveBean(it); swapOpen = false },
-                        onAllProfiles = { swapOpen = false; onNav("profiles") },
+                        onAllProfiles = { swapOpen = false; onNav(coffee.crema.ui.NavRestore.PROFILES_ALL) },
                         onAllBeans = { swapOpen = false; onNav("beans") },
                         onSelectGrinder = { vm.setActiveGrinder(it); swapOpen = false },
                         onManageGrinders = { swapOpen = false; vm.openDevicesTab("grinder"); onNav("scale") },

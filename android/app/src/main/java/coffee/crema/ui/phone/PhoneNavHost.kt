@@ -39,6 +39,7 @@ import coffee.crema.ui.BagEmptyDialog
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.NavRestore
 import coffee.crema.ui.SyncNavRoute
+import coffee.crema.ui.profilesDestination
 import coffee.crema.ui.remoteStatus
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.phone.components.CremaBottomNav
@@ -69,7 +70,8 @@ fun PhoneNavHost(
     onConnect: (String) -> Unit,
     brewContent: @Composable (onNav: (String) -> Unit) -> Unit,
     scaleContent: @Composable (onNav: (String) -> Unit) -> Unit,
-    profilesContent: @Composable (onNav: (String) -> Unit) -> Unit,
+    /** Profiles; `filter` is its nav argument (`recipes` = the recipes only, [NavRestore.PROFILES_PATTERN]). */
+    profilesContent: @Composable (onNav: (String) -> Unit, filter: String?) -> Unit,
     beansContent: @Composable (onNav: (String) -> Unit) -> Unit,
     historyContent: @Composable (onNav: (String) -> Unit) -> Unit,
     settingsContent: @Composable (onNav: (String) -> Unit) -> Unit,
@@ -97,7 +99,7 @@ fun PhoneNavHost(
     val tabRoutes = setOf("brew", "scale", "profiles", "beans", "history", "settings")
 
     val backStack by nav.currentBackStackEntryAsState()
-    val route = backStack?.destination?.route ?: "brew"
+    val route = backStack?.destination?.route?.let(NavRestore::baseRoute) ?: "brew"
     val showBottomBar = route in tabRoutes
     // Settings is a top-level destination but not a tab; nothing highlights.
     val activeTab = if (route == "settings") "" else route
@@ -109,11 +111,12 @@ fun PhoneNavHost(
     val onNav: (String) -> Unit = { dest ->
         nav.navigate(dest) {
             launchSingleTop = true
-            if (dest in tabRoutes) {
+            if (NavRestore.baseRoute(dest) in tabRoutes) {
                 // Standard bottom-nav pattern: save the outgoing tab's state and
-                // pop to the start so tabs don't stack on back.
+                // pop to the start so tabs don't stack on back. A tab with
+                // arguments (`profiles?filter=recipes`) opens fresh on them.
                 popUpTo(nav.graph.startDestinationId) { saveState = true }
-                restoreState = true
+                restoreState = NavRestore.restoresState(dest)
             }
         }
     }
@@ -157,7 +160,7 @@ fun PhoneNavHost(
                     // ── Top-level destinations (bottom bar visible) ──────────────
                     composable("brew") { brewContent(onNav) }
                     composable("scale") { scaleContent(onNav) }
-                    composable("profiles") { profilesContent(onNav) }
+                    profilesDestination { filter -> profilesContent(onNav, filter) }
                     composable("beans") { beansContent(onNav) }
                     composable("history") { historyContent(onNav) }
                     composable("settings") { settingsContent(onNav) }

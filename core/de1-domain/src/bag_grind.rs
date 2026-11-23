@@ -372,6 +372,11 @@ pub struct BagSelectInput {
     /// upload it to the machine mid-extraction, so the linked profile isn't
     /// loaded, and a notice says so. The grinder and grind still change.
     pub shot_in_progress: bool,
+    /// A guided brew runs on this device (armed, running or paused; brew
+    /// modes §4): the linked profile is held back as for a shot, and the
+    /// notice says "Brew in progress". With both, the brew is named, as
+    /// [`brew_pick_lock`](crate::brew_pick_lock) names it.
+    pub brew_in_progress: bool,
     /// The active grinder pointer now.
     pub active_grinder_id: Option<String>,
     /// Brew's grind value now.
@@ -393,7 +398,8 @@ pub struct BagSelectInput {
 pub enum SelectionNoticeKind {
     /// The bag's linked profile isn't in this library: nothing was loaded.
     LinkedProfileMissing,
-    /// A shot is in progress: the linked profile wasn't loaded.
+    /// A shot or a guided brew is in progress: the linked profile wasn't
+    /// loaded.
     ProfileNotLoaded,
 }
 
@@ -449,8 +455,9 @@ fn non_blank(s: Option<&str>) -> Option<&str> {
 /// Resolve selecting a bag on Brew into one change (review F6):
 ///
 /// 1. **Profile:** the bag's linked profile, when set, here, and not active,
-///    and no shot is in progress. A linked profile missing here, or one held
-///    back by a shot in progress, gives a notice instead (SF4).
+///    and no shot or guided brew is in progress. A linked profile missing
+///    here, or one held back by a shot or a brew in progress, gives a notice
+///    instead (SF4).
 /// 2. **Grinder:** the bag's starred grinder, when it's still on Devices
 ///    (live) and not active. No star, or a starred grinder that was removed:
 ///    the active grinder stays.
@@ -481,14 +488,19 @@ pub fn resolve_bag_selection(input: &BagSelectInput) -> BagSelection {
             });
         } else if input.active_profile_id.as_deref() == Some(linked) {
             // Already loaded: nothing to change, nothing to say.
-        } else if input.shot_in_progress {
+        } else if input.shot_in_progress || input.brew_in_progress {
             let name = profile_name.map_or_else(
                 || "the linked profile".to_owned(),
                 |n| format!("\u{201c}{n}\u{201d}"),
             );
+            let what = if input.brew_in_progress {
+                "Brew"
+            } else {
+                "Shot"
+            };
             notices.push(SelectionNotice {
                 kind: SelectionNoticeKind::ProfileNotLoaded,
-                text: format!("Shot in progress \u{2014} {name} not loaded"),
+                text: format!("{what} in progress \u{2014} {name} not loaded"),
             });
         } else {
             change.profile_id = Some(SetTo {
@@ -1919,6 +1931,47 @@ mod tests {
             resolve_bag_selection(&nameless).notices[0].text,
             "Shot in progress \u{2014} the linked profile not loaded"
         );
+    }
+
+    #[test]
+    fn mid_brew_the_linked_profile_is_held_back_and_the_notice_names_the_brew() {
+        let mut bag = bag_with(vec![row("grinder:nz", "14", true)]);
+        bag.name = "Kenya".into();
+        bag.linked_profile_id = Some("p:bloom".into());
+        let input = BagSelectInput {
+            bag: Some(bag),
+            active_profile_id: Some("p:default".into()),
+            linked_profile_name: Some("Blooming".into()),
+            brew_in_progress: true,
+            grinders: vec![g("grinder:nz", "Niche Zero")],
+            ..BagSelectInput::default()
+        };
+        let out = resolve_bag_selection(&input);
+        assert_eq!(out.change.profile_id, None, "no profile change mid-brew");
+        assert_eq!(
+            out.change.grinder_id,
+            set(Some("grinder:nz")),
+            "the rest still changes"
+        );
+        assert_eq!(
+            out.notices,
+            [SelectionNotice {
+                kind: SelectionNoticeKind::ProfileNotLoaded,
+                text: "Brew in progress \u{2014} \u{201c}Blooming\u{201d} not loaded".into(),
+            }]
+        );
+        // A shot as well: the brew is named, as the picker lock names it.
+        let mut both = input.clone();
+        both.shot_in_progress = true;
+        assert_eq!(
+            resolve_bag_selection(&both).notices[0].text,
+            "Brew in progress \u{2014} \u{201c}Blooming\u{201d} not loaded"
+        );
+        // The shells' JSON: `brewInProgress`, absent reads as false.
+        let json: BagSelectInput = serde_json::from_str(r#"{"brewInProgress":true}"#).unwrap();
+        assert!(json.brew_in_progress && !json.shot_in_progress);
+        let none: BagSelectInput = serde_json::from_str("{}").unwrap();
+        assert!(!none.brew_in_progress);
     }
 
     #[test]

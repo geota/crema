@@ -227,7 +227,7 @@ fun BrewScreen(
                 recipes = pickRecipes,
                 onPickRecipe = vm::pickRecipe,
                 pickLock = pickLock,
-                onOpenRecipes = { onNav("profiles") },
+                onOpenRecipes = { onNav(coffee.crema.ui.NavRestore.PROFILES_RECIPES) },
                 onNewRecipe = {
                     vm.openRecipeEdit(
                         coffee.crema.ui.brewlog.RecipeEditOwner.BREW,
@@ -248,7 +248,7 @@ fun BrewScreen(
                 onOpenQuick = { quickOpen = true },
                 // Footer/empty-state routes — mirror ProfilesScreen/BeansScreen wiring
                 // (start a fresh editor in the VM, then route to its screen).
-                onOpenProfiles = { onNav("profiles") },
+                onOpenProfiles = { onNav(coffee.crema.ui.NavRestore.PROFILES_ALL) },
                 onNewProfile = { vm.startNewProfile(); onNav("profile-edit") },
                 // Edit the active profile — custom edits in place, built-in edits a
                 // copy (ProfilesScreen parity); no active profile → start a new one.

@@ -594,8 +594,8 @@ class MainActivity : ComponentActivity() {
                         scaleContent = { navTo ->
                             PhoneScaleScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
                         },
-                        profilesContent = { navTo ->
-                            PhoneProfilesScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                        profilesContent = { navTo, filter ->
+                            PhoneProfilesScreen(viewModel, onNav = navTo, onConnect = onRailConnect, filter = filter)
                         },
                         beansContent = { navTo ->
                             PhoneBeansScreen(viewModel, onNav = navTo, onConnect = onRailConnect, beansState = beansState)
@@ -651,8 +651,8 @@ class MainActivity : ComponentActivity() {
                     brewContent = { navTo ->
                         BrewScreen(viewModel, onNav = navTo, onConnect = openDevices)
                     },
-                    profilesContent = { navTo ->
-                        ProfilesScreen(viewModel, onNav = navTo, onConnect = openDevices)
+                    profilesContent = { navTo, filter ->
+                        ProfilesScreen(viewModel, onNav = navTo, onConnect = openDevices, filter = filter)
                     },
                     beansContent = { navTo ->
                         BeansScreen(viewModel, onNav = navTo, onConnect = openDevices, beansState = beansState)

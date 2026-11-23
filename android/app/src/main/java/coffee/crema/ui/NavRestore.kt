@@ -36,6 +36,51 @@ object NavRestore {
         "debug" to "settings",
     )
 
+    /**
+     * The Profiles destination, with its optional `filter` argument (brew
+     * modes polish): `profiles` is the whole library, as the tab restores it;
+     * `profiles?filter=recipes` is the recipes only (Brew's "All recipes →");
+     * `profiles?filter=all` the whole library afresh (Brew's "All profiles →").
+     */
+    const val PROFILES_PATTERN = "profiles?filter={filter}"
+
+    /** [PROFILES_PATTERN]'s argument. */
+    const val PROFILES_FILTER_ARG = "filter"
+
+    /** Profiles on its recipes only. */
+    const val PROFILES_RECIPES = "profiles?filter=recipes"
+
+    /** Profiles on its whole library, never a recipes-only view left there. */
+    const val PROFILES_ALL = "profiles?filter=all"
+
+    /** The filter value that shows the recipes only. */
+    const val FILTER_RECIPES = "recipes"
+
+    /** Profiles' [filter] argument asks for the recipes only. */
+    fun recipesOnly(filter: String?): Boolean = filter == FILTER_RECIPES
+
+    /** [route] without its arguments: `profiles?filter=recipes` is `profiles`. */
+    fun baseRoute(route: String): String = route.substringBefore('?')
+
+    /**
+     * Whether a tab navigation to [dest] restores the tab's saved state: a
+     * plain tab does; one that names arguments opens fresh, so the arguments
+     * decide the view rather than what the tab last showed.
+     */
+    fun restoresState(dest: String): Boolean = dest == baseRoute(dest)
+
+    /**
+     * The route to report for a back-stack entry: its destination's [pattern]
+     * with the arguments filled in, so a host swap reopens the same view
+     * (`profiles?filter=recipes`). Patterns without arguments come back as they are.
+     */
+    fun reportedRoute(pattern: String, filter: String?): String =
+        if (pattern == PROFILES_PATTERN) {
+            if (filter == FILTER_RECIPES) PROFILES_RECIPES else "profiles"
+        } else {
+            pattern
+        }
+
     /** The phone's pushed Brew Log form (issue #10). */
     const val LOG_BREW = "log-brew"
 
@@ -61,7 +106,7 @@ object NavRestore {
      */
     fun steps(route: String?, supported: Set<String>, owners: Map<String, String> = emptyMap()): List<String> {
         if (route == null || route == "brew") return emptyList()
-        if (route in TAB_ROUTES) return if (route in supported) listOf(route) else emptyList()
+        if (baseRoute(route) in TAB_ROUTES) return if (baseRoute(route) in supported) listOf(route) else emptyList()
         val owner = owners[route] ?: OWNER[route] ?: return emptyList()
         if (route == METHOD_EDIT && route in supported) {
             val parent = owners[METHOD_EDIT_PARENT]?.takeIf { it in supported }
@@ -90,6 +135,16 @@ object NavRestore {
         phone: Boolean,
         recipeEditOwner: String? = null,
         methodEditOwner: String? = null,
+    ): String? = restoreBaseRoute(route?.let(::baseRoute), logBrewOwner, phone, recipeEditOwner, methodEditOwner)
+        // A tab that stays a tab keeps its arguments (`profiles?filter=recipes`).
+        .let { restored -> if (route != null && restored == baseRoute(route)) route else restored }
+
+    private fun restoreBaseRoute(
+        route: String?,
+        logBrewOwner: String?,
+        phone: Boolean,
+        recipeEditOwner: String?,
+        methodEditOwner: String?,
     ): String? = when {
         route == METHOD_EDIT && methodEditOwner == null ->
             when {
