@@ -9,6 +9,7 @@
  * the tooltip's wording.
  */
 import type { Bean } from '#lib/bean/model.js';
+import type { FollowCell } from '#lib/grinder/follow.svelte.js';
 import {
 	brewGrindView,
 	formatGrind,
@@ -39,6 +40,8 @@ export interface GrindView {
 	readonly saved: string | null;
 	/** Save's grind part: the value Save writes to the bag, or `null` (no dot on Save). */
 	readonly saveGrind: string | null;
+	/** Follow mode (a connected grinder, spec grinder-ble §5), when it has anything to show. */
+	readonly follow?: FollowCell | null;
 }
 
 export function grindView(input: { bag: Bean | null; grinder: Grinder | null; brewGrind: string | null }): GrindView {

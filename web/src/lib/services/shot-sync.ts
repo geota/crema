@@ -469,6 +469,12 @@ export interface ShotPatch {
 	 */
 	grinderSetting?: string;
 	/**
+	 * The shot's grinding speed, rpm: the core appends it to the wire's
+	 * `grinder_setting` ("480 700rpm", owner decision 6) unless the grind
+	 * already ends in it.
+	 */
+	grindRpm?: number;
+	/**
 	 * Per-shot visibility. Sent as the same `privacy` vocabulary the upload
 	 * document uses; the PATCH schema's `shot` object is
 	 * `additionalProperties: true`, so the key is accepted — server-side
@@ -823,7 +829,8 @@ export const ShotSyncLive = Layer.effect(
 				// The shot's effective grind wins over the snapshot reference
 				// (issue #16: a grind edit must reach the uploaded copy) —
 				// Android's patchEditedShot sends the same precedence.
-				grinderSetting: patch.grinderSetting ?? patch.bean?.grinderSetting ?? undefined
+				grinderSetting: patch.grinderSetting ?? patch.bean?.grinderSetting ?? undefined,
+				grindRpm: patch.grindRpm
 			};
 			// Fitted to the account tier in core, off the bean-sync premium flag
 			// (refreshed on sign-in, daily at start, on Test, and by every
@@ -1493,7 +1500,9 @@ export const ShotSyncLive = Layer.effect(
 				...(coffeeBagId != null ? { coffeeBagId } : {}),
 				...(shot.bean != null ? { bean: shot.bean } : {}),
 				...(grinderModel != null ? { grinderModel } : {}),
-				...(grinderSetting != null ? { grinderSetting } : {})
+				...(grinderSetting != null ? { grinderSetting } : {}),
+				// A typed or observed speed rides on the grind text (REVIEW-554).
+				...(shot.grindRpm != null ? { grindRpm: shot.grindRpm } : {})
 			};
 		};
 

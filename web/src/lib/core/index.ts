@@ -528,6 +528,28 @@ export interface CremaCore {
 	/** What the connected grinder reports, or `undefined` with no grinder. */
 	grinderCapabilities(): Promise<GrinderCapabilities | undefined>;
 	/**
+	 * The grinder record the connected grinder is linked to (the shell's
+	 * per-device link), or `null` to unlink. Follow mode needs it to match
+	 * Brew's active grinder; a shot's observation is stamped only on a shot of
+	 * that grinder. The output may carry `GrinderFollowChanged` / `FollowGrind`.
+	 */
+	setGrinderLink(grinderId: string | null): Promise<CoreOutput>;
+	/** "Pause following" for this session, or resume (which takes the grinder's value again). */
+	setGrinderFollowPaused(paused: boolean): Promise<CoreOutput>;
+	/**
+	 * The grinder record whose grind the collar sets now (a bag pick's and a
+	 * grinder switch's `followedGrinderId`), or `null`. Synchronous.
+	 */
+	followedGrinderId(): string | null;
+	/**
+	 * The shell discarded shot `shotId` (an aborted pull, a cleaning run): the
+	 * grind before it goes back, so the next shot within the window gets it
+	 * (review #554 S2). Synchronous; a no-op for any other shot.
+	 */
+	releaseShotGrind(shotId: string): void;
+	/** The discard's Undo kept shot `shotId` after all: it claims its grind again. Synchronous. */
+	claimShotGrind(shotId: string): void;
+	/**
 	 * Tell the core which profile the DE1 should hold: the library
 	 * `CremaProfile` (`null` = no active profile) with the Quick Controls
 	 * overrides. Call on every activation, edit, override change and restore.
@@ -1285,6 +1307,21 @@ async function createCore(): Promise<CremaCore> {
 			const raw = bridge.grinder_capabilities();
 			return raw === undefined ? undefined : (JSON.parse(raw) as GrinderCapabilities);
 		},
+		async setGrinderLink(grinderId) {
+			return parseOutput(bridge.set_grinder_link(grinderId ?? undefined));
+		},
+		async setGrinderFollowPaused(paused) {
+			return parseOutput(bridge.set_grinder_follow_paused(paused));
+		},
+		followedGrinderId() {
+			return bridge.followed_grinder_id() ?? null;
+		},
+		releaseShotGrind(shotId) {
+			bridge.release_shot_grind(shotId);
+		},
+		claimShotGrind(shotId) {
+			bridge.claim_shot_grind(shotId);
+		},
 		async setDesiredProfile(profile, qc, nowMs) {
 			const sync = JSON.parse(
 				bridge.set_desired_profile(
@@ -1620,7 +1657,8 @@ export type {
 	GrinderUuids,
 	GrindSession
 } from './crema-core';
-export { GrinderLinkDeadReason, GrinderState } from './crema-core';
+export { FollowStatus, GrinderLinkDeadReason, GrinderState } from './crema-core';
+export type { GrinderFollowView } from './crema-core';
 export type { BrewOverrides, ProfileSyncStatus } from './crema-core';
 export type {
 	FirmwareArtifact,

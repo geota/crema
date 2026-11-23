@@ -9,6 +9,7 @@
 	import QuickSplitLabel from './QuickSplitLabel.svelte';
 	import QuickStepper from './QuickStepper.svelte';
 	import QuickChipRow from './QuickChipRow.svelte';
+	import FollowedGrind from './FollowedGrind.svelte';
 	import { phoneLayout } from '#lib/shell/phone.svelte.js';
 	import { getSettingsStore, formatWeight } from '#lib/settings/index.js';
 	import GrindMarker from '#lib/components/grinders/GrindMarker.svelte';
@@ -66,6 +67,8 @@
 	 * text, with no dial and no chips; the first ± goes to the scale's start.
 	 */
 	const setGrindText = (t: string): void => brewGrind.set(t);
+	/** Follow mode (a connected grinder, spec grinder-ble §5): the collar sets the grind. */
+	const follow = $derived(grind?.follow ?? null);
 </script>
 
 {#snippet rangeWarning()}
@@ -82,8 +85,30 @@
 			value={p.doseGrindMode}
 			onChange={(v) => params.set('doseGrindMode', v as 'dose' | 'grind')}
 		/>
-		{#if p.doseGrindMode === 'grind' && grind?.marker}
-			<span class="qcs-sup qdg-marker"><GrindMarker text={grind.marker} title={grind.markerTitle} /></span>
+		{#if !follow?.suggest && !follow?.note}
+			{#if p.doseGrindMode === 'grind' && grind?.marker}
+				<span class="qcs-sup qdg-marker"><GrindMarker text={grind.marker} title={grind.markerTitle} /></span>
+			{/if}
+		{:else}
+			<span class="qdg-side">
+				{#if follow?.suggest}
+					{@const s = follow.suggest}
+					<button
+						type="button"
+						class="qdg-follow-btn"
+						title="{s.name} is connected"
+						onclick={() => follow.onUse(s.grinderId)}>Use {s.name}</button
+					>
+				{:else if follow?.note}
+					<span class="qdg-note">{follow.note}</span>
+					{#if follow.canResume}
+						<button type="button" class="qdg-follow-btn" onclick={follow.onResume}>Resume</button>
+					{/if}
+				{/if}
+				{#if p.doseGrindMode === 'grind' && grind?.marker}
+					<span class="qcs-sup qdg-marker"><GrindMarker text={grind.marker} title={grind.markerTitle} /></span>
+				{/if}
+			</span>
 		{/if}
 	</div>
 	{#if p.doseGrindMode === 'dose'}
@@ -106,6 +131,8 @@
 			dimension="weight"
 			onChange={(v) => params.set('dose', v)}
 		/>
+	{:else if follow?.following}
+		<FollowedGrind {follow} unit={gs.unit} />
 	{:else}
 		<QuickStepper
 			value={dial}
@@ -147,6 +174,35 @@
 	}
 	.qdg-marker {
 		display: inline-flex;
+	}
+	.qdg-side {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		min-width: 0;
+	}
+	/* Follow mode's notes and buttons sit in the label row, inside its
+	   height: small type, no vertical padding. */
+	.qdg-note {
+		font-size: 11px;
+		color: var(--fg-3);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.qdg-follow-btn {
+		border: 1px solid rgba(var(--copper-rgb), 0.5);
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--fg-accent);
+		font-size: 11px;
+		line-height: 16px;
+		padding: 0 6px;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+	.qdg-follow-btn:hover {
+		background: rgba(var(--copper-rgb), 0.12);
 	}
 	.qdg-warn {
 		color: var(--warning, #d9a54a);

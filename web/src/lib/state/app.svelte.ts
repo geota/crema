@@ -25,8 +25,15 @@ import {
 	type CoreOutput,
 	type CremaCore
 } from '#lib/core/index.js';
-import { MachineState, MmrRegister } from '#lib/core/crema-core.js';
-import type { BrewRecipe, MaintenanceFailure, ShotBean as CoreShotBean, ShotSelections, StartEnd } from '#lib/core/crema-core.js';
+import { FollowStatus, MachineState, MmrRegister } from '#lib/core/crema-core.js';
+import type {
+	BrewRecipe,
+	GrindSession,
+	MaintenanceFailure,
+	ShotBean as CoreShotBean,
+	ShotSelections,
+	StartEnd
+} from '#lib/core/crema-core.js';
 import { grindView } from '#lib/brew/grind-view.js';
 import { getBrewGrind } from '#lib/brew/grind-session.svelte.js';
 import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
@@ -133,6 +140,9 @@ import { watchBluetoothAvailability } from '#lib/ble/availability.js';
 import { connectBlocker } from '#lib/ble/connect-blocker.js';
 import { readImportText } from '#lib/utils/import-limits.js';
 import { GrinderManager } from '#lib/ble/grinder.js';
+import { getGrinderFollow } from '#lib/grinder/follow.svelte.js';
+import { formatGrind, isLiveGrinder } from '#lib/bean/grinder.js';
+import { selectGrinder } from '#lib/bean/activate.js';
 import { getGrinderLinkStore, resolveGrinderLink } from '#lib/grinder/connected-link.svelte.js';
 import { NO_GRINDER, type ConnectedGrinderView } from './ui-state.svelte';
 
@@ -826,6 +836,21 @@ export class CremaApp {
 				const selections = this.shotSelections();
 				if (!this.#replaying) this.core.setShotSelections(selections);
 			});
+			// The connected grinder's record link (spec grinder-ble §5.1): follow
+			// mode and the shot's grinder observation need it, so the core has
+			// it while the beta is on and the link names a live record.
+			$effect(() => {
+				const linked = this.#linkedGrinderId();
+				if (this.#replaying || linked === this.#pushedGrinderLink) return;
+				this.#pushedGrinderLink = linked;
+				void this.core
+					.setGrinderLink(linked)
+					.then((out) => {
+						this.applyCoreOutput(out);
+						getGrinderFollow().setFollowed(this.core.followedGrinderId());
+					})
+					.catch((e: unknown) => this.state.log(`Grinder: link update failed: ${describeError(e)}`));
+			});
 		});
 		// A hidden tab gets no wake-up tick (the regular tick covers the
 		// core's deadline when it is visible again).
@@ -893,6 +918,11 @@ export class CremaApp {
 				this.#linkConnectedGrinder(event.content.info.model);
 			}
 			if (event.type === 'GrinderLinkDead') this.grinder.presumeDead(event.content.reason);
+			if (event.type === 'GrinderFollowChanged') {
+				getGrinderFollow().update(event.content.follow, this.core.followedGrinderId());
+			}
+			if (event.type === 'FollowGrind') this.#followGrind(event.content.grind, event.content.announce);
+			if (event.type === 'GrindCompleted') this.#suggestAfterGrind(event.content.session);
 			if (event.type === 'GrinderUnsupported') {
 				// No retry: launch leaves it alone until the user connects again.
 				markUserDisconnect('grinder');
@@ -1094,6 +1124,10 @@ export class CremaApp {
 						lastNotificationAtMs: this.core.lastNotificationAtMs,
 						sliceJsonl: (from, to) => this.core.captureSliceJsonl(from, to),
 						takeStoredShot: (shotCtx) => this.core.takeStoredShot(shotCtx),
+						shotGrind: {
+							release: (id) => this.core.releaseShotGrind(id),
+							claim: (id) => this.core.claimShotGrind(id)
+						},
 						fireWebhook: (eventType, payload) => this.fireWebhook(eventType, payload),
 						runtime: this.runtime
 					});
@@ -1670,6 +1704,58 @@ export class CremaApp {
 		if (on) return;
 		this.#launch.cancel('grinder');
 		if (this.state.current.grinder.state !== 'idle') await this.disconnectGrinder();
+	}
+
+	/** The record link last given to the core (`undefined` = none yet). */
+	#pushedGrinderLink: string | null | undefined = undefined;
+
+	/**
+	 * The live grinder record this device's connected grinder is linked to,
+	 * while the beta is on; else `null`. Reactive: the link store, the
+	 * connected device and the library.
+	 */
+	#linkedGrinderId(): string | null {
+		if (!grinderBetaOn()) return null;
+		const deviceId = this.state.current.grinder.deviceId;
+		if (!deviceId) return null;
+		const id = getGrinderLinkStore().linkOf(deviceId);
+		const record = id ? getBeanStore().getGrinder(id) : null;
+		return record && isLiveGrinder(record) ? record.id : null;
+	}
+
+	/**
+	 * "Pause following" for this session (owner decision 3), or resume: the
+	 * stepper comes back, and resuming takes the grinder's value again.
+	 */
+	async setGrinderFollowPaused(paused: boolean): Promise<void> {
+		getGrinderFollow().setPaused(paused);
+		this.applyCoreOutput(await this.core.setGrinderFollowPaused(paused));
+		getGrinderFollow().setFollowed(this.core.followedGrinderId());
+	}
+
+	/**
+	 * Following: Brew's grind takes the grinder's steady value (§5.2); a
+	 * reconnect that changed it says so.
+	 */
+	#followGrind(grind: string, announce: boolean): void {
+		getBrewGrind().set(grind);
+		if (!announce) return;
+		const grinder = getBeanStore().activeGrinder;
+		const where = grinder ? ` from your ${grinder.name}` : ' from the grinder';
+		toast.info(`Grind ${formatGrind(grind, grinder?.scale ?? null)}${where}`, 4000);
+	}
+
+	/**
+	 * A grind on the connected grinder while another record is Brew's
+	 * (decision 4): suggest it, never switch on our own.
+	 */
+	#suggestAfterGrind(session: GrindSession): void {
+		const follow = getGrinderFollow().view;
+		if (session.kind !== 'Grind' || follow.status !== FollowStatus.Suggest || !follow.grinder_id) return;
+		const record = getBeanStore().getGrinder(follow.grinder_id);
+		if (!record || !isLiveGrinder(record)) return;
+		const id = record.id;
+		toast.action(`You ground on ${record.name}`, `Use ${record.name}`, () => void selectGrinder(id));
 	}
 
 	#patchGrinder(patch: Partial<ConnectedGrinderView>): void {

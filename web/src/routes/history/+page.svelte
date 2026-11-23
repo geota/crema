@@ -617,6 +617,19 @@
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
 	}
+	/**
+	 * The shot's grinding speed (spec grinder-ble §4.2): the effective grind's
+	 * trailing speed follows it ("15 1200rpm" → "15 1100rpm", a pulled shot's
+	 * bean grind included), so Visualizer never gets a second one (REVIEW-554,
+	 * REVIEW-557 M1).
+	 */
+	function saveGrindRpm(id: string, grindRpm: number | null): void {
+		if (!isLive(id)) return;
+		markForVisualizer(id, 'annotations');
+		store.setGrindRpm(id, grindRpm);
+		syncEditToVisualizer(id);
+		scheduleDecentReplaceAfterEdit(id);
+	}
 	function saveBean(id: string, bean: Bean | null, roaster: Roaster | null): void {
 		const shot = liveShot(store.get(id));
 		if (!shot) return;
@@ -2030,6 +2043,7 @@
 						{drinkerSuggestions}
 						onTagsChange={saveTags}
 						onGrindChange={saveGrind}
+						onGrindRpmChange={saveGrindRpm}
 						onBeanChange={saveBean}
 						onDelete={deleteById}
 						canDeleteRemote={canPushShots && (!!selected.visualizerId || uploadPending(selected.id))}

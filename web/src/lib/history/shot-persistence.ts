@@ -127,6 +127,16 @@ export interface ShotCompletionContext {
 	 */
 	takeStoredShot(ctx: ShotCaptureContext): Record<string, unknown> | null;
 	/**
+	 * The grind before the shot (review #554 S2): `release` when the shot is
+	 * discarded, so the next shot gets it; `claim` when a discard's Undo keeps
+	 * it after all (`CremaCore.releaseShotGrind` / `claimShotGrind`). Optional:
+	 * without it a discarded shot keeps its grind, as before.
+	 */
+	readonly shotGrind?: {
+		release(shotId: string): void;
+		claim(shotId: string): void;
+	};
+	/**
 	 * The app-wide Effect runtime (Option 3, T-16). The Visualizer push routes
 	 * through it (`ShotSync.uploadShot` / `UploadQueue.enqueue`); `null` (no
 	 * runtime) skips the push, same fire-and-forget non-fatal posture as before.
@@ -172,7 +182,10 @@ export function commitShotCompletion(
 	// discard keeps it for the undo.
 	const captured = ctx.takeStoredShot(captureContext(activeShot));
 	const dose = recordedDose(captured, activeShot);
+	const capturedId = typeof captured?.id === 'string' ? captured.id : null;
 	if (!effects.record && !effects.offerUndo) {
+		// Not kept (a cleaning run): its grind is the next shot's.
+		if (capturedId) ctx.shotGrind?.release(capturedId);
 		getActiveShotStore().clear();
 		return;
 	}
@@ -195,6 +208,10 @@ export function commitShotCompletion(
 		// Freeze everything the undo needs — by the time the user taps it
 		// the active-shot store is cleared and a new shot may be underway.
 		const frozenMeta = atShotStartMeta(activeShot);
+		// Discarded for now: the retry gets the grind, unless the Undo keeps
+		// this shot, which claims it back.
+		const shotGrind = ctx.shotGrind;
+		if (capturedId) shotGrind?.release(capturedId);
 		const frozenCtx = {
 			runtime: ctx.runtime,
 			shotStartedAtMs: ctx.shotStartedAtMs,
@@ -207,6 +224,7 @@ export function commitShotCompletion(
 			() => {
 				const record = captured ? getHistoryStore().recordCaptured(captured) : null;
 				if (!record) return;
+				if (capturedId) shotGrind?.claim(capturedId);
 				getHistoryStore().setBagDebit(record.id, bagDebit);
 				// An undone discard is a kept shot: auto-save counts it.
 				if (effects.autoSave) autoSaveGrind(record);

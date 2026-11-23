@@ -94,6 +94,8 @@ import {
 	putSeries
 } from './series-store';
 import {
+	editShotGrind,
+	editShotRpm,
 	isBrewLog,
 	isManualLog,
 	isShotRow,
@@ -3444,7 +3446,22 @@ export class HistoryStore {
 	 * wire purposes (see `effectiveGrindSetting`). Mirrors {@link setNotes}.
 	 */
 	setGrindSetting(id: string, grinderSetting: string | null): void {
-		this.edit(id, (target) => ({ ...target, metadata: { ...target.metadata, grinderSetting } }));
+		// A speed typed in the grind ("15 1300rpm") becomes the shot's speed;
+		// else it keeps the one it had (REVIEW-557 M1), so the upload never
+		// sends a stale speed beside the typed one.
+		this.edit(id, (target) => editShotGrind(target, grinderSetting));
+	}
+
+	/**
+	 * Set a shot's grinding speed (`grindRpm`, rpm; `null` clears it) — the
+	 * shot editor's RPM field for a variable-speed grinder. The effective
+	 * grind's trailing speed follows it (`rpmEditGrind`: "15 1200rpm" with 1100
+	 * becomes "15 1100rpm", a pulled shot's bean grind included), so the upload
+	 * never sends a second speed (REVIEW-557 M1). One edit, so the row and its
+	 * sync see both at once.
+	 */
+	setGrindRpm(id: string, grindRpm: number | null): void {
+		this.edit(id, (target) => editShotRpm(target, grindRpm));
 	}
 
 	/**

@@ -23,6 +23,7 @@ export {
 	ratioLabel,
 	effectiveGrindSetting,
 	grindLabel,
+	grinderObservationText,
 	shotFilename,
 	snapshotFromBean,
 	peaksOf,
