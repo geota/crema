@@ -11,7 +11,6 @@ import coffee.crema.core.ProfileSyncStatus
 import coffee.crema.core.WriteTarget
 import coffee.crema.settings.AppPrefs
 import coffee.crema.ui.RemoteFixture.Companion.writePrefs
-import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -49,7 +48,7 @@ class RestoreResweepTest {
         val volume = HotWaterUi.defaults.copy(mode = HotWaterMode.Volume, volumeMl = 220f)
         vm.setHotWaterDose(volume)
         VmHarness.idle()
-        val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
+        val backup = assertNotNull(VmHarness.backupBytes(vm))
         vm.setHotWaterDose(HotWaterUi.defaults)
         VmHarness.idle()
 

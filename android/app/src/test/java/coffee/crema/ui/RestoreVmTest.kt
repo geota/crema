@@ -180,7 +180,7 @@ class RestoreVmTest {
     @Test
     fun aFreshInstallHasNothingToBackUp() {
         val vm = vm()
-        assertNull(runBlocking { vm.buildBackupZipBytes() })
+        assertNull(VmHarness.backupBytes(vm))
         assertTrue("Nothing to back up yet" in vm.ui.value.userMessages, vm.ui.value.userMessages.toString())
     }
 

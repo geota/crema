@@ -162,8 +162,8 @@ class ShotStartOverridesTest {
 
         // The DE1 goes down; a backup is restored meanwhile.
         bridge.de1LinkLost()
-        val backup = assertNotNull(kotlinx.coroutines.runBlocking { vm.buildBackupZipBytes() })
-        kotlinx.coroutines.runBlocking { vm.restoreBackupBytes(backup, MainViewModel.RestoreMode.MERGE) }
+        val backup = assertNotNull(VmHarness.backupBytes(vm))
+        VmHarness.onMain("the restore\'s plan") { vm.restoreBackupBytes(backup, MainViewModel.RestoreMode.MERGE) }
         // The restore applies on its own coroutine: wait for its notice (it
         // re-sends the settings just before).
         VmHarness.idleUntil("the restore") { vm.ui.value.userMessages.any { it.startsWith("Restored ") } }

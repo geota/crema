@@ -111,7 +111,7 @@ class Stage2VmTest {
         val vm = vm()
         val library = VmHarness.library(vm)
         assertTrue(library.historyStoreForTest.onHistoryDb)
-        val zip = assertNotNull(runBlocking { library.buildBackupZipFile() }, "a backup")
+        val zip = assertNotNull(VmHarness.onMain("the backup") { library.buildBackupZipFile() }, "a backup")
         val ids = VmHarness.rows(vm).map { it.id }.toSet()
         // Erase all data, then restore the backup: every row back, on history.db.
         runBlocking { library.historyStoreForTest.erase() }

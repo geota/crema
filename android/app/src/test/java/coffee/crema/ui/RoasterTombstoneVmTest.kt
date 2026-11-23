@@ -5,7 +5,6 @@ import androidx.lifecycle.ViewModelStore
 import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.newBean
 import coffee.crema.beans.newRoaster
-import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -115,7 +114,7 @@ class RoasterTombstoneVmTest {
         val tomb = sey.copy(deletedAt = 5L, notes = "")
         writeLibrary(BeanLibrary(listOf(bag("a", sey.id)), listOf(tomb, onyx)))
         val vm = vm()
-        val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
+        val backup = assertNotNull(VmHarness.backupBytes(vm))
         val restored = freshDevice()
         VmHarness.restore(restored, backup, MainViewModel.RestoreMode.WIPE)
         assertEquals(listOf(onyx.id), restored.own().roasters.map { it.id })

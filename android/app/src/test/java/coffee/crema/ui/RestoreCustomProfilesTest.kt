@@ -55,7 +55,7 @@ class RestoreCustomProfilesTest {
 
     private fun customIds(vm: MainViewModel) = customs(vm).map { it.id }.sorted()
 
-    private fun backup(vm: MainViewModel) = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
+    private fun backup(vm: MainViewModel) = assertNotNull(VmHarness.backupBytes(vm))
 
     /** The newest "Restored …" notice. */
     private fun report(vm: MainViewModel) = vm.ui.value.userMessages.last { it.startsWith("Restored ") }

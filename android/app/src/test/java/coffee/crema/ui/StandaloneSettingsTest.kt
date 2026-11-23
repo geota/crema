@@ -160,7 +160,7 @@ class StandaloneSettingsTest {
         pushedBy("the reset") { vm.resetPreferences() }
         // Something to back up: a fresh install's settings alone aren't.
         pushedBy("a setting") { vm.setMaxShotDuration(37f) }
-        val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
+        val backup = assertNotNull(VmHarness.backupBytes(vm))
         pushedBy("the restore") { VmHarness.restore(vm, backup, MainViewModel.RestoreMode.WIPE) }
         // The pushes §6.1 adds.
         val duration = pushedBy("a max shot duration") { vm.setMaxShotDuration(41f) }

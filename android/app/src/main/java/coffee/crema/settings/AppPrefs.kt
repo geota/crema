@@ -807,6 +807,14 @@ class SettingsStore(private val context: Context, private val json: Json) {
         }
     }
 
+    /** Test seam: returns once every save asked for so far has finished (the
+     *  lock is fair, so this waits behind them). A ViewModel's saves can still
+     *  be queued when its test ends; the next test's ViewModel starts a new
+     *  save session, which would refuse them. */
+    internal suspend fun awaitSaves() {
+        withContext(NonCancellable + Dispatchers.IO) { saveLock.withLock { } }
+    }
+
     /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
     suspend fun erase() {
         // After any save in flight, so an old snapshot can't land after the erase.
