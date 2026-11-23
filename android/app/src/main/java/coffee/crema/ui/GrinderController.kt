@@ -60,6 +60,9 @@ class GrinderController internal constructor(
     private val applyFollowGrind: (String) -> Unit = {},
     /** "Pause following" to the core: `CremaBridge.setGrinderFollowPaused`, its output delivered. */
     private val setCorePaused: (Boolean) -> Unit = {},
+    /** What the screens show (on a remote, the hub's): Brew's grind scale
+     *  for the announce reads it, like every machine or session field. */
+    private val effectiveState: () -> MainUiState = uiState,
     /** Wall clock, for "last seen 12:03" on a stale follow. */
     private val wallMs: () -> Long = System::currentTimeMillis,
 ) {
@@ -165,9 +168,9 @@ class GrinderController internal constructor(
             scope.launch {
                 applyFollowGrind(grind)
                 if (e.content.announce) {
-                    val st = uiState()
-                    val shown = runCatching { coffee.crema.beans.formatGrind(grind, st.activeGrindScale()) }.getOrDefault(grind)
-                    notify("Grind $shown from your ${grinderModelName(st.connectedGrinder.model)}")
+                    val scale = effectiveState().activeGrindScale()
+                    val shown = runCatching { coffee.crema.beans.formatGrind(grind, scale) }.getOrDefault(grind)
+                    notify("Grind $shown from your ${grinderModelName(uiState().connectedGrinder.model)}")
                 }
             }
         }

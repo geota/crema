@@ -945,6 +945,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         persistPrefs = { persistPrefs() },
         addFromCatalogue = { presetId -> library.addGrinder("", presetId) },
         setCoreLink = { id -> lane.deliver(bridge.setGrinderLink(id)) },
+        effectiveState = { effectiveState() },
         setCorePaused = { paused -> lane.deliver(bridge.setGrinderFollowPaused(paused)) },
         // The collar sets Brew's grind: the typed-grind path, persisted and mirrored.
         applyFollowGrind = { grind -> machine.execute(MachineCommand.SetGrind(grind)) },
