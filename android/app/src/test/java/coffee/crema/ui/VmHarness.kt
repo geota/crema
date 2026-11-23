@@ -262,6 +262,21 @@ internal object VmHarness {
      * reset whose values the restore then puts back, say). Its last step
      * says "Restored …".
      */
+    /** How many "Restored …" messages [vm] has shown: a confirmed run's last word. */
+    fun restoredCount(vm: MainViewModel): Int = vm.ui.value.userMessages.count { it.startsWith("Restored ") }
+
+    /**
+     * Wait for [vm]'s confirmed restore to run to its end, past the rows a
+     * test waits for: the singletons (maintenance, settings) save after them,
+     * and a run left going lands its saves in a later test, whose strict
+     * SaveFloor throws into that test's runTest (#530, FLAKY.md).
+     */
+    fun awaitRestored(vm: MainViewModel, before: Int) = try {
+        idleUntil("the restore's end") { restoredCount(vm) > before }
+    } catch (e: IllegalStateException) {
+        throw IllegalStateException("${e.message}; said ${vm.ui.value.userMessages.takeLast(4)}", e)
+    }
+
     fun restore(vm: MainViewModel, backup: ByteArray, mode: MainViewModel.RestoreMode = MainViewModel.RestoreMode.MERGE) {
         fun restored() = vm.ui.value.userMessages.count { it.startsWith("Restored ") }
         val before = restored()

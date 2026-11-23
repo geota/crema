@@ -911,3 +911,10 @@ summary:focus-visible,
 .hpick-foot-icon:hover { background: rgba(var(--tint-rgb), 0.06); border-color: rgba(var(--tint-rgb), 0.2); color: var(--fg-1); }
 .hpick-foot-icon:disabled { opacity: 0.4; cursor: default; }
 .hpick-foot-lib > :is(i, svg), .hpick-foot-icon > :is(i, svg) { font-size: 15px; }
+/* Brew's picker sections: Espresso profiles, then Manual recipes (brew modes §2). */
+.hpick-section + .hpick-section { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(var(--tint-rgb), 0.08); }
+.hpick-section-head { padding: 6px 8px 4px; font: 600 11px/1.2 var(--font-sans); letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-3); }
+.hpick-method { background: var(--bg-page); color: var(--fg-accent); }
+.hpick-item:disabled { cursor: default; opacity: 0.45; }
+.hpick-item:disabled:hover { background: transparent; }
+.hpick-locked { padding: 0 8px 4px; font-family: var(--font-sans); font-size: 12px; color: var(--warning); }

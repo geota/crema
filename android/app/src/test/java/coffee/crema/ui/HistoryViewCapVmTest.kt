@@ -249,8 +249,10 @@ class HistoryViewCapVmTest {
         assertEquals(345, VmHarness.library(next).allShots().size, "the union loads")
         next.startRestore(bytes, "backup", MainViewModel.RestoreMode.WIPE)
         VmHarness.idleUntil("the report") { next.ui.value.restoreReport != null }
+        val restored = VmHarness.restoredCount(next)
         next.confirmRestore()
         VmHarness.idleUntil("the remove") { dbIds() == theirs.map { it.id }.toSet() }
+        VmHarness.awaitRestored(next, restored)
         val back = VmHarness.library(next).allShots()
         assertEquals(theirs.map { it.id }.toSet(), back.map { it.id }.toSet(), "exactly the backup's rows")
     }

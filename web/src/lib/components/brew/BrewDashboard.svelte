@@ -11,7 +11,9 @@
 	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
 	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
 	import ArrowsOutIcon from 'phosphor-svelte/lib/ArrowsOutIcon';
+	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	import CoffeeIcon from 'phosphor-svelte/lib/CoffeeIcon';
+	import PlayIcon from 'phosphor-svelte/lib/PlayIcon';
 	import DotsThreeVerticalIcon from 'phosphor-svelte/lib/DotsThreeVerticalIcon';
 	import MoonIcon from 'phosphor-svelte/lib/MoonIcon';
 	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
@@ -123,8 +125,27 @@
 	import ChannelReadout from './ChannelReadout.svelte';
 	import PhaseIndicatorCard from './PhaseIndicatorCard.svelte';
 	import MaxStopConditionsCard, { type StopConditionRow } from './MaxStopConditionsCard.svelte';
-	import BrewHeader from './BrewHeader.svelte';
+	import BrewHeader, { type RecipeHeader } from './BrewHeader.svelte';
 	import { type PickerItem } from './HeaderPicker.svelte';
+	import ManualBrew from './manual/ManualBrew.svelte';
+	import PhoneManualBrew from './manual/PhoneManualBrew.svelte';
+	import RecipeEditor from '#lib/components/brewlog/RecipeEditor.svelte';
+	import LogBrewDialog from '#lib/components/brewlog/LogBrewDialog.svelte';
+	import {
+		brewPickLock,
+		getBrewSelectionStore,
+		guidedBrewRunning,
+		recipeSummary
+	} from '#lib/brew/selection.svelte.js';
+	import { GuidedRun } from '#lib/brew/guided-run.svelte.js';
+	import {
+		getRecipeStore,
+		isBuiltinRecipe,
+		newRecipeFor,
+		recipeEstimateLabel
+	} from '#lib/brew/recipes.svelte.js';
+	import { methodLabel } from '#lib/brew/methods.js';
+	import type { BrewRecipe } from '#lib/core/crema-core.js';
 	import LiveChart from './LiveChart.svelte';
 	import ChartModal from '#lib/components/shared/ChartModal.svelte';
 	import QuickSheet from './QuickSheet.svelte';
@@ -153,7 +174,8 @@
 	import { pinActiveThenFavourite } from '#lib/library-order.js';
 	import PhoneBrewStrip, {
 		type StripBeanRow,
-		type StripProfileRow
+		type StripProfileRow,
+		type StripRecipeRow
 	} from './PhoneBrewStrip.svelte';
 	import PhoneDualChip from './PhoneDualChip.svelte';
 	import PhoneMachineStats from './PhoneMachineStats.svelte';
@@ -881,7 +903,7 @@
 			const wanted = shot.profileName.toLowerCase();
 			const profile = profileStore.all.find((pr) => pr.name.toLowerCase() === wanted);
 			if (profile) {
-				profileStore.setActive(profile.id);
+				selection.pickProfile(profile.id);
 				void app?.setDesiredProfile(profile);
 			} else {
 				toast.info(
@@ -1242,6 +1264,135 @@
 	 */
 	const noStopCondition = $derived(stopTargets != null && stopConditionRows.length === 0);
 
+	// ── Brew modes (spec §2–§4): the selection decides Espresso or Manual ──
+	const selection = getBrewSelectionStore();
+	const recipeStore = getRecipeStore();
+	/** The guided brew Manual runs; one instance for the wide and phone pages. */
+	const run = new GuidedRun({
+		app: () => app,
+		recipe: () => selection.recipe,
+		connected: () => scaleConnected,
+		weightG: () => ui.scaleWeight
+	});
+	/** Manual shows while a recipe is selected, and while a brew runs or waits to be saved. */
+	const manual = $derived(selection.manual || !run.idle);
+	/** The picker lock: a shot locks the profile rows, a guided brew every row. */
+	const pickLock = $derived(
+		brewPickLock({ shotRunning: ui.shotInProgress, guidedBrewRunning: guidedBrewRunning(run.phase) })
+	);
+
+	/** A recipe amount: whole grams, or the ounces setting. */
+	function recipeWeight(g: number): string {
+		return prefs.weightUnit === 'g' ? `${Math.round(g)} g` : formatWeight(g, prefs.weightUnit);
+	}
+
+	/** "15 g · 250 g water · 100 °C · ~3:00" for a recipe. */
+	function recipeMeta(r: BrewRecipe): string {
+		const sum = recipeSummary(r);
+		const parts = [recipeWeight(sum?.doseG ?? r.doseG), `${recipeWeight(sum?.waterG ?? r.waterG)} water`];
+		const temp = sum ? sum.tempC : r.tempC;
+		if (temp != null) parts.push(prefs.tempUnit === 'C' ? `${Math.round(temp)} °C` : formatTemp(temp, prefs.tempUnit));
+		const est = recipeEstimateLabel(r);
+		if (est) parts.push(`~${est}`);
+		return parts.join(' · ');
+	}
+
+	/** The Profile block in Manual. */
+	const recipeHeader = $derived.by<RecipeHeader | null>(() => {
+		const r = manual ? run.recipe : null;
+		if (!r) return null;
+		return {
+			eyebrow: `Recipe · ${methodLabel(r.method)}`,
+			name: r.name,
+			meta: recipeMeta(r),
+			builtin: isBuiltinRecipe(r.id)
+		};
+	});
+
+	/** The picker's Manual rows: your recipes, then the built-ins you keep. */
+	const recipeItems = $derived.by<PickerItem[]>(() => {
+		const list: BrewRecipe[] = [...recipeStore.all, ...recipeStore.visibleBuiltins];
+		const sel = selection.recipe;
+		if (sel && !list.some((r) => r.id === sel.id)) list.push(sel);
+		return list.map((r) => {
+			const method = methodLabel(r.method);
+			const est = recipeEstimateLabel(r);
+			return {
+				id: r.id,
+				primary: r.name,
+				secondary: [method, recipeWeight(r.doseG), recipeWeight(r.waterG), est ? `~${est}` : null]
+					.filter(Boolean)
+					.join(' · '),
+				pinned: r.favourite ?? false,
+				method: r.method,
+				search: `${r.name} ${method}`.toLowerCase()
+			};
+		});
+	});
+
+	// ── Recipe editor: Add recipe, Edit recipe, Duplicate to edit ──
+	let recipeEditing = $state<BrewRecipe | null>(null);
+	let recipeEditingNew = $state(false);
+
+	function openRecipeEditor(r: BrewRecipe, isNew: boolean): void {
+		recipeEditing = r;
+		recipeEditingNew = isNew;
+	}
+
+	/** A built-in edits as a credited copy, which becomes the selection. */
+	function editSelectedRecipe(): void {
+		const r = run.recipe;
+		if (!r) return;
+		if (isBuiltinRecipe(r.id)) {
+			const copy = recipeStore.duplicate(r.id);
+			if (!copy) return;
+			selection.pickRecipe(copy.id);
+			openRecipeEditor(copy, false);
+		} else {
+			openRecipeEditor(r, false);
+		}
+	}
+
+	function saveRecipe(r: BrewRecipe): void {
+		const saved = recipeStore.saveEdit(r);
+		recipeEditing = null;
+		recipeEditingNew = false;
+		if (!pickLock?.recipesLocked) selection.pickRecipe(saved.id);
+	}
+
+	/** Manual's big button: Start brew, Start now (armed), Finish, Save brew…. */
+	let logOpen = $state(false);
+	const manualButton = $derived.by(() => {
+		switch (run.phase) {
+			case 'armed':
+				return 'Start now';
+			case 'running':
+			case 'paused':
+				return 'Finish';
+			case 'done':
+				return 'Save brew…';
+			default:
+				return 'Start brew';
+		}
+	});
+
+	async function manualAction(): Promise<void> {
+		switch (run.phase) {
+			case 'armed':
+				await run.beginNow();
+				return;
+			case 'running':
+			case 'paused':
+				await run.finish();
+				return;
+			case 'done':
+				logOpen = true;
+				return;
+			default:
+				if (!(await run.start())) toast.info('App is still loading — try again in a moment.');
+		}
+	}
+
 	// ── BrewHeader wiring (presentational; reuses the profile + bean stores) ──
 	/** Profile rows for the header's ▾ picker — all profiles, pinned first. */
 	const profilePickerItems = $derived.by<PickerItem[]>(() =>
@@ -1472,13 +1623,18 @@
 	/** Android's top-bar actions, around the bar's Devices and Settings. */
 	usePhoneBar(() => ({
 		actions: [
-			{
-				id: 'quick',
-				label: 'Quick Controls',
-				icon: SlidersHorizontalIcon,
-				haspopup: 'dialog',
-				onclick: () => (quickSheetOpen = true)
-			},
+			// Manual has no Quick Controls (brew modes §3).
+			...(manual
+				? []
+				: [
+						{
+							id: 'quick',
+							label: 'Quick Controls',
+							icon: SlidersHorizontalIcon,
+							haspopup: 'dialog' as const,
+							onclick: () => (quickSheetOpen = true)
+						}
+					]),
 			'devices',
 			'settings',
 			{
@@ -1497,19 +1653,44 @@
 		return [grindInfo.recorded !== null ? grindInfo.label : null, g?.name ?? null].filter(Boolean).join(' · ') || null;
 	});
 	/** The swap dropdown's rows: the loaded item leads, then favourites. */
-	const stripProfiles = $derived.by<StripProfileRow[]>(() =>
-		pinActiveThenFavourite(profileStore.all, profileStore.activeId, (pr) => pr.pinned)
-			.slice(0, 4)
-			.map((pr) => ({
-				id: pr.id,
-				name: pr.name,
-				meta: `${formatRatio(pr.dose, pr.yieldOut)} · ${formatWeight(pr.dose, prefs.weightUnit)} · ${formatTemp(pr.brewTemp, prefs.tempUnit)}`,
-				segments: pr.segments
-			}))
-	);
-	const stripBeans = $derived.by<StripBeanRow[]>(() =>
+	/** Every profile as a dropdown row: the loaded one, then the most recently used. */
+	const allStripProfiles = $derived.by<StripProfileRow[]>(() => {
+		const recent = [...profileStore.all].sort((a, b) => (b.lastUsed ?? '').localeCompare(a.lastUsed ?? ''));
+		return pinActiveThenFavourite(recent, profileStore.activeId, () => false).map((pr) => ({
+			id: pr.id,
+			name: pr.name,
+			meta: `${formatRatio(pr.dose, pr.yieldOut)} · ${formatWeight(pr.dose, prefs.weightUnit)} · ${formatTemp(pr.brewTemp, prefs.tempUnit)}`,
+			segments: pr.segments
+		}));
+	});
+	/** The dropdown's Espresso profiles: three recent (brew modes §2). */
+	const stripProfiles = $derived(allStripProfiles.slice(0, 3));
+	/** Every recipe as a dropdown row: the selected one, then the ones you have run, then favourites. */
+	const allStripRecipes = $derived.by<StripRecipeRow[]>(() => {
+		const list: BrewRecipe[] = [...recipeStore.all, ...recipeStore.visibleBuiltins];
+		const sel = selection.recipe;
+		if (sel && !list.some((r) => r.id === sel.id)) list.push(sel);
+		const rank = (r: BrewRecipe) =>
+			r.id === sel?.id ? 0 : recipeStore.isDefault(r) ? 1 : r.favourite ? 2 : 3;
+		return list
+			.map((r, i) => ({ r, i }))
+			.sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i)
+			.map(({ r }) => {
+				const method = methodLabel(r.method);
+				const temp = r.tempC != null ? (prefs.tempUnit === 'C' ? `${Math.round(r.tempC)} °C` : formatTemp(r.tempC, prefs.tempUnit)) : null;
+				return {
+					id: r.id,
+					name: r.name,
+					meta: [method, recipeWeight(r.doseG), recipeWeight(r.waterG), temp].filter(Boolean).join(' · '),
+					method: r.method,
+					search: method.toLowerCase()
+				};
+			});
+	});
+	const stripRecipes = $derived(allStripRecipes.slice(0, 3));
+	/** Every live bag as a dropdown row, ranked as the bean picker ranks them. */
+	const allStripBeans = $derived.by<StripBeanRow[]>(() =>
 		rankForPicker(beanLibrary.beans.filter((b) => b.archivedAt == null), beanLibrary.activeBeanId)
-			.slice(0, 3)
 			.map((b) => {
 				const r = b.roasterId ? (beanLibrary.roasters.find((x) => x.id === b.roasterId) ?? null) : null;
 				const { mark, tone } = roasterMarkTone(r);
@@ -1527,6 +1708,7 @@
 				};
 			})
 	);
+	const stripBeans = $derived(allStripBeans.slice(0, 3));
 
 	const readiness = $derived(brewReadiness(modeReady, ui.machineStateName, ui.machineSubstate));
 	/** Live, never the pinned chart moment: these describe the machine now. */
@@ -1620,7 +1802,7 @@
 	 * sync.
 	 */
 	function selectFavorite(profile: CremaProfile): void {
-		profileStore.setActive(profile.id);
+		selection.pickProfile(profile.id);
 		// Picking a profile resolves the "Select a profile first" blocker
 		// (and any sync-failed banner — the user's natural next move is
 		// to tap Coffee again, which retries the upload).
@@ -1776,6 +1958,14 @@
 	/** Tapping the weight card tares — only while a scale is connected and
 	 *  no shot is pulling (a mid-shot tare would corrupt stop-at-weight). */
 	const tareOnTap = $derived(scaleConnected && !running);
+	/** Manual's weight tile tares before the brew (never mid-brew: the targets would shift). */
+	function tapTareManual(): void {
+		if (!app || !scaleConnected || !(run.idle || run.phase === 'armed')) return;
+		void app.tareScale();
+		tarePulse = true;
+		clearTimeout(tarePulseTimer);
+		tarePulseTimer = setTimeout(() => tarePulse = false, 600);
+	}
 	function tapTare(): void {
 		if (!app || !tareOnTap) return;
 		void app.tareScale();
@@ -1893,6 +2083,7 @@
 	{/if}
 {/snippet}
 {#snippet modeChips()}
+	{#if !manual}
 	<ModeChip
 		kind="steam"
 		active={modeState === 'steaming'}
@@ -1903,6 +2094,8 @@
 		sub={phoneLayout.current ? phoneChipSubs.steam : steamChipSub}
 		onTap={() => modeState === 'steaming' ? cancelMode() : tapSteam()}
 	/>
+	{/if}
+	{#if !manual || !phoneLayout.current}
 	<ModeChip
 		kind="water"
 		active={modeState === 'dispensing'}
@@ -1913,6 +2106,8 @@
 		sub={phoneLayout.current ? phoneChipSubs.water : waterChipSub}
 		onTap={() => modeState === 'dispensing' ? cancelMode() : tapWater()}
 	/>
+	{/if}
+	{#if !manual}
 	<ModeChip
 		kind="flush"
 		active={modeState === 'flushing'}
@@ -1923,6 +2118,22 @@
 		sub={phoneLayout.current ? phoneChipSubs.flush : flushChipSub}
 		onTap={() => modeState === 'flushing' ? cancelMode() : tapFlush()}
 	/>
+	{/if}
+{/snippet}
+{#snippet manualStartButton()}
+	<!-- Manual's Coffee: Start brew, then Start now / Finish / Save brew…. -->
+	<button
+		class="crema-bigbtn"
+		class:running={run.phase === 'running' || run.phase === 'paused'}
+		disabled={run.idle && !selection.recipe}
+		onclick={() => void manualAction()}
+	>
+		{#if run.phase === 'armed'}<PlayIcon weight="fill" aria-hidden="true" />
+		{:else if run.phase === 'running' || run.phase === 'paused'}<StopIcon weight="fill" aria-hidden="true" />
+		{:else if run.phase === 'done'}<CheckIcon weight="bold" aria-hidden="true" />
+		{:else}<CoffeeIcon weight="fill" aria-hidden="true" />{/if}
+		<span>{manualButton}</span>
+	</button>
 {/snippet}
 {#snippet shotButton()}
 	<button
@@ -1969,7 +2180,7 @@
 	{#if phoneLayout.current}
 		<div class="pbrew">
 			<PhoneBrewStrip
-				title={profileName}
+				title={manual && run.recipe ? `${run.recipe.name} · ${methodLabel(run.recipe.method)}` : profileName}
 				beanLine={headerBeanName}
 				specLine={stripSpecLine}
 				specMarker={grindInfo.marker}
@@ -1983,16 +2194,33 @@
 				syncLabel={profileSyncLabel}
 				profiles={stripProfiles}
 				beans={stripBeans}
+				recipes={stripRecipes}
+				allProfiles={allStripProfiles}
+				allRecipes={allStripRecipes}
+				allBeans={allStripBeans}
+				activeRecipeId={manual ? (run.recipe?.id ?? null) : null}
+				onSelectRecipe={(id) => {
+					if (!pickLock?.recipesLocked) selection.pickRecipe(id);
+				}}
+				onAllRecipes={() => void goto(`${resolve('/profiles')}#recipes`)}
+				profilesLocked={pickLock ? pickLock.note : null}
+				recipesLocked={pickLock?.recipesLocked ? pickLock.note : null}
 				activeProfileId={profileStore.activeId}
 				activeBeanId={beanLibrary.activeBeanId}
 				onSelectProfile={(id) => {
-					profileStore.setActive(id);
+					if (pickLock) return;
+					selection.pickProfile(id);
 					shotStartError = null;
 				}}
 				onSelectBean={(id) => activateBean(id, { shotInProgress: () => ui.shotInProgress })}
 				onAllProfiles={() => void goto(resolve('profiles'))}
 				onAllBeans={() => void goto(resolve('beans'))}
 			/>
+			{#if manual}
+				<div class="pbrew-body">
+					<PhoneManualBrew {run} connected={scaleConnected} weightG={ui.scaleWeight} onTare={tapTareManual} />
+				</div>
+			{:else}
 			{#if modeBanner && !ui.shotInProgress}
 				<PhoneModeBanner
 					label={modeBanner.label}
@@ -2102,14 +2330,15 @@
 					{#if showStatusCard && brewStatus}<BrewStatusCard {...brewStatus} />{/if}
 				{/if}
 			</div>
+			{/if}
 			<div class="pbrew-foot" {@attach keepToastsAbove}>
 				<div class="pbrew-modes">{@render modeChips()}</div>
-				{@render shotButton()}
+				{#if manual}{@render manualStartButton()}{:else}{@render shotButton()}{/if}
 			</div>
 		</div>
 		<PhoneQuickSheet
 			{params}
-			open={quickSheetOpen}
+			open={quickSheetOpen && !manual}
 			onClose={() => (quickSheetOpen = false)}
 			{yieldTargetOn}
 			{onToggleYieldTarget}
@@ -2166,9 +2395,17 @@
 				quickSheetOpen={quickSheetOpen}
 				onEditProfile={editActiveProfile}
 				onSelectProfile={(id) => {
-					profileStore.setActive(id);
+					selection.pickProfile(id);
 					shotStartError = null;
 				}}
+				recipe={recipeHeader}
+				{recipeItems}
+				activeRecipeId={manual ? (run.recipe?.id ?? null) : null}
+				{pickLock}
+				onSelectRecipe={(id) => selection.pickRecipe(id)}
+				onAddRecipe={() => openRecipeEditor(newRecipeFor(run.recipe?.method ?? 'pourover'), true)}
+				onRecipeLibrary={() => void goto(`${resolve('/profiles')}#recipes`)}
+				onEditRecipe={pickLock?.recipesLocked ? undefined : editSelectedRecipe}
 				onAddProfile={() => void goto(resolve('profiles/new'))}
 				onProfileLibrary={() => void goto(resolve('profiles'))}
 				onEditBean={editActiveBean}
@@ -2178,6 +2415,17 @@
 				onOpenQuick={() => quickSheetOpen = true}
 			/>
 
+			{#if manual}
+				<!-- Manual (brew modes §3): the guided brew in the dashboard's frame. -->
+				<ManualBrew
+					{run}
+					connected={scaleConnected}
+					weightG={ui.scaleWeight}
+					flowGs={ui.scaleFlow}
+					onTare={tapTareManual}
+					tareFlash={tarePulse}
+				/>
+			{:else}
 			<!-- Main grid: timer + targets | readouts + chart -->
 			<div class="crema-dash-main">
 				<div class="crema-dash-timercol">
@@ -2291,6 +2539,7 @@
 					{@render chartPanel()}
 				</div>
 			</div>
+			{/if}
 
 			<!-- Foot: meta cluster on the left, service-mode chips in the middle,
 			     big Start / Stop button on the right. Stays visible even with
@@ -2348,12 +2597,12 @@
 				     (without this wrapper the extra children wrap to a new row
 				     above Start). Chip labels are single-line per the design;
 				     active state still shows the inline ✕ cancel. -->
-				<div class="crema-foot-actions">
+				<div class={['crema-foot-actions', { 'is-manual': manual }]}>
 					<div class="mc-foot-chips">
 						{@render modeChips()}
 					</div>
 					<span class="mc-foot-rule" aria-hidden="true"></span>
-					{@render shotButton()}
+					{#if manual}{@render manualStartButton()}{:else}{@render shotButton()}{/if}
 				</div>
 			</div>
 
@@ -2365,7 +2614,7 @@
 				pinnedBeans={pinnedBeans}
 				roasters={beanLibrary.roasters}
 				activeBeanId={beanLibrary.activeBeanId}
-				open={quickSheetOpen}
+				open={quickSheetOpen && !manual}
 				onSelectFavorite={selectFavorite}
 				onSelectBean={selectBean}
 				onClose={() => quickSheetOpen = false}
@@ -2383,6 +2632,31 @@
 		</div>
 	{/if}
 </div>
+
+{#if recipeEditing}
+	<RecipeEditor
+		recipe={recipeEditing}
+		heading={recipeEditingNew ? 'New recipe' : 'Edit recipe'}
+		reseedOnMethodChange={recipeEditingNew}
+		onSave={saveRecipe}
+		onClose={() => {
+			recipeEditing = null;
+			recipeEditingNew = false;
+		}}
+	/>
+{/if}
+
+<!-- The finished guided brew's log form; it opens once History's rows load (#310). -->
+{#if logOpen && run.logPrefill && getHistoryStore().loaded}
+	<LogBrewDialog
+		prefill={run.logPrefill}
+		onClose={() => (logOpen = false)}
+		onSaved={() => {
+			run.discard();
+			toast.success('Guided brew saved to history');
+		}}
+	/>
+{/if}
 
 <style>
 	/* The phone screen (Android `PhoneBrewScreen`): the strip on top, the foot

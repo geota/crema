@@ -189,6 +189,8 @@ fun SettingsScreen(
             machineConnected = connected,
             scaleConnected = scaleConnected,
             onConnect = onConnect,
+            devicesTab = ui.devicesTab,
+            onOpenDevicesTab = vm::openDevicesTab,
         )
         Row(Modifier.weight(1f).fillMaxHeight()) {
             // ── Section nav (248dp) ──────────────────────────────────────────
