@@ -61,9 +61,41 @@ class GrindSpeedTextTest {
             id = "shot:remote:v1", completedAtMs = 1, durationMs = 1, grindRpm = 700,
             bean = coffee.crema.core.ShotBean(name = "Guji", grinderSetting = "480 700rpm"),
         )
-        val edited = pulled.copy(grindRpm = 800, grindSetting = rpmEditGrind(pulled, 800))
+        val edited = pulled.edit(800)
         assertEquals("480 800rpm", edited.grindSetting)
         assertEquals("480 800rpm", patchedGrind(edited))
+        // Cleared: the dial stays, the speed goes.
+        assertEquals("480", pulled.edit(null).grindSetting)
+        assertEquals("480 700rpm", pulled.edit(null).bean?.grinderSetting, "a snapshot that names a dial is kept")
+    }
+
+    /** As web's `editShotRpm` (core `rpm_edit_grind`). */
+    private fun coffee.crema.history.StoredShot.edit(rpm: Int?): coffee.crema.history.StoredShot {
+        val e = rpmEditGrind(this, rpm)
+        return copy(grindRpm = rpm, grindSetting = e.grinderSetting, bean = rpmEditBean(bean, e))
+    }
+
+    /** REVIEW-555 recheck: clearing the speed of a pulled shot whose grind is
+     *  only "1200rpm" sticks; the snapshot's speed-only grind goes too. */
+    @Test
+    fun `clearing a speed-only grind drops the snapshot's grind too`() {
+        val pulled = coffee.crema.history.StoredShot(
+            id = "shot:remote:v1", completedAtMs = 1, durationMs = 1, grindRpm = 1200,
+            bean = coffee.crema.core.ShotBean(name = "Guji", grinderSetting = "1200rpm"),
+        )
+        val cleared = pulled.edit(null)
+        assertEquals(null, cleared.grindSetting)
+        assertEquals(null, cleared.bean?.grinderSetting)
+        assertEquals("Guji", cleared.bean?.name, "the rest of the snapshot stays")
+        assertEquals(null, cleared.grindRpm)
+        // Its own speed-only grind and the snapshot's go together.
+        val both = pulled.copy(grindSetting = "1200rpm").edit(null)
+        assertEquals(null, both.grindSetting)
+        assertEquals(null, both.bean?.grinderSetting)
+        // A new speed keeps the snapshot and sets the shot's own grind.
+        val faster = pulled.edit(1300)
+        assertEquals("1300rpm", faster.grindSetting)
+        assertEquals("1200rpm", faster.bean?.grinderSetting)
     }
 
     /** Review #555 M1 (b): a grind retyped with a new speed carries it, so

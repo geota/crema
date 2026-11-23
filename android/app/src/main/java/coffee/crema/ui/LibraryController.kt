@@ -4004,14 +4004,19 @@ class LibraryController(
      * Set (null clears) a stored shot's grinding speed, rpm (SPEC grinder-ble
      * §4.2, the shot editor's RPM field). A grind text that ends in a speed
      * ("15 1200rpm", an imported shot's) gets the new speed in place of the
-     * old one, or loses it when cleared: never a second speed.
+     * old one, or loses it when cleared: never a second speed. Clearing the
+     * speed of a pulled shot whose snapshot grind is only that speed drops
+     * the snapshot's grind too, so the speed doesn't come back ([rpmEditGrind]).
      */
     fun setShotGrindRpm(id: String, rpm: Int?) {
         val shot = findShot(id) ?: return
         val value = rpm?.takeIf { it > 0 }
         if (shot.grindRpm == value) return
         val marked = markForVisualizer(id, annotations = true)
-        historyStore.update(id) { it.copy(grindRpm = value, grindSetting = rpmEditGrind(it, value)) }
+        historyStore.update(id) {
+            val edit = rpmEditGrind(it, value)
+            it.copy(grindRpm = value, grindSetting = edit.grinderSetting, bean = rpmEditBean(it.bean, edit))
+        }
         saveMarkedEdit(marked)
         schedulePatchEdited(id)
         onShotAnnotationsEdited(id)
@@ -4349,47 +4354,40 @@ internal fun brewLogGrind(
     coreJson.decodeFromString(BrewLogGrind.serializer(), core(coreJson.encodeToString(BrewLogGrindInput.serializer(), BrewLogGrindInput(grinder, grind))))
 }.getOrElse { BrewLogGrind(grinderId = grinder?.id?.ifBlank { null }, grinderName = grinder?.name?.trim()?.ifEmpty { null }) }
 
+/** A speed as the core's `u32`; a negative one (never stored) is none. */
+private fun Int?.asRpm(): UInt? = this?.takeIf { it >= 0 }?.toUInt()
+
 /**
  * [grind] with its trailing speed ("15 1200rpm") replaced by [rpm], or
  * dropped when [rpm] is null; a grind with no trailing speed is unchanged
  * (the speed lives in `grindRpm`, and the core appends it for Visualizer).
+ * The core's `grind_with_rpm`, as web's `withGrindRpm`.
  */
-internal fun grindWithSpeed(grind: String?, rpm: Int?): String? {
-    val text = grind ?: return null
-    val split = runCatching { coffee.crema.core.splitVisualizerGrindJson(text) }.getOrNull()
-        ?.let { kotlinx.serialization.json.Json.parseToJsonElement(it) as? kotlinx.serialization.json.JsonObject }
-        ?: return text
-    val had = (split["grindRpm"] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull()
-        ?: return text
-    if (had == rpm) return text
-    val setting = (split["setting"] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
-    return when {
-        rpm == null -> setting.ifEmpty { null }
-        setting.isEmpty() -> "${rpm}rpm"
-        else -> "$setting ${rpm}rpm"
-    }
-}
-
-/** The speed a grind text ends in ("15 1200rpm" → 1200), or null. */
-internal fun trailingSpeed(grind: String): Int? =
-    runCatching { coffee.crema.core.splitVisualizerGrindJson(grind) }.getOrNull()
-        ?.let { kotlinx.serialization.json.Json.parseToJsonElement(it) as? kotlinx.serialization.json.JsonObject }
-        ?.let { it["grindRpm"] as? kotlinx.serialization.json.JsonPrimitive }
-        ?.takeIf { !it.isString }?.content?.toIntOrNull()
+internal fun grindWithSpeed(grind: String?, rpm: Int?): String? =
+    runCatching { coffee.crema.core.grindWithRpm(grind, rpm.asRpm()) }.getOrDefault(grind)
 
 /**
- * The grind a shot keeps when its speed is edited to [rpm]: the effective
- * grind (a pulled shot's lives on its bean) with its trailing speed replaced
- * or dropped ([grindWithSpeed]); the stored grind as it is when that changes
- * nothing (review #555 M1).
+ * The grind a shot keeps when its speed is edited to [rpm] (core
+ * `rpm_edit_grind`, web's `rpmEditGrind`): the effective grind (a pulled
+ * shot's may live on its bean snapshot) with its trailing speed replaced or
+ * dropped; the stored grind as it is when that changes nothing (review #555
+ * M1). `clearBeanGrind`: the snapshot held only the speed being cleared and
+ * goes too, so it doesn't come back. Should the bridge refuse, nothing changes.
  */
-internal fun rpmEditGrind(shot: coffee.crema.history.ShotMeta, rpm: Int?): String? {
-    val effective = shot.effectiveGrindSetting
-    val edited = grindWithSpeed(effective, rpm)
-    return if (edited != effective) edited else shot.grindSetting
-}
+internal fun rpmEditGrind(shot: coffee.crema.history.ShotMeta, rpm: Int?): coffee.crema.core.RpmEditGrind = runCatching {
+    coreJson.decodeFromString(
+        coffee.crema.core.RpmEditGrind.serializer(),
+        coffee.crema.core.rpmEditGrindJson(shot.grindSetting, shot.bean?.grinderSetting, rpm.asRpm()),
+    )
+}.getOrElse { coffee.crema.core.RpmEditGrind(grinderSetting = shot.grindSetting, clearBeanGrind = false) }
 
-/** The speed a shot keeps when its grind is edited to [grind]: one typed in
- *  the grind ("15 1300rpm") wins, else the one it had (review #555 M1). */
-internal fun grindEditSpeed(grind: String?, had: Int?): Int? = grind?.let { trailingSpeed(it) } ?: had
+/** [bean] without its legacy grind when [edit] drops it ([rpmEditGrind]). */
+internal fun rpmEditBean(bean: coffee.crema.core.ShotBean?, edit: coffee.crema.core.RpmEditGrind): coffee.crema.core.ShotBean? =
+    if (edit.clearBeanGrind) bean?.copy(grinderSetting = null) else bean
+
+/** The speed a shot keeps when its grind is edited to [grind] (core
+ *  `grind_edit_rpm`, web's `grindEditSpeed`): one typed in the grind
+ *  ("15 1300rpm") wins, else the one it had (review #555 M1). */
+internal fun grindEditSpeed(grind: String?, had: Int?): Int? =
+    runCatching { coffee.crema.core.grindEditRpm(grind, had.asRpm())?.toInt() }.getOrDefault(had)
 

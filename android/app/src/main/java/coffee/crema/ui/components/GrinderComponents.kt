@@ -349,7 +349,7 @@ fun ShotGrinderObservedLine(shot: coffee.crema.history.ShotMeta, modifier: Modif
  * The shot editor's RPM field (grinder-ble §4.2): for a shot whose grinder
  * has a variable speed (its catalogue entry), or one that has a speed.
  * Editing replaces a trailing speed in the grind text, never adds a second
- * ([coffee.crema.ui.grindWithSpeed]).
+ * ([coffee.crema.ui.rpmEditGrind]).
  */
 @Composable
 fun ShotRpmField(
