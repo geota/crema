@@ -118,10 +118,13 @@ class Stage2VmTest {
         val fresh = relaunch()
         assertTrue(VmHarness.library(fresh).historyStoreForTest.onHistoryDb, "a fresh install flips an empty store")
         val before = fresh.ui.value.userMessages.size
+        // A fresh install may run it without a report: count from before the pick.
+        val restored = VmHarness.restoredCount(fresh)
         fresh.startRestore(zip.readBytes(), "backup", MainViewModel.RestoreMode.MERGE)
         VmHarness.idleUntil("the report") { fresh.ui.value.restoreReport != null || fresh.ui.value.userMessages.size > before }
         fresh.confirmRestore()
         VmHarness.idleUntil("the restore") { VmHarness.rows(fresh).map { it.id }.toSet() == ids }
+        VmHarness.awaitRestored(fresh, restored)
         val h = VmHarness.library(fresh).historyStoreForTest
         VmHarness.idleUntil("written to history.db") { ids.all { h.truthRowJsonForTest(it) != null } }
         assertFalse(VmHarness.rows(relaunch()).map { it.id }.toSet() != ids, "and they last")

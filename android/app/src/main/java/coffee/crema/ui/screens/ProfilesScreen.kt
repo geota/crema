@@ -170,6 +170,8 @@ fun ProfilesScreen(
             machineConnected = connected,
             scaleConnected = scaleConnected,
             onConnect = onConnect,
+            devicesTab = ui.devicesTab,
+            onOpenDevicesTab = vm::openDevicesTab,
         )
         Column(Modifier.weight(1f).fillMaxHeight()) {
             // Command bar: title · search · actions in one row. On a narrow 7"/

@@ -89,6 +89,9 @@ class RelayedVerbSecondaryWireTest {
         VmHarness.pinHub(relayStore, endpoint.hubKeys, endpoint.port, name = "Test primary")
         vm = VmHarness.build(store)
         VmHarness.idle()
+        // The grinder's save needs the library loaded: before that the strict
+        // SaveFloor throws on a coroutine, into a later test's runTest (#530).
+        VmHarness.awaitStartupLoaded(vm)
         // The remote's pickers list its own grinders: it owns one of the hub's name.
         vm.addGrinder(SAMPLE_GRINDER_NAME)
         VmHarness.idle()

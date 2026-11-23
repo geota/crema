@@ -272,6 +272,8 @@ fun HistoryScreen(
             machineConnected = connected,
             scaleConnected = scaleConnected,
             onConnect = onConnect,
+            devicesTab = ui.devicesTab,
+            onOpenDevicesTab = vm::openDevicesTab,
         )
         Column(Modifier.weight(1f).fillMaxHeight()) {
             // Short-window compaction (issue #35): on a landscape 8" tablet the

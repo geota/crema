@@ -142,8 +142,10 @@ class SyncReadsStoreVmTest {
         try {
             vm.startRestore(bytes, "backup", MainViewModel.RestoreMode.WIPE)
             VmHarness.idleUntil("the report") { vm.ui.value.restoreReport != null }
+            val restored = VmHarness.restoredCount(vm)
             vm.confirmRestore()
             VmHarness.idleUntil("the restore") { dbField("s1", "visualizerId") == "vis-1" }
+            VmHarness.awaitRestored(vm, restored)
         } finally {
             library.beforeRestoreRows = null
         }

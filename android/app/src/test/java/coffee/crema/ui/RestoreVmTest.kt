@@ -129,8 +129,10 @@ class RestoreVmTest {
             assertTrue("damaged" in vm.ui.value.userMessages.last(), "bom=$bom: ${vm.ui.value.userMessages.last()}")
             vm.startRestore(damaged(bom), "damaged", MainViewModel.RestoreMode.MERGE)
             VmHarness.idleUntil("the report") { vm.ui.value.restoreReport != null }
+            val restored = VmHarness.restoredCount(vm)
             vm.confirmRestore()
             VmHarness.idleUntil("the merge") { VmHarness.rows(vm).any { it.id == "shot:android-1" } }
+            VmHarness.awaitRestored(vm, restored)
         }
     }
 

@@ -189,6 +189,8 @@ fun BrewScreen(
             machineConnected = connected,
             scaleConnected = scaleConnected,
             onConnect = onConnect,
+            devicesTab = ui.devicesTab,
+            onOpenDevicesTab = vm::openDevicesTab,
         )
         Column(Modifier.weight(1f).fillMaxHeight()) {
             BrewHeader(
