@@ -1,12 +1,16 @@
 package coffee.crema.ble.proxy
 
 import android.util.Log
+import coffee.crema.core.RelayDeviceInfo
+import coffee.crema.core.RelayFrame
+import coffee.crema.core.RelayFrameDecoded
+import coffee.crema.core.relayDecodeFrame
+import coffee.crema.core.relayEncodeFrame
+import coffee.crema.core.relayFrameTypes
+import coffee.crema.core.wellFormed
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonObject
 
 /**
  * The Crema multi-device **proxy wire protocol** (M1 — LAN proxy transport).
@@ -306,25 +310,31 @@ const val SCOPE_CONTROL: String = "control"
 const val SCOPE_MIRROR: String = "mirror"
 
 /**
- * Encodes/decodes [Frame]s to/from the JSON wire text. Always (de)serialises via
- * the sealed [Frame] serializer so the `"type"` discriminator is written and
- * read; encoding a concrete subtype directly would omit it.
+ * Encodes/decodes [Frame]s to/from the JSON wire text: the core's codec
+ * (`de1_relay_app::frame`), byte for byte what kotlinx wrote here before and
+ * read as it did (the shared fixtures in
+ * `core/de1-relay-app/tests/golden/v4/frames/` pin the wire). [Frame] keeps
+ * its kotlinx annotations as the schema's description; nothing serializes
+ * through them.
  *
- * - `encodeDefaults = false` — optional nulls (`token`, `src`) and other
- *   defaults stay off the wire, keeping frames lean and capture-line-like.
- * - `ignoreUnknownKeys = true` — forward compatibility: a newer peer adding a
- *   field does not break an older decoder.
+ * - A field at its default (`args` empty, `result` or `src` null) stays off
+ *   the wire.
+ * - An unknown field is ignored, and an unknown `type` is skipped by
+ *   [decodeTolerant] (spec §4.5).
+ * - Strings cross to the core as UTF-8: a lone surrogate is encoded as `?`,
+ *   the byte this shell's UTF-8 encoder wrote for one, and an escaped lone
+ *   surrogate decodes as U+FFFD.
  */
 object FrameCodec {
-    val json: Json = Json {
-        classDiscriminator = "type"
-        encodeDefaults = false
-        ignoreUnknownKeys = true
+    fun encode(frame: Frame): String = relayEncodeFrame(frame.toCore())
+
+    /** Decode a frame; an unknown `type` fails, as kotlinx's sealed decode did. */
+    fun decode(text: String): Frame = when (val decoded = relayDecodeFrame(text.wellFormed())) {
+        is RelayFrameDecoded.Frame -> decoded.frame.toFrame()
+        is RelayFrameDecoded.Unknown ->
+            throw SerializationException("Serializer for subclass '${decoded.typeName}' is not found in the polymorphic scope of 'Frame'")
+        else -> throw decoded.failure()
     }
-
-    fun encode(frame: Frame): String = json.encodeToString(Frame.serializer(), frame)
-
-    fun decode(text: String): Frame = json.decodeFromString(Frame.serializer(), text)
 
     /**
      * Decode a relay v4 `FRAME` payload, tolerating an unknown frame `type`
@@ -332,22 +342,76 @@ object FrameCodec {
      * frames without a version bump. Malformed JSON, a missing `type` or a
      * known type with bad fields still throws, which closes the session.
      */
-    fun decodeTolerant(text: String): Frame? {
-        val obj = json.parseToJsonElement(text).jsonObject
-        val type = (obj["type"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-            ?: throw SerializationException("frame without a type")
-        if (type !in knownTypes) {
-            Log.i(TAG, "Skipping a frame of unknown type \"${type.take(32)}\"")
-            return null
+    fun decodeTolerant(text: String): Frame? = when (val decoded = relayDecodeFrame(text.wellFormed())) {
+        is RelayFrameDecoded.Frame -> decoded.frame.toFrame()
+        is RelayFrameDecoded.Unknown -> {
+            Log.i(TAG, "Skipping a frame of unknown type \"${decoded.typeName.take(32)}\"")
+            null
         }
-        return json.decodeFromJsonElement(Frame.serializer(), obj)
+        else -> throw decoded.failure()
     }
 
-    /** The `type` names the sealed [Frame] serializer knows. */
-    private val knownTypes: Set<String> by lazy {
-        val d = Frame.serializer().descriptor
-        // The sealed descriptor's second element lists the subclasses by serial name.
-        (0 until d.getElementDescriptor(1).elementsCount).map { d.getElementDescriptor(1).getElementName(it) }.toSet()
+    /** The `type` names the core's codec knows. */
+    val TYPES: Set<String> by lazy { relayFrameTypes().toSet() }
+
+    /** The exception kotlinx threw for the same input: not an object was an
+     *  [IllegalArgumentException], the rest [SerializationException]s. */
+    private fun RelayFrameDecoded.failure(): Exception = when (this) {
+        RelayFrameDecoded.NotAnObject -> IllegalArgumentException("a frame must be a JSON object")
+        RelayFrameDecoded.NoType -> SerializationException("frame without a type")
+        is RelayFrameDecoded.Malformed -> SerializationException(detail)
+        is RelayFrameDecoded.Frame, is RelayFrameDecoded.Unknown -> IllegalStateException("not a failure")
+    }
+
+    private fun String.out(): String = wellFormed('?')
+
+    private fun List<DeviceInfo>.toCore(): List<RelayDeviceInfo> =
+        map { RelayDeviceInfo(it.address.out(), it.name.out(), it.kind.out(), it.state.out()) }
+
+    private fun List<RelayDeviceInfo>.toDevices(): List<DeviceInfo> = map { DeviceInfo(it.address, it.name, it.kind, it.state) }
+
+    private fun Frame.toCore(): RelayFrame = when (this) {
+        is Frame.Welcome -> RelayFrame.Welcome(primaryName.out(), authority.out(), roster.toCore(), scope.out())
+        is Frame.Roster -> RelayFrame.Roster(devices.toCore())
+        is Frame.Attach -> RelayFrame.Attach(id, address.out())
+        is Frame.Attached -> RelayFrame.Attached(id, address.out(), state.out())
+        is Frame.Detach -> RelayFrame.Detach(id, address.out())
+        is Frame.Detached -> RelayFrame.Detached(id, address.out())
+        is Frame.Read -> RelayFrame.Read(id, address.out(), service.out(), char.out())
+        is Frame.ReadOk -> RelayFrame.ReadOk(id, hex.out())
+        is Frame.ReadErr -> RelayFrame.ReadErr(id, reason.out())
+        is Frame.Write -> RelayFrame.Write(id, address.out(), service.out(), char.out(), hex.out())
+        is Frame.WriteOk -> RelayFrame.WriteOk(id)
+        is Frame.WriteErr -> RelayFrame.WriteErr(id, reason.out())
+        is Frame.Control -> RelayFrame.Control(id, method.out(), args.out())
+        is Frame.ControlOk -> RelayFrame.ControlOk(id, result?.out())
+        is Frame.ControlErr -> RelayFrame.ControlErr(id, reason.out())
+        is Frame.Notify -> RelayFrame.Notify(address.out(), service.out(), char.out(), hex.out(), t, src?.out())
+        is Frame.State -> RelayFrame.State(address.out(), state.out())
+        is Frame.Config -> RelayFrame.Config(json.out())
+        is Frame.Event -> RelayFrame.Event(text.out())
+    }
+
+    private fun RelayFrame.toFrame(): Frame = when (this) {
+        is RelayFrame.Welcome -> Frame.Welcome(primaryName, authority, roster.toDevices(), scope)
+        is RelayFrame.Roster -> Frame.Roster(devices.toDevices())
+        is RelayFrame.Attach -> Frame.Attach(id, address)
+        is RelayFrame.Attached -> Frame.Attached(id, address, state)
+        is RelayFrame.Detach -> Frame.Detach(id, address)
+        is RelayFrame.Detached -> Frame.Detached(id, address)
+        is RelayFrame.Read -> Frame.Read(id, address, service, char)
+        is RelayFrame.ReadOk -> Frame.ReadOk(id, hex)
+        is RelayFrame.ReadErr -> Frame.ReadErr(id, reason)
+        is RelayFrame.Write -> Frame.Write(id, address, service, char, hex)
+        is RelayFrame.WriteOk -> Frame.WriteOk(id)
+        is RelayFrame.WriteErr -> Frame.WriteErr(id, reason)
+        is RelayFrame.Control -> Frame.Control(id, method, args)
+        is RelayFrame.ControlOk -> Frame.ControlOk(id, result)
+        is RelayFrame.ControlErr -> Frame.ControlErr(id, reason)
+        is RelayFrame.Notify -> Frame.Notify(address, service, char, hex, t, src)
+        is RelayFrame.State -> Frame.State(address, state)
+        is RelayFrame.Config -> Frame.Config(json)
+        is RelayFrame.Event -> Frame.Event(text)
     }
 
     private const val TAG = "FrameCodec"

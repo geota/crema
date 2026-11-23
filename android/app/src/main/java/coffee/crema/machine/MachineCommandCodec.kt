@@ -8,6 +8,7 @@ import coffee.crema.core.relayCommandRefusal
 import coffee.crema.core.relayDecodeCommand
 import coffee.crema.core.relayEncodeCommand
 import coffee.crema.core.relayMachineStates
+import coffee.crema.core.wellFormed
 
 /**
  * The relay's wire vocabulary for [MachineCommand]: `Frame.Control` method
@@ -32,6 +33,11 @@ import coffee.crema.core.relayMachineStates
  * Strings cross to the core as UTF-8, which has no lone surrogates: one
  * (only a peer's escaped JSON can hold one) crosses as U+FFFD, the same
  * length in UTF-16 units, so every length and character check is unchanged.
+ *
+ * "Byte for byte" was checked against the JVM the unit tests run on (JDK
+ * 21). The bytes a sender writes for a brew override's numbers are Java's
+ * shortest `Double.toString`; on a device, ART's may print a few doubles with
+ * more digits, which parse back to the same value on either side.
  */
 object MachineCommandCodec {
 
@@ -157,23 +163,5 @@ object MachineCommandCodec {
         RelayQcField.HOT_WATER_VOLUME -> QcField.HOT_WATER_VOLUME
         RelayQcField.FLUSH_TIME -> QcField.FLUSH_TIME
         RelayQcField.FLUSH_TEMP -> QcField.FLUSH_TEMP
-    }
-
-    /** This text with each lone surrogate as U+FFFD, so it can cross as UTF-8. */
-    private fun String.wellFormed(): String {
-        if (none { it.isSurrogate() }) return this
-        val out = StringBuilder(length)
-        var i = 0
-        while (i < length) {
-            val c = this[i]
-            if (c.isHighSurrogate() && i + 1 < length && this[i + 1].isLowSurrogate()) {
-                out.append(c).append(this[i + 1])
-                i += 2
-                continue
-            }
-            out.append(if (c.isSurrogate()) '\uFFFD' else c)
-            i++
-        }
-        return out.toString()
     }
 }

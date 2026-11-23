@@ -40,3 +40,23 @@ pub fn number(data: &[u8]) {
         }
     }
 }
+
+/// Decode arbitrary bytes as a relay message (lossy UTF-8; the shells
+/// reject invalid UTF-8 before decoding).
+///
+/// Invariants, as asserts: no panic, and a decoded frame encodes to text
+/// that decodes to the same frame and re-encodes to the same text.
+pub fn frame(data: &[u8]) {
+    let text = String::from_utf8_lossy(data);
+    if let Ok(crate::frame::Decoded::Frame(f)) = crate::decode_frame(&text) {
+        let wire = crate::encode_frame(&f);
+        assert_eq!(
+            crate::decode_frame(&wire),
+            Ok(crate::frame::Decoded::Frame(f)),
+            "{wire}"
+        );
+        if let Ok(crate::frame::Decoded::Frame(again)) = crate::decode_frame(&wire) {
+            assert_eq!(crate::encode_frame(&again), wire);
+        }
+    }
+}
