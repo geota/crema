@@ -48,6 +48,8 @@ data class LiveTelemetry(
     val shotTelemetry: List<TelemetrySample> = emptyList(),
     /** Latest scale weight in grams, or null before the first reading. */
     val scaleWeightG: Float? = null,
+    /** The connected grinder's latest reading (5 Hz), or null. */
+    val grinderReading: coffee.crema.core.GrinderReading? = null,
     /**
      * Latest scale-reported native mass-flow rate in g/s, or null — only
      * scales that report their own flow (the Bookoo) populate this; it is

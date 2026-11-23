@@ -74,6 +74,16 @@ fun ScaleBleManager.State.toLinkState(): LinkState = when (this) {
     ScaleBleManager.State.DISCONNECTED -> LinkState.DISCONNECTED
 }
 
+fun GrinderBleManager.State.toLinkState(): LinkState = when (this) {
+    GrinderBleManager.State.IDLE -> LinkState.IDLE
+    GrinderBleManager.State.SCANNING -> LinkState.SCANNING
+    GrinderBleManager.State.CONNECTING,
+    GrinderBleManager.State.DISCOVERING,
+    GrinderBleManager.State.SUBSCRIBING -> LinkState.CONNECTING
+    GrinderBleManager.State.READY -> LinkState.READY
+    GrinderBleManager.State.DISCONNECTED -> LinkState.DISCONNECTED
+}
+
 /**
  * Whether to show a device as "reconnecting" (with a "Retry now" action):
  * remembered, not ended by the user, not READY, and either a live session is

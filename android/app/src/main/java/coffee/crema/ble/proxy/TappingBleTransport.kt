@@ -33,6 +33,11 @@ class TappingBleTransport(
     private val delegate: BleTransport,
     private val hub: RelayHub,
     private val scope: CoroutineScope,
+    /** Whether a device is relayed at all (false for the grinder): its
+     *  traffic isn't teed and [readByAddress] refuses it. */
+    private val isRelayedDevice: (address: String) -> Boolean = { true },
+    /** Whether a service is relayed at all (false for the grinder's). */
+    private val isRelayedService: (service: UUID) -> Boolean = { true },
 ) : BleTransport {
 
     /** Live device handles seen via scan/connect, so [readByAddress] can resolve them. */
@@ -54,7 +59,7 @@ class TappingBleTransport(
         // post-connect state.
         if (connTapped.add(device.address)) {
             delegate.connectionState(device)
-                .onEach { hub.onConnState(device.address, it.name) }
+                .onEach { if (isRelayedDevice(device.address)) hub.onConnState(device.address, it.name) }
                 .launchIn(scope)
         }
     }
@@ -79,7 +84,7 @@ class TappingBleTransport(
         delegate.connectWhenAvailable(device, onLinkUp)
         if (connTapped.add(device.address)) {
             delegate.connectionState(device)
-                .onEach { hub.onConnState(device.address, it.name) }
+                .onEach { if (isRelayedDevice(device.address)) hub.onConnState(device.address, it.name) }
                 .launchIn(scope)
         }
     }
@@ -94,7 +99,9 @@ class TappingBleTransport(
     ): Flow<BleTransport.Notification> =
         delegate.observe(device, service, characteristic).onEach { n ->
             // Non-suspending tee — never blocks the manager's collection.
-            hub.onInbound(device.address, service, characteristic, n.data, n.atMs)
+            if (isRelayedDevice(device.address) && isRelayedService(service)) {
+                hub.onInbound(device.address, service, characteristic, n.data, n.atMs)
+            }
         }
 
     override suspend fun write(
@@ -117,6 +124,9 @@ class TappingBleTransport(
     override suspend fun requestConnectionPriority(device: BleTransport.DeviceHandle, high: Boolean) =
         delegate.requestConnectionPriority(device, high)
 
+    override suspend fun requestLargeMtu(device: BleTransport.DeviceHandle): Int? =
+        delegate.requestLargeMtu(device)
+
     override suspend fun rearmNotifications(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID) =
         delegate.rearmNotifications(device, service, characteristic)
 
@@ -126,6 +136,7 @@ class TappingBleTransport(
     /** Serve a hub read by address: resolve the handle and read through the
      *  delegate. This backs [RelayHub]'s `readSource`. */
     suspend fun readByAddress(address: String, service: UUID, char: UUID): ByteArray {
+        check(isRelayedDevice(address) && isRelayedService(service)) { NOT_RELAYED }
         val handle = handles[address] ?: error("TappingBleTransport: no handle for $address")
         return delegate.read(handle, service, char)
     }

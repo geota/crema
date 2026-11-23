@@ -21,7 +21,14 @@ package coffee.crema.ui
  * Nothing is persisted: a restart outside a running flash starts unpaused.
  * Main thread only, like the rest of [ConnectionController].
  */
-internal class ScaleFlashPause(private val port: Port) {
+internal class ScaleFlashPause(
+    private val port: Port,
+    /** Which device the log lines name (the grinder shares this pause). */
+    private val label: String = "Scale",
+    /** Say nothing about a device that isn't wanted (the grinder with its
+     *  beta off); the scale keeps its line either way. */
+    private val quietWhenUnwanted: Boolean = false,
+) {
     interface Port {
         /** A scale is linked, connecting, reconnecting or remembered, and not ended by the user. */
         fun scaleWanted(): Boolean
@@ -49,12 +56,12 @@ internal class ScaleFlashPause(private val port: Port) {
         if (active) {
             bringBack = port.scaleWanted()
             port.standDown()
-            port.log("Scale: Bluetooth paused for the firmware update")
+            if (bringBack || !quietWhenUnwanted) port.log("$label: Bluetooth paused for the firmware update")
         } else {
             val restore = bringBack
             bringBack = false
             if (restore) {
-                port.log("Scale: firmware update over — reconnecting")
+                port.log("$label: firmware update over — reconnecting")
                 port.bringBack()
             }
         }
@@ -66,7 +73,7 @@ internal class ScaleFlashPause(private val port: Port) {
      */
     fun holdConnect(): Boolean {
         if (!paused) return false
-        if (!bringBack) port.log("Scale: connect held until the firmware update ends")
+        if (!bringBack) port.log("$label: connect held until the firmware update ends")
         bringBack = true
         return true
     }

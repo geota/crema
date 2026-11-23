@@ -53,10 +53,12 @@ class SettingsRegistryTest {
         // the hot-water modes added the dose rows A22–A25; 97: #488 added the
         // active grinder (B) and the grind auto-save switch (C). Round 2 retired
         // the Settings grinder's mirroring: it is this device's own (C, N8).
-        assertEquals(97, Setting.entries.size)
+        // 102: connected grinders (G2b) added the remembered grinder, its
+        // record link and the beta switch, all personal (C).
+        assertEquals(102, Setting.entries.size)
         assertEquals(25, Setting.entries.count { it.group == SettingGroup.A_MACHINE })
         assertEquals(13, Setting.entries.count { it.group == SettingGroup.B_SESSION })
-        assertEquals(59, Setting.entries.count { it.group == SettingGroup.C_PERSONAL })
+        assertEquals(64, Setting.entries.count { it.group == SettingGroup.C_PERSONAL })
         for (s in Setting.entries) {
             if (s.group == SettingGroup.C_PERSONAL) {
                 assertEquals(OnRemote.LOCAL, s.onRemote, "$s")

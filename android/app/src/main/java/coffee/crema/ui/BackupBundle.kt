@@ -157,6 +157,10 @@ internal fun backupEnvelope(snap: BackupSnapshot, json: Json, withShots: Boolean
     val portable = snap.prefs.copy(
         de1Address = null,
         scaleAddress = null,
+        grinderAddress = null,
+        grinderName = null,
+        grinderLinkedAddress = null,
+        grinderLinkedId = null,
         proxyRole = "normal",
         proxyPrimaryHost = "",
         proxyPrimaryPort = 0,

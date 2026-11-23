@@ -211,6 +211,16 @@ interface BleTransport {
     suspend fun requestConnectionPriority(device: DeviceHandle, high: Boolean) {}
 
     /**
+     * Best-effort: ask for the largest ATT MTU the stack allows (517), as
+     * decaid's transport does right after an Android connect
+     * (`universal_ble_transport.dart`, `requestMtu(517)`, 5 s timeout, failure
+     * ignored) — the transport the Motto 80 decaid drivers run on. Returns the
+     * negotiated MTU, or null when unknown or refused. Never throws. The
+     * default (no radio underneath: replay / LAN proxy) is null.
+     */
+    suspend fun requestLargeMtu(device: DeviceHandle): Int? = null
+
+    /**
      * Force a fresh CCCD enable on [characteristic] while an [observe] of it
      * is already being collected: write "disable" then "enable", both awaited
      * (de1app re-enables A009 notifications before the firmware verify,

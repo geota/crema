@@ -42,6 +42,9 @@ internal class CoreLane(
     private val writeDe1: suspend (WriteTarget, ByteArray, Boolean, () -> UInt?) -> Boolean,
     /** One scale write ([coffee.crema.ble.ScaleBleManager.writeCommand]). */
     private val writeScale: suspend (ByteArray) -> Unit,
+    /** One grinder write ([coffee.crema.ble.GrinderBleManager.writeCommand]);
+     *  false when it failed (the rest of that output's writes are dropped). */
+    private val writeGrinder: suspend (ByteArray) -> Boolean = { false },
     /** `Command.ReadState`: read StateInfo and feed it to the core
      *  ([coffee.crema.ble.De1BleManager.readState]). */
     private val readState: suspend () -> Unit = {},
@@ -153,15 +156,35 @@ internal class CoreLane(
                 // Run below, the scale writes on their own, the DE1 writes as
                 // one ordered batch. No `else`: a new command must fail the
                 // build here, not be dropped.
-                is Command.WriteScale, is Command.WriteCharacteristic -> {}
-                // No grinder transport on Android yet (G2b), so nothing connects
-                // a grinder and the core sends none of these.
-                is Command.WriteGrinder -> log("Grinder write dropped: no grinder transport")
+                is Command.WriteScale, is Command.WriteCharacteristic, is Command.WriteGrinder -> {}
             }
         }
         val de1Writes = output.commands.filterIsInstance<Command.WriteCharacteristic>()
         output.commands.filterIsInstance<Command.WriteScale>().forEach(::executeCommand)
+        // The grinder's writes are the fragments of one message: in order, one
+        // coroutine, each awaited; a failed one drops the rest (the core's
+        // first-reading deadline then reports the link dead).
+        val grinderWrites = output.commands.filterIsInstance<Command.WriteGrinder>()
+        if (grinderWrites.isNotEmpty()) executeGrinderWrites(grinderWrites)
         if (de1Writes.isNotEmpty()) executeDe1Writes(de1Writes, startedUploadId(output.events))
+    }
+
+    /** `Command.WriteGrinder`s, in order on one coroutine. */
+    private fun executeGrinderWrites(writes: List<Command.WriteGrinder>) {
+        scope.launch {
+            for (w in writes) {
+                val bytes = w.content.data.map { it.toByte() }.toByteArray()
+                val ok = try {
+                    writeGrinder(bytes)
+                } catch (ce: kotlinx.coroutines.CancellationException) {
+                    throw ce
+                } catch (e: Exception) {
+                    log("Grinder write failed: ${e.message}")
+                    false
+                }
+                if (!ok) break
+            }
+        }
     }
 
     /** `Command.ReadState`: a stop not honoured may only have lost its state
@@ -237,8 +260,7 @@ internal class CoreLane(
                 }
             }
             is Command.WriteCharacteristic -> executeDe1Writes(listOf(command))
-            // Dropped in `applyOutput` (no grinder transport yet).
-            is Command.WriteGrinder -> {}
+            is Command.WriteGrinder -> executeGrinderWrites(listOf(command))
             Command.Stop -> executeStop()
             Command.CancelStop -> cancelStaleStop()
             Command.ReadState -> executeReadState()

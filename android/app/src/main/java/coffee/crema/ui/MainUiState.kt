@@ -113,6 +113,19 @@ data class MainUiState(
     /** The remembered scale's advertised name — feeds the scan-free direct
      *  reconnect (codec identify needs the name). */
     val rememberedScaleName: String? = null,
+    /** The remembered grinder (same rule as the scale's), and its advertised
+     *  name for the scan-free reconnect. */
+    val rememberedGrinderAddress: String? = null,
+    val rememberedGrinderName: String? = null,
+    /** The owned grinder record linked to the grinder at [grinderLinkedAddress]. */
+    val grinderLinkedAddress: String? = null,
+    val grinderLinkedId: String? = null,
+    /** Settings → Connected grinders (beta), off by default. */
+    val connectedGrinders: Boolean = false,
+    /** The connected grinder's Bluetooth address while linked, else null. */
+    val connectedGrinderAddress: String? = null,
+    /** The connected grinder's link and identity (Devices → Grinder card). */
+    val connectedGrinder: ConnectedGrinderUi = ConnectedGrinderUi(),
     /** The DE1 is reconnecting (a remembered device between / during
      *  re-attempts) — the device rows show "Reconnecting…" and "Retry now". */
     val de1Reconnecting: Boolean = false,

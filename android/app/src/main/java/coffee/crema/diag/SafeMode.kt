@@ -55,6 +55,6 @@ object SafeMode {
     suspend fun resetDevices(ctx: Context) {
         val store = SettingsStore(ctx.applicationContext, json)
         val prefs = store.load()
-        store.save(prefs.copy(de1Address = null, scaleAddress = null))
+        store.save(prefs.copy(de1Address = null, scaleAddress = null, grinderAddress = null))
     }
 }
