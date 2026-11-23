@@ -62,7 +62,7 @@ import kotlin.math.roundToInt
  * session is the same GuidedBrewController engine; these are the pieces the
  * Brew layouts place (the tablet's steps column, step tile, chart and foot
  * controls; the phone's step card, list and Start brew). The live state and
- * cues are shared with [GuidedBrewPanel] through [LiveModel].
+ * cues come from [LiveModel] (GuidedBrewShared.kt).
  */
 
 /** The live model of [session], or of [recipe] at rest (its first step, the clock at 0). */

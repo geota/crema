@@ -245,7 +245,6 @@ internal class GuidedBrewController(
             it.copy(guidedBrew = GuidedBrewUi(phase = "armed", recipe = recipe, startOnPour = startOnPour))
         }
         _liveBrewSeries.value = coffee.crema.core.BrewSeries(samples = emptyList(), stageMarks = emptyList())
-        _guidedSetup.update { it.copy(scaleMode = coffee.crema.ui.brewlog.ScaleMode.BREW) }
         startBrewTick()
         setBrewSessionActive(true)
     }
@@ -365,7 +364,7 @@ internal class GuidedBrewController(
 
 
     /**
-     * The Scale screen's Weigh | Brew mode and the Brew setup's method /
+     * The guided brew's setup: method /
      * recipe / start-on-pour picks. VM-held, not a screen `remember`, so a
      * rotation across 840dp (a nav-host swap) keeps them.
      */
@@ -386,7 +385,6 @@ internal class GuidedBrewController(
         }
     }
 
-    fun setScaleMode(mode: String) = _guidedSetup.update { it.copy(scaleMode = mode) }
 
     /** A method chip: the method's default recipe (pointer, else its built-in), or none. */
     fun selectGuidedMethod(method: String) {

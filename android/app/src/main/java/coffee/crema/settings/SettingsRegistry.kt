@@ -261,7 +261,6 @@ val NOT_SETTINGS: Map<String, String> = mapOf(
     // Setters of library data, drafts and screen state.
     "$VM.setBuiltinRecipeHidden(String, Boolean)" to "library data (recipe organisation)",
     "$VM.setDefaultBrewRecipe(BrewRecipe)" to "library pointer (lastRecipeByMethod)",
-    "$VM.setScaleMode(String)" to "guided-setup selection",
     "$VM.setGuidedStartOnPour(Boolean)" to "guided-setup selection",
     "$VM.setRecipeEditMethod(String)" to "screen-local draft",
     "$VM.setMethodEditStyle(BrewMethodStyle)" to "screen-local draft",

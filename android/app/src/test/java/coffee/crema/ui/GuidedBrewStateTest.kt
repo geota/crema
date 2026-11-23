@@ -13,10 +13,8 @@ import coffee.crema.ui.brewlog.BrewCueDefaults
 import coffee.crema.ui.brewlog.GuidedBeanRules
 import coffee.crema.ui.brewlog.GuidedBrewSetup
 import coffee.crema.ui.brewlog.GuidedSetupRules
-import coffee.crema.ui.brewlog.LivePane
 import coffee.crema.ui.brewlog.RecipeEditDraft
 import coffee.crema.ui.brewlog.RecipeEditOwner
-import coffee.crema.ui.brewlog.ScaleMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -81,7 +79,6 @@ class GuidedBrewStateTest {
         val s = GuidedSetupRules.resolve(GuidedBrewSetup(), listOf(saved), mapOf("aeropress" to "a"), "aeropress", template)
         assertEquals("aeropress", s.method)
         assertEquals(saved, s.recipe)
-        assertEquals(ScaleMode.WEIGH, s.scaleMode)
     }
 
     @Test fun blankSetupWithoutHistoryUsesTheTemplateAndKeepsItStable() {
@@ -95,10 +92,9 @@ class GuidedBrewStateTest {
     @Test fun anEditedRecipeReplacesTheStaleSelection() {
         val old = recipe("a")
         val edited = old.copy(name = "Renamed", updatedAt = 2)
-        val s = GuidedBrewSetup(scaleMode = ScaleMode.BREW, method = "pourover", recipe = old, methodChosen = true)
+        val s = GuidedBrewSetup(method = "pourover", recipe = old, methodChosen = true)
         val r = GuidedSetupRules.resolve(s, listOf(edited), mapOf("pourover" to "a"), null, template)
         assertEquals("Renamed", r.recipe?.name)
-        assertEquals(ScaleMode.BREW, r.scaleMode)
     }
 
     @Test fun aDeletedSelectionFallsBackToTheMethodDefault() {
@@ -197,26 +193,6 @@ class GuidedBrewStateTest {
         assertFalse(d.totalMatches(planned))
         assertEquals(StepAdvance.Manual, d.steps[1].advance)
         assertEquals(2, d.removeStep(0).steps.size)
-    }
-
-    // ── Live-session pane classes (PLAN §4) ─────────────────────────────
-
-    @Test fun paneClassesFollowThePaneNotTheDevice() {
-        assertEquals(LivePane.COMPACT, LivePane.of(427f, 700f)) // Pixel portrait
-        assertEquals(LivePane.MEDIUM, LivePane.of(568f, 820f)) // 7" portrait: 600dp minus shell edges
-        assertEquals(LivePane.COMPACT, LivePane.of(440f, 820f)) // widest phones
-        assertEquals(LivePane.MEDIUM, LivePane.of(800f, 1100f)) // medium tablet portrait
-        assertEquals(LivePane.COCKPIT, LivePane.of(780f, 330f)) // Pixel landscape, minus rail + header
-        assertEquals(LivePane.COCKPIT, LivePane.of(860f, 300f))
-        assertEquals(LivePane.COCKPIT, LivePane.of(870f, 450f)) // 7" landscape
-        assertEquals(LivePane.TWO_COLUMN, LivePane.of(1350f, 780f)) // large tablet landscape
-    }
-
-    @Test fun clockScalesWithHeightWithinBounds() {
-        assertEquals(48f, LivePane.clockSp(200f))
-        assertEquals(96f, LivePane.clockSp(2000f))
-        val mid = LivePane.clockSp(700f)
-        assertTrue(mid in 48f..96f)
     }
 
     @Test fun aLongSteepLetsTheScreenSleepEverythingElseHoldsIt() {

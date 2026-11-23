@@ -549,7 +549,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The open Log-brew form's draft, or null (see [NavRestore.restoreRoute]). */
     val logBrew: StateFlow<coffee.crema.ui.brewlog.BrewLogDraft?> get() = guided.logBrew
 
-    /** The Scale screen's Weigh | Brew mode and the Brew setup's picks. */
+    /** The guided brew's setup picks (recipe, start-on-pour, bean). */
     val guidedSetup: StateFlow<coffee.crema.ui.brewlog.GuidedBrewSetup> get() = guided.guidedSetup
 
     /** The open recipe editor's working copy, or null. */
@@ -623,7 +623,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun defaultBrewRecipeFor(method: String): coffee.crema.core.BrewRecipe? = guided.defaultBrewRecipeFor(method)
 
     // Setup selections + the recipe editor.
-    fun setScaleMode(mode: String) = guided.setScaleMode(mode)
     fun selectGuidedMethod(method: String) = guided.selectGuidedMethod(method)
     fun selectGuidedRecipe(recipe: coffee.crema.core.BrewRecipe) = guided.selectGuidedRecipe(recipe)
     fun setGuidedStartOnPour(on: Boolean) = guided.setGuidedStartOnPour(on)
