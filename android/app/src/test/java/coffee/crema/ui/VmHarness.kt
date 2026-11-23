@@ -8,6 +8,7 @@ import android.app.Application
 import android.os.Looper
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
 import coffee.crema.ble.proxy.RelayKeyLoad
 import coffee.crema.ble.proxy.RelayKeyStore
@@ -43,10 +44,56 @@ internal object VmHarness {
     /** A new factory per call: `AndroidViewModelFactory.getInstance` caches the
      *  first test's Application, whose files dir a later test doesn't use. */
     fun build(store: ViewModelStore): MainViewModel {
+        recordOwner()
         RelayKeyStore.backendForTests = keystore
         // One restore per process: a test's last one never outlives it.
         coffee.crema.restore.RestoreEngine.resetForTest()
+        settleEnded()
         return ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(app()))[MainViewModel::class.java]
+            .also { built += it }
+    }
+
+    /** The ViewModels built and not yet settled by [settleEnded]. */
+    private val built = java.util.concurrent.CopyOnWriteArrayList<MainViewModel>()
+
+    /**
+     * Before a new ViewModel starts its save session, finish what the ended
+     * ones (their store cleared, by an earlier test's teardown) left running:
+     * their queued Main work and restores ([settleRestores]), then their queued
+     * prefs saves. The new session refuses a save from an old ViewModel, and
+     * under strict saves that refusal throws from the old ViewModel's
+     * coroutine, failing a later, unrelated test (UncaughtExceptionsBeforeTest
+     * in RailSplitTest, FLAKY.md). The prefs saves only wait on the store's
+     * lock, on IO, so blocking on them can't deadlock the main thread. A
+     * ViewModel still alive (a second one in the same test) is left alone.
+     */
+    private fun settleEnded() {
+        val ended = built.filter { !it.viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.isActive }
+        if (ended.isEmpty()) return
+        settleRestores(ended, timeoutMs = 5_000)
+        for (vm in ended) {
+            val settings = MainViewModel::class.java.declaredFields.single { it.type == SettingsController::class.java }
+                .apply { isAccessible = true }.get(vm)
+            val store = SettingsController::class.java.declaredFields.single { it.type == coffee.crema.settings.SettingsStore::class.java }
+                .apply { isAccessible = true }.get(settings) as coffee.crema.settings.SettingsStore
+            kotlinx.coroutines.runBlocking { store.awaitSaves() }
+        }
+        built.removeAll(ended.toSet())
+    }
+
+    /** Name the test building this VM for [coffee.crema.persist.SaveFloor.owners]: the
+     *  innermost `@Test` method on the stack. */
+    private fun recordOwner() {
+        val test = Thread.currentThread().stackTrace.firstNotNullOfOrNull { f ->
+            runCatching {
+                Class.forName(f.className).declaredMethods.firstOrNull { m ->
+                    m.name == f.methodName && m.isAnnotationPresent(org.junit.Test::class.java)
+                }?.let { "${f.className.substringAfterLast('.')}.${f.methodName}" }
+            }.getOrNull()
+        } ?: return
+        val owners = coffee.crema.persist.SaveFloor.owners
+        owners.addLast(test)
+        while (owners.size > 4) owners.pollFirst()
     }
 
     /**
