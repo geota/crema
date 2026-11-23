@@ -14,6 +14,7 @@ import io.ktor.websocket.close
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -231,6 +232,16 @@ internal class RelayWire(
     suspend fun abort(code: Int, reason: String) {
         lock.withLock { markClosed(code) }
         closeSocket(code, reason)
+    }
+
+    /**
+     * End the socket without the connection's lock, which a stuck socket write
+     * may hold (a remote that stopped reading): cancel the WebSocket. Its
+     * pending and later writes fail, its `incoming` ends, and [pump] then
+     * shuts the connection down. No close frame: the writer is what's stuck.
+     */
+    fun cancelSocket() {
+        ws.cancel()
     }
 
     /** The socket ended: stop the timer and free the native object, once. */

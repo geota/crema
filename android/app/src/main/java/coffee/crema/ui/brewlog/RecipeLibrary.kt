@@ -329,3 +329,16 @@ fun BrewRecipeCard(
         )
     }
 }
+
+/**
+ * Brew's phone dropdown recipes, most recent first (brew-modes owner
+ * revision): the selected recipe, then each method's last-used recipe (the
+ * library pointers a pick or a brew moves), then the rest of the library in
+ * its own order. Hidden built-ins and deleted recipes are left out.
+ */
+fun recentBrewRecipes(ui: coffee.crema.ui.MainUiState, selectedId: String?): List<BrewRecipe> {
+    val all = visibleBrewRecipes(ui.brewRecipes, "", ui.builtinRecipes, ui.hiddenBuiltinRecipes)
+    val byId = all.associateBy { it.id }
+    val lead = (listOfNotNull(selectedId) + ui.lastRecipeByMethod.values).distinct().mapNotNull { byId[it] }
+    return lead + all.filter { it !in lead }
+}

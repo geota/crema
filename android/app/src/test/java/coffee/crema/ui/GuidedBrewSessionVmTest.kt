@@ -7,7 +7,6 @@ import coffee.crema.core.BrewStep
 import coffee.crema.core.BrewStepKind
 import coffee.crema.core.StepAdvance
 import coffee.crema.ui.brewlog.BrewLogOwner
-import coffee.crema.ui.brewlog.ScaleMode
 import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -68,7 +67,6 @@ class GuidedBrewSessionVmTest {
         settle(vm)
         assertEquals("armed", session(vm).phase)
         assertTrue(guided.brewTicking, "the session tick runs while armed")
-        assertEquals(ScaleMode.BREW, vm.guidedSetup.value.scaleMode)
         // Arming remembers the recipe as its method's default.
         assertEquals(recipe.id, VmHarness.ownState(vm).lastRecipeByMethod["pourover"])
 

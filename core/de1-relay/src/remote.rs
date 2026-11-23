@@ -805,10 +805,14 @@ impl RemoteConnection {
 
     /// Closes: an authenticated `CLOSE` once established, `ABORT(CANCELLED)`
     /// during a pairing, a plain close while waiting for the ServerHello.
+    /// Never fails: the Step always carries a close, so the shell always ends
+    /// the socket (an ended connection gets a plain close).
     pub fn close(&mut self, reason: CloseReason, now_ms: u64) -> Step {
         let mut step = Step::default();
         match self.phase {
-            Phase::Paired | Phase::Closed | Phase::Failed => {}
+            Phase::Paired | Phase::Closed | Phase::Failed => {
+                step.close_with(ws_close::NORMAL, "closed");
+            }
             Phase::Established => {
                 let code = CloseCode::from(reason);
                 let payload = wire::encode_close(code, "");

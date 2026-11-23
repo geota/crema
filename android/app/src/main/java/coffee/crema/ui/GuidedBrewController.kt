@@ -245,7 +245,6 @@ internal class GuidedBrewController(
             it.copy(guidedBrew = GuidedBrewUi(phase = "armed", recipe = recipe, startOnPour = startOnPour))
         }
         _liveBrewSeries.value = coffee.crema.core.BrewSeries(samples = emptyList(), stageMarks = emptyList())
-        _guidedSetup.update { it.copy(scaleMode = coffee.crema.ui.brewlog.ScaleMode.BREW) }
         startBrewTick()
         setBrewSessionActive(true)
     }
@@ -365,7 +364,7 @@ internal class GuidedBrewController(
 
 
     /**
-     * The Scale screen's Weigh | Brew mode and the Brew setup's method /
+     * The guided brew's setup: method /
      * recipe / start-on-pour picks. VM-held, not a screen `remember`, so a
      * rotation across 840dp (a nav-host swap) keeps them.
      */
@@ -386,7 +385,6 @@ internal class GuidedBrewController(
         }
     }
 
-    fun setScaleMode(mode: String) = _guidedSetup.update { it.copy(scaleMode = mode) }
 
     /** A method chip: the method's default recipe (pointer, else its built-in), or none. */
     fun selectGuidedMethod(method: String) {
@@ -442,8 +440,8 @@ internal class GuidedBrewController(
      * becomes its default; an edit opened from the Scale setup comes back as
      * that setup's selection, so Save returns to the same setup, updated.
      */
-    fun saveRecipeEdit() {
-        val d = _recipeEdit.value ?: return
+    fun saveRecipeEdit(): coffee.crema.core.BrewRecipe? {
+        val d = _recipeEdit.value ?: return null
         val now = System.currentTimeMillis()
         val edited = d.toRecipe()
         // Built-ins are read-only: an edit handed a built-in saves as a
@@ -458,11 +456,12 @@ internal class GuidedBrewController(
         if (coffee.crema.brew.RecipeLibraryRules.becomesDefaultOnSave(saved.method, uiState().lastRecipeByMethod)) {
             rememberRecipeUsed(saved)
         }
-        if (d.owner == coffee.crema.ui.brewlog.RecipeEditOwner.SCALE) {
+        if (d.owner == coffee.crema.ui.brewlog.RecipeEditOwner.SCALE || d.owner == coffee.crema.ui.brewlog.RecipeEditOwner.BREW) {
             _guidedSetup.update { it.copy(method = saved.method, recipe = saved, methodChosen = true) }
         }
         _recipeEdit.value = null
         resolveGuidedSetup()
+        return saved
     }
 
     // ── Your own brewing methods (issue #10 feedback) ────────────────
@@ -617,13 +616,13 @@ internal class GuidedBrewController(
     }
 
     /** The finished session's "Save brew…": the Log-brew form, pre-filled with measured truth. */
-    fun openGuidedLogBrew() {
+    fun openGuidedLogBrew(owner: String = coffee.crema.ui.brewlog.BrewLogOwner.SCALE) {
         val s = effectiveState()
         val session = s.guidedBrew
         val recipe = session.recipe ?: _guidedSetup.value.recipe
         val summary = session.summary
         _logBrew.value = coffee.crema.ui.brewlog.BrewLogSeeds.open(
-            owner = coffee.crema.ui.brewlog.BrewLogOwner.SCALE,
+            owner = owner,
             history = historyRows(),
             activeBeanId = s.activeBeanId,
             guidedMethod = summary?.method ?: recipe?.method,
@@ -895,7 +894,9 @@ internal class GuidedBrewController(
         }
         _logBrew.value = null
         // A guided session's summary card ends once its brew is saved.
-        if (d.owner == coffee.crema.ui.brewlog.BrewLogOwner.SCALE && uiState().guidedBrew.phase == "done") {
+        // Brew's Manual page owns it now (BREW); SCALE is a draft from before.
+        val guidedOwner = d.owner == coffee.crema.ui.brewlog.BrewLogOwner.BREW || d.owner == coffee.crema.ui.brewlog.BrewLogOwner.SCALE
+        if (guidedOwner && uiState().guidedBrew.phase == "done") {
             brewSessionClearSummary()
         }
         return true

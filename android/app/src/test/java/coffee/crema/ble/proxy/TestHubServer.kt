@@ -7,7 +7,6 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * A relay v4 hub endpoint a remote under test can dial on the loopback: a real
@@ -66,8 +65,8 @@ internal class TestHubServer private constructor(
 
     /** Stop hosting: admitted remotes get an authenticated `CLOSE(HUB_STOPPED)` first. */
     fun stopHosting() {
-        runBlocking { withTimeoutOrNull(2_000) { acceptor.closeAll() } }
-        server.stop()
+        // The mode switch's own teardown: closeAll is bounded per session, so no outer timeout.
+        runBlocking { coffee.crema.ble.proxy.stopHosting(acceptor, server) }
     }
 
     /** A link that logs what the remote sent. */

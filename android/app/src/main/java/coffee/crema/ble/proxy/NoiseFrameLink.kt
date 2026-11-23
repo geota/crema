@@ -40,9 +40,18 @@ internal class NoiseFrameLink(private val wire: RelayWire) : FrameLink {
         closeWith(RelayCloseReason.REVOKED)
     }
 
-    /** Close the session with an authenticated [reason]; a socket that already ended is left alone. */
+    /**
+     * Close the session with an authenticated [reason]. When the core call
+     * fails, the socket is closed anyway (a plain close), so a close or a
+     * revoke always ends the socket. A wire that had already ended is left
+     * alone: whatever ended it closes the socket, with its own code.
+     */
     suspend fun closeWith(reason: RelayCloseReason) {
-        if (!wire.call { closeSession(reason, it) }) ended()
+        if (wire.call { closeSession(reason, it) }) return
+        // false with the wire still open: the core call failed (call() never
+        // marks a failed call closed).
+        if (!wire.closed) wire.abort(CLOSE_NORMAL, "closed")
+        ended()
     }
 
     /** One decrypted message from the wire. */
@@ -67,5 +76,8 @@ internal class NoiseFrameLink(private val wire: RelayWire) : FrameLink {
 
         /** WebSocket close code for a protocol error (spec §4.5). */
         const val CLOSE_PROTOCOL = 4400
+
+        /** The plain close the core uses for a connection that already ended. */
+        const val CLOSE_NORMAL = 1000
     }
 }

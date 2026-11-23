@@ -144,9 +144,9 @@ internal class RelayRig(
         client: io.ktor.client.HttpClient = coffee.crema.net.HttpClients.webSocketClient(),
     ): ReconnectingClientLink = ReconnectingClientLink(at, scope, remote, hubKey, client)
 
+    /** Stop hosting the way the mode switch does: the bounded close, then the server stop. */
     fun stop() {
-        runBlocking { withTimeoutOrNull(2_000) { acceptor.closeAll() } }
-        server.stop()
+        runBlocking { stopHosting(acceptor, server) }
         scope.cancel()
     }
 
