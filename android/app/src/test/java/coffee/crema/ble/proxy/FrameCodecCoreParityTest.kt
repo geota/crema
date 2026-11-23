@@ -109,16 +109,16 @@ class FrameCodecCoreParityTest {
     }
 
     /** A hostile peer's object with as many distinct keys as fit in one
-     *  64 KiB message, and a duplicate that wins: decoded as kotlinx did, in
-     *  linear time. */
+     *  relay message (up to 1 MiB once reassembled), and a duplicate that
+     *  wins: decoded as kotlinx did, in linear time. */
     @Test
-    fun `an object with thousands of keys decodes as it did, quickly`() {
+    fun `an object with a megabyte of keys decodes as it did, quickly`() {
         val text = buildString {
             append("""{"type":"event","text":"first"""")
-            for (i in 0 until 5_000) append(",\"k$i\":$i")
+            for (i in 0 until 60_000) append(",\"k$i\":$i")
             append(""","text":"last"}""")
         }
-        assertTrue(text.length < 65_536, "${text.length}")
+        assertTrue(text.length < 1 shl 20, "${text.length}")
         val start = System.nanoTime()
         val frame = FrameCodec.decodeTolerant(text)
         val elapsedMs = (System.nanoTime() - start) / 1_000_000
