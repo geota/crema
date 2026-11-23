@@ -1512,6 +1512,15 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				...snapshot,
 				eventLog: appendLog(snapshot.eventLog, `Decode error: ${event.content.message}`)
 			};
+		// The connected grinder (G2a core only): the web shell has no grinder
+		// transport yet, so these don't arrive; G2b gives them a home.
+		case 'GrinderReady':
+		case 'GrinderReading':
+		case 'GrinderInfoChanged':
+		case 'GrinderLinkDead':
+		case 'GrinderUnsupported':
+		case 'GrindCompleted':
+			return snapshot;
 		case 'UnknownMachineByte':
 			return {
 				...snapshot,

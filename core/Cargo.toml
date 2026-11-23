@@ -7,6 +7,8 @@ resolver = "3"
 members = [
     "de1-protocol",
     "de1-scale",
+    "de1-device",
+    "de1-grinder",
     "de1-domain",
     "de1-app",
     "de1-relay",
@@ -18,7 +20,7 @@ members = [
 ]
 # The cargo-fuzz project builds on nightly with its own lockfile. The model
 # tests have their own lockfiles too: proptest would fail `cargo deny check bans`.
-exclude = ["de1-relay/fuzz", "de1-relay-app/fuzz", "de1-relay-app-model", "de1-model", "de1-history-model"]
+exclude = ["de1-relay/fuzz", "de1-relay-app/fuzz", "de1-grinder/fuzz", "de1-relay-app-model", "de1-model", "de1-history-model"]
 
 [workspace.package]
 edition = "2024"

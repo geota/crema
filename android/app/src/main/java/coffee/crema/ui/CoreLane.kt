@@ -154,6 +154,9 @@ internal class CoreLane(
                 // one ordered batch. No `else`: a new command must fail the
                 // build here, not be dropped.
                 is Command.WriteScale, is Command.WriteCharacteristic -> {}
+                // No grinder transport on Android yet (G2b), so nothing connects
+                // a grinder and the core sends none of these.
+                is Command.WriteGrinder -> log("Grinder write dropped: no grinder transport")
             }
         }
         val de1Writes = output.commands.filterIsInstance<Command.WriteCharacteristic>()
@@ -234,6 +237,8 @@ internal class CoreLane(
                 }
             }
             is Command.WriteCharacteristic -> executeDe1Writes(listOf(command))
+            // Dropped in `applyOutput` (no grinder transport yet).
+            is Command.WriteGrinder -> {}
             Command.Stop -> executeStop()
             Command.CancelStop -> cancelStaleStop()
             Command.ReadState -> executeReadState()

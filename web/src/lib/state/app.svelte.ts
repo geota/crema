@@ -1208,6 +1208,11 @@ export class CremaApp {
 				await this.scale.writeScale(data);
 				break;
 			}
+			case 'WriteGrinder':
+				// No grinder transport on web yet (G2b), so nothing connects a
+				// grinder and the core sends none of these.
+				this.state.log('Grinder write dropped: no grinder transport');
+				break;
 			case 'Stop':
 				// The core says this is a stop: the urgent lane, ahead of the
 				// queue, one at a time.

@@ -226,6 +226,8 @@ crema/
 ├── core/                     # Rust workspace (sans-IO, edition 2024)
 │   ├── de1-protocol/         #   DE1 BLE wire codec (state, shot samples, MMR, profiles, firmware)
 │   ├── de1-scale/            #   Per-scale BLE codecs (13 scale families)
+│   ├── de1-device/           #   What BLE devices share: kinds, scan registry, link health, firmware
+│   ├── de1-grinder/          #   Connected-grinder drivers (BOOKOO Motto 80) + grind detection
 │   ├── de1-domain/           #   Shots, profiles, beans, brew recipes, stop-at-weight, sync, import/export
 │   ├── de1-app/              #   Orchestrator: the `CremaCore` facade + event stream, capture/replay
 │   ├── de1-wasm/             #   wasm-bindgen bridge for the web shell

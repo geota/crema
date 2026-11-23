@@ -1,0 +1,36 @@
+# cargo-fuzz project for de1-grinder. Excluded from the core workspace; builds
+# on nightly with its own lockfile:
+#
+#   cd core/de1-grinder/fuzz && cargo +nightly fuzz run fuzz_motto_notifications -- -max_total_time=60
+#
+# The targets are thin wrappers around `de1_grinder::fuzzing`, whose entry
+# points `tests/fuzz_corpus.rs` also replays on stable over `corpus/`.
+[package]
+name = "de1-grinder-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+de1-grinder = { path = ".." }
+
+[[bin]]
+name = "fuzz_motto_notifications"
+path = "fuzz_targets/fuzz_motto_notifications.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_motto_round_trip"
+path = "fuzz_targets/fuzz_motto_round_trip.rs"
+test = false
+doc = false
+bench = false
+
+# Its own workspace root, so the core workspace's settings don't apply.
+[workspace]

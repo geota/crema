@@ -2534,6 +2534,53 @@ export type Event =
 	reason: ScaleLinkDeadReason;
 }}
 	/**
+	 * The connected grinder answered: its first valid reading after the
+	 * handshake (a [`GrinderReading`](Self::GrinderReading) follows).
+	 */
+	| { type: "GrinderReady", content: {
+	/** What the grinder has said about itself so far. */
+	info: GrinderInfo;
+}}
+	/**
+	 * A reading from the connected grinder (the Motto 80 sends five a
+	 * second).
+	 */
+	| { type: "GrinderReading", content: {
+	/** The decoded reading. */
+	reading: GrinderReading;
+}}
+	/** The grinder reported its firmware or serial after it was ready. */
+	| { type: "GrinderInfoChanged", content: {
+	/** Everything it has said about itself. */
+	info: GrinderInfo;
+}}
+	/**
+	 * The grinder link looks dead. The shell drops the link and reconnects
+	 * (a reconnect builds a new driver and handshakes again).
+	 */
+	| { type: "GrinderLinkDead", content: {
+	/** Which rule tripped. */
+	reason: GrinderLinkDeadReason;
+}}
+	/**
+	 * Crema can't use this grinder: its firmware is too old. The shell drops
+	 * the link and does not retry; the user updates it in the vendor's app.
+	 */
+	| { type: "GrinderUnsupported", content: {
+	/** The firmware it reported, for display. */
+	firmware: string;
+	/** The oldest firmware that works, for display. */
+	minimum: string;
+}}
+	/**
+	 * A grind or purge on the connected grinder finished (or was cut off by
+	 * a drop). The core also keeps the last 20 (`CremaCore::recent_grinds`).
+	 */
+	| { type: "GrindCompleted", content: {
+	/** The completed run. */
+	session: GrindSession;
+}}
+	/**
 	 * The untared-cup guard latched a virtual zero: a heavy reading right
 	 * after first flow held still, so it was a cup landing after the tare —
 	 * every later reading this shot is netted against it and stop-at-weight
@@ -2991,6 +3038,16 @@ export type Command =
 	data: number[];
 }}
 	/**
+	 * Write `data` to the connected grinder's write characteristic
+	 * (`GrinderUuids::write`), with or without response as
+	 * `GrinderUuids::write_with_response` says, in the order given. Today
+	 * only the connect handshake.
+	 */
+	| { type: "WriteGrinder", content: {
+	/** The bytes to write. */
+	data: number[];
+}}
+	/**
 	 * Stop the machine: write Idle to the requested-state characteristic
 	 * (`0x02`) now, on the urgent lane, ahead of anything queued. Only the
 	 * core emits it, and only while a flow session is open. A shell keeps at
@@ -3238,6 +3295,22 @@ export interface DetectorResults {
 	grindCoverage: string;
 	/** Profile frame 0 appears to have been skipped. */
 	skipFirstFrame: boolean;
+}
+
+/** What a Bluetooth device is, beside the DE1. */
+export enum DeviceKind {
+	/** A coffee scale (`de1-scale`). */
+	Scale = "Scale",
+	/** A grinder (`de1-grinder`). */
+	Grinder = "Grinder",
+}
+
+/** A scan match: the kind and the model id its driver is built from. */
+export interface DeviceMatch {
+	/** Which kind of device matched. */
+	kind: DeviceKind;
+	/** The model id (a scale's label, a grinder's catalogue id). */
+	model: string;
 }
 
 /** A row that failed this run and may hold the cursor. */
@@ -3781,6 +3854,78 @@ export interface GrindSave {
 	changed: boolean;
 }
 
+/** What a run was. */
+export enum RunKind {
+	/** A dose was ground. */
+	Grind = "Grind",
+	/** The grinder cleared its chamber. Never a shot's grind. */
+	Purge = "Purge",
+}
+
+/** The grinder's dial as it reported it. */
+export interface ObservedSetting {
+	/** The value as text ("500"), always present. */
+	value: string;
+	/** The value as a number, when the setting is numeric. */
+	number?: number;
+}
+
+/** Which of the grinder's presets is selected. */
+export type PresetSlot = 
+	/** No preset: the grinder's manual mode (the Motto's "N mode"). */
+	| { type: "Manual", content?: undefined }
+	/** A user preset. */
+	| { type: "Slot", content: {
+	/** The preset's index on the grinder (0-based). */
+	index: number;
+}};
+
+/** How a run ended. */
+export enum GrindEnd {
+	/** The grinder reported another state. */
+	StateChange = "StateChange",
+	/** The link dropped mid-run. */
+	LinkLost = "LinkLost",
+}
+
+/** One completed grind or purge. */
+export interface GrindSession {
+	/** Grind or purge. */
+	kind: RunKind;
+	/** The first reading in the run (ms, the core's clock). */
+	started_at: number;
+	/**
+	 * The first reading after it, or the last one in it when the link
+	 * dropped.
+	 */
+	ended_at: number;
+	/** `ended_at - started_at`, ±200 ms at 5 Hz. */
+	duration_ms: number;
+	/** The dial at the start. */
+	setting?: ObservedSetting;
+	/** The dial moved during the run. */
+	setting_changed: boolean;
+	/** Median grinding speed over the run, rpm. */
+	grind_rpm?: number;
+	/** Slowest grinding speed seen, rpm. */
+	grind_rpm_min?: number;
+	/** Fastest grinding speed seen, rpm. */
+	grind_rpm_max?: number;
+	/** Median feeder speed over the run, rpm. */
+	feed_rpm?: number;
+	/** The preset at the start. */
+	preset?: PresetSlot;
+	/** Humidity at the start, %. */
+	humidity_pct?: number;
+	/**
+	 * The lifetime count went up during the run. `None` when the grinder
+	 * doesn't report one.
+	 */
+	counted?: boolean;
+	/** How it ended. */
+	ended_by: GrindEnd;
+}
+
 /** How [`add_grinder`] got its grinder. */
 export enum GrinderAddKind {
 	/** A new record. */
@@ -3808,6 +3953,105 @@ export interface GrinderArchive {
 	 * (review F5), else as it was.
 	 */
 	activeGrinderId?: string;
+}
+
+/** What kind of value a grinder's dial is. */
+export type SettingKind = 
+	/** A number in a range. */
+	| { type: "Numeric", content: {
+	/** Smallest value. */
+	min: number;
+	/** Largest value. */
+	max: number;
+	/** The step between values. */
+	step: number;
+}}
+	/** One of a fixed list of values. */
+	| { type: "Enumerated", content: {
+	/** The values, in dial order. */
+	values: string[];
+}}
+	/** Text with no structure Crema knows. */
+	| { type: "Opaque", content?: undefined };
+
+/** What a grinder tells us about its dial. */
+export interface SettingObservation {
+	/** The kind of value. */
+	kind: SettingKind;
+	/** The unit ("μm"), empty when unitless. */
+	unit: string;
+	/** The unit is a real physical one (μm), not a raw coordinate. */
+	calibrated: boolean;
+	/** The value reflects the burrs, not just a stored number. */
+	physical: boolean;
+}
+
+/** What a grinder tells us about one of its speeds. */
+export interface RpmObservation {
+	/** Smallest value reported, rpm. */
+	min: number;
+	/** Largest value reported, rpm. */
+	max: number;
+	/** The value is the measured motor speed, not the setpoint. */
+	measured: boolean;
+}
+
+/** A settable range. */
+export interface GrinderRange {
+	/** Smallest value. */
+	min: number;
+	/** Largest value. */
+	max: number;
+}
+
+/** What a grinder accepts. Nothing yet: every grinder is read-only in Crema. */
+export interface GrinderCommands {
+	/**
+	 * Starting and stopping a grind. Never true without the vendor's own
+	 * safety statement.
+	 */
+	start_stop: boolean;
+	/** Setting the dial (motorised dials only). */
+	set_setting?: SettingKind;
+	/** Setting the grinding speed. */
+	set_grind_rpm?: GrinderRange;
+	/** Setting the bean-feeder speed. */
+	set_feed_rpm?: GrinderRange;
+	/** Selecting a preset: how many there are. */
+	select_preset?: number;
+}
+
+/** What a connected grinder reports and accepts. Static per model. */
+export interface GrinderCapabilities {
+	/** What it says about its dial. */
+	setting?: SettingObservation;
+	/** What it says about its grinding speed. */
+	grind_rpm?: RpmObservation;
+	/** What it says about its bean-feeder speed. */
+	feed_rpm?: RpmObservation;
+	/** It reports whether it is grinding (grind detection needs this). */
+	reports_state: boolean;
+	/** It reports a lifetime grind count. */
+	reports_grind_count: boolean;
+	/** It reports humidity. */
+	reports_humidity: boolean;
+	/** It reports the dose weight. */
+	reports_weight: boolean;
+	/** What it accepts. */
+	commands: GrinderCommands;
+}
+
+/** What a grinder says about itself. */
+export interface GrinderInfo {
+	/** The model id (the grinder catalogue's id, e.g. `bookoo-motto-80`). */
+	model: string;
+	/** Firmware version for display, once the grinder reported it. */
+	firmware?: string;
+	/**
+	 * The grinder's serial number, as it reported it. Held in memory like a
+	 * scale's serial (`Event::ScaleConfig`); redacted from captures.
+	 */
+	serial?: string;
 }
 
 /** Why [`migrate_grinder_library`] ran nothing. */
@@ -3912,6 +4156,67 @@ export interface GrinderPickRow {
 	lastShot?: string;
 }
 
+/** What the grinder is doing. */
+export enum GrinderState {
+	/** Idle. */
+	Idle = "Idle",
+	/** Grinding a dose. */
+	Grinding = "Grinding",
+	/** Clearing the chamber (a purge or a reverse): not a dose. */
+	Purging = "Purging",
+	/** Busy with something else: applying settings, the start-up guide. */
+	Busy = "Busy",
+	/** Updating its firmware: expect a drop, write nothing. */
+	Updating = "Updating",
+	/** A warning on the grinder. */
+	Warning = "Warning",
+	/** A state this build doesn't know (the raw string is kept). */
+	Unknown = "Unknown",
+}
+
+/**
+ * Device configuration a grinder reports alongside its telemetry: shown on
+ * the Devices page, never logged with a shot.
+ */
+export interface GrinderSettings {
+	/** Cup detection is on. */
+	cup_detect?: boolean;
+	/** The grinder stops on its own (auto stop) is on. */
+	auto_stop?: boolean;
+	/** Faster clearing of retained grounds is on. */
+	fast_clean?: boolean;
+	/** Display brightness, 1–5. */
+	brightness?: number;
+	/** Sleep timeout, seconds. */
+	standby_s?: number;
+	/** The grinder's own Wi-Fi is connected. The network's name is never kept. */
+	wifi_connected?: boolean;
+}
+
+/** One decoded snapshot from a grinder. */
+export interface GrinderReading {
+	/** When it arrived (the core's clock, ms). */
+	at_ms: number;
+	/** What the grinder is doing. */
+	state: GrinderState;
+	/** The grinder's own state string, for diagnostics. */
+	raw_state: string;
+	/** The dial, when reported and in range. */
+	setting?: ObservedSetting;
+	/** Grinding speed, rpm, when reported and in range. */
+	grind_rpm?: number;
+	/** Bean-feeder speed, rpm, when reported and in range. */
+	feed_rpm?: number;
+	/** Relative humidity, %, when reported and in range. */
+	humidity_pct?: number;
+	/** The grinder's lifetime grind count. */
+	total_grinds?: number;
+	/** The selected preset, when reported. */
+	preset?: PresetSlot;
+	/** Device configuration (Devices page only). */
+	settings: GrinderSettings;
+}
+
 /** What [`resolve_grinder_switch`] reads. */
 export interface GrinderSwitchInput {
 	/** The selected bag, if any. */
@@ -3922,6 +4227,21 @@ export interface GrinderSwitchInput {
 	grinders: Grinder[];
 	/** The bag's newest grind per grinder, from the history. */
 	lastGrinds: LastGrind[];
+}
+
+/** The GATT UUIDs a shell needs for a connected grinder. */
+export interface GrinderUuids {
+	/** The grinder's service. */
+	service: string;
+	/**
+	 * Subscribe to this one; its notifications go to the core as
+	 * `Source::GrinderNotify`.
+	 */
+	notify: string;
+	/** `Command::WriteGrinder` bytes go here. */
+	write: string;
+	/** Write with response (true) or without. */
+	write_with_response: boolean;
 }
 
 /**
@@ -6925,6 +7245,19 @@ export type FlashBlocker =
 	| { type: "MaintenanceRunning", content?: undefined }
 	/** The tablet is on battery below 50 % and not charging. */
 	| { type: "LowPower", content?: undefined };
+
+/**
+ * Why a grinder link counts as dead. The shell drops the link and
+ * reconnects.
+ */
+export enum GrinderLinkDeadReason {
+	/** Nothing valid arrived within 5 s of the handshake. */
+	NoFirstReading = "NoFirstReading",
+	/** No valid reading for 5 s. */
+	Silent = "Silent",
+	/** Too many malformed frames in a row. */
+	Malformed = "Malformed",
+}
 
 /**
  * What the shell saw the user do. Every kind restarts the countdown the
