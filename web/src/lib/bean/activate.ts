@@ -15,11 +15,17 @@
  * `selectGrinder` is the grinder pick: the pointer, and the grind by the pick
  * order (the bag's saved grind for it, else its newest shot with it, else the
  * grind stays).
+ *
+ * With a connected grinder in follow mode (spec grinder-ble §5.3) the core
+ * leaves the followed grinder's grind to the collar: the bag's grind becomes
+ * "set the collar to 480 μm" in the message, and a pick's Undo that switches
+ * back off the followed grinder puts back the grind Brew had.
  */
 import { getBeanStore } from './store.svelte';
 import { getProfileStore } from '#lib/profiles/index.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
 import { getBrewGrind } from '#lib/brew/grind-session.svelte.js';
+import { getGrinderFollow } from '#lib/grinder/follow.svelte.js';
 import { getHistoryReads, lastGrinds } from '#lib/history/reads.svelte.js';
 import {
 	bagSelectionUndo,
@@ -106,7 +112,10 @@ export async function activateBean(id: string, opts: PickBusy = {}): Promise<voi
 		activeGrinderId: library.activeGrinderId ?? undefined,
 		grind: brewGrind ?? undefined,
 		grinders: library.allGrinders,
-		lastGrinds: history
+		lastGrinds: history,
+		// Follow mode (spec grinder-ble §5.3): onto the followed grinder the
+		// bag's grind is the collar's target, in the message, not Brew's.
+		followedGrinderId: getGrinderFollow().followedGrinderId ?? undefined
 	});
 
 	// The core's words, verbatim (REVIEW-FINAL-2 SF4): the one message with
@@ -144,7 +153,9 @@ export async function selectGrinder(id: string | null): Promise<void> {
 		bag: library.getBean(bag.id) ?? bag,
 		grinderId: id ?? undefined,
 		grinders: library.allGrinders,
-		lastGrinds: history
+		lastGrinds: history,
+		// The followed grinder's grind is the collar's (§5.3).
+		followedGrinderId: getGrinderFollow().followedGrinderId ?? undefined
 	});
 	if (grind !== null) getBrewGrind().set(grind);
 }

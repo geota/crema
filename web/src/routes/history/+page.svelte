@@ -113,6 +113,7 @@
 	import SplitButton from '#lib/components/shared/SplitButton.svelte';
 	import { getBeanStore, type Bean, type Roaster } from '#lib/bean/index.js';
 	import { moveShotBag } from '#lib/bean/move-shot-bag.js';
+	import { withGrindRpm } from '#lib/bean/grinder.js';
 	import { onMount, tick, untrack } from 'svelte';
 	import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
 	import { uploadPending } from '#lib/history/store.svelte.js';
@@ -614,6 +615,20 @@
 		if (!isLive(id)) return;
 		markForVisualizer(id, 'annotations');
 		store.setGrindSetting(id, grinderSetting);
+		syncEditToVisualizer(id);
+		scheduleDecentReplaceAfterEdit(id);
+	}
+	/**
+	 * The shot's grinding speed (spec grinder-ble §4.2): the grind text's
+	 * trailing speed follows it ("15 1200rpm" → "15 1100rpm"), so Visualizer
+	 * never gets a second one (REVIEW-554).
+	 */
+	function saveGrindRpm(id: string, grindRpm: number | null): void {
+		if (!isLive(id)) return;
+		const shot = store.get(id);
+		if (!shot) return;
+		markForVisualizer(id, 'annotations');
+		store.setGrindRpm(id, grindRpm, withGrindRpm(shot.metadata.grinderSetting ?? null, grindRpm));
 		syncEditToVisualizer(id);
 		scheduleDecentReplaceAfterEdit(id);
 	}
@@ -2030,6 +2045,7 @@
 						{drinkerSuggestions}
 						onTagsChange={saveTags}
 						onGrindChange={saveGrind}
+						onGrindRpmChange={saveGrindRpm}
 						onBeanChange={saveBean}
 						onDelete={deleteById}
 						canDeleteRemote={canPushShots && (!!selected.visualizerId || uploadPending(selected.id))}

@@ -104,6 +104,8 @@
 	import type { GrinderChoice, LastGrind } from '#lib/bean/grinder.js';
 	import { grinderRowViews, grindView } from '#lib/brew/grind-view.js';
 	import { selectGrinder } from '#lib/bean/activate.js';
+	import { hasVariableSpeed, isLiveGrinder } from '#lib/bean/grinder.js';
+	import { followDisplay, getGrinderFollow, type FollowCell } from '#lib/grinder/follow.svelte.js';
 	import { devicesHref } from '#lib/components/grinders/devices-link.js';
 	import type { GrinderPickRow } from '#lib/components/grinders/GrinderPicker.svelte';
 	import { getBrewGrind } from '#lib/brew/grind-session.svelte.js';
@@ -1556,9 +1558,38 @@
 	}
 	// ── Grinder (#488) ────────────────────────────────────────────────────
 	/** What Brew shows about the grind: the value with its unit, and the unsaved marker. */
-	const grindInfo = $derived(
-		grindView({ bag: beanLibrary.activeBean, grinder: beanLibrary.activeGrinder, brewGrind: brewGrind.value })
-	);
+	const grinderFollow = getGrinderFollow();
+	/**
+	 * Follow mode (a connected grinder, spec grinder-ble §5): the core's view
+	 * in words, with the Grind cell's actions. `null` when it has nothing to
+	 * show, so the cell and the header lines are as without a grinder.
+	 */
+	const followCell = $derived.by<FollowCell | null>(() => {
+		const d = followDisplay({
+			view: grinderFollow.view,
+			staleSince: grinderFollow.staleSince,
+			liveValue: ui.grinder.reading?.setting?.value ?? null,
+			variableSpeed: hasVariableSpeed(beanLibrary.activeGrinder),
+			nameOf: (id) => {
+				const g = beanLibrary.getGrinder(id);
+				return g && isLiveGrinder(g) ? g.name : null;
+			}
+		});
+		if (!d.following && !d.note && !d.suggest) return null;
+		return {
+			...d,
+			onPause: () => void app?.setGrinderFollowPaused(true),
+			onResume: () => void app?.setGrinderFollowPaused(false),
+			onUse: (id) => void selectGrinder(id),
+			onDevices: openDevicesGrinder
+		};
+	});
+	const grindInfo = $derived.by(() => {
+		const v = grindView({ bag: beanLibrary.activeBean, grinder: beanLibrary.activeGrinder, brewGrind: brewGrind.value });
+		// "Grind 480 μm · from grinder" in the header and the strip.
+		const label = followCell?.following && v.recorded !== null ? `${v.label} · from grinder` : v.label;
+		return { ...v, label, follow: followCell };
+	});
 	/** The selected bag's newest grind per grinder, for the picker rows. */
 	const bagLastGrinds = getHistoryReads().watch(
 		() => (beanLibrary.activeBeanId ? lastGrinds(beanLibrary.activeBeanId) : null),

@@ -38,6 +38,7 @@ import {
 	historyStats as wasmHistoryStats,
 	brewHistoryStats as wasmBrewHistoryStats,
 	ratioForMethod as wasmRatioForMethod,
+	splitVisualizerGrindJson,
 	uploadRefusedNoSamples as wasmUploadRefusedNoSamples,
 	uploadRefusedShot as wasmUploadRefusedShot
 } from '#lib/wasm/de1_wasm.js';
@@ -767,10 +768,65 @@ export function effectiveGrindSetting(shot: Pick<StoredShot, 'metadata' | 'bean'
 	return snap || null;
 }
 
-/** "Grind N" display form of {@link effectiveGrindSetting}, or `null`. */
-export function grindLabel(shot: Pick<StoredShot, 'metadata' | 'bean'>): string | null {
+/** Whether `text` already ends in `rpm` ("15 1200rpm"): the core's split of a Visualizer grind. */
+function endsInSpeed(text: string, rpm: number): boolean {
+	return (JSON.parse(splitVisualizerGrindJson(text)) as { grindRpm: number | null }).grindRpm === rpm;
+}
+
+/**
+ * "Grind N" display form of {@link effectiveGrindSetting}, with the shot's
+ * speed when it has one ("Grind 480 · 700 rpm"; a text that already ends in
+ * it, "15 1200rpm", shows as it is), or `null`.
+ */
+export function grindLabel(shot: Pick<StoredShot, 'metadata' | 'bean' | 'grindRpm'>): string | null {
 	const setting = effectiveGrindSetting(shot);
-	return setting ? `Grind ${setting}` : null;
+	const rpm = shot.grindRpm ?? null;
+	const speed = rpm != null && !(setting && endsInSpeed(setting, rpm)) ? `${rpm} rpm` : null;
+	if (setting) return speed ? `Grind ${setting} · ${speed}` : `Grind ${setting}`;
+	return speed ? `Grind ${speed}` : null;
+}
+
+/** The fields of a shot's grinder observation the History detail reads (core `ShotGrinderObservation`). */
+interface ObservationFields {
+	readonly source?: string;
+	readonly setting?: string;
+	readonly grindRpm?: number;
+	readonly feedRpm?: number;
+	readonly grindMs?: number;
+}
+
+/**
+ * What the connected grinder reported for `shot` (spec grinder-ble §7), for
+ * the History detail: "480 μm · 700 rpm · feed 50 · 9.8 s grind · from Motto
+ * 80", or "… · reading at shot start" when no grind was detected; `edited`
+ * when the shot's grind differs from the grinder's ("Edited (grinder said
+ * 480)"; derived, never stored: `same` is the core's `same_grind`). `null`
+ * for a shot with no observation.
+ */
+export function grinderObservationText(
+	shot: Pick<StoredShot, 'metadata' | 'grinderObserved' | 'grinderModel'>,
+	format: (grind: string) => string,
+	same: (a: string, b: string) => boolean
+): { readonly line: string; readonly edited: string | null } | null {
+	const o = shot.grinderObserved as ObservationFields | undefined;
+	if (!o || typeof o !== 'object') return null;
+	const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+	const said = typeof o.setting === 'string' && o.setting.trim() !== '' ? o.setting.trim() : null;
+	const parts: string[] = [];
+	if (said) parts.push(format(said));
+	const rpm = num(o.grindRpm);
+	if (rpm != null) parts.push(`${rpm} rpm`);
+	const feed = num(o.feedRpm);
+	if (feed != null) parts.push(`feed ${feed}`);
+	const ms = num(o.grindMs);
+	if (ms != null) parts.push(`${(ms / 1000).toFixed(1)} s grind`);
+	else if (o.source === 'AtShotStart') parts.push('reading at shot start');
+	const from = shot.grinderModel?.trim();
+	if (from) parts.push(`from ${from}`);
+	if (parts.length === 0) return null;
+	const grind = shot.metadata?.grinderSetting?.trim() || null;
+	const edited = said && !(grind && same(grind, said)) ? `Edited (grinder said ${format(said)})` : null;
+	return { line: parts.join(' · '), edited };
 }
 
 /**

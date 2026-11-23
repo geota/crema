@@ -14,6 +14,8 @@ import { grindView } from '#lib/brew/grind-view.js';
 import { getBrewGrind, resetBrewGrindForTest } from '#lib/brew/grind-session.svelte.js';
 import DoseGrindStepper from './DoseGrindStepper.svelte';
 import { BrewParamState } from './brew-params.svelte';
+import { FollowStatus } from '#lib/core/crema-core.js';
+import { followDisplay, type FollowCell } from '#lib/grinder/follow.svelte.js';
 
 beforeAll(async () => {
 	await initTestWasm();
@@ -40,12 +42,12 @@ afterEach(() => {
 });
 
 /** The Dose | Grind card on its Grind side, showing Brew's grind as it is now. */
-function render(): HTMLElement {
+function render(follow: FollowCell | null = null): HTMLElement {
 	if (component) unmount(component);
 	document.body.innerHTML = '';
 	const params = new BrewParamState(() => ({ dose: 18, yield: 36, brewTemp: 93, preinf: 8 }));
 	params.set('doseGrindMode', 'grind');
-	const grind = grindView({ bag: null, grinder, brewGrind: getBrewGrind().value });
+	const grind = { ...grindView({ bag: null, grinder, brewGrind: getBrewGrind().value }), follow };
 	const target = document.body.appendChild(document.createElement('div'));
 	component = mount(WithAppContext, { target, props: { app: null, component: DoseGrindStepper, props: { params, grind } } });
 	flushSync();
@@ -101,5 +103,64 @@ describe("Brew's grind field takes a text grind (#28)", () => {
 		const root = render();
 		await typeGrind(root, '   ');
 		expect(getBrewGrind().value).toBe('6 + a tooth');
+	});
+});
+
+describe('the Grind cell in follow mode (spec grinder-ble §5.2)', () => {
+	const calls: string[] = [];
+	const cell = (status: FollowStatus, over: Partial<FollowCell> = {}): FollowCell => ({
+		...followDisplay({
+			view: { status, grinder_id: 'g:motto', grind: '480', moving: false, grind_rpm: 700 },
+			staleSince: null,
+			liveValue: '480',
+			variableSpeed: true,
+			nameOf: () => 'Motto 80'
+		}),
+		onPause: () => calls.push('pause'),
+		onResume: () => calls.push('resume'),
+		onUse: (id) => calls.push(`use ${id}`),
+		onDevices: () => calls.push('devices'),
+		...over
+	});
+
+	beforeEach(() => {
+		calls.length = 0;
+	});
+
+	it("following: the grinder's value from grinder in the stepper's place, with no ± and no chips", () => {
+		getBrewGrind().set('480');
+		const root = render(cell(FollowStatus.Following));
+		expect(root.querySelector('[aria-label="Increase Grind"]')).toBeNull();
+		expect(root.querySelector('.qcs-num')!.textContent).toBe('480');
+		expect(root.querySelector('.qcs-sub')!.textContent).toBe('from grinder · 700 rpm');
+		const buttons = [...root.querySelectorAll<HTMLButtonElement>('.qchip')].map((b) => b.textContent?.trim());
+		expect(buttons).toEqual(['Pause following', 'Devices']);
+		root.querySelector<HTMLButtonElement>('.qchip')!.click();
+		expect(calls).toEqual(['pause']);
+	});
+
+	it('paused: the stepper is back, with Resume in the label row', () => {
+		getBrewGrind().set('480');
+		const root = render(cell(FollowStatus.Paused));
+		expect(root.querySelector('[aria-label="Increase Grind"]')).not.toBeNull();
+		expect(root.querySelector('.qdg-note')!.textContent).toBe('Following paused');
+		root.querySelector<HTMLButtonElement>('.qdg-follow-btn')!.click();
+		expect(calls).toEqual(['resume']);
+	});
+
+	it('another grinder active: a "Use Motto 80" chip, never a switch', () => {
+		const root = render(cell(FollowStatus.Suggest));
+		const use = root.querySelector<HTMLButtonElement>('.qdg-follow-btn')!;
+		expect(use.textContent?.trim()).toBe('Use Motto 80');
+		expect(root.querySelector('[aria-label="Increase Grind"]')).not.toBeNull();
+		use.click();
+		expect(calls).toEqual(['use g:motto']);
+	});
+
+	it('nothing grinder-related: the label row and the stepper are as without a grinder', () => {
+		getBrewGrind().set('6');
+		const root = render(null);
+		expect(root.querySelector('.qdg-side')).toBeNull();
+		expect(root.querySelector('[aria-label="Increase Grind"]')).not.toBeNull();
 	});
 });

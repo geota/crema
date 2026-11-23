@@ -3448,6 +3448,24 @@ export class HistoryStore {
 	}
 
 	/**
+	 * Set a shot's grinding speed (`grindRpm`, rpm; `null` clears it) — the
+	 * shot editor's RPM field for a variable-speed grinder — with the grind
+	 * text whose trailing speed follows it (`withGrindRpm`: "15 1200rpm" with
+	 * 1100 becomes "15 1100rpm", so the upload never sends a second speed).
+	 * One edit, so the row and its sync see both at once.
+	 */
+	setGrindRpm(id: string, grindRpm: number | null, grinderSetting: string | null): void {
+		this.edit(id, (target) => {
+			const { grindRpm: _old, ...rest } = target;
+			return {
+				...rest,
+				...(grindRpm != null ? { grindRpm } : {}),
+				metadata: { ...target.metadata, grinderSetting }
+			};
+		});
+	}
+
+	/**
 	 * Update a shot's equipment-level grinder-model override and persist.
 	 * Pass `null` (or call with an empty string after trimming) to clear
 	 * it: the shot then has no grinder and uploads none (no settings

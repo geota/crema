@@ -54,6 +54,7 @@ import {
 	countsInThirdsJson,
 	formatGrindJson,
 	grinderCatalogueJson,
+	grinderHasVariableSpeed,
 	grinderNamedJson,
 	grindChipsJson,
 	grinderPickRowsJson,
@@ -73,6 +74,7 @@ import {
 	restoreGrinderJson,
 	sameGrind as wasmSameGrind,
 	saveBagGrindJson,
+	splitVisualizerGrindJson,
 	stageGrinderPickJson,
 	stagedGrindersOnSaveJson
 } from '#lib/wasm/de1_wasm.js';
@@ -329,6 +331,34 @@ export function grindText(dial: number, scale: GrindScale | null = null): string
 /** Whether two grinds are the same (`de1_domain::same_grind`): as numbers when both parse, else trimmed text. */
 export function sameGrind(a: string, b: string): boolean {
 	return wasmSameGrind(a, b);
+}
+
+/**
+ * Whether a grinder's catalogue entry has a variable speed
+ * (`de1_domain::grinder_catalogue::has_variable_speed`): Brew shows the speed
+ * beside a followed grind, and the shot editor has an RPM field.
+ */
+export function hasVariableSpeed(grinder: Pick<Grinder, 'presetId'> | null | undefined): boolean {
+	return grinderHasVariableSpeed(grinder?.presetId || undefined);
+}
+
+/**
+ * A grind text with its trailing speed set to `rpm` (REVIEW-554: editing a
+ * shot's RPM): "15 1200rpm" with 1100 is "15 1100rpm", never "15 1200rpm
+ * 1100rpm"; with no speed, "15 1200rpm" is "15". A text that names no speed
+ * ("480", "18 clicks") is returned as it is: the speed rides beside it
+ * (`grindRpm`) and Visualizer gets "480 1100rpm" (owner decision 6). The split
+ * is the core's (`split_visualizer_grind`).
+ */
+export function withGrindRpm(text: string | null | undefined, rpm: number | null): string | null {
+	if (text == null) return null;
+	const { setting, grindRpm } = JSON.parse(splitVisualizerGrindJson(text)) as {
+		setting: string;
+		grindRpm: number | null;
+	};
+	if (grindRpm == null) return text;
+	const next = [setting, rpm != null ? `${rpm}rpm` : ''].filter(Boolean).join(' ');
+	return next === '' ? null : next;
 }
 
 /** `grind` with the scale's unit (`de1_domain::format_grind`): "480 μm", "2.1.3" as typed, "—" for none. */

@@ -40,6 +40,7 @@
 		flatSamplesOf,
 		effectiveGrindSetting,
 		grindLabel,
+		grinderObservationText,
 		isBrewLog,
 		isManualLog,
 		brewDateError,
@@ -60,7 +61,16 @@
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { downloadBlob } from '#lib/utils/download.js';
 	import { getBeanStore } from '#lib/bean/index.js';
-	import { grindInputMode, grindNumber, grindStartFromBlank, grindText, shotGrindScale } from '#lib/bean/grinder.js';
+	import {
+		formatGrind,
+		grindInputMode,
+		grindNumber,
+		grindStartFromBlank,
+		grindText,
+		hasVariableSpeed,
+		sameGrind,
+		shotGrindScale
+	} from '#lib/bean/grinder.js';
 	import { getHistoryContext } from '#lib/state/index.js';
 	import TagInput from '#lib/components/profiles/TagInput.svelte';
 	import SplitButton from '#lib/components/shared/SplitButton.svelte';
@@ -106,6 +116,7 @@
 		drinkerSuggestions = [],
 		onTagsChange,
 		onGrindChange,
+		onGrindRpmChange,
 		onBeanChange,
 		onDelete,
 		canDeleteRemote = false,
@@ -158,6 +169,12 @@
 		 * the Visualizer wire fall back to the bean snapshot when unset.
 		 */
 		onGrindChange: (id: string, grinderSetting: string | null) => void;
+		/**
+		 * Persist the shot's grinding speed (rpm; `null` clears it) — the RPM
+		 * field for a variable-speed grinder (spec grinder-ble §4.2). Optional:
+		 * without it the field is read-only.
+		 */
+		onGrindRpmChange?: (id: string, grindRpm: number | null) => void;
 		/**
 		 * Retroactively (re)bind the shot to a live bean — caller wraps
 		 * `HistoryStore.setBeanFromLive` so the shared `snapshotFromBean`
@@ -565,6 +582,24 @@
 	const grindFmt = (v: number): string => grindText(v, grindScale);
 	function commitGrind(v: number): void {
 		onGrindChange(shotId, grindText(v, grindScale));
+	}
+
+	// ── The connected grinder (spec grinder-ble §4.2, §7) ─────────────────
+	/** What the grinder reported for this shot, and whether the grind was edited since. */
+	const observed = $derived(
+		grinderObservationText(shot, (g) => formatGrind(g, grindScale), sameGrind)
+	);
+	/** The shot's grinder, when it is one of the owned records. */
+	const shotGrinder = $derived(shot.grinderId ? library.getGrinder(shot.grinderId) : null);
+	/** The RPM field: a variable-speed grinder, or a shot that already has a speed. */
+	const showRpm = $derived(shot.grindRpm != null || hasVariableSpeed(shotGrinder));
+	const rpmInputId = `${detailUid}-rpm`;
+	function commitRpm(raw: string): void {
+		const t = raw.trim();
+		const n = t === '' ? null : Math.round(Number(t));
+		if (n !== null && (!Number.isFinite(n) || n <= 0)) return;
+		if ((shot.grindRpm ?? null) === n) return;
+		onGrindRpmChange?.(shotId, n);
 	}
 
 	/** Open the notes editor, seeding the draft from the current notes. */
@@ -1111,6 +1146,34 @@
 	</div>
 {/snippet}
 
+{#snippet grinderObservedField()}
+	{#if observed || showRpm}
+		<div class="hi-grinder hi-grinder-obs">
+			{#if showRpm}
+				<label class="t-eyebrow" style="color:var(--fg-3)" for={rpmInputId}>Speed</label>
+				<span class="hi-rpm">
+					<input
+						id={rpmInputId}
+						class="hi-grinder-input hi-rpm-input"
+						type="text"
+						inputmode="numeric"
+						placeholder="—"
+						readonly={!onGrindRpmChange}
+						value={shot.grindRpm != null ? String(shot.grindRpm) : ''}
+						{@attach commitField(() => (shot.grindRpm != null ? String(shot.grindRpm) : ''), commitRpm)}
+					/>
+					<span class="hi-grinder-hint">rpm</span>
+				</span>
+			{/if}
+			{#if observed}
+				<span class="hi-grinder-hint" data-testid="grinder-observed">
+					{observed.line}{#if observed.edited}<span class="hi-obs-edited"> · {observed.edited}</span>{/if}
+				</span>
+			{/if}
+		</div>
+	{/if}
+{/snippet}
+
 {#snippet peopleFields()}
 	<div class="hi-people">
 		{#each [{ field: 'barista', label: 'Barista', names: baristaSuggestions }, { field: 'drinker', label: 'Drinker', names: drinkerSuggestions }] as p (p.field)}
@@ -1315,6 +1378,7 @@
 				</label>
 				{@render tagsField()}
 				{@render grinderField()}
+				{@render grinderObservedField()}
 				{#if !isBrew}
 					<div class="pshot-row">
 						<span class="t-eyebrow pshot-eye">Privacy</span>
@@ -1699,6 +1763,7 @@
 	<!-- Grinder model — the shot's grinder name. Empty saves as `null`: the
 	     shot then has no grinder, and uploads none. -->
 	{@render grinderField()}
+	{@render grinderObservedField()}
 
 	<!-- Barista / drinker — who made it and who drank it. Suggestions are
 	     the names already in History, most recent first. -->
@@ -2197,6 +2262,20 @@
 		font-family: var(--font-sans);
 		font-size: 11px;
 		color: var(--fg-muted);
+	}
+	.hi-rpm {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.hi-grinder .hi-rpm-input {
+		flex: 0 0 auto;
+		min-width: 0;
+		width: 7ch;
+	}
+	.hi-obs-edited {
+		color: var(--fg-3);
+		font-style: italic;
 	}
 	.hi-notes-head {
 		display: flex;
