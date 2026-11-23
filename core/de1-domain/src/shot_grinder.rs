@@ -26,6 +26,9 @@ pub enum ObservationSource {
     LastGrind,
     /// No such grind: the grinder's reading when the shot started.
     AtShotStart,
+    /// A source a newer build wrote: the observation still decodes.
+    #[serde(other)]
+    Unknown,
 }
 
 /// What the connected grinder reported for a shot. Every field but
@@ -120,10 +123,16 @@ pub fn grind_provenance_json(shot_json: &str) -> Result<String, String> {
 /// The grind text Visualizer gets: the setting with the speed appended,
 /// "480 700rpm", as the community writes it (owner decision 6). The setting
 /// alone without a speed; the speed alone ("700rpm") without a setting;
-/// `None` with neither.
+/// `None` with neither. A setting that already ends in this speed (a shot
+/// imported or pulled as "15 1200rpm") goes out as it is, never twice.
 #[must_use]
 pub fn visualizer_grind_text(setting: Option<&str>, grind_rpm: Option<u32>) -> Option<String> {
     let setting = setting.map(str::trim).filter(|s| !s.is_empty());
+    if let (Some(s), Some(rpm)) = (setting, grind_rpm)
+        && split_visualizer_grind(s).1 == Some(rpm)
+    {
+        return Some(s.to_owned());
+    }
     match (setting, grind_rpm) {
         (Some(s), Some(rpm)) => Some(format!("{s} {rpm}rpm")),
         (Some(s), None) => Some(s.to_owned()),
@@ -165,20 +174,19 @@ pub fn split_visualizer_grind(text: &str) -> (String, Option<u32>) {
     (setting.trim().to_owned(), Some(rpm))
 }
 
-/// A shot read from a file or pulled from Visualizer whose grind is
-/// "480 700rpm": the grind becomes "480" and the speed fills
-/// [`StoredShot::grind_rpm`] (when it has none). Any other grind is left
-/// alone.
+/// A shot read from a file whose grind ends in a speed ("15 1200rpm", as
+/// de1app, Decenza and Visualizer users write it): the speed also fills
+/// [`StoredShot::grind_rpm`] (when it has none). Additive: the grind text is
+/// kept whole, so nothing is lost on a shell that doesn't show the speed,
+/// and the export sends it back unchanged ([`visualizer_grind_text`]).
 pub fn take_rpm_from_grind(shot: &mut StoredShot) {
+    if shot.grind_rpm.is_some() {
+        return;
+    }
     let Some(text) = shot.metadata.grinder_setting.as_deref() else {
         return;
     };
-    let (setting, rpm) = split_visualizer_grind(text);
-    let Some(rpm) = rpm else {
-        return;
-    };
-    shot.metadata.grinder_setting = Some(setting).filter(|s| !s.is_empty());
-    shot.grind_rpm = shot.grind_rpm.or(Some(rpm));
+    shot.grind_rpm = split_visualizer_grind(text).1;
 }
 
 /// [`split_visualizer_grind`] as JSON: `{"setting": "480", "grindRpm": 700}`.
@@ -251,6 +259,15 @@ mod tests {
             visualizer_grind_text(Some("480"), Some(700)).as_deref(),
             Some("480 700rpm")
         );
+        // Already there (an imported "15 1200rpm"): never twice.
+        assert_eq!(
+            visualizer_grind_text(Some("480 700rpm"), Some(700)).as_deref(),
+            Some("480 700rpm")
+        );
+        assert_eq!(
+            visualizer_grind_text(Some("700 RPM"), Some(700)).as_deref(),
+            Some("700 RPM")
+        );
         assert_eq!(
             visualizer_grind_text(Some(" 480 "), None).as_deref(),
             Some("480")
@@ -318,5 +335,32 @@ mod tests {
             !old.contains("grinderObserved") && !old.contains("grindRpm"),
             "{old}"
         );
+    }
+
+    #[test]
+    fn an_unknown_source_still_decodes() {
+        let o: ShotGrinderObservation =
+            serde_json::from_str(r#"{"source":"FromTheFuture","setting":"480"}"#).expect("decodes");
+        assert_eq!(
+            (o.source, o.setting.as_deref()),
+            (ObservationSource::Unknown, Some("480"))
+        );
+    }
+
+    #[test]
+    fn taking_the_speed_keeps_the_grind_whole() {
+        let mut s = shot(Some("15 1200rpm"), None);
+        take_rpm_from_grind(&mut s);
+        assert_eq!(
+            (s.metadata.grinder_setting.as_deref(), s.grind_rpm),
+            (Some("15 1200rpm"), Some(1200))
+        );
+        let mut s = shot(Some("18 clicks"), None);
+        take_rpm_from_grind(&mut s);
+        assert_eq!(s.grind_rpm, None);
+        let mut s = shot(Some("480 700rpm"), None);
+        s.grind_rpm = Some(650);
+        take_rpm_from_grind(&mut s);
+        assert_eq!(s.grind_rpm, Some(650), "a speed it has is kept");
     }
 }

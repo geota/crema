@@ -1226,9 +1226,17 @@ mod tests {
             v["app"]["data"]["settings"]["grinder_setting"],
             "480 700rpm"
         );
+        // The import is additive (review #554 M1): the text stays whole, the
+        // speed is read off it too, and the re-export doesn't append it twice.
         let parsed = import_v2_json_shot(&exported).expect("re-imports");
-        assert_eq!(parsed.metadata.grinder_setting.as_deref(), Some("480"));
+        assert_eq!(
+            parsed.metadata.grinder_setting.as_deref(),
+            Some("480 700rpm")
+        );
         assert_eq!(parsed.grind_rpm, Some(700));
+        let again: serde_json::Value =
+            serde_json::from_str(&export_v2_json_shot(&parsed).unwrap()).unwrap();
+        assert_eq!(again["meta"]["grinder"]["setting"], "480 700rpm");
         // Without a speed nothing changes.
         shot.grind_rpm = None;
         let parsed = import_v2_json_shot(&export_v2_json_shot(&shot).unwrap()).expect("re-imports");
@@ -1236,6 +1244,41 @@ mod tests {
             (parsed.metadata.grinder_setting.as_deref(), parsed.grind_rpm),
             (Some("480"), None)
         );
+    }
+
+    /// Review #554 M1: a grind another app wrote with a speed in it comes
+    /// back out byte for byte through import → export, whatever its shape.
+    #[test]
+    fn a_foreign_grind_text_round_trips_byte_identical() {
+        for text in ["15 1200rpm", "1200rpm", "700 RPM", "18 clicks"] {
+            let mut shot = fixture();
+            shot.metadata.grinder_setting = Some(text.into());
+            shot.grind_rpm = None;
+            let file = export_v2_json_shot(&shot).unwrap();
+            let imported = import_v2_json_shot(&file).expect("imports");
+            assert_eq!(
+                imported.metadata.grinder_setting.as_deref(),
+                Some(text),
+                "{text}"
+            );
+            let out: serde_json::Value =
+                serde_json::from_str(&export_v2_json_shot(&imported).unwrap()).unwrap();
+            assert_eq!(out["meta"]["grinder"]["setting"], text, "{text}");
+            assert_eq!(
+                out["app"]["data"]["settings"]["grinder_setting"], text,
+                "{text}"
+            );
+            assert_eq!(
+                export_v2_json_shot(&imported).unwrap(),
+                export_v2_json_shot(&{
+                    let mut s = imported.clone();
+                    s.grind_rpm = None;
+                    s
+                })
+                .unwrap(),
+                "{text}: the speed adds nothing to the file"
+            );
+        }
     }
 
     /// The canonical round-trip: `export → import → equivalence`.

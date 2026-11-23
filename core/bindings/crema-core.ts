@@ -6297,6 +6297,8 @@ export enum ObservationSource {
 	LastGrind = "LastGrind",
 	/** No such grind: the grinder's reading when the shot started. */
 	AtShotStart = "AtShotStart",
+	/** A source a newer build wrote: the observation still decodes. */
+	Unknown = "Unknown",
 }
 
 /**
@@ -6940,13 +6942,13 @@ export interface WireShotBean {
 	/** Grinder model (`grinder_model`). */
 	grinder_model?: string;
 	/**
-	 * Grinder dial (`grinder_setting`), without a speed Crema appended:
-	 * "480 700rpm" arrives as "480" here and 700 in [`Self::grind_rpm`].
+	 * Grinder dial (`grinder_setting`), whole: "480 700rpm" stays so, and
+	 * 700 also arrives in [`Self::grind_rpm`].
 	 */
 	grinder_setting?: string;
 	/**
-	 * The grinding speed split off `grinder_setting` (owner decision 6),
-	 * rpm, or `None`.
+	 * The grinding speed read off the end of `grinder_setting` (owner
+	 * decision 6), rpm, or `None`.
 	 */
 	grind_rpm?: number;
 }

@@ -3846,6 +3846,10 @@ export class HistoryStore {
 			autoTare: extras?.autoTare,
 			tags: extras?.tags ? [...extras.tags] : [],
 			...(imported.brewMethod ? { brewMethod: imported.brewMethod } : {}),
+			// A grind with its speed ("15 1200rpm") stays whole; the core read the
+			// speed off it too (#488 phase 2).
+			...(imported.grindRpm != null ? { grindRpm: imported.grindRpm } : {}),
+			...(imported.grinderObserved ? { grinderObserved: { ...imported.grinderObserved } } : {}),
 			...(imported.recipeName ? { recipeName: imported.recipeName } : {}),
 			...(imported.brewSeries ? { brewSeries: imported.brewSeries } : {})
 		};
@@ -4438,6 +4442,13 @@ export function coerceStoredShot(obj: Record<string, unknown>): StoredShot | nul
 		...(bagDebit !== null ? { bagDebit } : {}),
 		...(obj.replay === true ? { replay: true } : {}),
 		...(obj.mirrorCopy === true ? { mirrorCopy: true } : {}),
+		// The connected grinder's fields (#488 phase 2), kept whole.
+		...(obj.grinderObserved !== null && typeof obj.grinderObserved === 'object' && !Array.isArray(obj.grinderObserved)
+			? { grinderObserved: obj.grinderObserved as Record<string, unknown> }
+			: {}),
+		...(typeof obj.grindRpm === 'number' && Number.isFinite(obj.grindRpm) && obj.grindRpm > 0
+			? { grindRpm: obj.grindRpm }
+			: {}),
 		...(recipeName ? { recipeName } : {}),
 		...(brewSeries ? { brewSeries } : {})
 	};

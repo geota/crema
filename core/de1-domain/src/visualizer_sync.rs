@@ -293,12 +293,12 @@ pub struct WireShotBean {
     /// Grinder model (`grinder_model`).
     #[serde(default)]
     pub grinder_model: Option<String>,
-    /// Grinder dial (`grinder_setting`), without a speed Crema appended:
-    /// "480 700rpm" arrives as "480" here and 700 in [`Self::grind_rpm`].
+    /// Grinder dial (`grinder_setting`), whole: "480 700rpm" stays so, and
+    /// 700 also arrives in [`Self::grind_rpm`].
     #[serde(default)]
     pub grinder_setting: Option<String>,
-    /// The grinding speed split off `grinder_setting` (owner decision 6),
-    /// rpm, or `None`.
+    /// The grinding speed read off the end of `grinder_setting` (owner
+    /// decision 6), rpm, or `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grind_rpm: Option<u32>,
 }

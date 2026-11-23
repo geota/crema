@@ -519,9 +519,8 @@ pub fn wire_shot_from_detail(
             _ => None,
         }
     };
-    // "480 700rpm" is Crema's grind and speed (owner decision 6).
-    let grind =
-        bean_field("grinder_setting").map(|g| crate::shot_grinder::split_visualizer_grind(&g));
+    // "480 700rpm" is a grind and a speed (owner decision 6).
+    let grinder_setting = bean_field("grinder_setting");
     let bean = WireShotBean {
         bean_brand: bean_field("bean_brand"),
         bean_type: bean_field("bean_type"),
@@ -531,11 +530,11 @@ pub fn wire_shot_from_detail(
             .map(|n| html_to_plain(&n))
             .filter(|n| !n.is_empty()),
         grinder_model: bean_field("grinder_model"),
-        grinder_setting: grind
-            .as_ref()
-            .map(|(s, _)| s.clone())
-            .filter(|s| !s.is_empty()),
-        grind_rpm: grind.and_then(|(_, rpm)| rpm),
+        // Whole, as the remote has it; the speed is read off it too.
+        grind_rpm: grinder_setting
+            .as_deref()
+            .and_then(|g| crate::shot_grinder::split_visualizer_grind(g).1),
+        grinder_setting,
     };
     let bean = (bean != WireShotBean::default()).then_some(bean);
 
@@ -1803,6 +1802,25 @@ mod tests {
         assert_eq!(w.profile_title, None);
         assert_eq!(w.rating, None);
         assert_eq!(w.bean, None);
+    }
+
+    /// Review #554 M1: a pulled grind keeps its text whole; its speed is
+    /// read off it too.
+    #[test]
+    fn a_pulled_grind_with_a_speed_stays_whole() {
+        for (text, rpm) in [
+            ("480 700rpm", Some(700)),
+            ("1200rpm", Some(1200)),
+            ("18 clicks", None),
+        ] {
+            let w =
+                wire_shot_from_detail("x", 0, 0, &serde_json::json!({ "grinder_setting": text }));
+            let bean = w.bean.expect("bean");
+            assert_eq!(
+                (bean.grinder_setting.as_deref(), bean.grind_rpm),
+                (Some(text), rpm)
+            );
+        }
     }
 
     #[test]

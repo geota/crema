@@ -143,6 +143,10 @@ describe('HistoryStore reload', () => {
 			pinned: true,
 			replay: true,
 			mirrorCopy: true,
+			// The connected grinder's (#488 phase 2), kept whole: a newer
+			// build's field included.
+			grinderObserved: { source: 'LastGrind', setting: '480', grindRpm: 700, fromTheFuture: { x: 1 } },
+			grindRpm: 700,
 			machine,
 			deletedAt: 1_700_000_100_000,
 			brewMethod: 'custom:abc',
@@ -157,6 +161,24 @@ describe('HistoryStore reload', () => {
 		new HistoryStore().insertPulled(full);
 		// Whole through `loadShot`: a row hands out its summary, not its heavy parts.
 		expect(await reload().loadShot('shot:full')).toStrictEqual(full);
+	});
+
+	it('an imported shot keeps its grind whole and its speed (review #554 M1)', async () => {
+		const store = new HistoryStore();
+		const row = store.addImported({
+			completedAt: 1_700_000_000_000,
+			metadata: { grinderSetting: '15 1200rpm' },
+			record: {
+				duration: 30_000,
+				samples: [{ elapsed: 0, sample: {} } as never]
+			},
+			grindRpm: 1200
+		} as never);
+		expect(row?.metadata.grinderSetting).toBe('15 1200rpm');
+		expect(row?.grindRpm).toBe(1200);
+		const back = await reload().loadShot(row!.id);
+		expect(back?.metadata.grinderSetting).toBe('15 1200rpm');
+		expect(back?.grindRpm).toBe(1200);
 	});
 
 	it('normalises legacy and malformed values on reload', () => {

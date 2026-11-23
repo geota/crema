@@ -292,6 +292,8 @@ export function storedShotFromWire(
 		// shouldn't depend on that to stay correct.
 		tags: [...(remote.tag_list ?? [])],
 		visualizerId: remote.id,
-		deletedAt: null
+		deletedAt: null,
+		// "480 700rpm" stays whole on the bean; its speed is read off it too.
+		...(wb?.grind_rpm != null ? { grindRpm: wb.grind_rpm } : {})
 	};
 }

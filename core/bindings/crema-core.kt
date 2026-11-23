@@ -6295,6 +6295,9 @@ enum class ObservationSource(val string: String) {
 	/// No such grind: the grinder's reading when the shot started.
 	@SerialName("AtShotStart")
 	AtShotStart("AtShotStart"),
+	/// A source a newer build wrote: the observation still decodes.
+	@SerialName("Unknown")
+	Unknown("Unknown"),
 }
 
 /// What the connected grinder reported for a shot. Every field but
@@ -6874,11 +6877,11 @@ data class WireShotBean (
 	val bean_notes: String? = null,
 	/// Grinder model (`grinder_model`).
 	val grinder_model: String? = null,
-	/// Grinder dial (`grinder_setting`), without a speed Crema appended:
-	/// "480 700rpm" arrives as "480" here and 700 in [`Self::grind_rpm`].
+	/// Grinder dial (`grinder_setting`), whole: "480 700rpm" stays so, and
+	/// 700 also arrives in [`Self::grind_rpm`].
 	val grinder_setting: String? = null,
-	/// The grinding speed split off `grinder_setting` (owner decision 6),
-	/// rpm, or `None`.
+	/// The grinding speed read off the end of `grinder_setting` (owner
+	/// decision 6), rpm, or `None`.
 	val grind_rpm: UInt? = null
 )
 

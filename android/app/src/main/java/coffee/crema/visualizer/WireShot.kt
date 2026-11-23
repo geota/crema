@@ -181,6 +181,11 @@ fun wireShotJson(shot: StoredShot, forBackup: Boolean = false): JsonObject {
         if (forBackup && shot.replay) put("replay", true)
         // The mirror-copy mark (#488 follow-up 51), omitted when false as the core does.
         if (forBackup && shot.mirrorCopy) put("mirrorCopy", true)
+        // The grinder (#488 phase 2): the speed goes everywhere (the core's
+        // Visualizer text appends it, "480 700rpm"); the observation is local
+        // identity, backup only. Both omitted when absent, as the core does.
+        shot.grindRpm?.let { put("grindRpm", it) }
+        if (forBackup) shot.grinderObserved?.let { put("grinderObserved", it) }
         if (forBackup) shot.bagDebitG?.let { put("bagDebit", it) }
         // Brew Log fields (issue #10) — local-only rows, so backup only; the
         // core StoredShot carries them, and the restore inverts them below.
@@ -327,6 +332,8 @@ fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Jso
         pinned = boolOf("pinned") == true,
         replay = boolOf("replay") == true,
         mirrorCopy = boolOf("mirrorCopy") == true,
+        grinderObserved = o["grinderObserved"] as? JsonObject,
+        grindRpm = str("grindRpm")?.toIntOrNull()?.takeIf { it > 0 },
         bagDebitG = str("bagDebit")?.toFloatOrNull(),
         machineSerial = machineStr("serialNumber"),
         machineFirmware = machineStr("serialNumber")?.let { machineStr("firmwareVersion") },

@@ -192,6 +192,13 @@ data class StoredShot(
      *  debited here, so moving it to another bag in History moves nothing. Core
      *  `StoredShot::mirror_copy`; kept by backups, omitted when false. */
     override val mirrorCopy: Boolean = false,
+    /** What a connected grinder reported for this shot (#488 phase 2, core
+     *  `StoredShot::grinder_observed`, a `ShotGrinderObservation`), kept as
+     *  the JSON it came in, so a backup moves it between the apps and a newer
+     *  build's fields survive a re-save; null = none. */
+    override val grinderObserved: JsonObject? = null,
+    /** Grinding speed, rpm: the grinder's or typed (core `StoredShot::grind_rpm`). */
+    override val grindRpm: Int? = null,
     /**
      * The DE1 this shot was pulled on, stamped at record time (#84). The Decent
      * upload needs the serial (the server checks it belongs to the account);
