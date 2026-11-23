@@ -253,3 +253,13 @@
   }
   .pbrew-modes .mc-chip-cancel { display: none; }
 }
+
+/* Manual (brew modes §3): Hot water alone before Start brew. */
+.crema-foot-actions.is-manual {
+	grid-template-columns: minmax(150px, 1fr) auto minmax(150px, 1fr);
+}
+@media (max-width: 1200px) {
+	.crema-dash-foot .crema-foot-actions.is-manual {
+		grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.15fr);
+	}
+}

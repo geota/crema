@@ -624,9 +624,9 @@
 
 	// ── Brew recipes — the guided-brew plans (issue #10) ─────────────────
 	// A second library section: unlike machine profiles these are
-	// followed by hand, never uploaded to the DE1. Authored here; the
-	// Scale page's Brew tab picks + runs them and edits the selected one
-	// in place (its own RecipeEditor modal — no hop back here).
+	// followed by hand, never uploaded to the DE1. Authored here; Brew's
+	// Profile picker (its Manual tab) picks them, and Manual mode runs them
+	// and edits the selected one in place (its own RecipeEditor modal).
 	const recipeStore = getRecipeStore();
 
 	/** Reveal the hidden built-in recipes (with an Unhide door). */
@@ -978,13 +978,13 @@
 	     profile uploads it to the DE1; a recipe never touches the
 	     machine. Hidden while browsing the Hidden archive. -->
 	{#if !showingHidden}
-		<div class="pp-recipes">
+		<div class="pp-recipes" id="recipes">
 			<div class="pp-recipes-head">
 				<div>
 					<div class="t-eyebrow" style="color:var(--fg-3)">Guided brews</div>
 					<div class="pp-recipes-title">Brew recipes</div>
 					<div class="pp-sub">
-						Step plans you follow by hand — run them from the Scale page's Brew tab.
+						Step plans you follow by hand — pick one on the Manual tab of Brew's Profile picker.
 					</div>
 				</div>
 				<button class="pp-btn pp-btn-secondary" onclick={newRecipe}>
