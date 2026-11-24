@@ -125,6 +125,8 @@ class ScaleSessionVmTest {
         VmHarness.idle()
         val caps = vm.ui.value.scaleCapabilities
         assertEquals(listOf(1, 2), caps?.auto_stop_targets?.map { it.id.toInt() })
+        // V4's conditions, filter removed included, in display order.
+        assertEquals(listOf(0, 2, 1), caps?.auto_stop_modes?.map { it.id.toInt() })
         assertTrue(caps?.modes.orEmpty().isEmpty(), "no Flow / Timer / Auto selector on an Ultra")
         vm.setScaleAutoStopFor(2, 1)
         VmHarness.drainCoreLane(vm)

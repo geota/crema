@@ -362,49 +362,84 @@ pub const fn set_flow_smoothing(enabled: bool) -> [u8; 6] {
 
 /// The scale's auto-stop condition: what ends an automatic-mode extraction.
 ///
-/// Crema's id for each is the discriminant (`0` / `1`), which is also the
-/// `p1` byte of the Mini / Ultra-V3 format. The Ultra-V4 format numbers the
+/// Crema's id for each is the discriminant (`0` / `1` / `2`). For flow-stop
+/// and cup-removal it is also the `p1` byte of the Mini / Ultra-V3 format;
+/// filter-removal exists only in the Ultra-V4 format, which numbers the
 /// conditions differently — see [`AutoStopMode::v4_condition`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoStopMode {
-    /// Stop when the liquid flow stops (`p1 = 0`).
+    /// Stop when the liquid flow stops (`p1 = 0`; V4 `00`).
     FlowStop = 0,
     /// Stop when the cup is removed (`p1 = 1`; on Ultra V4, "server being
-    /// removed").
+    /// removed", `02`).
     CupRemoval = 1,
+    /// Stop when the filter is removed — a pour-over dripper lifted off
+    /// (Ultra V4 only, `01`; the Mini / V3 format has no such condition).
+    FilterRemoval = 2,
 }
 
 impl AutoStopMode {
-    /// The `p1` byte the scale uses for this mode in the Mini / Ultra-V3
-    /// command `0x0B`.
+    /// The flow-stop and cup-removal pair the Mini / Ultra-V3 format takes.
+    pub const TWO: [AutoStopMode; 2] = [AutoStopMode::FlowStop, AutoStopMode::CupRemoval];
+    /// Ultra V4's three conditions, in display order.
+    pub const V4: [AutoStopMode; 3] = [
+        AutoStopMode::FlowStop,
+        AutoStopMode::FilterRemoval,
+        AutoStopMode::CupRemoval,
+    ];
+
+    /// Crema's id for the mode (the discriminant).
     #[must_use]
-    pub const fn p1(self) -> u8 {
+    pub const fn id(self) -> u8 {
         self as u8
     }
 
+    /// The `p1` byte the scale uses for this mode in the Mini / Ultra-V3
+    /// command `0x0B`; `None` for filter-removal, which that format lacks.
+    #[must_use]
+    pub const fn p1(self) -> Option<u8> {
+        match self {
+            AutoStopMode::FlowStop => Some(0x00),
+            AutoStopMode::CupRemoval => Some(0x01),
+            AutoStopMode::FilterRemoval => None,
+        }
+    }
+
     /// The Ultra-V4 stop-condition byte (`0x0B`'s BYTE5): `00` liquid flow
-    /// stopping, `02` server being removed. V4's third condition, `01` filter
-    /// being removed (a pour-over dripper lifted off), has no Crema setting.
+    /// stopping, `01` filter being removed, `02` server being removed.
     #[must_use]
     pub const fn v4_condition(self) -> u8 {
         match self {
             AutoStopMode::FlowStop => 0x00,
+            AutoStopMode::FilterRemoval => 0x01,
             AutoStopMode::CupRemoval => 0x02,
         }
     }
 
-    /// The mode for Crema's id (`0` / `1`), or `None` for any other id.
+    /// The mode for Crema's id (`0` / `1` / `2`), or `None` for any other id.
     #[must_use]
     pub const fn from_id(id: u8) -> Option<AutoStopMode> {
         match id {
             0 => Some(AutoStopMode::FlowStop),
             1 => Some(AutoStopMode::CupRemoval),
+            2 => Some(AutoStopMode::FilterRemoval),
             _ => None,
+        }
+    }
+
+    /// A display name for the condition.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            AutoStopMode::FlowStop => "Flow stops",
+            AutoStopMode::CupRemoval => "Cup removed",
+            AutoStopMode::FilterRemoval => "Filter removed",
         }
     }
 }
 
-/// Command `0x0B` in the Mini / Ultra ≤ V3.1.2 format: `0B <stop> 00`.
+/// Command `0x0B` in the Mini / Ultra ≤ V3.1.2 format: `0B <stop> 00`;
+/// `None` for filter-removal, which this format has no byte for.
 ///
 /// The Ultra doc gives this format for release firmware V3.1.2 and earlier and
 /// says not to use it on V4.0.0 and later. The Mini doc does not list `0x0B`;
@@ -412,8 +447,11 @@ impl AutoStopMode {
 /// capture, cross-checked with the scale's echo in weight byte `[18]`). Send it
 /// only through [`BookooScale::auto_stop_writes`], which checks the firmware.
 #[must_use]
-pub const fn set_auto_stop_mode(mode: AutoStopMode) -> [u8; 6] {
-    command(0x0B, mode.p1(), 0x00)
+pub const fn set_auto_stop_mode(mode: AutoStopMode) -> Option<[u8; 6]> {
+    match mode.p1() {
+        Some(p1) => Some(command(0x0B, p1, 0x00)),
+        None => None,
+    }
 }
 
 /// The Ultra-V4 mode whose automatic submode a `0x0B` stop condition applies
@@ -598,11 +636,24 @@ impl BookooFirmware {
         matches!(self.model(), Some(BookooModel::Mini))
     }
 
+    /// The auto-stop conditions this firmware takes: flow-stop and
+    /// cup-removal on a Mini and an Ultra ≤ V3.1.2; those and filter-removal
+    /// on an Ultra ≥ V4.0.0; none where Crema can't set auto-stop.
+    #[must_use]
+    pub const fn auto_stop_modes(self) -> &'static [AutoStopMode] {
+        match self.model() {
+            Some(BookooModel::Mini) => &AutoStopMode::TWO,
+            Some(BookooModel::Ultra) if self.0 <= ULTRA_V3_1_2 => &AutoStopMode::TWO,
+            Some(BookooModel::Ultra) if self.0 >= ULTRA_V4_0_0 => &AutoStopMode::V4,
+            _ => &[],
+        }
+    }
+
     /// The `0x0B` writes that set `mode` on this firmware; empty when Crema
     /// can't set it correctly.
     ///
-    /// - Mini: the captured `0B <stop> 00`.
-    /// - Ultra ≤ V3.1.2: the documented V3 `0B <stop> 00`.
+    /// - Mini: the captured `0B <stop> 00` (no filter-removal).
+    /// - Ultra ≤ V3.1.2: the documented V3 `0B <stop> 00` (no filter-removal).
     /// - Ultra ≥ V4.0.0: `0B <target> <stop>` for both automatic submodes
     ///   (timing, then ratio), so Crema's one setting means the same in each.
     /// - Ultra V3.1.3–V3.9.9 (betas such as V3.2.4, neither format documented)
@@ -610,8 +661,10 @@ impl BookooFirmware {
     #[must_use]
     pub fn auto_stop_writes(self, mode: AutoStopMode) -> Vec<[u8; 6]> {
         match self.model() {
-            Some(BookooModel::Mini) => vec![set_auto_stop_mode(mode)],
-            Some(BookooModel::Ultra) if self.0 <= ULTRA_V3_1_2 => vec![set_auto_stop_mode(mode)],
+            Some(BookooModel::Mini) => set_auto_stop_mode(mode).into_iter().collect(),
+            Some(BookooModel::Ultra) if self.0 <= ULTRA_V3_1_2 => {
+                set_auto_stop_mode(mode).into_iter().collect()
+            }
             Some(BookooModel::Ultra) if self.0 >= ULTRA_V4_0_0 => vec![
                 set_auto_stop_v4(AutoStopTarget::Timing, mode),
                 set_auto_stop_v4(AutoStopTarget::Ratio, mode),
@@ -812,6 +865,13 @@ impl BookooScale {
     #[must_use]
     pub fn shutdown_command(&self) -> Option<&'static [u8; 6]> {
         self.firmware.and_then(BookooFirmware::shutdown_command)
+    }
+
+    /// The auto-stop conditions the scale takes — see
+    /// [`BookooFirmware::auto_stop_modes`]. Empty until the firmware is known.
+    #[must_use]
+    pub fn auto_stop_modes(&self) -> &'static [AutoStopMode] {
+        self.firmware.map_or(&[], BookooFirmware::auto_stop_modes)
     }
 
     /// The `0x0B` writes for `mode`; empty until the firmware is known, and on
@@ -1424,12 +1484,23 @@ mod tests {
         // 0x0B 00 = Flow-Stop, 0x0B 01 = Cup-Removal (confirmed by capture).
         assert_eq!(
             set_auto_stop_mode(AutoStopMode::FlowStop),
-            hex6("030a0b000002")
+            Some(hex6("030a0b000002"))
         );
         assert_eq!(
             set_auto_stop_mode(AutoStopMode::CupRemoval),
-            hex6("030a0b010003")
+            Some(hex6("030a0b010003"))
         );
+        // The V3 format has no filter-removal byte: no frame.
+        assert_eq!(set_auto_stop_mode(AutoStopMode::FilterRemoval), None);
+    }
+
+    #[test]
+    fn auto_stop_mode_ids_round_trip() {
+        for mode in AutoStopMode::V4 {
+            assert_eq!(AutoStopMode::from_id(mode.id()), Some(mode));
+        }
+        assert_eq!(AutoStopMode::from_id(2), Some(AutoStopMode::FilterRemoval));
+        assert_eq!(AutoStopMode::from_id(3), None);
     }
 
     #[test]
@@ -1462,6 +1533,51 @@ mod tests {
         assert_eq!(
             set_auto_stop_v4(AutoStopTarget::Ratio, AutoStopMode::CupRemoval),
             hex6("030a0b020202")
+        );
+        // Filter removed: 03 0a 0b <target> 01.
+        assert_eq!(
+            set_auto_stop_v4(AutoStopTarget::Timing, AutoStopMode::FilterRemoval),
+            hex6("030a0b010102")
+        );
+        assert_eq!(
+            set_auto_stop_v4(AutoStopTarget::Ratio, AutoStopMode::FilterRemoval),
+            hex6("030a0b020101")
+        );
+    }
+
+    #[test]
+    fn filter_removal_is_offered_and_sent_only_on_ultra_v4() {
+        let filter = AutoStopMode::FilterRemoval;
+        for fw in [141, 143, 300, 312] {
+            let firmware = BookooFirmware(fw);
+            assert_eq!(firmware.auto_stop_modes(), &AutoStopMode::TWO, "fw {fw}");
+            assert!(firmware.auto_stop_writes(filter).is_empty(), "fw {fw}");
+        }
+        for fw in [400, 403] {
+            let firmware = BookooFirmware(fw);
+            assert_eq!(firmware.auto_stop_modes(), &AutoStopMode::V4, "fw {fw}");
+            assert_eq!(
+                firmware.auto_stop_writes(filter),
+                vec![hex6("030a0b010102"), hex6("030a0b020101")],
+                "fw {fw}"
+            );
+            assert_eq!(
+                firmware.auto_stop_target_write(AutoStopTarget::Ratio, filter),
+                Some(hex6("030a0b020101")),
+                "fw {fw}"
+            );
+        }
+        for fw in [324, 0, 202, 1234] {
+            let firmware = BookooFirmware(fw);
+            assert!(firmware.auto_stop_modes().is_empty(), "fw {fw}");
+            assert!(firmware.auto_stop_writes(filter).is_empty(), "fw {fw}");
+        }
+        let unknown = BookooScale::default();
+        assert!(unknown.auto_stop_modes().is_empty());
+        assert!(unknown.auto_stop_writes(filter).is_empty());
+        assert_eq!(
+            unknown.auto_stop_target_write(AutoStopTarget::Timing, filter),
+            None
         );
     }
 

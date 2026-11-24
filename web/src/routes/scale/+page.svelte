@@ -268,16 +268,14 @@
 	}
 
 	/**
-	 * Auto-stop — what ends the scale's automatic mode: the flow stopping
-	 * (`0`) or the cup coming off (`1`), the `AutoStopMode` ids. One setting
-	 * (`caps.auto_stop`, active = the snapshot's `scaleAutoStop`: a Mini's
-	 * echo, else what Crema last set), or one per mode
-	 * (`caps.auto_stop_targets`, active = `scaleAutoStopFor`).
+	 * Auto-stop — what ends the scale's automatic mode. The conditions come
+	 * from the core (`caps.auto_stop_modes`: flow stops, cup removed, and on
+	 * an Ultra with firmware 4+ filter removed). One setting (`caps.auto_stop`,
+	 * active = the snapshot's `scaleAutoStop`: a Mini's echo, else what Crema
+	 * last set), or one per mode (`caps.auto_stop_targets`, active =
+	 * `scaleAutoStopFor`).
 	 */
-	const AUTO_STOP_OPTIONS = [
-		{ id: 0, label: 'Flow stops' },
-		{ id: 1, label: 'Cup removed' }
-	] as const;
+	const autoStopModes = $derived(caps?.auto_stop_modes ?? []);
 
 	/** Beep the scale's buzzer — a locate / test-tone ping. Capability-gated. */
 	function beep(): void {
@@ -557,12 +555,12 @@
 							</div>
 						</div>
 						<div class="st-segment" role="group" aria-labelledby="sc-autostop-{t.id}">
-							{#each AUTO_STOP_OPTIONS as o (o.id)}
+							{#each autoStopModes as o (o.id)}
 								<button
 									type="button"
 									class:is-active={snap?.scaleAutoStopFor[t.id] === o.id}
 									aria-pressed={snap?.scaleAutoStopFor[t.id] === o.id}
-									onclick={() => app?.setScaleAutoStopFor(t.id, o.id)}>{o.label}</button
+									onclick={() => app?.setScaleAutoStopFor(t.id, o.id)}>{o.name}</button
 								>
 							{/each}
 						</div>
@@ -573,17 +571,16 @@
 					<div>
 						<div class="sc-set-title" id="sc-autostop">Auto-stop</div>
 						<div class="sc-set-sub">
-							What ends the scale's automatic mode and stops its timer: the flow
-							stopping, or the cup coming off the scale.
+							What ends the scale's automatic mode and stops its timer.
 						</div>
 					</div>
 					<div class="st-segment" role="group" aria-labelledby="sc-autostop">
-						{#each AUTO_STOP_OPTIONS as o (o.id)}
+						{#each autoStopModes as o (o.id)}
 							<button
 								type="button"
 								class:is-active={snap?.scaleAutoStop === o.id}
 								aria-pressed={snap?.scaleAutoStop === o.id}
-								onclick={() => app?.setScaleAutoStop(o.id)}>{o.label}</button
+								onclick={() => app?.setScaleAutoStop(o.id)}>{o.name}</button
 							>
 						{/each}
 					</div>

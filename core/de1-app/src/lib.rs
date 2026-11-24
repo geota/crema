@@ -3285,7 +3285,8 @@ impl CremaCore {
     }
 
     /// Build the [`Command`]s that select the connected scale's auto-stop
-    /// mode (`0` = flow-stop, `1` = cup-removal). Routed through
+    /// mode (`0` = flow-stop, `1` = cup-removal, `2` = filter-removal, one of
+    /// [`ScaleCapabilities::auto_stop_modes`]). Routed through
     /// [`Scale::set_auto_stop_command`], which picks the frame format the
     /// scale's firmware takes (one write per automatic submode on a Bookoo
     /// Ultra V4); empty [`CoreOutput`] when the capability is absent — on a
@@ -3304,7 +3305,7 @@ impl CremaCore {
     }
 
     /// Build the [`Command`] that sets the auto-stop mode (`0` = flow-stop,
-    /// `1` = cup-removal) for one of the connected scale's
+    /// `1` = cup-removal, `2` = filter-removal) for one of the connected scale's
     /// [`ScaleCapabilities::auto_stop_targets`] — a Bookoo Ultra on firmware
     /// 4+ sets it separately for timing (`1`) and ratio (`2`) mode — then the
     /// settings query. Empty when the scale has no such target or either id
@@ -9797,7 +9798,7 @@ mod tests {
         };
         assert_eq!(
             flow_stop,
-            bookoo::set_auto_stop_mode(bookoo::AutoStopMode::FlowStop)
+            bookoo::set_auto_stop_mode(bookoo::AutoStopMode::FlowStop).unwrap()
         );
         let Some(Command::WriteScale { data: cup_removal }) =
             core.set_scale_auto_stop(1).commands.into_iter().next()
@@ -9806,7 +9807,7 @@ mod tests {
         };
         assert_eq!(
             cup_removal,
-            bookoo::set_auto_stop_mode(bookoo::AutoStopMode::CupRemoval)
+            bookoo::set_auto_stop_mode(bookoo::AutoStopMode::CupRemoval).unwrap()
         );
     }
 
@@ -9814,8 +9815,41 @@ mod tests {
     fn set_scale_auto_stop_emits_nothing_for_an_out_of_range_mode_id() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        // 2 is not a valid auto-stop mode — rejected gracefully, empty output.
+        // 3 is not an auto-stop mode — rejected gracefully, empty output.
+        assert!(core.set_scale_auto_stop(3).commands.is_empty());
+        // Filter removed (2) before the firmware is known, and on a Mini or
+        // an Ultra <= 3.1.2, which have no frame for it: nothing either.
         assert!(core.set_scale_auto_stop(2).commands.is_empty());
+        for fw in [141, 312] {
+            let core = bookoo_core_on(fw);
+            assert!(core.set_scale_auto_stop(2).commands.is_empty(), "fw {fw}");
+            assert!(
+                core.set_scale_auto_stop_for(1, 2).commands.is_empty(),
+                "fw {fw}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ultra_v4_sets_filter_removed_per_mode() {
+        let core = bookoo_core_on(403);
+        let writes = |out: CoreOutput| -> Vec<Vec<u8>> {
+            out.commands
+                .into_iter()
+                .filter_map(|c| match c {
+                    Command::WriteScale { data } if data[2] == 0x0B => Some(data),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(
+            writes(core.set_scale_auto_stop_for(1, 2)),
+            vec![vec![0x03, 0x0A, 0x0B, 0x01, 0x01, 0x02]]
+        );
+        assert_eq!(
+            writes(core.set_scale_auto_stop_for(2, 2)),
+            vec![vec![0x03, 0x0A, 0x0B, 0x02, 0x01, 0x01]]
+        );
     }
 
     #[test]

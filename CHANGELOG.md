@@ -46,6 +46,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   scale's ratio mode divides by the right weight. A profile picked mid-shot
   sends its dose when the shot ends. The Mini and older Ultra firmware are
   left alone. Android and web.
+- **"Filter removed" auto-stop on a BOOKOO Ultra with firmware 4** — the
+  per-mode auto-stop settings for timing and ratio mode now offer Flow stops,
+  Filter removed (a pour-over dripper lifted off) or Cup removed. The Mini and
+  older Ultra firmware have no such condition and keep their two choices.
+  Android and web.
 
 ### Changed
 

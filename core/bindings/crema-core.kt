@@ -5914,7 +5914,7 @@ data class ScaleCapabilities (
 	/// The scale accepts a command to toggle anti-mistouch.
 	val anti_mistouch: Boolean,
 	/// The scale accepts a command to select its auto-stop mode (the Bookoo's
-	/// flow-stop / cup-removal setting). On a Bookoo this turns on only once
+	/// flow-stop / cup-removal setting; see [`auto_stop_modes`](Self::auto_stop_modes)). On a Bookoo this turns on only once
 	/// the firmware has been reported, so the shell re-reads the capabilities
 	/// when a `ScaleConfig` event carries the firmware.
 	val auto_stop: Boolean,
@@ -5924,6 +5924,13 @@ data class ScaleCapabilities (
 	/// entry and sets it with `set_scale_auto_stop_for(target, mode)`. The
 	/// scale doesn't echo these settings, so the shell keeps what it last set.
 	val auto_stop_targets: List<ModeInfo>,
+	/// The auto-stop conditions the scale takes, in display order — the ids
+	/// `set_scale_auto_stop` / `set_scale_auto_stop_for` accept (`0` = flow
+	/// stops, `1` = cup removed, `2` = filter removed), each with a display
+	/// `name`. Empty when [`auto_stop`](Self::auto_stop) is `false`. A Bookoo
+	/// Mini or Ultra ≤ 3.1.2 takes flow stops and cup removed; an Ultra on
+	/// firmware 4+ adds filter removed.
+	val auto_stop_modes: List<ModeInfo>,
 	/// The selectable display/behaviour modes the scale exposes — empty when
 	/// the scale has no switchable modes. Each entry carries the mode's wire
 	/// `id` and a display `name`.
