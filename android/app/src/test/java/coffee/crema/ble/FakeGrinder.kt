@@ -21,6 +21,12 @@ import kotlinx.coroutines.flow.filter
 class FakeGrinder(
     /** The services discovery reports (the Motto's by default). */
     private val services: List<String> = listOf(SERVICE),
+    /** The characteristics' properties discovery reports, by UUID (the
+     *  Motto's by default); none under a service it doesn't report. */
+    private val characteristics: Map<String, Set<GattProperty>> = mapOf(
+        RX to setOf(GattProperty.WRITE, GattProperty.WRITE_WITHOUT_RESPONSE),
+        TX to setOf(GattProperty.NOTIFY),
+    ),
 ) : BleTransport {
     val clock = AtomicLong(1_000)
     val writes = CopyOnWriteArrayList<ByteArray>()
@@ -61,14 +67,18 @@ class FakeGrinder(
     }
     override suspend fun read(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID): ByteArray = error("no reads")
     override fun discoveredServices(device: BleTransport.DeviceHandle): List<String> = services
+    override fun characteristicProperties(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID): Set<GattProperty> =
+        if (services.any { it.equals(service.toString(), ignoreCase = true) }) characteristics[characteristic.toString()].orEmpty() else emptySet()
     override suspend fun requestLargeMtu(device: BleTransport.DeviceHandle): Int? {
         mtuRequests++
         return 247
     }
 
-    /** Send one message as the grinder would: 20-byte frames, all at [atMs]. */
-    fun send(json: String, seq: Int = 1, atMs: Long = clock.get()) {
-        for (frame in frames(json.toByteArray(Charsets.UTF_8), seq)) {
+    /** Send one message as the grinder would: 20-byte frames, all at [atMs].
+     *  The frames at [lost] never arrive. */
+    fun send(json: String, seq: Int = 1, atMs: Long = clock.get(), lost: Set<Int> = emptySet()) {
+        for ((i, frame) in frames(json.toByteArray(Charsets.UTF_8), seq).withIndex()) {
+            if (i in lost) continue
             check(notifications.tryEmit(BleTransport.Notification(UUID.fromString(TX), frame, atMs)))
         }
     }

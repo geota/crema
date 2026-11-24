@@ -54,4 +54,16 @@ class RemoteGrinderUpdateTest {
         fixture.push()
         assertNull(VmHarness.ownState(vm).mirror!!.grinder)
     }
+
+    /** #563 review: a grinder frame that doesn't parse logs only the
+     *  exception's class, never kotlinx's message, which can echo the JSON. */
+    @Test
+    fun `a bad grinder frame logs no JSON`() {
+        val vm = fixture.start()
+        fixture.push()
+        vm.deliverGrinderForTest("""{"rev":"x","grinder":{"model":"MT80-ECHO-ME"}}""")
+        VmHarness.idle()
+        val line = VmHarness.log(vm).first { "Grinder update parse failed" in it }
+        kotlin.test.assertTrue("ECHO" !in line && "rev" !in line && "{" !in line, line)
+    }
 }

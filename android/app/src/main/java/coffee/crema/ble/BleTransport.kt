@@ -201,6 +201,15 @@ interface BleTransport {
     fun discoveredServices(device: DeviceHandle): List<String> = emptyList()
 
     /**
+     * The properties of [characteristic] under [service] on the connected
+     * [device], as discovered at connect: empty when the service or the
+     * characteristic isn't there, null when this transport can't tell (the
+     * default: replay, the LAN proxy). The grinder's GATT check reads it
+     * (BOOKOO §4.3: RX writable, TX notifies).
+     */
+    fun characteristicProperties(device: DeviceHandle, service: UUID, characteristic: UUID): Set<GattProperty>? = null
+
+    /**
      * Best-effort connection-parameter hint: ask the OS for a HIGH-priority
      * (short-interval) link while [high], or back to BALANCED. Used to tighten
      * the DE1's sample cadence + stop-write latency during a shot (Decenza
@@ -306,6 +315,9 @@ interface BleTransport {
         }
     }
 }
+
+/** A GATT characteristic property, free of the BLE library's types. */
+enum class GattProperty { READ, WRITE, WRITE_WITHOUT_RESPONSE, NOTIFY, INDICATE }
 
 /** The write type a [BleTransport.write] asks the stack for. */
 enum class BleWriteType {

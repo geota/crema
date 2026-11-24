@@ -121,6 +121,9 @@ class TappingBleTransport(
     override fun discoveredServices(device: BleTransport.DeviceHandle): List<String> =
         delegate.discoveredServices(device)
 
+    override fun characteristicProperties(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID): Set<coffee.crema.ble.GattProperty>? =
+        delegate.characteristicProperties(device, service, characteristic)
+
     override suspend fun requestConnectionPriority(device: BleTransport.DeviceHandle, high: Boolean) =
         delegate.requestConnectionPriority(device, high)
 

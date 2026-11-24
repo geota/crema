@@ -219,9 +219,9 @@ class GrinderBleManager(
             GrinderUuids.serializer(),
             bridge.grinderUuids() ?: error("Core reported no UUIDs for '$model'"),
         )
-        // The service, RX and TX must be there (BOOKOO §4.3: else disconnect
-        // and report a mismatch). Services come lowercased from the transport.
-        if (services.isNotEmpty() && services.none { it.equals(u.service, ignoreCase = true) }) {
+        // BOOKOO §4.3: the service, a writable RX and a TX that notifies,
+        // else disconnect and report a mismatch.
+        if (!gattFits(device, u, services)) {
             // Retrying can't help: stop the session (off this coroutine, which
             // the stop cancels).
             onMismatch()
@@ -245,6 +245,20 @@ class GrinderBleManager(
         // Writes stay 20-byte packets (BOOKOO's client and Sabotage1 both
         // write 20; it fits the default MTU on every phone).
         onCoreOutput(bridge.grinderSubscribed(SAFE_PACKET.toUInt(), nowMs().toULong()))
+    }
+
+    /**
+     * BOOKOO §4.3 as its client checks it (`mt80_gatt_client.py`): the custom
+     * service, RX with `write` or `write-without-response`, and TX with
+     * `notify`. A transport that can't list characteristics falls back to the
+     * service list; one that listed none can't tell, and the subscribe decides.
+     */
+    private fun gattFits(device: BleTransport.DeviceHandle, u: GrinderUuids, services: List<String>): Boolean {
+        val service = UUID.fromString(u.service)
+        val rx = transport.characteristicProperties(device, service, UUID.fromString(u.write))
+        val tx = transport.characteristicProperties(device, service, UUID.fromString(u.notify))
+        if (rx == null || tx == null) return services.isEmpty() || services.any { it.equals(u.service, ignoreCase = true) }
+        return (GattProperty.WRITE in rx || GattProperty.WRITE_WITHOUT_RESPONSE in rx) && GattProperty.NOTIFY in tx
     }
 
     /** The device answered the scan by name but has no grinder service. */

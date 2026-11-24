@@ -64,15 +64,19 @@ const FIRST_READING_MS: u64 = 5_000;
 /// 5 s without a valid `periodInfo` ends the session (Sabotage1's default
 /// `PacketTimeoutMs`; the grinder streams at 5 Hz).
 const SILENT_MS: u64 = 5_000;
-/// Malformed frames in a row before the link counts as dead (about 1 s of
-/// garbage at MTU 23).
+/// Bad messages in a row before the link counts as dead. A message counts
+/// once, at the frame that breaks it: the continuations it orphans don't
+/// count (official §5.1 drops them and starts over at the next `offset = 0`;
+/// its client only warns), so one lost notification can't end the link. The
+/// silence watchdog still ends a stream that never completes a reading.
 const MALFORMED_LIMIT: u32 = 20;
 /// The oldest firmware with this protocol, v1.2.19.0820 (official README;
 /// Sabotage1 refuses older).
 pub const MIN_RELEASE: i64 = 102_190_820;
 /// The handshake, compact (official §5.2 and §7.1).
 const HANDSHAKE: &[u8] = br#"{"request":{"appHello":{"op":"handshake"}}}"#;
-/// Longest `devState` accepted (Sabotage1).
+/// Longest `devState` kept in a reading's `raw_state` (Sabotage1's limit); a
+/// longer one is truncated, never rejected (official §7.3.1).
 const MAX_STATE_LEN: usize = 80;
 /// Longest serial kept; the official limit is 32 UTF-8 bytes.
 const MAX_SERIAL_LEN: usize = 32;
@@ -126,6 +130,10 @@ pub enum FrameError {
     OutOfBounds,
     /// A continuation that doesn't follow the partial message.
     OutOfOrder,
+    /// A continuation with no message in progress: its message's first
+    /// fragment was lost, rejected or expired. Dropped, and not a new bad
+    /// message (official §5.1).
+    Orphaned,
 }
 
 /// One frame's header.
@@ -208,6 +216,8 @@ impl FrameReassembler {
             self.seq = Some(h.seq);
             self.total = h.total;
             self.payload.clear();
+        } else if self.seq.is_none() {
+            return Err(FrameError::Orphaned);
         } else if self.seq != Some(h.seq) || h.total != self.total || offset != self.payload.len() {
             self.reset();
             return Err(FrameError::OutOfOrder);
@@ -244,9 +254,12 @@ fn min_firmware() -> FirmwareVersion {
 }
 
 /// A `devState` string, upper-cased (Sabotage1 matches `toUpperCase()`). The
-/// table is official §7.3.1 plus its history: `SHAKING` and `Reverse` (the
-/// 2026-09-02 table), the pre-1.3.11 spellings `HighSpeedClean` and
-/// `BootGuide`, and Sabotage1's `HIGH_SPEED_CLEAN`.
+/// table is official §7.3.1 at `76458a1` (last changed 2026-10-23,
+/// `b925c5f`), and any other string is [`GrinderState::Unknown`] (§7.3.1:
+/// tolerate unlisted values). Kept from its history, harmless if they never
+/// come: the pre-1.3.11 spellings `HighSpeedClean` and `BootGuide`; `SHAKING`
+/// and `Reverse`, historical (the 2026-09-02 table, dropped since); and
+/// Sabotage1's `HIGH_SPEED_CLEAN` / `HIGHSPEED_CLEAN`.
 #[must_use]
 pub fn state_from(raw: &str) -> GrinderState {
     match raw.to_ascii_uppercase().as_str() {
@@ -310,14 +323,15 @@ impl Fields<'_> {
 }
 
 /// Decode a `periodInfo` object (official §7.3) received at `at_ms`. `None`
-/// unless `devState` is a non-empty string of at most 80 bytes; any other
-/// field that is missing, mistyped or out of range is left out and counted
-/// in the returned number.
+/// unless `devState` is a non-empty string; an unlisted one is
+/// [`GrinderState::Unknown`] and the reading stands (§7.3.1). Any other field
+/// that is missing, mistyped or out of range is left out and counted in the
+/// returned number.
 fn decode_period(period: &Map<String, Value>, at_ms: u64) -> Option<(GrinderReading, u32)> {
     let raw_state = period
         .get("devState")
         .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty() && s.len() <= MAX_STATE_LEN)?;
+        .filter(|s| !s.is_empty())?;
     let mut f = Fields {
         object: period,
         rejected: 0,
@@ -352,7 +366,7 @@ fn decode_period(period: &Map<String, Value>, at_ms: u64) -> Option<(GrinderRead
     let reading = GrinderReading {
         at_ms,
         state: state_from(raw_state),
-        raw_state: raw_state.to_owned(),
+        raw_state: truncated(raw_state, MAX_STATE_LEN).to_owned(),
         setting,
         grind_rpm,
         feed_rpm,
@@ -362,6 +376,15 @@ fn decode_period(period: &Map<String, Value>, at_ms: u64) -> Option<(GrinderRead
         settings,
     };
     Some((reading, f.rejected))
+}
+
+/// The longest prefix of `s` of at most `max` bytes that ends on a character.
+fn truncated(s: &str, max: usize) -> &str {
+    let mut end = s.len().min(max);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 /// Parse a complete message: strict UTF-8, then a JSON object.
@@ -464,6 +487,12 @@ impl Motto80 {
             return events;
         }
         match self.reassembler.feed(bytes, now_ms) {
+            // Dropped, not a new bad message: its message counted where it
+            // broke, or its first fragment never came.
+            Err(FrameError::Orphaned) => {
+                self.diagnostics.malformed_frames =
+                    self.diagnostics.malformed_frames.saturating_add(1);
+            }
             Err(_) => {
                 self.diagnostics.malformed_frames =
                     self.diagnostics.malformed_frames.saturating_add(1);

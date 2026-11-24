@@ -99,6 +99,9 @@ class SwitchableBleTransport(initial: BleTransport) : BleTransport {
     override fun discoveredServices(device: BleTransport.DeviceHandle): List<String> =
         current.discoveredServices(device)
 
+    override fun characteristicProperties(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID): Set<coffee.crema.ble.GattProperty>? =
+        current.characteristicProperties(device, service, characteristic)
+
     override suspend fun requestConnectionPriority(device: BleTransport.DeviceHandle, high: Boolean) =
         current.requestConnectionPriority(device, high)
 

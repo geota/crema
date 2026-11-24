@@ -198,7 +198,8 @@ internal class RemoteConfigController(
         val mirror = uiState().mirror
         if (mirror == null || mirror.frozen) return
         val update = runCatching { json.decodeFromString(GrinderUpdate.serializer(), jsonStr) }.getOrElse {
-            appendLog("Grinder update parse failed: ${it.message}")
+            // The class only: kotlinx's message can echo the JSON (as NoiseFrameLink logs).
+            appendLog("Grinder update parse failed: ${it.javaClass.simpleName}")
             return
         }
         updateUi { s ->

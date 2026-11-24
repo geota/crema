@@ -237,6 +237,9 @@ fn states_match_case_insensitively_with_legacy_spellings() {
         ("WARNING", GrinderState::Warning),
         ("UNKNOWN", GrinderState::Unknown),
         ("FOO", GrinderState::Unknown),
+        // Unlisted, odd or long: unknown, and the reading stands (§7.3.1).
+        ("   ", GrinderState::Unknown),
+        ("NEW_STATE_2027", GrinderState::Unknown),
     ] {
         let mut driver = connected();
         let events = feed(&mut driver, &period(raw), 512, 0);
@@ -246,22 +249,30 @@ fn states_match_case_insensitively_with_legacy_spellings() {
     }
 }
 
+/// Official §7.3.1: an unlisted `devState` must not fail the whole
+/// `periodInfo`. A long one is kept truncated to 80 bytes, on a character.
+#[test]
+fn a_long_state_is_unknown_and_truncated_not_rejected() {
+    let long = format!("{}é{}", "X".repeat(79), "Y".repeat(40));
+    let mut driver = connected();
+    let events = feed(&mut driver, &period(&long), 512, 0);
+    let r = readings(&events);
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].state, GrinderState::Unknown);
+    assert_eq!(r[0].raw_state, "X".repeat(79), "cut before the two-byte é");
+    assert_eq!(r[0].setting.as_ref().map(|s| s.value.as_str()), Some("500"));
+    assert_eq!(driver.diagnostics().unreadable_messages, 0);
+}
+
 #[test]
 fn an_empty_or_missing_state_is_not_a_reading() {
-    let long = "X".repeat(81);
-    for bad in ["", "   ", long.as_str()] {
-        let mut driver = connected();
-        assert!(
-            feed(&mut driver, &period(bad), 512, 0).is_empty(),
-            "{bad:?}"
-        );
-    }
     let mut driver = connected();
+    assert!(feed(&mut driver, &period(""), 512, 0).is_empty());
     let no_state = PERIOD.replace(r#""devState":"IDLE","#, "");
     assert!(feed(&mut driver, &no_state, 512, 0).is_empty());
     let numeric = PERIOD.replace(r#""IDLE""#, "1");
     assert!(feed(&mut driver, &numeric, 512, 0).is_empty());
-    assert_eq!(driver.diagnostics().unreadable_messages, 2);
+    assert_eq!(driver.diagnostics().unreadable_messages, 3);
     // ...and it never became ready.
     assert_eq!(
         driver.tick(5_000),
@@ -293,7 +304,7 @@ fn reassembly_follows_the_official_rules() {
     // ...and the partial is gone: a continuation now has nothing to follow.
     assert_eq!(
         r.feed(&frame(1, total, 12, &msg[12..24]), 0),
-        Err(FrameError::OutOfOrder)
+        Err(FrameError::Orphaned)
     );
     // A different seq or total mid-message.
     assert_eq!(r.feed(&frame(1, total, 0, &msg[..12]), 0), Ok(None));
@@ -310,7 +321,7 @@ fn reassembly_follows_the_official_rules() {
     assert_eq!(r.feed(&frame(1, 24, 0, &msg[..12]), 0), Ok(None));
     assert_eq!(
         r.feed(&frame(1, 24, 12, &msg[12..24]), 2_001),
-        Err(FrameError::OutOfOrder)
+        Err(FrameError::Orphaned)
     );
     assert_eq!(r.feed(&frame(1, 24, 0, &msg[..12]), 0), Ok(None));
     assert_eq!(
@@ -380,6 +391,47 @@ fn a_utf8_character_may_span_fragments_but_invalid_utf8_is_dropped() {
         .collect();
     assert!(events.is_empty());
     assert_eq!(driver.diagnostics().unreadable_messages, 1);
+}
+
+/// M1 (official §5.1): a lost notification drops its message, not the link.
+/// The README `periodInfo` at 20-byte packets is 21 fragments; without
+/// fragment 0 the other 20 are orphans, which don't count.
+#[test]
+fn a_lost_first_fragment_drops_the_message_not_the_link() {
+    let mut driver = connected();
+    feed(&mut driver, PERIOD, 512, 100);
+    for round in 0..3_u64 {
+        let frames = encode(PERIOD.as_bytes(), 7, 20);
+        assert_eq!(frames.len(), 21);
+        let at = 200 + round * 200;
+        for f in &frames[1..] {
+            assert!(driver.on_notification(f, at).is_empty(), "round {round}");
+        }
+        // The next message reads as normal.
+        let events = feed(&mut driver, PERIOD, 20, at + 100);
+        assert_eq!(readings(&events).len(), 1, "round {round}: {events:?}");
+    }
+    assert_eq!(driver.diagnostics().malformed_frames, 60);
+}
+
+/// Bad messages are what count: orphaned continuations neither add to the
+/// run of bad frames nor end it.
+#[test]
+fn orphans_neither_count_nor_reset_the_run() {
+    let mut driver = connected();
+    feed(&mut driver, PERIOD, 512, 100);
+    for _ in 0..19 {
+        assert!(driver.on_notification(b"garbage!!", 200).is_empty());
+    }
+    for f in &encode(PERIOD.as_bytes(), 7, 20)[1..] {
+        assert!(driver.on_notification(f, 200).is_empty());
+    }
+    assert_eq!(
+        driver.on_notification(b"garbage!!", 200),
+        [GrinderEvent::LinkDead {
+            reason: GrinderLinkDeadReason::Malformed
+        }]
+    );
 }
 
 #[test]
