@@ -767,6 +767,19 @@ data class GrinderSnapshot(
     val lastGrindSetting: String? = null,
 )
 
+/**
+ * The hub's grinder block on its own, in a `Frame.Grinder` (grinder-ble
+ * §6.2): what a turning collar changes, without the rest of the snapshot.
+ * [rev] comes from the same counter as [ConfigSnapshot.rev], so a remote
+ * keeps whichever of the two carried the newer block. [grinder] null = the
+ * hub has no grinder connected or linked now.
+ */
+@Serializable
+data class GrinderUpdate(
+    val rev: Long,
+    val grinder: GrinderSnapshot? = null,
+)
+
 /** Decode `prefs.json`'s text: the nested shape, or a pre-unification FLAT
  *  [AppPrefs] (decoded directly; the next save rewrites it nested). */
 internal fun decodePrefs(json: Json, text: String): AppPrefs {

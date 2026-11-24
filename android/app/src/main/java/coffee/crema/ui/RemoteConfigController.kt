@@ -9,6 +9,7 @@ import coffee.crema.machine.ConfigEcho
 import coffee.crema.machine.MachineCommand
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.settings.ConfigSnapshot
+import coffee.crema.settings.GrinderUpdate
 import coffee.crema.settings.MirroredSettings
 import coffee.crema.settings.Setting
 import coffee.crema.settings.setting
@@ -137,7 +138,15 @@ internal class RemoteConfigController(
         )
     }.getOrDefault("")
 
-    /** The next config snapshot's `rev`: a plain counter from 0 (Main only). */
+    /** The hub's grinder block on its own, for a `Frame.Grinder` (grinder-ble
+     *  §6.2): numbered from the snapshots' counter, on Main like them, so a
+     *  remote keeps the newer of the two. */
+    fun grinderUpdateJson(): String = runCatching {
+        val rev = configRev++
+        json.encodeToString(GrinderUpdate.serializer(), GrinderUpdate(rev = rev, grinder = grinderSnapshot(uiState(), grinderReading())))
+    }.getOrDefault("")
+
+    /** The next config snapshot's (or grinder update's) `rev`: a plain counter from 0 (Main only). */
     private var configRev = 0L
 
     // ── A remote's mirror slice ──────────────────────────────────────────────
@@ -177,6 +186,25 @@ internal class RemoteConfigController(
         // The remote's core follows the hub's values (§7.4).
         pushCoreInputs(effectiveState())
         appendLog("Config from the hub applied (profile ${cfg.activeProfileId})")
+    }
+
+    /**
+     * Apply a hub's grinder block sent between snapshots ([grinderUpdateJson]):
+     * only the slice's grinder changes. Dropped like a snapshot when this
+     * device isn't a remote or is leaving the role, and when the slice
+     * already shows a newer block.
+     */
+    fun applyRemoteGrinder(jsonStr: String) {
+        val mirror = uiState().mirror
+        if (mirror == null || mirror.frozen) return
+        val update = runCatching { json.decodeFromString(GrinderUpdate.serializer(), jsonStr) }.getOrElse {
+            appendLog("Grinder update parse failed: ${it.message}")
+            return
+        }
+        updateUi { s ->
+            val m = s.mirror?.takeUnless { it.frozen } ?: return@updateUi s
+            s.copy(mirror = m.grinderApplied(update))
+        }
     }
 
     /**

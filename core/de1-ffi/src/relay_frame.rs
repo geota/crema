@@ -113,6 +113,8 @@ pub enum RelayFrame {
     State { address: String, state: String },
     /// The hub's session config.
     Config { json: String },
+    /// The hub's grinder block on its own.
+    Grinder { json: String },
     /// A who-drove-it notice.
     Event { text: String },
 }
@@ -186,6 +188,7 @@ impl From<RelayFrame> for app::Frame {
             },
             RelayFrame::State { address, state } => Self::State { address, state },
             RelayFrame::Config { json } => Self::Config { json },
+            RelayFrame::Grinder { json } => Self::Grinder { json },
             RelayFrame::Event { text } => Self::Event { text },
         }
     }
@@ -260,6 +263,7 @@ impl From<app::Frame> for RelayFrame {
             },
             app::Frame::State { address, state } => Self::State { address, state },
             app::Frame::Config { json } => Self::Config { json },
+            app::Frame::Grinder { json } => Self::Grinder { json },
             app::Frame::Event { text } => Self::Event { text },
         }
     }
@@ -343,6 +347,6 @@ mod tests {
                 type_name: "x".into()
             }
         );
-        assert_eq!(relay_frame_types().len(), 19);
+        assert_eq!(relay_frame_types().len(), 20);
     }
 }

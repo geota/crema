@@ -107,4 +107,40 @@ class MirroredSettingsTest {
         assertTrue(!slice.isStale(6))
         assertTrue(!slice.welcomed("Kitchen tablet").isStale(1), "a restarted hub counts from 0 again")
     }
+
+    /** grinder-ble §6.2: the hub sends its grinder block on its own between
+     *  snapshots, numbered from the snapshots' counter. The newer block wins,
+     *  whichever frame carried it; an update changes nothing else. */
+    @Test
+    fun `a grinder update between snapshots`() {
+        val turning = GrinderSnapshot(connected = true, model = "Motto 80", follow = "Following", setting = "481")
+        val older = GrinderSnapshot(connected = true, model = "Motto 80", follow = "Following", setting = "480")
+        val (base, _) = MirroredSettings().applied(snap.copy(rev = 5, grinder = older), null, null)
+            .withPending(MachineCommand.SetGrind("18"))
+
+        val updated = base.grinderApplied(GrinderUpdate(rev = 6, grinder = turning))
+        assertEquals(turning, updated.grinder)
+        assertEquals(base.copy(grinder = turning, grinderRev = 6), updated, "only the grinder changes: snapshot, rev and pending edits stay")
+        assertTrue(!updated.isStale(6), "an update doesn't make the next snapshot stale")
+
+        // An update at or below the block shown is dropped; null clears it.
+        assertSame(updated, updated.grinderApplied(GrinderUpdate(rev = 6, grinder = older)))
+        assertSame(updated, updated.grinderApplied(GrinderUpdate(rev = 4, grinder = older)))
+        assertEquals(null, updated.grinderApplied(GrinderUpdate(rev = 7)).grinder)
+
+        // An attach's snapshot built before an update but delivered after
+        // it applies, and keeps the newer block.
+        val late = MirroredSettings().grinderApplied(GrinderUpdate(rev = 6, grinder = turning))
+            .applied(snap.copy(rev = 5, grinder = older, qcGrind = "16"), null, null)
+        assertEquals("16", late.snapshot?.qcGrind)
+        assertEquals(5L, late.lastRev)
+        assertEquals(turning, late.grinder)
+        // A newer snapshot's block replaces it.
+        val newer = updated.applied(snap.copy(rev = 8, grinder = null), null, null)
+        assertEquals(null, newer.grinder)
+        assertTrue(newer.isGrinderStale(7))
+
+        // A new Welcome: the hub's counter may start over.
+        assertTrue(!updated.welcomed("Kitchen tablet").isGrinderStale(0))
+    }
 }

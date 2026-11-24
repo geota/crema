@@ -79,6 +79,7 @@ fn frame() -> impl Strategy<Value = Frame> {
             }
         ),
         text().prop_map(|json| Frame::Config { json }),
+        text().prop_map(|json| Frame::Grinder { json }),
         text().prop_map(|text| Frame::Event { text }),
     ]
 }

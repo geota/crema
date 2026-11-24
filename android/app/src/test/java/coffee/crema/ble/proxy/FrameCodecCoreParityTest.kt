@@ -51,7 +51,7 @@ class FrameCodecCoreParityTest {
 
     @Test
     fun `every fixture decodes as it did, and re-encodes to the same bytes`() {
-        assertEquals(53, fixtures.size)
+        assertEquals(54, fixtures.size)
         for (text in fixtures) {
             assertSame(text)
             val frame = Oracle.decodeTolerant(text) ?: continue
@@ -161,7 +161,7 @@ class FrameCodecCoreParityTest {
 
     private fun devices() = List(random.nextInt(3)) { DeviceInfo(text(), text(), text(), text()) }
 
-    private fun frame(): Frame = when (random.nextInt(19)) {
+    private fun frame(): Frame = when (random.nextInt(20)) {
         0 -> Frame.Welcome(text(), text(), devices(), text())
         1 -> Frame.Roster(devices())
         2 -> Frame.Attach(id(), text())
@@ -180,6 +180,7 @@ class FrameCodecCoreParityTest {
         15 -> Frame.Notify(text(), text(), text(), text(), id(), if (random.nextBoolean()) null else text())
         16 -> Frame.State(text(), text())
         17 -> Frame.Config(text())
+        18 -> Frame.Grinder(text())
         else -> Frame.Event(text())
     }
 
