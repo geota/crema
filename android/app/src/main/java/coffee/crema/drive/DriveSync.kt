@@ -21,9 +21,6 @@ import coffee.crema.core.reconnectNoticeDue
 import coffee.crema.runCatchingCancellable
 import coffee.crema.sync.OwnStateGate
 import coffee.crema.sync.SingleFlightRefresh
-import coffee.crema.visualizer.codeChallengeFromVerifier
-import coffee.crema.visualizer.generateCodeVerifier
-import coffee.crema.visualizer.randomState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -45,8 +42,10 @@ import java.util.UUID
  * Deliberately NOT folded into MainViewModel: the VM instantiates one, mirrors
  * [state] into MainUiState, and forwards UI intents.
  *
- * Owns the OAuth lifecycle (PKCE Authorization-Code via a Custom Tab, reusing the
- * Visualizer PKCE helpers), token freshness, and the three backup operations
+ * Owns the sign-in lifecycle and token freshness, through the build's
+ * [DriveAuthorizer]s (the browser way, and in `play` Google Play services'),
+ * which it picks at sign-in and dispatches to by the stored grant's
+ * [DriveTokenSet.method]; and the three backup operations
  * (upload / list+download). The backup BYTES come from the VM (it owns the
  * library/history/settings) via the [backupZip] / [applyRestore] callbacks — the
  * same `.crema.zip` (backup.jsonl + bean photos) the local SAF backup writes, so a
@@ -167,11 +166,12 @@ class DriveSync(
     private val applyRestore: (file: java.io.File, wipe: Boolean, from: DriveBackupRow?) -> Unit,
     /** Whether the active network is unmetered (Wi-Fi): a Wi-Fi only backup waits for it. */
     private val unmetered: () -> Boolean = { true },
-    /** The OAuth code → token exchange (injected so JVM tests can drive a sign-in). */
-    private val exchangeCode: suspend (code: String, verifier: String) -> DriveTokenSet =
-        { code, verifier -> exchangeCodeForDriveToken(clientId, code, verifier, json) },
-    /** The refresh-token grant (injected so JVM tests can drive a refresh). */
-    private val refreshToken: suspend (refresh: String) -> DriveTokenSet = { refresh -> refreshDriveToken(clientId, refresh, json) },
+    /**
+     * The ways to a token this build has, in the order sign-in prefers them
+     * (`DriveAuthorizers.create`); one is always [AuthMethod.BROWSER]. JVM
+     * tests inject fakes, so they drive a sign-in or refresh without Google.
+     */
+    private val authorizers: List<DriveAuthorizer>,
     /** Core `callback_outcome`: what a redirect means for the stored handshake. */
     private val callbackRule: (expectedState: String?, verifier: String?, code: String?, returnedState: String?, error: String?) -> CallbackOutcome =
         ::callbackOutcome,
@@ -187,8 +187,6 @@ class DriveSync(
     private val restoreDownloadFile: () -> java.io.File = { java.io.File.createTempFile("crema-drive-restore", ".crema") },
     private val downloadBackup: suspend (token: String, fileId: String, dest: java.io.File) -> java.io.File =
         { token, id, dest -> driveDownloadBackupTo(token, id, dest, json) },
-    /** Revoke a grant at Google, best-effort (injected so JVM tests make no call). */
-    private val revokeGrant: suspend (DriveTokenSet) -> Unit = { revokeDriveGrant(it) },
     /** Why a daily backup mustn't run now (a store that couldn't be read, a
      *  restore running), or null. A copy made then would hold less than the
      *  last, and could push a good one out. */
@@ -226,6 +224,12 @@ class DriveSync(
 
     private val _state = MutableStateFlow(UiState(configured = clientId.isNotBlank()))
     val state: StateFlow<UiState> = _state.asStateFlow()
+
+    /** The browser way: it completes the redirect, and revokes a grant no way here can. */
+    private val browser: DriveAuthorizer = authorizers.first { it.method == AuthMethod.BROWSER }
+
+    /** The way that made [stored], or null when this build has none (a `play` grant on `foss`). */
+    private fun authorizerFor(stored: DriveTokenSet): DriveAuthorizer? = authorizers.firstOrNull { it.method == stored.method }
 
     @Volatile
     private var persisted = DriveState()
@@ -276,26 +280,35 @@ class DriveSync(
 
     // ── Sign-in lifecycle ────────────────────────────────────────────────────
 
-    /** Begin the PKCE handshake: mint verifier + state, persist them (the process
-     *  can die while the Custom Tab is up), and hand the authorize URL to [openUrl]. */
-    fun beginSignIn(openUrl: (String) -> Unit) {
+    /** Begin an interactive sign-in with [openUrl] as its host. */
+    fun beginSignIn(openUrl: (String) -> Unit) = beginSignIn(SignInHost { openUrl(it) })
+
+    /**
+     * Begin an interactive sign-in the first available way. The browser way's
+     * PKCE verifier and state are persisted (the process can die while the
+     * Custom Tab is up) before [host] opens the authorize URL.
+     */
+    fun beginSignIn(host: SignInHost) {
         if (clientId.isBlank()) {
             notify("Google Drive isn’t configured in this build (missing client id)")
             return
         }
-        val verifier = generateCodeVerifier()
-        val csrf = randomState()
+        val authorizer = authorizers.firstOrNull { it.available() } ?: browser
         scope.launch {
             if (!ownState.await()) return@launch
-            signInStartedHere = true
-            persist {
-                it.copy(
-                    pendingVerifier = verifier,
-                    pendingState = csrf,
-                    pendingStartedAtMs = System.currentTimeMillis(),
-                )
+            when (val begun = authorizer.begin(host)) {
+                is Begin.Browser -> {
+                    signInStartedHere = true
+                    persist {
+                        it.copy(
+                            pendingVerifier = begun.verifier,
+                            pendingState = begun.state,
+                            pendingStartedAtMs = System.currentTimeMillis(),
+                        )
+                    }
+                    host.openUrl(begun.url)
+                }
             }
-            openUrl(buildGoogleAuthorizeUrl(clientId, csrf, codeChallengeFromVerifier(verifier)))
         }
     }
 
@@ -351,7 +364,7 @@ class DriveSync(
                     code ?: return@launch
                     verifier ?: return@launch
                     _state.update { it.copy(busy = true) }
-                    runCatchingCancellable { exchangeCode(code, verifier) }
+                    runCatchingCancellable { browser.complete(SignInResult.Browser(code, verifier)) }
                         .onSuccess { tokens ->
                             // A new sign-in may be another account: the next
                             // backup uploads whatever it finds (#311).
@@ -402,8 +415,14 @@ class DriveSync(
             persist { it.copy(tokens = null, unopened = null, needsReconnect = false, health = null, lastAutoBackupHash = null, lastAutoBackupMark = null) }
             _state.update { it.copy(backups = null) }
             if (!quiet) notify("Disconnected from Google Drive")
-            tokens?.let { revokeGrant(it) }
+            tokens?.let { revoke(it) }
         }
+    }
+
+    /** End [tokens]' grant the way that made it, else the browser way's revoke of its access token. Never throws. */
+    private suspend fun revoke(tokens: DriveTokenSet) {
+        runCatchingCancellable { (authorizerFor(tokens) ?: browser).revoke(tokens) }
+            .onFailure { log("Google Drive revoke failed: ${it.javaClass.simpleName}") }
     }
 
     /**
@@ -423,38 +442,38 @@ class DriveSync(
             t
         }
         fold()
-        tokens?.let { scope.launch { revokeGrant(it) } }
-    }
-
-    /** What [freshToken] found. */
-    private sealed interface FreshToken {
-        /** A set to call with. */
-        data class Token(val set: DriveTokenSet) : FreshToken
-
-        /** The session stands, but no token for now. */
-        data class Waiting(val failure: SyncFailure) : FreshToken
-
-        /** Signed out, or Google ended the sign-in. */
-        data object NeedsReconnect : FreshToken
+        tokens?.let { scope.launch { revoke(it) } }
     }
 
     /** A Drive call that couldn't get a token, or whose retry couldn't. */
     private class NoDriveToken(val failure: SyncFailure, message: String? = null) : Exception(message)
 
+    /** An authorizer's [FreshToken.NeedsReconnect], through [refresher]: it ends the session. */
+    private class SessionOver : Exception()
+
+    /** An authorizer's [FreshToken.Waiting], through [refresher]: the session stands. */
+    private class WaitingOn(val failure: SyncFailure) : Exception()
+
     private val refresher = SingleFlightRefresh<DriveTokenSet>(
         stored = { persisted.tokens },
-        refreshTokenOf = { it.refreshToken },
+        refreshTokenOf = { it.grantKey() },
         expiring = ::expiring,
-        grant = refreshToken,
-        endsSession = { driveFailure(it, "refresh", now()) == SyncFailure.SessionEnded },
+        grant = { _, current, rejected ->
+            when (val got = authorizerFor(current)?.fresh(current, rejected) ?: FreshToken.NeedsReconnect) {
+                is FreshToken.Token -> got.set
+                is FreshToken.Waiting -> throw WaitingOn(got.failure)
+                FreshToken.NeedsReconnect -> throw SessionOver()
+            }
+        },
+        endsSession = { it is SessionOver },
         store = { spent, fresh ->
-            persist { st -> if (st.tokens?.refreshToken == spent) st.copy(tokens = fresh) else st }
+            persist { st -> if (st.tokens?.grantKey() == spent) st.copy(tokens = fresh) else st }
         },
         end = { rejected ->
             // Keeps everything else, so a reconnect picks up where this left off.
             var ended = false
             persist { st ->
-                ended = st.tokens != null && st.tokens.refreshToken == rejected
+                ended = st.tokens != null && st.tokens.grantKey() == rejected
                 if (ended) st.copy(tokens = null, needsReconnect = true) else st
             }
             if (ended) finishRun(failed(SyncFailure.SessionEnded))
@@ -463,8 +482,8 @@ class DriveSync(
 
     private fun expiring(tokens: DriveTokenSet) = now() >= tokens.expiresAt - 60_000
 
-    /** A token to call with, refreshing within 60 s of expiry. Only Google saying
-     *  the refresh token is dead ends the session (geota/crema#323). */
+    /** A token to call with, renewed within 60 s of expiry. Only Google saying
+     *  the grant is dead ends the session (geota/crema#323). */
     private suspend fun freshToken(): FreshToken {
         val tokens = persisted.tokens ?: return FreshToken.NeedsReconnect
         return if (expiring(tokens)) refreshed(tokens, rejected = false) else FreshToken.Token(tokens)
@@ -474,6 +493,8 @@ class DriveSync(
         refresher.refresh(observed, rejected)?.let { FreshToken.Token(it) } ?: FreshToken.NeedsReconnect
     } catch (c: CancellationException) {
         throw c
+    } catch (e: WaitingOn) {
+        FreshToken.Waiting(e.failure)
     } catch (e: Exception) {
         FreshToken.Waiting(driveFailure(e, "refresh", now()))
     }

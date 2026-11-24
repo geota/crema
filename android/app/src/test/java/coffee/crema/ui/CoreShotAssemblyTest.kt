@@ -33,7 +33,7 @@ import kotlin.test.assertTrue
  * recorded here ([recordedShot]), and `web-shots.crema.jsonl` by web's
  * `shotHistoryJsonl` (`web/src/lib/history/shot-cross-shell.vitest.ts`), which
  * also imports this one. Regenerate with `CREMA_REGEN_SHOT_FIXTURES=1 ./gradlew
- * :app:testDebugUnitTest --tests coffee.crema.ui.CoreShotAssemblyTest`.
+ * :app:testFossDebugUnitTest --tests coffee.crema.ui.CoreShotAssemblyTest`.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])

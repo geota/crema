@@ -105,7 +105,12 @@ Everything below ships in the web app and the Android app (tablet and phone) unl
 
 **Stable**: tagged releases.
 
-- Download the APK from the [latest release](https://github.com/geota/crema/releases/latest). See the **[changelog](CHANGELOG.md)** for what each release includes.
+- Download the APK from the [latest release](https://github.com/geota/crema/releases/latest). See the **[changelog](CHANGELOG.md)** for what each release includes. Each release has two:
+  - **`crema-<version>-play.apk`**: for phones with Google Play services. Google Drive sign-in will use them; for now it opens the browser, as in `-foss`.
+  - **`crema-<version>-foss.apk`**: no Google code at all, the build F-Droid and IzzyOnDroid ship. Google Drive sign-in opens the browser.
+
+  Both are the same app with the same signature, so either installs over the other and keeps your data. Obtainium asks which one to follow.
+
 - Or add `https://github.com/geota/crema` to **Obtainium** (steps below) with **Include prereleases** off.
 
 <!--
@@ -119,7 +124,7 @@ Everything below ships in the web app and the Android app (tablet and phone) unl
   2. Tap **Add App** and paste the source URL `https://github.com/geota/crema`.
   3. Turn on **Include prereleases**: the nightly build is published as a GitHub *prerelease*.
   4. Tap **Add**, then **Install**. Obtainium updates it in place whenever a new nightly ships.
-- Or download the APK straight from the [`nightly`](https://github.com/geota/crema/releases/tag/nightly) prerelease and sideload it.
+- Or download the APK straight from the [`nightly`](https://github.com/geota/crema/releases/tag/nightly) prerelease and sideload it. Nightlies are the `play` build.
 
 Stable and nightly are the **same app** (`dev.maceiras.crema`), signed with the same key and sharing one strictly increasing version scheme: a nightly's version code sits just above the release it builds on and below the next one, so **every tagged release is an in-place upgrade over the nightlies that preceded it**, with no manual reinstall. The **Include prereleases** switch just picks which lane you follow. Minimum Android 12 (API 31).
 

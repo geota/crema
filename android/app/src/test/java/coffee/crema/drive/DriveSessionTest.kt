@@ -79,11 +79,18 @@ class DriveSessionTest {
         },
         backupFileName = { "crema-backup-1" },
         applyRestore = { _, _, _ -> },
-        exchangeCode = { _, _ -> set("new") },
-        refreshToken = {
-            grants.incrementAndGet()
-            refresh(it)
-        },
+        authorizers = listOf(
+            BrowserAuthorizer(
+                "cid", json,
+                now = { clock },
+                exchange = { _, _ -> set("new") },
+                refresh = {
+                    grants.incrementAndGet()
+                    refresh(it)
+                },
+                revokeGrant = {},
+            ),
+        ),
         now = { clock },
         uploadBackup = { token, name, _ ->
             uploads += "$token $name"
@@ -91,7 +98,6 @@ class DriveSessionTest {
             DriveFile(id = "f", name = name)
         },
         listBackups = { emptyList() },
-        revokeGrant = {},
     ).also { runBlocking { it.load() } }
 
     @After
