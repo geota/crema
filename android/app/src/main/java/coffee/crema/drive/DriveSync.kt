@@ -220,6 +220,9 @@ class DriveSync(
         /** Automatic copies kept (#311): the stored choice, else what the next
          *  retention would choose ([autoBackupKeepFor]). Null until loaded. */
         val autoBackupKeep: Int? = null,
+        /** Settings offers "Sign in with the browser instead": this build has
+         *  another way, working here, that sign-in would take. */
+        val browserInstead: Boolean = false,
     )
 
     private val _state = MutableStateFlow(UiState(configured = clientId.isNotBlank()))
@@ -230,6 +233,28 @@ class DriveSync(
 
     /** The way that made [stored], or null when this build has none (a `play` grant on `foss`). */
     private fun authorizerFor(stored: DriveTokenSet): DriveAuthorizer? = authorizers.firstOrNull { it.method == stored.method }
+
+    /** The ways other than the browser's that work on this phone, asked once. */
+    private val otherWays: List<DriveAuthorizer> by lazy {
+        authorizers.filter { it.method != AuthMethod.BROWSER && runCatching { it.available() }.getOrDefault(false) }
+    }
+
+    /** The way a sign-in takes: the first other way that works here, unless this phone is [DriveState.browserOnly]. */
+    private fun signInWay(): DriveAuthorizer = if (persisted.browserOnly) browser else otherWays.firstOrNull() ?: browser
+
+    /** The Activity on screen, for a consent screen or a browser fallback; set between its onStart and onStop. */
+    @Volatile
+    private var attachedHost: SignInHost? = null
+
+    /** The Activity is on screen: [host] launches what a sign-in needs. */
+    fun attachHost(host: SignInHost) {
+        attachedHost = host
+    }
+
+    /** The Activity left the screen: drop it, if [host] is still the one held. */
+    fun detachHost(host: SignInHost) {
+        if (attachedHost === host) attachedHost = null
+    }
 
     @Volatile
     private var persisted = DriveState()
@@ -265,6 +290,7 @@ class DriveSync(
             ),
             needsReconnect = persisted.needsReconnect,
             healthLine = driveHealthLine(persisted.health),
+            browserInstead = !persisted.browserOnly && otherWays.isNotEmpty(),
         ) }
     }
 
@@ -280,34 +306,125 @@ class DriveSync(
 
     // ── Sign-in lifecycle ────────────────────────────────────────────────────
 
+    /** [open] for the browser, with the attached Activity for a consent screen. */
+    private fun hostWith(open: (String) -> Unit) = object : SignInHost {
+        override fun openUrl(url: String) = open(url)
+        override fun launchConsent(consent: android.app.PendingIntent) = attachedHost?.launchConsent(consent) ?: false
+    }
+
     /** Begin an interactive sign-in with [openUrl] as its host. */
-    fun beginSignIn(openUrl: (String) -> Unit) = beginSignIn(SignInHost { openUrl(it) })
+    fun beginSignIn(openUrl: (String) -> Unit) = beginSignIn(hostWith(openUrl))
 
     /**
-     * Begin an interactive sign-in the first available way. The browser way's
-     * PKCE verifier and state are persisted (the process can die while the
-     * Custom Tab is up) before [host] opens the authorize URL.
+     * Begin an interactive sign-in: Google Play services' way where it works
+     * and this phone hasn't fallen back from it, else the browser's (#336 §5).
      */
     fun beginSignIn(host: SignInHost) {
         if (clientId.isBlank()) {
             notify("Google Drive isn’t configured in this build (missing client id)")
             return
         }
-        val authorizer = authorizers.firstOrNull { it.available() } ?: browser
         scope.launch {
             if (!ownState.await()) return@launch
-            when (val begun = authorizer.begin(host)) {
-                is Begin.Browser -> {
-                    signInStartedHere = true
-                    persist {
-                        it.copy(
-                            pendingVerifier = begun.verifier,
-                            pendingState = begun.state,
-                            pendingStartedAtMs = System.currentTimeMillis(),
-                        )
-                    }
-                    host.openUrl(begun.url)
+            start(signInWay(), host)
+        }
+    }
+
+    /**
+     * Settings' "Sign in with the browser instead" (`play` builds): this phone
+     * keeps to the browser from now on, and its sign-in starts.
+     */
+    fun signInWithBrowser(openUrl: (String) -> Unit) {
+        if (clientId.isBlank()) {
+            notify("Google Drive isn’t configured in this build (missing client id)")
+            return
+        }
+        scope.launch {
+            if (!ownState.await()) return@launch
+            persist { it.copy(browserOnly = true) }
+            start(browser, hostWith(openUrl))
+        }
+    }
+
+    /**
+     * Start [way]'s sign-in. The browser way's PKCE verifier and state are
+     * persisted (the process can die while the Custom Tab is up) before [host]
+     * opens the authorize URL.
+     */
+    private suspend fun start(way: DriveAuthorizer, host: SignInHost) {
+        val begun = try {
+            way.begin(host)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Exception) {
+            signInFailed(way, e, host)
+            return
+        }
+        when (begun) {
+            is Begin.Browser -> {
+                signInStartedHere = true
+                persist {
+                    it.copy(
+                        pendingVerifier = begun.verifier,
+                        pendingState = begun.state,
+                        pendingStartedAtMs = System.currentTimeMillis(),
+                    )
                 }
+                host.openUrl(begun.url)
+            }
+            is Begin.Granted -> connected(begun.tokens)
+            Begin.Launched -> Unit
+        }
+    }
+
+    /** A sign-in gave [tokens]: store them. A new sign-in may be another account, so the next backup uploads whatever it finds (#311). */
+    private suspend fun connected(tokens: DriveTokenSet) {
+        persist { it.copy(tokens = tokens, needsReconnect = false, health = null, lastAutoBackupHash = null, lastAutoBackupMark = null) }
+        notify("Connected to Google Drive")
+    }
+
+    /**
+     * [way]'s interactive sign-in failed. A way other than the browser's that
+     * doesn't work on this phone hands over to the browser at once, and for
+     * later sign-ins (#336 §5); the user sees the browser open, with no error
+     * between. A cancel or no network is only said: switching on those would
+     * bounce users between ways.
+     */
+    private suspend fun signInFailed(way: DriveAuthorizer, e: Exception, host: SignInHost?) {
+        val kind = (e as? SignInFailure)?.kind
+        if (way.method != AuthMethod.BROWSER && (kind == null || kind == SignInFailure.Kind.UNSUPPORTED)) {
+            log("Google Drive: ${way.method} sign-in doesn't work here (${e.message ?: e.javaClass.simpleName}); using the browser")
+            persist { it.copy(browserOnly = true) }
+            if (host != null) start(browser, host) else notify("Google Drive sign-in didn’t finish. Tap Connect again.")
+            return
+        }
+        notify(
+            when (kind) {
+                SignInFailure.Kind.CANCELLED -> "Google Drive sign-in was cancelled"
+                SignInFailure.Kind.OFFLINE -> "Google Drive sign-in failed: couldn’t reach Google"
+                else -> "Google Drive sign-in failed: ${e.message}"
+            },
+        )
+    }
+
+    /**
+     * A Google Play services consent screen closed ([SignInResult.Consent]):
+     * the grant it gave, or what [signInFailed] makes of its failure. The
+     * Activity relays it; a fallback opens the browser through [attachedHost].
+     */
+    fun handleConsentResult(resultCode: Int, data: android.content.Intent?) {
+        scope.launch {
+            if (!ownState.await()) return@launch
+            val way = otherWays.firstOrNull() ?: return@launch
+            _state.update { it.copy(busy = true) }
+            try {
+                connected(way.complete(SignInResult.Consent(resultCode, data)))
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                signInFailed(way, e, attachedHost)
+            } finally {
+                _state.update { it.copy(busy = false) }
             }
         }
     }
@@ -365,12 +482,7 @@ class DriveSync(
                     verifier ?: return@launch
                     _state.update { it.copy(busy = true) }
                     runCatchingCancellable { browser.complete(SignInResult.Browser(code, verifier)) }
-                        .onSuccess { tokens ->
-                            // A new sign-in may be another account: the next
-                            // backup uploads whatever it finds (#311).
-                            persist { it.copy(tokens = tokens, needsReconnect = false, health = null, lastAutoBackupHash = null, lastAutoBackupMark = null) }
-                            notify("Connected to Google Drive")
-                        }
+                        .onSuccess { tokens -> connected(tokens) }
                         .onFailure { notify("Google Drive sign-in failed: ${it.message}") }
                     _state.update { it.copy(busy = false) }
                 }

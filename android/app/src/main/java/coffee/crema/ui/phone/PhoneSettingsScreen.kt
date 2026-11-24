@@ -1059,17 +1059,23 @@ private fun SharingSection(
     val ds = ui.drive
     SettingsGroup("Google Drive") {
         if (!ds.connected && ds.needsReconnect) {
-            CremaSettingsRow("Reconnect Google Drive", coffee.crema.drive.DRIVE_RECONNECT_LINE, last = true, stacked = true) {
+            CremaSettingsRow("Reconnect Google Drive", coffee.crema.drive.DRIVE_RECONNECT_LINE, last = !ds.browserInstead, stacked = true) {
                 androidx.compose.foundation.layout.Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
                     CremaButton(onClick = { vm.drive.disconnect(quiet = true) }, variant = CremaButtonVariant.Text, enabled = !ds.busy, label = "Forget")
                     CremaButton(onClick = { vm.drive.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "cloud", enabled = ds.configured && !ds.busy, label = "Reconnect")
                 }
             }
         } else if (!ds.connected) {
-            CremaSettingsRow("Connect Google Drive", "Back up to and restore from your own Google Drive — only the files Crema creates.", last = true) {
+            CremaSettingsRow("Connect Google Drive", "Back up to and restore from your own Google Drive — only the files Crema creates.", last = !ds.browserInstead) {
                 CremaButton(onClick = { vm.drive.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "cloud", enabled = ds.configured && !ds.busy, label = "Connect")
             }
-        } else {
+        }
+        if (!ds.connected && ds.browserInstead) {
+            CremaSettingsRow("Sign in with the browser instead", coffee.crema.drive.DRIVE_BROWSER_INSTEAD_HINT, last = true) {
+                CremaButton(onClick = { vm.drive.signInWithBrowser(openUrl) }, variant = CremaButtonVariant.Outlined, icon = "arrow-square-out", enabled = ds.configured && !ds.busy, label = "Browser")
+            }
+        }
+        if (ds.connected) {
             val lastBackupSub = ds.lastBackupAtMs
                 ?.let { "Upload a fresh backup file to your Google Drive. Last backed up ${relativeAgo(it)}." }
                 ?: "Upload a fresh backup file to your Google Drive."

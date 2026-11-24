@@ -129,11 +129,31 @@ class MainActivity : ComponentActivity() {
         // in the browser instead. Say so, rather than leaving the tap silent
         // (geota/crema#45). Self-gating: a no-op when no handshake is in flight.
         viewModel.drive.notePossibleAbandon()
+        // While on screen, Drive sign-in can open Google Play services' consent
+        // screen, or the browser when it falls back from it (#336).
+        viewModel.drive.attachHost(driveSignInHost)
     }
 
     override fun onStop() {
+        viewModel.drive.detachHost(driveSignInHost)
         viewModel.setAppForeground(false)
         super.onStop()
+    }
+
+    /** Google Play services' Drive consent screen (`play` builds); its result goes back to Drive sign-in. */
+    private val driveConsentLauncher = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result -> viewModel.drive.handleConsentResult(result.resultCode, result.data) }
+
+    /** What Drive sign-in launches its screens through while this Activity is on screen. */
+    private val driveSignInHost = object : coffee.crema.drive.SignInHost {
+        override fun openUrl(url: String) {
+            startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+        }
+
+        override fun launchConsent(consent: android.app.PendingIntent): Boolean = runCatching {
+            driveConsentLauncher.launch(androidx.activity.result.IntentSenderRequest.Builder(consent).build())
+        }.isSuccess
     }
 
     /** The system "associate this device" dialog ("Reconnect when nearby"). */

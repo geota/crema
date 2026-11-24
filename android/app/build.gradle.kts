@@ -407,6 +407,12 @@ dependencies {
     // nothing resolved. Keep -android and -test on the same version.
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
+    // `play` only (#336): Google's Authorization API for Drive sign-in
+    // (PlayAuthorizer, src/play), and Task.await for it, on the coroutines
+    // version above. Proprietary, so never in `foss`: checkFossHasNoGoogle.
+    "playImplementation"("com.google.android.gms:play-services-auth:22.0.0")
+    "playImplementation"("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.11.0")
+
     // The de1-app `CoreOutput` JSON is deserialized with kotlinx.serialization.
     // The generated `core/bindings/crema-core.kt` types are @Serializable.
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.13.0")

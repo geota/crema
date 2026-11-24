@@ -31,6 +31,15 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   "The grind follows Motto 80 on ‹hub›", instead of the collar quietly putting
   its value back. Remotes get a summary only, never the grinder's serial or
   Wi-Fi name (#488).
+- **Google Drive sign-in through Google Play services (Android, `-play`)** —
+  the `-play` APK, the Play listing and nightlies sign in to Google Drive
+  with Google Play services' own account picker, no browser hop and no
+  refresh token on the phone; the daily backup gets its token from them too.
+  Where they don't work it opens the browser sign-in at once, and keeps to
+  it; Settings → Google Drive also offers "Sign in with the browser
+  instead". A Drive connection you already have keeps working as it is
+  until you next sign in. `-foss` signs in through the browser as before
+  (#336).
 
 ### Changed
 
@@ -41,11 +50,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   a grinder on Brew, with a grind scale per grinder (#488). Android and web.
 - **Two Android APKs: `-foss` and `-play`** — each release now ships
   `crema-<version>-foss.apk`, with no Google code, for F-Droid and
-  IzzyOnDroid, and `crema-<version>-play.apk`, which will sign in to Google
-  Drive through Google Play services. Both are the same app with the same
-  signature, so either installs over the other and keeps your data. For now
-  both sign in to Drive through the browser, as before. The release APK was
-  `crema-<version>-release.apk` (#336).
+  IzzyOnDroid, and `crema-<version>-play.apk`. Both are the same app with the
+  same signature, so either installs over the other and keeps your data. The
+  release APK was `crema-<version>-release.apk` (#336).
 
 ### Fixed
 

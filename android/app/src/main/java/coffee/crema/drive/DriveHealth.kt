@@ -26,6 +26,10 @@ private val coreJson = Json {
 /** The notice and banner when Google ends the sign-in. */
 const val DRIVE_RECONNECT_LINE = "Google ended the Drive sign-in, so backups have stopped. Reconnect to resume them."
 
+/** Settings' escape hatch from Google Play services sign-in (#336 §5). */
+const val DRIVE_BROWSER_INSTEAD_HINT =
+    "If signing in through Google Play services doesn’t work on this phone (an older microG, say), sign in through the browser. This phone keeps to the browser after that."
+
 /** The line when Drive refuses a sign-in Google hasn't ended. */
 const val DRIVE_REFUSED_LINE = "Google Drive refused this sign-in. Disconnect and connect again if it keeps happening."
 

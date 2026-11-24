@@ -932,15 +932,20 @@ fun SettingsScreen(
                         SetGroup("Google Drive") {
                             if (!ds.connected) {
                                 if (ds.needsReconnect) {
-                                    CremaSettingsRow("Reconnect Google Drive", DRIVE_RECONNECT_LINE, last = true) {
+                                    CremaSettingsRow("Reconnect Google Drive", DRIVE_RECONNECT_LINE, last = !ds.browserInstead) {
                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                                             CremaButton(onClick = { vm.drive.disconnect(quiet = true) }, variant = CremaButtonVariant.Text, enabled = !ds.busy, label = "Forget")
                                             CremaButton(onClick = { vm.drive.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "cloud", enabled = ds.configured && !ds.busy, label = "Reconnect")
                                         }
                                     }
                                 } else {
-                                    CremaSettingsRow("Connect Google Drive", "Back up to and restore from your own Google Drive — only the backup files Crema creates (scope drive.file).", last = true) {
+                                    CremaSettingsRow("Connect Google Drive", "Back up to and restore from your own Google Drive — only the backup files Crema creates (scope drive.file).", last = !ds.browserInstead) {
                                         CremaButton(onClick = { vm.drive.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "cloud", enabled = ds.configured && !ds.busy, label = "Connect")
+                                    }
+                                }
+                                if (ds.browserInstead) {
+                                    CremaSettingsRow("Sign in with the browser instead", coffee.crema.drive.DRIVE_BROWSER_INSTEAD_HINT, last = true) {
+                                        CremaButton(onClick = { vm.drive.signInWithBrowser(openUrl) }, variant = CremaButtonVariant.Outlined, icon = "arrow-square-out", enabled = ds.configured && !ds.busy, label = "Browser")
                                     }
                                 }
                             } else {
