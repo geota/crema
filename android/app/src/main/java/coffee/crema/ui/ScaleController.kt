@@ -180,6 +180,7 @@ internal class ScaleController(
             scaleStandbyMinutes = DEFAULT_SCALE_STANDBY_MINUTES,
             scaleFlowSmoothing = false,
             scaleAutoStop = null,
+            scaleAutoStopFor = emptyMap(),
             scaleAntiMistouch = false,
             scaleActiveMode = null,
             scaleEchoed = emptySet(),
@@ -393,6 +394,25 @@ internal class ScaleController(
                 appendLog("Set auto-stop failed: ${it.message}")
                 return
             }
+            lane.deliver(raw)
+        }
+    }
+
+    /**
+     * Set the auto-stop mode for one of the scale's `auto_stop_targets`
+     * ([targetId]). Shown once the core emits a write, since the scale
+     * doesn't echo it.
+     */
+    fun setScaleAutoStopFor(targetId: Int, modeId: Int) {
+        editOwn(Setting.SCALE_AUTO_STOP) {
+            val raw = runCatching {
+                bridge.setScaleAutoStopFor(targetId.toUByte(), modeId.toUByte())
+            }.getOrElse {
+                appendLog("Set auto-stop failed: ${it.message}")
+                return
+            }
+            if (!raw.contains("WriteScale")) return
+            updateUi { it.copy(scaleAutoStopFor = it.scaleAutoStopFor + (targetId to modeId)) }
             lane.deliver(raw)
         }
     }

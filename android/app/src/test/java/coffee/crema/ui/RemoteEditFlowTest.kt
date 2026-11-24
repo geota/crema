@@ -70,7 +70,7 @@ class RemoteEditFlowTest {
         "setWaterRefillPointMm" to listOf(8f), "setHeaterVoltage" to listOf(230), "setFlowMultiplier" to listOf(1.1f),
         "setLineFrequency" to listOf(50f), "setCupWarmerTemp" to listOf(60), "setScaleVolume" to listOf(3),
         "setScaleStandbyMinutes" to listOf(10), "setScaleFlowSmoothing" to listOf(true), "setScaleAntiMistouch" to listOf(true),
-        "setScaleMode" to listOf(1), "setScaleAutoStop" to listOf(1), "setMaxShotDuration" to listOf(41f),
+        "setScaleMode" to listOf(1), "setScaleAutoStop" to listOf(1), "setScaleAutoStopFor" to listOf(1, 1), "setMaxShotDuration" to listOf(41f),
         "setVolumeStopWithScale" to listOf(true), "setRequireScale" to listOf(true), "setPreFlush" to listOf(true),
         "setSteamPurge" to listOf(true), "setIdleSleepMin" to listOf(60), "setGrinderModel" to listOf("Niche"),
         "setQcSteamTemp" to listOf(150f), "setQcSteamTime" to listOf(30f), "setQcSteamFlow" to listOf(1.6f),

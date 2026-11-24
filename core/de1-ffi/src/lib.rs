@@ -4726,6 +4726,15 @@ impl CremaBridge {
         self.emit(self.core().set_scale_auto_stop(mode_id))
     }
 
+    /// Build a [`CoreOutput`] (JSON) whose command sets the auto-stop mode
+    /// (`0` = flow-stop, `1` = cup-removal) for one of the scale's
+    /// `ScaleCapabilities::auto_stop_targets` (`target_id`; a Bookoo Ultra on
+    /// firmware 4+ has timing `1` and ratio `2`). Empty when the scale has no
+    /// such target or either id is unknown.
+    pub fn set_scale_auto_stop_for(&self, target_id: u8, mode_id: u8) -> String {
+        self.emit(self.core().set_scale_auto_stop_for(target_id, mode_id))
+    }
+
     /// Build a [`CoreOutput`] (JSON) whose command queries the connected
     /// scale's settings (the scale answers with a `03 0e …` notification).
     ///
@@ -5515,6 +5524,12 @@ mod tests {
     fn scale_capabilities_reports_modes_for_a_bookoo() {
         let bridge = CremaBridge::new();
         bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
+        // The modes are a Mini's: its serial reply (firmware 1.4.1) first.
+        let serial = vec![
+            0x03, 0x0c, 0x00, 0x8d, 0x53, 0x4e, 0x32, 0x34, 0x30, 0x30, 0x64, 0x36, 0x36, 0x61,
+            0x38, 0x39, 0x65, 0x37, 0x01, 0xce,
+        ];
+        bridge.on_notification(NotificationSource::ScaleCommand, serial, 1_000);
         let json = bridge.scale_capabilities().expect("a connected scale");
         let caps: serde_json::Value = serde_json::from_str(&json).unwrap();
         let modes = caps["modes"].as_array().expect("a modes array");
@@ -5551,6 +5566,12 @@ mod tests {
     fn set_scale_mode_produces_three_write_scale_commands_for_a_capable_scale() {
         let bridge = CremaBridge::new();
         bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
+        // The mode selector is a Mini's: its serial reply (firmware 1.4.1) first.
+        let serial = vec![
+            0x03, 0x0c, 0x00, 0x8d, 0x53, 0x4e, 0x32, 0x34, 0x30, 0x30, 0x64, 0x36, 0x36, 0x61,
+            0x38, 0x39, 0x65, 0x37, 0x01, 0xce,
+        ];
+        bridge.on_notification(NotificationSource::ScaleCommand, serial, 1_000);
         let json = bridge.set_scale_mode(1);
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         // Three mode writes plus the appended 0x0f settings query.

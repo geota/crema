@@ -105,6 +105,8 @@ async function connectedApp(
 			return writes(HEARTBEAT);
 		},
 		tareScale: async () => writes(TARE),
+		// Only target 1 (timing) exists on this fake scale.
+		setScaleAutoStopFor: async (target: unknown) => (target === 1 ? writes(SETTING) : writes()),
 		setScaleFlowSmoothing: async () => writes(SETTING)
 	};
 	// Every other core call resolves to an empty output.
@@ -308,5 +310,20 @@ describe('capabilities that depend on the scale firmware', () => {
 		expect(t.counts.heartbeat).toBe(1);
 		await settle(60_000);
 		expect(t.counts.heartbeat).toBe(2);
+	});
+});
+
+describe('auto-stop per mode', () => {
+	it('shows the mode set for a target only when a write went out', async () => {
+		const t = await connectedApp();
+		const autoStopFor = () =>
+			(t.app as unknown as { state: { current: { scaleAutoStopFor: Record<number, number> } } })
+				.state.current.scaleAutoStopFor;
+		await t.app.setScaleAutoStopFor(1, 1);
+		await settle();
+		expect(autoStopFor()).toEqual({ 1: 1 });
+		expect(t.scale.sent).toContain(SETTING);
+		await t.app.setScaleAutoStopFor(9, 0);
+		expect(autoStopFor()).toEqual({ 1: 1 });
 	});
 });

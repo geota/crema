@@ -1828,6 +1828,7 @@ export class CremaApp {
 			scaleStandby: DEFAULT_SCALE_STANDBY,
 			scaleFlowSmoothing: false,
 			scaleAutoStop: null,
+			scaleAutoStopFor: {},
 			scaleAntiMistouch: false,
 			scaleActiveMode: null,
 			scaleBattery: null,
@@ -2582,6 +2583,19 @@ export class CremaApp {
 	async setScaleAutoStop(modeId: number): Promise<void> {
 		this.state.patch({ scaleAutoStop: modeId });
 		this.applyCoreOutput(await this.core.setScaleAutoStop(modeId));
+	}
+
+	/**
+	 * Set the auto-stop mode for one of the scale's `auto_stop_targets`. The
+	 * scale doesn't echo it, so the shown value is the one set here.
+	 */
+	async setScaleAutoStopFor(targetId: number, modeId: number): Promise<void> {
+		const out = await this.core.setScaleAutoStopFor(targetId, modeId);
+		if (out.commands.length === 0) return;
+		this.state.patch({
+			scaleAutoStopFor: { ...this.state.current.scaleAutoStopFor, [targetId]: modeId }
+		});
+		this.applyCoreOutput(out);
 	}
 
 	/**

@@ -103,6 +103,40 @@ class ScaleSessionVmTest {
         assertEquals("1.4.3", vm.ui.value.scaleFirmware)
     }
 
+    /** A Bookoo `03 0c` serial reply for firmware [fw]. */
+    private fun bookooSerial(fw: Int): ByteArray {
+        val frame = ByteArray(20)
+        frame[0] = 0x03; frame[1] = 0x0c
+        frame[2] = (fw shr 8).toByte(); frame[3] = fw.toByte()
+        "SN2400d66a89e7".toByteArray().copyInto(frame, 4)
+        frame[19] = frame.take(19).fold(0) { a, b -> a xor b.toInt() }.toByte()
+        return frame
+    }
+
+    @Test
+    fun `an Ultra on firmware 4 sets auto-stop per mode, and shows what it set`() {
+        val vm = build()
+        val bridge = VmHarness.bridge(vm)
+        bridge.connectScale("BOOKOO_SC", emptyList())
+        val out = bridge.onNotification(coffee.crema.core.NotificationSource.SCALE_COMMAND, bookooSerial(403), 1_000uL)
+        VmHarness.deliverCoreOutput(vm, out)
+        VmHarness.scaleController(vm).refreshScaleCapabilities("BOOKOO_SC")
+        VmHarness.drainCoreLane(vm)
+        VmHarness.idle()
+        val caps = vm.ui.value.scaleCapabilities
+        assertEquals(listOf(1, 2), caps?.auto_stop_targets?.map { it.id.toInt() })
+        assertTrue(caps?.modes.orEmpty().isEmpty(), "no Flow / Timer / Auto selector on an Ultra")
+        vm.setScaleAutoStopFor(2, 1)
+        VmHarness.drainCoreLane(vm)
+        VmHarness.idle()
+        assertEquals(mapOf(2 to 1), vm.ui.value.scaleAutoStopFor)
+        // An unknown target writes nothing and shows nothing.
+        vm.setScaleAutoStopFor(5, 1)
+        VmHarness.drainCoreLane(vm)
+        VmHarness.idle()
+        assertEquals(mapOf(2 to 1), vm.ui.value.scaleAutoStopFor)
+    }
+
     @Test
     fun `a stale scale drops the weight, and a disconnect clears the session`() {
         val vm = build()

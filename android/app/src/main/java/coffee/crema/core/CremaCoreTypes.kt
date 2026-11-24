@@ -5918,6 +5918,12 @@ data class ScaleCapabilities (
 	/// the firmware has been reported, so the shell re-reads the capabilities
 	/// when a `ScaleConfig` event carries the firmware.
 	val auto_stop: Boolean,
+	/// The modes whose auto-stop condition is set separately — empty when the
+	/// scale has one auto-stop setting (or none). A Bookoo Ultra on firmware
+	/// 4+ lists Timing (`1`) and Ratio (`2`): the shell shows one selector per
+	/// entry and sets it with `set_scale_auto_stop_for(target, mode)`. The
+	/// scale doesn't echo these settings, so the shell keeps what it last set.
+	val auto_stop_targets: List<ModeInfo>,
 	/// The selectable display/behaviour modes the scale exposes — empty when
 	/// the scale has no switchable modes. Each entry carries the mode's wire
 	/// `id` and a display `name`.

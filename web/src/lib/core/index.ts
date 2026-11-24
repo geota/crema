@@ -857,6 +857,12 @@ export interface CremaCore {
 	/** Build a `CoreOutput` whose command selects the scale auto-stop mode. */
 	setScaleAutoStop(modeId: number): Promise<CoreOutput>;
 	/**
+	 * Build a `CoreOutput` whose command sets the auto-stop mode for one of the
+	 * scale's `auto_stop_targets` (a Bookoo Ultra on firmware 4+: timing `1`,
+	 * ratio `2`).
+	 */
+	setScaleAutoStopFor(targetId: number, modeId: number): Promise<CoreOutput>;
+	/**
 	 * Build a `CoreOutput` whose command writes the DE1's water-tank refill
 	 * threshold (`cuuid_11`). `thresholdMm` is the level at or below which the
 	 * DE1 should ask for a refill.
@@ -1508,6 +1514,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setScaleAutoStop(modeId) {
 			return parseOutput(bridge.set_scale_auto_stop(modeId));
+		},
+		async setScaleAutoStopFor(targetId, modeId) {
+			return parseOutput(bridge.set_scale_auto_stop_for(targetId, modeId));
 		},
 		async setRefillThreshold(thresholdMm) {
 			return parseOutput(bridge.set_refill_threshold(thresholdMm));

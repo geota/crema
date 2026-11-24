@@ -399,7 +399,17 @@ fun ScaleCapabilityRows(
     if (caps.anti_mistouch) CremaSettingsRow("Anti-mistouch", "Ignore accidental taps on the scale.", gate = ui.gate(Setting.SCALE_ANTI_MISTOUCH)) {
         CremaSwitch(ui.scaleAntiMistouch, vm::setScaleAntiMistouch)
     }
-    if (caps.auto_stop) CremaSettingsRow("Auto-stop", "How the scale's built-in timer ends.", gate = ui.gate(Setting.SCALE_AUTO_STOP)) {
+    // A scale that sets auto-stop per mode (a Bookoo Ultra on firmware 4+:
+    // timing and ratio) gets one row per mode; it doesn't echo them.
+    if (caps.auto_stop_targets.isNotEmpty()) for (target in caps.auto_stop_targets) {
+        CremaSettingsRow("Auto-stop · ${target.name}", "What ends the scale's automatic ${target.name.lowercase()} mode.", gate = ui.gate(Setting.SCALE_AUTO_STOP)) {
+            CremaSegmentedButton(
+                options = listOf(SegOption("0", "Flow"), SegOption("1", "Cup")),
+                value = ui.scaleAutoStopFor[target.id.toInt()]?.toString() ?: "",
+                onChange = { vm.setScaleAutoStopFor(target.id.toInt(), it.toInt()) },
+            )
+        }
+    } else if (caps.auto_stop) CremaSettingsRow("Auto-stop", "How the scale's built-in timer ends.", gate = ui.gate(Setting.SCALE_AUTO_STOP)) {
         CremaSegmentedButton(
             options = listOf(SegOption("0", "Flow"), SegOption("1", "Cup")),
             value = (ui.scaleAutoStop ?: 0).toString(),

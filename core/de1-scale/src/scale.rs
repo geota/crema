@@ -328,6 +328,13 @@ pub struct ScaleCapabilities {
     /// the firmware has been reported, so the shell re-reads the capabilities
     /// when a `ScaleConfig` event carries the firmware.
     pub auto_stop: bool,
+    /// The modes whose auto-stop condition is set separately — empty when the
+    /// scale has one auto-stop setting (or none). A Bookoo Ultra on firmware
+    /// 4+ lists Timing (`1`) and Ratio (`2`): the shell shows one selector per
+    /// entry and sets it with `set_scale_auto_stop_for(target, mode)`. The
+    /// scale doesn't echo these settings, so the shell keeps what it last set.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub auto_stop_targets: Vec<ModeInfo>,
     /// The selectable display/behaviour modes the scale exposes — empty when
     /// the scale has no switchable modes. Each entry carries the mode's wire
     /// `id` and a display `name`.
@@ -858,20 +865,36 @@ impl Scale {
                 auto_stop: !state
                     .auto_stop_writes(bookoo::AutoStopMode::FlowStop)
                     .is_empty(),
-                modes: vec![
-                    ModeInfo {
-                        id: bookoo::BookooMode::FlowRate.index(),
-                        name: "Flow Rate".to_owned(),
-                    },
-                    ModeInfo {
-                        id: bookoo::BookooMode::Timer.index(),
-                        name: "Timer".to_owned(),
-                    },
-                    ModeInfo {
-                        id: bookoo::BookooMode::Auto.index(),
-                        name: "Auto".to_owned(),
-                    },
-                ],
+                auto_stop_targets: state
+                    .auto_stop_targets()
+                    .iter()
+                    .map(|target| ModeInfo {
+                        id: target.id(),
+                        name: target.name().to_owned(),
+                    })
+                    .collect(),
+                // The Flow-Rate / Timer / Auto selector is the Mini's
+                // (captured `0x0E` / `03 0e` indices). The Ultra's modes
+                // (weight, timing, ratio; manual and automatic submodes) have
+                // no known index, so it gets no selector and no `0x0E`.
+                modes: if state.has_mini_modes() {
+                    vec![
+                        ModeInfo {
+                            id: bookoo::BookooMode::FlowRate.index(),
+                            name: "Flow Rate".to_owned(),
+                        },
+                        ModeInfo {
+                            id: bookoo::BookooMode::Timer.index(),
+                            name: "Timer".to_owned(),
+                        },
+                        ModeInfo {
+                            id: bookoo::BookooMode::Auto.index(),
+                            name: "Auto".to_owned(),
+                        },
+                    ]
+                } else {
+                    Vec::new()
+                },
                 can_lcd,
                 can_power_off,
                 can_beep,
@@ -1345,11 +1368,10 @@ impl Scale {
             self.last_battery_percent = Some(percent);
         }
         // The Bookoo's serial reply carries the firmware that gates its
-        // version-dependent commands; its settings reply, the active mode.
-        if let Inner::Bookoo(state) = &mut self.inner
-            && let Some(response) = bookoo::parse_command_response(data)
-        {
-            state.absorb(&response);
+        // version-dependent commands; its settings reply, the Mini's active
+        // mode; an Ultra's `03 0D` event, its automatic-submode phase.
+        if let Inner::Bookoo(state) = &mut self.inner {
+            state.absorb_frame(data);
         }
     }
 
@@ -1380,8 +1402,9 @@ impl Scale {
     }
 
     /// Inspect a frame that [`parse_reading`] couldn't decode and update
-    /// any device-specific state it carries — today that means snapping
-    /// the Decent Scale's firmware version from a `0x0A` LCD-ack frame.
+    /// any device-specific state it carries — snapping the Decent Scale's
+    /// firmware version from a `0x0A` LCD-ack frame, and a Bookoo Ultra's
+    /// `03 0D` automatic-mode event.
     /// Returns silently for every scale that has nothing to absorb (most
     /// of them); the shell calls this once on every non-weight
     /// notification without having to name the device.
@@ -1397,6 +1420,13 @@ impl Scale {
             && let Some(response) = decent_scale::parse_command_response(data)
         {
             state.absorb_command_response(response);
+        }
+        // An Ultra's `03 0D` automatic-mode event: the doc doesn't say which
+        // characteristic carries it, so the weight channel is read too.
+        if let Inner::Bookoo(state) = &mut self.inner
+            && let Some(event) = bookoo::parse_auto_mode_event(data)
+        {
+            state.absorb_auto_event(event);
         }
     }
 
@@ -1531,6 +1561,24 @@ impl Scale {
                 let mode = bookoo::AutoStopMode::from_id(mode_id)?;
                 let writes = state.auto_stop_writes(mode);
                 (!writes.is_empty()).then(|| writes.iter().map(|cmd| cmd.to_vec()).collect())
+            }
+            _ => None,
+        }
+    }
+
+    /// Build the write that sets the auto-stop mode (`0` = flow-stop, `1` =
+    /// cup-removal) for one of [`ScaleCapabilities::auto_stop_targets`]
+    /// (`target_id`). `None` when the scale sets auto-stop for no separate
+    /// modes, or either id is unknown.
+    #[must_use]
+    pub fn set_auto_stop_for_command(&self, target_id: u8, mode_id: u8) -> Option<Vec<u8>> {
+        match &self.inner {
+            Inner::Bookoo(state) => {
+                let target = bookoo::AutoStopTarget::from_id(target_id)?;
+                let mode = bookoo::AutoStopMode::from_id(mode_id)?;
+                state
+                    .auto_stop_target_write(target, mode)
+                    .map(|cmd| cmd.to_vec())
             }
             _ => None,
         }
@@ -2096,6 +2144,69 @@ mod tests {
     }
 
     #[test]
+    fn a_bookoo_ultra_has_no_mode_selector_and_per_target_auto_stop_on_v4() {
+        for fw in [312, 403] {
+            let ultra = bookoo_on(fw);
+            assert!(ultra.capabilities().modes.is_empty(), "fw {fw}");
+            // No 0x0E on an Ultra: its modes have no known index.
+            for id in 0..=2 {
+                assert_eq!(ultra.select_mode_command(id), None, "fw {fw} mode {id}");
+            }
+        }
+        let v4 = bookoo_on(403);
+        assert_eq!(
+            v4.capabilities().auto_stop_targets,
+            vec![
+                ModeInfo {
+                    id: 1,
+                    name: "Timing".to_owned()
+                },
+                ModeInfo {
+                    id: 2,
+                    name: "Ratio".to_owned()
+                },
+            ]
+        );
+        assert_eq!(
+            v4.set_auto_stop_for_command(2, 1),
+            Some(vec![0x03, 0x0A, 0x0B, 0x02, 0x02, 0x02])
+        );
+        assert_eq!(
+            v4.set_auto_stop_for_command(1, 0),
+            Some(vec![0x03, 0x0A, 0x0B, 0x01, 0x00, 0x03])
+        );
+        assert_eq!(v4.set_auto_stop_for_command(3, 0), None);
+        assert_eq!(v4.set_auto_stop_for_command(1, 2), None);
+        // One setting on V3 and the Mini: no per-target write.
+        assert_eq!(bookoo_on(312).set_auto_stop_for_command(1, 0), None);
+        assert_eq!(bookoo_on(143).set_auto_stop_for_command(1, 0), None);
+        assert!(bookoo_on(143).select_mode_command(2).is_some());
+    }
+
+    #[test]
+    fn a_bookoo_ultra_reads_auto_mode_events_on_either_characteristic() {
+        let event = |e: u8| {
+            let mut f = vec![0u8; 20];
+            f[..3].copy_from_slice(&[0x03, 0x0D, e]);
+            f[19] = f[..19].iter().fold(0, |a, &b| a ^ b);
+            f
+        };
+        let tare = Some(vec![0x03, 0x0A, 0x01, 0x00, 0x00, 0x08]);
+        let tare_and_start = Some(vec![0x03, 0x0A, 0x07, 0x00, 0x00, 0x0E]);
+        let mut ultra = bookoo_on(403);
+        // On the command characteristic: done.
+        ultra.absorb_command_notification(&event(0));
+        assert_eq!(ultra.tare(), tare_and_start);
+        // On the weight characteristic (not a weight frame): exit done.
+        assert_eq!(ultra.parse_reading(&event(4)), None);
+        ultra.absorb_unmatched_frame(&event(4));
+        assert_eq!(ultra.tare(), tare);
+        // A Mini's 03 0e Auto index on an Ultra means nothing.
+        ultra.absorb_command_notification(&bookoo_settings_frame(2));
+        assert_eq!(ultra.tare(), tare);
+    }
+
+    #[test]
     fn bookoo_ultra_does_not_report_byte_18_as_the_auto_stop_setting() {
         // [18] = 0x01 in this frame; an Ultra's byte is fixed at 00 in the
         // doc, so it is never shown as the live setting.
@@ -2434,9 +2545,14 @@ mod tests {
         assert_eq!(caps.standby, Some(RangeCapability { min: 5, max: 30 }));
         assert!(caps.flow_smoothing);
         assert!(caps.anti_mistouch);
-        // Auto-stop waits for the firmware, which says which format it takes.
+        // Auto-stop waits for the firmware, which says which format it takes,
+        // and so do the modes, which only a Mini's index describes.
         assert!(!caps.auto_stop);
-        assert!(bookoo_on(141).capabilities().auto_stop);
+        assert!(caps.modes.is_empty());
+        assert!(caps.auto_stop_targets.is_empty());
+        let caps = bookoo_on(141).capabilities();
+        assert!(caps.auto_stop);
+        assert!(caps.auto_stop_targets.is_empty());
         assert_eq!(
             caps.modes,
             vec![

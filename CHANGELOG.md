@@ -60,10 +60,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 - **BOOKOO scales follow BOOKOO's published protocol** — Crema now tells the
   Mini from the Ultra by the firmware the scale reports. The auto-stop setting
   uses the format the firmware takes, so on an Ultra with firmware 4 it no
-  longer sets the wrong condition, and it stays hidden until the firmware is
-  known. While the scale is in its own Auto mode, a tare sends BOOKOO's "tare
-  and start" command, which newer firmware also takes after an automatic
-  run. On
+  longer sets the wrong condition, and there it is set separately for timing
+  and ratio mode. It stays hidden until the firmware is known. The Flow /
+  Timer / Auto display-mode selector is the Mini's, so an Ultra no longer gets
+  it. While the scale is in its own automatic mode (a Mini in Auto, an Ultra's
+  automatic timing or ratio mode), a tare sends BOOKOO's "tare and start"
+  command, which newer firmware also takes after an automatic run. On
   firmware that supports it, Crema keeps the scale awake while connected
   (not while the machine sleeps) and can power it off. Device flow keeps its
   sign, and an Ultra no longer shows a stand-in auto-stop value.

@@ -3499,6 +3499,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Select the connected scale's auto-stop mode (0 = flow-stop, 1 = cup-removal). */
     fun setScaleAutoStop(modeId: Int) = scaleController.setScaleAutoStop(modeId)
+    fun setScaleAutoStopFor(targetId: Int, modeId: Int) = scaleController.setScaleAutoStopFor(targetId, modeId)
 
     /**
      * Tare the connected scale. Asks the core for the tare bytes, then routes

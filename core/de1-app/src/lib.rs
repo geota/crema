@@ -3265,6 +3265,23 @@ impl CremaCore {
         out
     }
 
+    /// Build the [`Command`] that sets the auto-stop mode (`0` = flow-stop,
+    /// `1` = cup-removal) for one of the connected scale's
+    /// [`ScaleCapabilities::auto_stop_targets`] — a Bookoo Ultra on firmware
+    /// 4+ sets it separately for timing (`1`) and ratio (`2`) mode — then the
+    /// settings query. Empty when the scale has no such target or either id
+    /// is unknown. Routed through [`Scale::set_auto_stop_for_command`].
+    pub fn set_scale_auto_stop_for(&self, target_id: u8, mode_id: u8) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        if let Some(scale) = &self.scale
+            && let Some(bytes) = scale.set_auto_stop_for_command(target_id, mode_id)
+        {
+            Self::push_scale_write(&mut out, bytes);
+            Self::push_query_settings_command(scale, &mut out);
+        }
+        out
+    }
+
     /// Feed a raw GATT notification: `data` is the characteristic's bytes and
     /// `now_ms` a monotonic millisecond timestamp from the shell.
     ///
@@ -7625,6 +7642,58 @@ mod tests {
     }
 
     #[test]
+    fn a_bookoo_ultra_sends_no_mode_select_and_sets_auto_stop_per_mode_on_v4() {
+        let core = bookoo_core_on(403);
+        assert!(core.set_scale_mode(1).commands.is_empty());
+        assert_eq!(
+            scale_writes(&core.set_scale_auto_stop_for(2, 1)),
+            vec![
+                hex("030a0b020202").as_slice(), // ratio mode: server removed
+                bookoo::QUERY_SETTINGS.as_slice(),
+            ]
+        );
+        assert!(core.set_scale_auto_stop_for(3, 1).commands.is_empty());
+        // A Mini has one setting: nothing per mode.
+        assert!(
+            bookoo_core_on(143)
+                .set_scale_auto_stop_for(1, 0)
+                .commands
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_bookoo_ultra_in_its_automatic_submode_is_tared_with_tare_and_start() {
+        let mut core = bookoo_core_on(403);
+        let event = |e: u8| {
+            let mut f = vec![0u8; 20];
+            f[..3].copy_from_slice(&[0x03, 0x0D, e]);
+            f[19] = f[..19].iter().fold(0, |a, &b| a ^ b);
+            f
+        };
+        assert_eq!(
+            scale_writes(&core.tare_scale()),
+            vec![bookoo::TARE.as_slice()]
+        );
+        // Done (00), from either characteristic.
+        core.on_notification(Source::ScaleCommand, &event(0), 1_000);
+        assert_eq!(
+            scale_writes(&core.tare_scale()),
+            vec![bookoo::TARE_AND_START.as_slice()]
+        );
+        core.on_notification(Source::ScaleWeight, &event(4), 1_100); // exit done
+        assert_eq!(
+            scale_writes(&core.tare_scale()),
+            vec![bookoo::TARE.as_slice()]
+        );
+        core.on_notification(Source::ScaleWeight, &event(2), 1_200); // ready
+        assert_eq!(
+            scale_writes(&core.tare_scale()),
+            vec![bookoo::TARE_AND_START.as_slice()]
+        );
+    }
+
+    #[test]
     fn a_bookoo_in_auto_mode_is_tared_with_tare_and_start() {
         let mut core = bookoo_core_on(143);
         assert_eq!(
@@ -9477,8 +9546,8 @@ mod tests {
 
     #[test]
     fn set_scale_mode_emits_three_writes_in_order_for_a_capable_scale() {
-        let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC", &[]);
+        // The Flow / Timer / Auto selector is a Mini's (firmware 1.x).
+        let core = bookoo_core_on(141);
         // Selecting a mode is three writes (target on, then the other two off),
         // followed by the appended 0x0f settings query.
         let out = core.set_scale_mode(1);
@@ -9684,8 +9753,8 @@ mod tests {
 
     #[test]
     fn set_scale_mode_appends_a_settings_query_after_the_three_writes() {
-        let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC", &[]);
+        // The Flow / Timer / Auto selector is a Mini's (firmware 1.x).
+        let core = bookoo_core_on(141);
         let out = core.set_scale_mode(1);
         // Three mode writes, then the 0x0f settings query.
         assert_eq!(out.commands.len(), 4);

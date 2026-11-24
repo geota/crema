@@ -12,6 +12,16 @@
 //! scale reports in its `03 0c` serial reply (Mini V1.x, Ultra V3 / V4), and
 //! [`BookooScale`] keys every version-dependent command off it.
 //!
+//! The two models' modes differ and are modelled per model. The Mini has
+//! Flow-Rate, Timer and Auto, which the undocumented `0x0E` / `03 0e` pair
+//! sets and reports (captured on a Mini). The Ultra has weight, timing and
+//! ratio modes, timing and ratio each with a manual and an automatic submode
+//! (V4). No documented or captured frame reports which one is active, so Crema
+//! neither reads nor sets an Ultra's mode with `0x0E`. It follows the
+//! automatic submode of timing or ratio mode alike through the documented
+//! `03 0D` events, and sets an Ultra-V4 auto-stop for timing and ratio mode
+//! separately.
+//!
 //! # Weight notification packet
 //!
 //! The scale sends fixed 20-byte notifications on the weight characteristic.
@@ -141,7 +151,7 @@
 //! 0x0A QUERY_SERIAL           query serial number (scale replies 03 0c …)
 //! 0x0B set_auto_stop_mode     auto-stop, Mini / Ultra <= V3.1.2 format
 //! 0x0B set_auto_stop_v4       auto-stop, Ultra >= V4.0.0 format
-//! 0x0E set_mode_enabled       enable/disable a display mode, p1 = mode index
+//! 0x0E set_mode_enabled       enable/disable a display mode (Mini only)
 //! 0x0F QUERY_SETTINGS         query settings (scale replies 03 0e …)
 //! 0x10 set_anti_mistouch      anti-mistouch on/off, p1 = 0|1
 //! 0x11 SHUTDOWN_V1_4_2        shutdown, Mini V1.4.2 only
@@ -401,14 +411,44 @@ pub const fn set_auto_stop_mode(mode: AutoStopMode) -> [u8; 6] {
     command(0x0B, mode.p1(), 0x00)
 }
 
-/// The Ultra-V4 automatic submode a `0x0B` stop condition applies to
-/// (`0x0B`'s BYTE4).
+/// The Ultra-V4 mode whose automatic submode a `0x0B` stop condition applies
+/// to (`0x0B`'s BYTE4). V4 sets the condition separately for each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoStopTarget {
     /// Timing mode (`01`).
     Timing = 1,
     /// Ratio mode (`02`).
     Ratio = 2,
+}
+
+impl AutoStopTarget {
+    /// Both targets, in wire order.
+    pub const ALL: [AutoStopTarget; 2] = [AutoStopTarget::Timing, AutoStopTarget::Ratio];
+
+    /// The BYTE4 id, which is also Crema's id for the target.
+    #[must_use]
+    pub const fn id(self) -> u8 {
+        self as u8
+    }
+
+    /// The target for its id, or `None` for any other id.
+    #[must_use]
+    pub const fn from_id(id: u8) -> Option<AutoStopTarget> {
+        match id {
+            1 => Some(AutoStopTarget::Timing),
+            2 => Some(AutoStopTarget::Ratio),
+            _ => None,
+        }
+    }
+
+    /// A display name for the mode.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            AutoStopTarget::Timing => "Timing",
+            AutoStopTarget::Ratio => "Ratio",
+        }
+    }
 }
 
 /// Command `0x0B` in the Ultra ≥ V4.0.0 format: `0B <target> <stop>`.
@@ -492,6 +532,38 @@ impl BookooFirmware {
         }
     }
 
+    /// The modes whose auto-stop condition is set separately on this
+    /// firmware: timing and ratio on Ultra ≥ V4.0.0, none elsewhere (one
+    /// setting for the scale's automatic mode).
+    #[must_use]
+    pub const fn auto_stop_targets(self) -> &'static [AutoStopTarget] {
+        match self.model() {
+            Some(BookooModel::Ultra) if self.0 >= ULTRA_V4_0_0 => &AutoStopTarget::ALL,
+            _ => &[],
+        }
+    }
+
+    /// The `0x0B` write that sets `mode` for one `target` mode; `None` unless
+    /// this firmware sets the condition per mode (Ultra ≥ V4.0.0).
+    #[must_use]
+    pub fn auto_stop_target_write(
+        self,
+        target: AutoStopTarget,
+        mode: AutoStopMode,
+    ) -> Option<[u8; 6]> {
+        (!self.auto_stop_targets().is_empty()).then(|| set_auto_stop_v4(target, mode))
+    }
+
+    /// Whether the `03 0e` settings reply's mode index means the Mini's
+    /// Flow-Rate / Timer / Auto (captured on a Mini; the Ultra's modes —
+    /// weight, timing, ratio, the last two with manual and automatic
+    /// submodes — have no known index, so Crema neither reads nor sets them
+    /// with `0x0E` there).
+    #[must_use]
+    pub const fn has_mini_modes(self) -> bool {
+        matches!(self.model(), Some(BookooModel::Mini))
+    }
+
     /// The `0x0B` writes that set `mode` on this firmware; empty when Crema
     /// can't set it correctly.
     ///
@@ -522,14 +594,66 @@ impl BookooFirmware {
     }
 }
 
-/// What Crema has learnt about a connected Bookoo from its `ff12` replies: the
-/// firmware (from `03 0c`) and the active mode (from `03 0e`). A new
-/// connection starts empty; until the firmware arrives, no version-gated
-/// command is sent.
+/// An Ultra automatic-mode event (`03 0D`, documented for beta V3.2.4+ and
+/// release V4.0.0+): the scale's automatic submode — of timing or ratio mode
+/// alike — changed phase. The discriminant is the event byte `[2]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoModeEvent {
+    /// `00` — brewing ended (stop condition or command): now *done*.
+    Stopped = 0,
+    /// `01` — brewing started (automatically or by command): now *running*.
+    Started = 1,
+    /// `02` — the automatic submode entered *ready*.
+    Ready = 2,
+    /// `03` — left *ready* (to idle).
+    ExitReady = 3,
+    /// `04` — left *done*.
+    ExitDone = 4,
+}
+
+/// `[0-1]` header of an Ultra `03 0D` automatic-mode event.
+const AUTO_EVENT_HEADER: [u8; 2] = [0x03, 0x0D];
+
+/// Decode an Ultra `03 0D` automatic-mode event: 20 bytes, the `03 0D`
+/// header, a known event byte at `[2]` and the `[19]` XOR of `[0..=18]`.
+/// The doc doesn't say which characteristic carries it, so Crema reads it on
+/// both. The time, weight and result fields are not used.
+#[must_use]
+pub fn parse_auto_mode_event(data: &[u8]) -> Option<AutoModeEvent> {
+    if data.len() != FULL_PACKET_LEN
+        || data[..2] != AUTO_EVENT_HEADER
+        || data[..FULL_PACKET_LEN - 1].iter().fold(0_u8, |a, &b| a ^ b) != data[FULL_PACKET_LEN - 1]
+    {
+        return None;
+    }
+    match data[2] {
+        0 => Some(AutoModeEvent::Stopped),
+        1 => Some(AutoModeEvent::Started),
+        2 => Some(AutoModeEvent::Ready),
+        3 => Some(AutoModeEvent::ExitReady),
+        4 => Some(AutoModeEvent::ExitDone),
+        _ => None,
+    }
+}
+
+/// The phase of an Ultra's automatic submode, as its `03 0D` events report
+/// it. Idle (or a manual submode, or weight mode) is no phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutoPhase {
+    Ready,
+    Running,
+    Done,
+}
+
+/// What Crema has learnt about a connected Bookoo from its replies: the
+/// firmware (from `03 0c`), the Mini's active mode (from `03 0e`) and the
+/// Ultra's automatic-submode phase (from `03 0D` events). A new connection
+/// starts empty; until the firmware arrives, no version-gated command is sent.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BookooScale {
     firmware: Option<BookooFirmware>,
     active_mode: Option<u8>,
+    auto_phase: Option<AutoPhase>,
 }
 
 impl BookooScale {
@@ -543,22 +667,82 @@ impl BookooScale {
         }
     }
 
+    /// Fold an Ultra automatic-mode event into the tracked phase.
+    pub fn absorb_auto_event(&mut self, event: AutoModeEvent) {
+        self.auto_phase = match event {
+            AutoModeEvent::Ready => Some(AutoPhase::Ready),
+            AutoModeEvent::Started => Some(AutoPhase::Running),
+            AutoModeEvent::Stopped => Some(AutoPhase::Done),
+            AutoModeEvent::ExitReady | AutoModeEvent::ExitDone => None,
+        };
+    }
+
+    /// Fold any frame the scale sent, on either characteristic: a `03 0c` /
+    /// `03 0e` reply or an Ultra `03 0D` event. Anything else is ignored.
+    pub fn absorb_frame(&mut self, data: &[u8]) {
+        if let Some(response) = parse_command_response(data) {
+            self.absorb(&response);
+        } else if let Some(event) = parse_auto_mode_event(data) {
+            self.absorb_auto_event(event);
+        }
+    }
+
+    /// Whether the scale shows the Mini's three modes (a Mini, once its
+    /// firmware is known). See [`BookooFirmware::has_mini_modes`].
+    #[must_use]
+    pub fn has_mini_modes(&self) -> bool {
+        self.firmware.is_some_and(BookooFirmware::has_mini_modes)
+    }
+
+    /// The modes whose auto-stop is set separately — see
+    /// [`BookooFirmware::auto_stop_targets`]. Empty until the firmware is
+    /// known.
+    #[must_use]
+    pub fn auto_stop_targets(&self) -> &'static [AutoStopTarget] {
+        self.firmware.map_or(&[], BookooFirmware::auto_stop_targets)
+    }
+
+    /// The `0x0B` write for one `target` mode — see
+    /// [`BookooFirmware::auto_stop_target_write`].
+    #[must_use]
+    pub fn auto_stop_target_write(
+        &self,
+        target: AutoStopTarget,
+        mode: AutoStopMode,
+    ) -> Option<[u8; 6]> {
+        self.firmware
+            .and_then(|fw| fw.auto_stop_target_write(target, mode))
+    }
+
     /// The reported firmware, once the serial reply has arrived.
     #[must_use]
     pub const fn firmware(&self) -> Option<BookooFirmware> {
         self.firmware
     }
 
-    /// Whether the scale last reported its Auto mode as active.
+    /// Whether the scale is known to be in its automatic mode, per model:
+    ///
+    /// - **Mini:** its last `03 0e` reply named Auto (index 2) as active.
+    /// - **Ultra:** its last `03 0D` event left the automatic submode — of
+    ///   timing or ratio mode — in ready, running or done. Automatic *idle*
+    ///   doesn't count: there `0x01` tares and V4 ignores `0x07`. An Ultra on
+    ///   firmware without the events (release ≤ V3.1.2) is never known to be.
+    /// - **Unknown firmware:** never, since the mode index's meaning depends
+    ///   on the model.
     #[must_use]
     pub fn in_auto_mode(&self) -> bool {
-        self.active_mode == Some(BookooMode::Auto.index())
+        match self.firmware.and_then(BookooFirmware::model) {
+            Some(BookooModel::Mini) => self.active_mode == Some(BookooMode::Auto.index()),
+            Some(BookooModel::Ultra) => self.auto_phase.is_some(),
+            None => false,
+        }
     }
 
-    /// The tare frame to send: [`TARE_AND_START`] while the scale reports Auto
-    /// (owner decision 2026-11-24 — `0x01` is ignored in Auto running / done;
-    /// see [`TARE_AND_START`] for what `0x07` does per model and version),
-    /// [`TARE`] in every other mode and before the mode is known.
+    /// The tare frame to send: [`TARE_AND_START`] while the scale is known to
+    /// be in its automatic mode ([`in_auto_mode`](Self::in_auto_mode); owner
+    /// decision 2026-11-24 — `0x01` is ignored in Auto running / done; see
+    /// [`TARE_AND_START`] for what `0x07` does per model and version),
+    /// [`TARE`] otherwise.
     #[must_use]
     pub fn tare_command(&self) -> &'static [u8; 6] {
         if self.in_auto_mode() {
@@ -1355,11 +1539,20 @@ mod tests {
                 "mode {mode:?}"
             );
         }
-        // Auto (index 2): 07, on either model and with the firmware unknown.
-        for fw in [None, Some(141), Some(143), Some(312), Some(403)] {
+        // A Mini in Auto (index 2): 07.
+        for fw in [141, 143] {
+            assert_eq!(
+                *bookoo_with(Some(fw), Some(2)).tare_command(),
+                hex6("030a0700000e"),
+                "fw {fw}"
+            );
+        }
+        // Index 2 means Auto only on a Mini: not with the firmware unknown,
+        // and not on an Ultra, whose modes the index doesn't describe.
+        for fw in [None, Some(312), Some(403)] {
             assert_eq!(
                 *bookoo_with(fw, Some(2)).tare_command(),
-                hex6("030a0700000e"),
+                hex6("030a01000008"),
                 "fw {fw:?}"
             );
         }
@@ -1370,6 +1563,111 @@ mod tests {
             enabled_modes: 0b010,
         });
         assert_eq!(*scale.tare_command(), hex6("030a01000008"));
+    }
+
+    /// An Ultra `03 0D` automatic-mode event frame for event byte `event`.
+    fn auto_event(event: u8) -> [u8; 20] {
+        let mut f = [0u8; 20];
+        f[..3].copy_from_slice(&[0x03, 0x0D, event]);
+        f[19] = f[..19].iter().fold(0, |a, &b| a ^ b);
+        f
+    }
+
+    #[test]
+    fn parse_auto_mode_event_decodes_the_five_events_and_rejects_the_rest() {
+        assert_eq!(
+            parse_auto_mode_event(&auto_event(0)),
+            Some(AutoModeEvent::Stopped)
+        );
+        assert_eq!(
+            parse_auto_mode_event(&auto_event(1)),
+            Some(AutoModeEvent::Started)
+        );
+        assert_eq!(
+            parse_auto_mode_event(&auto_event(2)),
+            Some(AutoModeEvent::Ready)
+        );
+        assert_eq!(
+            parse_auto_mode_event(&auto_event(3)),
+            Some(AutoModeEvent::ExitReady)
+        );
+        assert_eq!(
+            parse_auto_mode_event(&auto_event(4)),
+            Some(AutoModeEvent::ExitDone)
+        );
+        assert_eq!(parse_auto_mode_event(&auto_event(5)), None);
+        let mut corrupt = auto_event(2);
+        corrupt[19] ^= 0xFF;
+        assert_eq!(parse_auto_mode_event(&corrupt), None);
+        assert_eq!(parse_auto_mode_event(&auto_event(2)[..19]), None);
+        // A weight frame or a settings reply is not an event.
+        assert_eq!(
+            parse_auto_mode_event(&hex20("030b000000012b0000002b0000640096010000fa")),
+            None
+        );
+        assert_eq!(
+            parse_auto_mode_event(&hex20("030e02040000000000000000000000000000000b")),
+            None
+        );
+    }
+
+    #[test]
+    fn an_ultra_tares_with_tare_and_start_while_its_automatic_submode_is_ready_running_or_done() {
+        let tare = hex6("030a01000008");
+        let tare_and_start = hex6("030a0700000e");
+        let mut ultra = bookoo_with(Some(403), None);
+        assert_eq!(*ultra.tare_command(), tare);
+        for (event, expected) in [
+            (2, tare_and_start), // ready
+            (1, tare_and_start), // running
+            (0, tare_and_start), // done
+            (4, tare),           // exit done: idle
+            (2, tare_and_start), // ready again
+            (3, tare),           // exit ready: idle
+        ] {
+            ultra.absorb_frame(&auto_event(event));
+            assert_eq!(*ultra.tare_command(), expected, "after event {event}");
+        }
+        // The same events on a Mini don't move its tare: it never sends them,
+        // and its Auto comes from the mode index.
+        let mut mini = bookoo_with(Some(143), Some(1));
+        mini.absorb_frame(&auto_event(0));
+        assert_eq!(*mini.tare_command(), tare);
+    }
+
+    #[test]
+    fn only_a_mini_has_the_flow_timer_auto_modes() {
+        assert!(bookoo_with(Some(141), None).has_mini_modes());
+        assert!(!bookoo_with(None, None).has_mini_modes());
+        assert!(!bookoo_with(Some(312), None).has_mini_modes());
+        assert!(!bookoo_with(Some(403), None).has_mini_modes());
+    }
+
+    #[test]
+    fn an_ultra_v4_sets_auto_stop_per_target_mode() {
+        let v4 = bookoo_with(Some(400), None);
+        assert_eq!(v4.auto_stop_targets(), &AutoStopTarget::ALL);
+        assert_eq!(
+            v4.auto_stop_target_write(AutoStopTarget::Timing, AutoStopMode::CupRemoval),
+            Some(hex6("030a0b010201"))
+        );
+        assert_eq!(
+            v4.auto_stop_target_write(AutoStopTarget::Ratio, AutoStopMode::FlowStop),
+            Some(hex6("030a0b020000"))
+        );
+        // One setting elsewhere: no per-target write.
+        for fw in [None, Some(143), Some(312), Some(324)] {
+            let scale = bookoo_with(fw, None);
+            assert!(scale.auto_stop_targets().is_empty(), "fw {fw:?}");
+            assert_eq!(
+                scale.auto_stop_target_write(AutoStopTarget::Timing, AutoStopMode::FlowStop),
+                None,
+                "fw {fw:?}"
+            );
+        }
+        assert_eq!(AutoStopTarget::from_id(1), Some(AutoStopTarget::Timing));
+        assert_eq!(AutoStopTarget::from_id(2), Some(AutoStopTarget::Ratio));
+        assert_eq!(AutoStopTarget::from_id(0), None);
     }
 
     #[test]

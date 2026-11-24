@@ -108,7 +108,7 @@ enum class Setting(
     SCALE_FLOW_SMOOTHING(A, RO, SettingStore.SCALE, null, MirrorSource.SCALE_ECHO, null, false, listOf("$VM.setScaleFlowSmoothing(Boolean)"), uiField = "scaleFlowSmoothing"),
     SCALE_ANTI_MISTOUCH(A, RO, SettingStore.SCALE, null, MirrorSource.NONE_AVAILABLE, null, false, listOf("$VM.setScaleAntiMistouch(Boolean)"), uiField = "scaleAntiMistouch"),
     SCALE_MODE(A, RO, SettingStore.SCALE, null, MirrorSource.NONE_AVAILABLE, null, false, listOf("$VM.setScaleMode(Int)"), uiField = "scaleActiveMode"),
-    SCALE_AUTO_STOP(A, RO, SettingStore.SCALE, null, MirrorSource.SCALE_ECHO, null, false, listOf("$VM.setScaleAutoStop(Int)"), uiField = "scaleAutoStop"),
+    SCALE_AUTO_STOP(A, RO, SettingStore.SCALE, null, MirrorSource.SCALE_ECHO, null, false, listOf("$VM.setScaleAutoStop(Int)", "$VM.setScaleAutoStopFor(Int, Int)"), uiField = "scaleAutoStop"),
 
     // ── B: session (13) ──────────────────────────────────────────────────────
     STOP_ON_WEIGHT(B, REL, AP, "stopOnWeight", SNAP, "stopOnWeight", true, listOf("$VM.setStopOnWeight(Boolean)")),

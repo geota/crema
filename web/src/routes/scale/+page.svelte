@@ -277,6 +277,11 @@
 	 * modes would be handled by extending this to a segment control.
 	 */
 	const autoStopOn = $derived(snap?.scaleAutoStop != null && snap.scaleAutoStop !== 0);
+	/** The auto-stop mode ids (`AutoStopMode`) and their labels. */
+	const AUTO_STOP_OPTIONS = [
+		{ id: 0, label: 'Flow stops' },
+		{ id: 1, label: 'Cup removed' }
+	] as const;
 	function toggleAutoStop(): void {
 		if (!caps?.auto_stop) return;
 		app?.setScaleAutoStop(autoStopOn ? 0 : 1);
@@ -547,8 +552,31 @@
 				</div>
 			{/if}
 
-			<!-- Auto-stop (capability-gated, hidden when not supported) -->
-			{#if caps?.auto_stop}
+			<!-- Auto-stop per mode (a scale that sets it separately for each,
+			     e.g. a Bookoo Ultra on firmware 4+: timing and ratio). -->
+			{#if caps && (caps.auto_stop_targets ?? []).length > 0}
+				{#each caps.auto_stop_targets as t (t.id)}
+					<div class="sc-set-row">
+						<div>
+							<div class="sc-set-title" id="sc-autostop-{t.id}">Auto-stop · {t.name} mode</div>
+							<div class="sc-set-sub">
+								What ends the scale's automatic {t.name.toLowerCase()} mode. The scale doesn't
+								report it back, so this shows what Crema last set.
+							</div>
+						</div>
+						<div class="st-segment" role="group" aria-labelledby="sc-autostop-{t.id}">
+							{#each AUTO_STOP_OPTIONS as o (o.id)}
+								<button
+									type="button"
+									class:is-active={snap?.scaleAutoStopFor[t.id] === o.id}
+									aria-pressed={snap?.scaleAutoStopFor[t.id] === o.id}
+									onclick={() => app?.setScaleAutoStopFor(t.id, o.id)}>{o.label}</button
+								>
+							{/each}
+						</div>
+					</div>
+				{/each}
+			{:else if caps?.auto_stop}
 				<div class="sc-set-row">
 					<div>
 						<div class="sc-set-title">Auto-stop on flow drop</div>

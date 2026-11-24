@@ -709,6 +709,13 @@ data class MainUiState(
      */
     val scaleAutoStop: Int? = null,
     /**
+     * The auto-stop mode id last set for each of the scale's
+     * `ScaleCapabilities.auto_stop_targets` (target id → mode id): a Bookoo
+     * Ultra on firmware 4+ sets timing and ratio mode separately. The scale
+     * doesn't echo these, so this is what Crema set this connection.
+     */
+    val scaleAutoStopFor: Map<Int, Int> = emptyMap(),
+    /**
      * Whether the scale's anti-mistouch toggle is shown as on.
      *
      * Two-way like [scaleFlowSmoothing]: the Bookoo reports its real
