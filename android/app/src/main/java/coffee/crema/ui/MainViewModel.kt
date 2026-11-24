@@ -934,6 +934,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val grinder: coffee.crema.ble.GrinderBleManager = coffee.crema.ble.GrinderBleManager(
         transport = proxy.transport,
         bridge = bridge,
+        recorder = bleRecorder,
         onCoreOutput = lane::deliver,
         onStatus = { line -> appendLog(line) },
         onIdentified = { model, caps -> grinderController.onIdentified(model, caps) },
