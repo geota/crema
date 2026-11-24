@@ -57,6 +57,19 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **BOOKOO scales follow BOOKOO's published protocol** — Crema now tells the
+  Mini from the Ultra by the firmware the scale reports. The auto-stop setting
+  uses the format the firmware takes, so on an Ultra with firmware 4 it no
+  longer sets the wrong condition, and there it is set separately for timing
+  and ratio mode. It stays hidden until the firmware is known. The Flow /
+  Timer / Auto display-mode selector is the Mini's, so an Ultra no longer gets
+  it. In the scale's own automatic mode, Crema picks the tare commands that
+  land in each documented state: after an automatic run, where the plain tare
+  is ignored, it adds BOOKOO's "tare and start", which newer firmware takes
+  there. On firmware that supports it, Crema keeps the scale awake while the
+  DE1 is connected and awake, and can power it off. Device flow keeps its
+  sign, and an Ultra no longer shows a stand-in auto-stop value.
+
 - **de1app shot imports keep their profile and frames** — a `.shot` file
   from de1app's history now brings in the profile it was pulled with, steps
   and all, where it used to bring only the profile's name. Its samples get

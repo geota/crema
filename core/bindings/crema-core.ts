@@ -5841,9 +5841,19 @@ export interface ScaleCapabilities {
 	anti_mistouch: boolean;
 	/**
 	 * The scale accepts a command to select its auto-stop mode (the Bookoo's
-	 * flow-stop / cup-removal setting).
+	 * flow-stop / cup-removal setting). On a Bookoo this turns on only once
+	 * the firmware has been reported, so the shell re-reads the capabilities
+	 * when a `ScaleConfig` event carries the firmware.
 	 */
 	auto_stop: boolean;
+	/**
+	 * The modes whose auto-stop condition is set separately — empty when the
+	 * scale has one auto-stop setting (or none). A Bookoo Ultra on firmware
+	 * 4+ lists Timing (`1`) and Ratio (`2`): the shell shows one selector per
+	 * entry and sets it with `set_scale_auto_stop_for(target, mode)`. The
+	 * scale doesn't echo these settings, so the shell keeps what it last set.
+	 */
+	auto_stop_targets: ModeInfo[];
 	/**
 	 * The selectable display/behaviour modes the scale exposes — empty when
 	 * the scale has no switchable modes. Each entry carries the mode's wire

@@ -204,6 +204,14 @@ internal object VmHarness {
         return field.get(vm) as CremaBridge
     }
 
+    /** The VM's [ScaleController], found by type. */
+    fun scaleController(vm: MainViewModel): ScaleController {
+        val field = MainViewModel::class.java.declaredFields.singleOrNull { it.type == ScaleController::class.java }
+            ?: error("MainViewModel no longer holds exactly one ScaleController field: update VmHarness.scaleController")
+        field.isAccessible = true
+        return field.get(vm) as ScaleController
+    }
+
     /** The VM's [CoreLane], found by type. */
     fun coreLane(vm: MainViewModel): CoreLane {
         val field = MainViewModel::class.java.declaredFields.singleOrNull { it.type == CoreLane::class.java }

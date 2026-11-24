@@ -270,6 +270,12 @@ export interface UiSnapshot {
 	readonly scaleFlowSmoothing: boolean;
 	/** The scale's selected auto-stop mode id (0/1), or null (two-way). */
 	readonly scaleAutoStop: number | null;
+	/**
+	 * The auto-stop mode id last set for each of the scale's
+	 * `auto_stop_targets` (target id → mode id). The scale doesn't echo these,
+	 * so this is what Crema set this connection.
+	 */
+	readonly scaleAutoStopFor: Readonly<Record<number, number>>;
 	/** Whether the scale's anti-mistouch toggle is shown as on (two-way). */
 	readonly scaleAntiMistouch: boolean;
 	/** The scale's active display-mode index (0/1/2), or null (two-way). */
@@ -711,6 +717,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	scaleSerial: null,
 	scaleFlowSmoothing: false,
 	scaleAutoStop: null,
+	scaleAutoStopFor: {},
 	scaleAntiMistouch: false,
 	scaleActiveMode: null,
 	eventLog: [],
