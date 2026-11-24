@@ -40,21 +40,26 @@ import java.util.UUID
  *  4. [CremaBridge.grinderSubscribed] returns the handshake as
  *     `Command.WriteGrinder`s, which go out in order through the core lane
  *     ([writeCommand]);
- *  5. every notification goes to the core as [NotificationSource.GRINDER_NOTIFY].
+ *  5. every notification goes to the core as [NotificationSource.GRINDER_NOTIFY]
+ *     ([CremaBridge.onGrinderNotification]).
  *     The core's tick runs the first-reading and silence deadlines and says
  *     `GrinderLinkDead`; the owner answers with [presumeDead], and the
  *     reconnect supervisor builds a new link (the core a new driver, so the
  *     handshake is sent again).
  *
- * Nothing here records grinder bytes: the grinder's `baseInfo` carries its
- * serial and the user's Wi-Fi name, so [BleSessionRecorder] (which writes raw
- * bytes) gets nothing from the grinder. The core records them redacted by the
- * driver (`redact_for_capture`) in its own capture, which Android doesn't
- * export yet; a grinder in Android's capture files waits for that.
+ * The raw grinder bytes are never recorded: the grinder's `baseInfo` carries
+ * its serial and the user's Wi-Fi name. Each notification goes to the core
+ * through [CremaBridge.onGrinderNotification], which hands back the frames
+ * the core recorded in its own capture, redacted and re-serialized by the
+ * driver (`redact_for_capture`); those, and only those, go to
+ * [BleSessionRecorder] as `GRINDER_TX` lines, as web's capture holds them.
  */
 class GrinderBleManager(
     private val transport: BleTransport,
     private val bridge: CremaBridge,
+    /** The session-wide BLE recorder, shared with the DE1 and scale managers:
+     *  it gets the core's redacted grinder frames, never the raw bytes. */
+    private val recorder: BleSessionRecorder? = null,
     /** Called with each raw JSON `CoreOutput` string the core returns. */
     private val onCoreOutput: (String) -> Unit,
     /** Human-readable status transitions for the UI log. */
@@ -94,6 +99,12 @@ class GrinderBleManager(
     private var uuids: GrinderUuids? = null
 
     private var observeJob: Job? = null
+
+    /** Whether this manager holds a slot in the shared [recorder]'s connection
+     *  counter: joined once per session, left by its teardown or [disconnect],
+     *  so the two stay balanced across reconnects. */
+    @Volatile
+    private var recording = false
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -188,6 +199,7 @@ class GrinderBleManager(
             onConnecting = { _state.value = State.CONNECTING },
             teardown = {
                 if (gen != sessionGen) return@reconnectingSession
+                leaveRecording()
                 this@GrinderBleManager.device = null
                 uuids = null
                 dropCoreGrinder()
@@ -230,6 +242,11 @@ class GrinderBleManager(
         }
         uuids = u
         onIdentified(model, runCatching { bridge.grinderCapabilities() }.getOrNull())
+        // Join the shared session recording once per session (not per reconnect).
+        if (!recording && recorder != null) {
+            recording = true
+            recorder.open()?.let { onStatus("Recording session to $it") }
+        }
 
         val mtu = transport.requestLargeMtu(device)
         onStatus(if (mtu != null) "Grinder MTU $mtu" else "Grinder MTU unchanged")
@@ -250,6 +267,13 @@ class GrinderBleManager(
     /** The device answered the scan by name but has no grinder service. */
     class GattMismatch(name: String) : IllegalStateException("$name has no grinder service")
 
+    /** Leave the shared recording: its file closes once the last device has gone. */
+    private fun leaveRecording() {
+        if (!recording) return
+        recording = false
+        recorder?.close()
+    }
+
     private fun dropCoreGrinder() {
         runCatching { onCoreOutput(bridge.disconnectGrinder()) }
             .onFailure { Log.w(TAG, "disconnectGrinder failed", it) }
@@ -263,6 +287,7 @@ class GrinderBleManager(
         val d = device
         observeJob?.cancel()
         observeJob = null
+        leaveRecording()
         device = null
         uuids = null
         dropCoreGrinder()
@@ -323,9 +348,10 @@ class GrinderBleManager(
 
     private fun feedCore(notification: BleTransport.Notification) {
         runCatching {
-            onCoreOutput(
-                bridge.onNotification(NotificationSource.GRINDER_NOTIFY, notification.data, notification.atMs.toULong()),
-            )
+            val fed = bridge.onGrinderNotification(notification.data, notification.atMs.toULong())
+            // What the core recorded for it (redacted), at the delivery time it was fed with.
+            recorder?.let { r -> for (frame in fed.capture) r.recordInbound(CAPTURE_SRC, frame, notification.atMs) }
+            onCoreOutput(fed.output)
         }.onFailure {
             // Never the bytes: a grinder message can hold its serial.
             Log.e(TAG, "Grinder notification failed — skipped (${notification.data.size} bytes)", it)
@@ -334,6 +360,9 @@ class GrinderBleManager(
 
     companion object {
         private const val TAG = "GrinderBleManager"
+
+        /** The capture `src` of a grinder line: the core's name for its redacted frames. */
+        const val CAPTURE_SRC = "GRINDER_TX"
 
         /** The packet size the handshake is written in (BOOKOO `SAFE_WRITE_PACKET_LEN`). */
         const val SAFE_PACKET = 20
