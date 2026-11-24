@@ -1587,9 +1587,14 @@ impl Scale {
     /// The writes for one logical tare: [`tare`](Self::tare)'s frame, sent
     /// twice to a Decent Scale that may drop commands (see
     /// [`DecentScale::drops_commands`](decent_scale::DecentScale::drops_commands);
-    /// the copy is the same frame, so the tare counter advances once).
-    /// Empty when the scale has no tare write.
+    /// the copy is the same frame, so the tare counter advances once). A
+    /// Bookoo's tare is one or two frames by mode and phase
+    /// ([`bookoo::BookooScale::tare_frames`]). Empty when the scale has no
+    /// tare write.
     pub fn tare_writes(&mut self) -> Vec<Vec<u8>> {
+        if let Inner::Bookoo(state) = &self.inner {
+            return state.tare_frames().iter().map(|f| f.to_vec()).collect();
+        }
         let copies = self.command_copies();
         self.tare()
             .map_or_else(Vec::new, |frame| vec![frame; copies])
@@ -1655,14 +1660,18 @@ impl Scale {
     /// and returns `None`; the next `parse_weight` will report a near-zero
     /// reading without any BLE write. Every other scale returns the wire
     /// bytes the shell should write to [`ScaleUuids::command_write`].
+    ///
+    /// A Bookoo in its automatic mode tares with two frames; this returns the
+    /// first. Send a tare with [`tare_writes`](Self::tare_writes), as Crema
+    /// does everywhere.
     pub fn tare(&mut self) -> Option<Vec<u8>> {
         Some(match &mut self.inner {
             Inner::Decent(state) => state.next_tare().to_vec(),
             Inner::Skale => vec![skale::CMD_TARE],
             Inner::Felicita => vec![felicita::TARE],
-            // `0x07` while the scale reports Auto, `0x01` otherwise — see
-            // `bookoo::BookooScale::tare_command`.
-            Inner::Bookoo(state) => state.tare_command().to_vec(),
+            // The first of the per-phase frames; `tare_writes` sends them
+            // all — see `bookoo::BookooScale::tare_frames`.
+            Inner::Bookoo(state) => state.tare_frames()[0].to_vec(),
             Inner::AcaiaGen1(_) | Inner::AcaiaPyxis(_) => acaia::TARE.to_vec(),
             Inner::AtomheartEclair => atomheart_eclair::TARE.to_vec(),
             Inner::EurekaPrecisa | Inner::SoloBarista => eureka_precisa::TARE.to_vec(),
@@ -2191,19 +2200,19 @@ mod tests {
             f[19] = f[..19].iter().fold(0, |a, &b| a ^ b);
             f
         };
-        let tare = Some(vec![0x03, 0x0A, 0x01, 0x00, 0x00, 0x08]);
-        let tare_and_start = Some(vec![0x03, 0x0A, 0x07, 0x00, 0x00, 0x0E]);
+        let tare = vec![0x03, 0x0A, 0x01, 0x00, 0x00, 0x08];
+        let tare_and_start = vec![0x03, 0x0A, 0x07, 0x00, 0x00, 0x0E];
         let mut ultra = bookoo_on(403);
-        // On the command characteristic: done.
+        // On the command characteristic: done -> 07 then 01.
         ultra.absorb_command_notification(&event(0));
-        assert_eq!(ultra.tare(), tare_and_start);
+        assert_eq!(ultra.tare_writes(), vec![tare_and_start, tare.clone()]);
         // On the weight characteristic (not a weight frame): exit done.
         assert_eq!(ultra.parse_reading(&event(4)), None);
         ultra.absorb_unmatched_frame(&event(4));
-        assert_eq!(ultra.tare(), tare);
+        assert_eq!(ultra.tare_writes(), vec![tare.clone()]);
         // A Mini's 03 0e Auto index on an Ultra means nothing.
         ultra.absorb_command_notification(&bookoo_settings_frame(2));
-        assert_eq!(ultra.tare(), tare);
+        assert_eq!(ultra.tare_writes(), vec![tare]);
     }
 
     #[test]
@@ -2237,26 +2246,20 @@ mod tests {
     }
 
     #[test]
-    fn bookoo_tare_is_tare_and_start_while_the_scale_reports_auto() {
+    fn bookoo_mini_tare_is_tare_then_tare_and_start_while_the_scale_reports_auto() {
+        let tare = vec![0x03, 0x0A, 0x01, 0x00, 0x00, 0x08];
+        let tare_and_start = vec![0x03, 0x0A, 0x07, 0x00, 0x00, 0x0E];
         let mut bookoo = bookoo_on(143);
-        assert_eq!(
-            bookoo.tare(),
-            Some(vec![0x03, 0x0A, 0x01, 0x00, 0x00, 0x08])
-        );
+        assert_eq!(bookoo.tare_writes(), vec![tare.clone()]);
         bookoo.absorb_command_notification(&bookoo_settings_frame(2));
+        assert_eq!(bookoo.tare_writes(), vec![tare.clone(), tare_and_start]);
         assert_eq!(
             bookoo.tare(),
-            Some(vec![0x03, 0x0A, 0x07, 0x00, 0x00, 0x0E])
-        );
-        assert_eq!(
-            bookoo.tare_writes(),
-            vec![vec![0x03, 0x0A, 0x07, 0x00, 0x00, 0x0E]]
+            Some(tare.clone()),
+            "tare() is the first frame"
         );
         bookoo.absorb_command_notification(&bookoo_settings_frame(1));
-        assert_eq!(
-            bookoo.tare(),
-            Some(vec![0x03, 0x0A, 0x01, 0x00, 0x00, 0x08])
-        );
+        assert_eq!(bookoo.tare_writes(), vec![tare]);
     }
 
     #[test]

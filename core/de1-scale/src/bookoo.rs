@@ -215,10 +215,10 @@ pub const TIMER_STOP: [u8; 6] = command(0x05, 0x00, 0x00);
 pub const TIMER_RESET: [u8; 6] = command(0x06, 0x00, 0x00);
 /// Command `0x07`: tare and start (the doc's "recommend" tare).
 ///
-/// [`BookooScale::tare_command`] sends it instead of [`TARE`] while the scale
-/// reports its Auto mode, where `0x01` is ignored once an extraction has run
-/// (Mini all versions, Ultra all versions: "ignored during automatic running,
-/// automatic done"). What `0x07` does in Auto, per the doc:
+/// [`BookooScale::tare_frames`] adds it to [`TARE`] only where the scale may be
+/// in automatic *done*, the one documented state where `0x01` is ignored but
+/// `0x07` tares (Mini ≥ V1.4.2, Ultra ≥ V4.0.0). What `0x07` does in Auto, per
+/// the doc:
 ///
 /// - **Mini V1.0.0–V1.0.1:** nothing in Auto (ready or done).
 /// - **Mini V1.0.2–V1.4.1:** in Auto *ready*, starts the extraction at once;
@@ -232,9 +232,11 @@ pub const TIMER_RESET: [u8; 6] = command(0x06, 0x00, 0x00);
 ///   *done*, returns to idle and tares without starting; ignored in Auto
 ///   *idle* or *running*.
 ///
-/// All versions ignore it during an automatic run. Where it does not tare, the
-/// weight does not zero, and the core's open-weight guard refuses the weight
-/// stop as it does for any tare that did not land.
+/// All versions ignore it during an automatic run. Nowhere does the doc say it
+/// tares in *ready*, where `0x01` does. Where no frame tares, the weight does
+/// not zero and the core treats it as any tare that did not land: its untared
+/// guard trips only above its 50 g threshold, below which the weight stop runs
+/// on the un-zeroed weight.
 pub const TARE_AND_START: [u8; 6] = command(0x07, 0x00, 0x00);
 
 /// Command `0x25`: reset the automatic-shutdown countdown (keep awake).
@@ -658,12 +660,22 @@ pub struct BookooScale {
 
 impl BookooScale {
     /// Fold a decoded `ff12` reply into what the scale has told us.
+    ///
+    /// A settings reply whose mode index differs from the last one means the
+    /// mode changed. On an Ultra the index's meaning is unknown, but a change
+    /// still makes the tracked automatic-submode phase stale, so it is
+    /// cleared.
     pub fn absorb(&mut self, response: &CommandResponse) {
         match response {
             CommandResponse::Serial {
                 firmware_version, ..
             } => self.firmware = Some(BookooFirmware(*firmware_version)),
-            CommandResponse::Settings { active_mode, .. } => self.active_mode = Some(*active_mode),
+            CommandResponse::Settings { active_mode, .. } => {
+                if self.active_mode.is_some_and(|last| last != *active_mode) {
+                    self.auto_phase = None;
+                }
+                self.active_mode = Some(*active_mode);
+            }
         }
     }
 
@@ -720,35 +732,31 @@ impl BookooScale {
         self.firmware
     }
 
-    /// Whether the scale is known to be in its automatic mode, per model:
+    /// The frames for one tare, in order. The aim is a tare that lands in
+    /// every documented state (owner decision 2026-11-24, refined in the #571
+    /// review): `0x01` tares everywhere except automatic running and done,
+    /// and `0x07` tares in done only (Mini ≥ V1.4.2, Ultra ≥ V4.0.0; see
+    /// [`TARE_AND_START`]).
     ///
-    /// - **Mini:** its last `03 0e` reply named Auto (index 2) as active.
-    /// - **Ultra:** its last `03 0D` event left the automatic submode — of
-    ///   timing or ratio mode — in ready, running or done. Automatic *idle*
-    ///   doesn't count: there `0x01` tares and V4 ignores `0x07`. An Ultra on
-    ///   firmware without the events (release ≤ V3.1.2) is never known to be.
-    /// - **Unknown firmware:** never, since the mode index's meaning depends
-    ///   on the model.
+    /// - **Ultra, by the phase its `03 0D` events report:** ready → `01`;
+    ///   done → `07` then `01` (`07` tares done and leaves it, then `01`
+    ///   tares the idle that follows — or the weight mode or manual submode
+    ///   of a stale phase); idle, running or unknown → `01`.
+    /// - **Mini in Auto** (its `03 0e` index; the phase is unknown): `01`
+    ///   then `07`. `01` tares in ready; in done it is ignored and `07` tares
+    ///   on V1.4.2+.
+    /// - **Anything else** (another mode, firmware unknown): `01`.
     #[must_use]
-    pub fn in_auto_mode(&self) -> bool {
+    pub fn tare_frames(&self) -> &'static [[u8; 6]] {
+        const PLAIN: [[u8; 6]; 1] = [TARE];
+        const ULTRA_DONE: [[u8; 6]; 2] = [TARE_AND_START, TARE];
+        const MINI_AUTO: [[u8; 6]; 2] = [TARE, TARE_AND_START];
         match self.firmware.and_then(BookooFirmware::model) {
-            Some(BookooModel::Mini) => self.active_mode == Some(BookooMode::Auto.index()),
-            Some(BookooModel::Ultra) => self.auto_phase.is_some(),
-            None => false,
-        }
-    }
-
-    /// The tare frame to send: [`TARE_AND_START`] while the scale is known to
-    /// be in its automatic mode ([`in_auto_mode`](Self::in_auto_mode); owner
-    /// decision 2026-11-24 — `0x01` is ignored in Auto running / done; see
-    /// [`TARE_AND_START`] for what `0x07` does per model and version),
-    /// [`TARE`] otherwise.
-    #[must_use]
-    pub fn tare_command(&self) -> &'static [u8; 6] {
-        if self.in_auto_mode() {
-            &TARE_AND_START
-        } else {
-            &TARE
+            Some(BookooModel::Ultra) if self.auto_phase == Some(AutoPhase::Done) => &ULTRA_DONE,
+            Some(BookooModel::Mini) if self.active_mode == Some(BookooMode::Auto.index()) => {
+                &MINI_AUTO
+            }
+            _ => &PLAIN,
         }
     }
 
@@ -1530,31 +1538,30 @@ mod tests {
     }
 
     #[test]
-    fn tare_sends_tare_and_start_only_in_auto_mode() {
+    fn a_mini_tares_with_tare_then_tare_and_start_in_auto_and_tare_elsewhere() {
+        let tare = hex6("030a01000008");
+        let tare_and_start = hex6("030a0700000e");
         // Mode unknown, Flow-Rate, Timer: 01.
         for mode in [None, Some(0), Some(1)] {
             assert_eq!(
-                *bookoo_with(Some(143), mode).tare_command(),
-                hex6("030a01000008"),
+                bookoo_with(Some(143), mode).tare_frames(),
+                &[tare],
                 "mode {mode:?}"
             );
         }
-        // A Mini in Auto (index 2): 07.
-        for fw in [141, 143] {
+        // A Mini in Auto (index 2), phase unknown: 01 (ready) then 07 (done,
+        // V1.4.2+). The same on older Minis, where 07 in done is ignored.
+        for fw in [100, 101, 141, 142, 143] {
             assert_eq!(
-                *bookoo_with(Some(fw), Some(2)).tare_command(),
-                hex6("030a0700000e"),
+                bookoo_with(Some(fw), Some(2)).tare_frames(),
+                &[tare, tare_and_start],
                 "fw {fw}"
             );
         }
         // Index 2 means Auto only on a Mini: not with the firmware unknown,
         // and not on an Ultra, whose modes the index doesn't describe.
         for fw in [None, Some(312), Some(403)] {
-            assert_eq!(
-                *bookoo_with(fw, Some(2)).tare_command(),
-                hex6("030a01000008"),
-                "fw {fw:?}"
-            );
+            assert_eq!(bookoo_with(fw, Some(2)).tare_frames(), &[tare], "fw {fw:?}");
         }
         // Leaving Auto goes back to 01.
         let mut scale = bookoo_with(Some(143), Some(2));
@@ -1562,7 +1569,7 @@ mod tests {
             active_mode: 1,
             enabled_modes: 0b010,
         });
-        assert_eq!(*scale.tare_command(), hex6("030a01000008"));
+        assert_eq!(scale.tare_frames(), &[tare]);
     }
 
     /// An Ultra `03 0D` automatic-mode event frame for event byte `event`.
@@ -1612,27 +1619,50 @@ mod tests {
     }
 
     #[test]
-    fn an_ultra_tares_with_tare_and_start_while_its_automatic_submode_is_ready_running_or_done() {
+    fn an_ultra_tares_by_the_phase_its_events_report() {
         let tare = hex6("030a01000008");
         let tare_and_start = hex6("030a0700000e");
-        let mut ultra = bookoo_with(Some(403), None);
-        assert_eq!(*ultra.tare_command(), tare);
-        for (event, expected) in [
-            (2, tare_and_start), // ready
-            (1, tare_and_start), // running
-            (0, tare_and_start), // done
-            (4, tare),           // exit done: idle
-            (2, tare_and_start), // ready again
-            (3, tare),           // exit ready: idle
-        ] {
-            ultra.absorb_frame(&auto_event(event));
-            assert_eq!(*ultra.tare_command(), expected, "after event {event}");
+        for fw in [324, 400, 403] {
+            let mut ultra = bookoo_with(Some(fw), None);
+            assert_eq!(ultra.tare_frames(), &[tare], "fw {fw}: phase unknown");
+            for (event, expected, phase) in [
+                (2, &[tare][..], "ready"),
+                (1, &[tare][..], "running"),
+                (0, &[tare_and_start, tare][..], "done"),
+                (4, &[tare][..], "exit done: idle"),
+                (2, &[tare][..], "ready again"),
+                (3, &[tare][..], "exit ready: idle"),
+            ] {
+                ultra.absorb_frame(&auto_event(event));
+                assert_eq!(ultra.tare_frames(), expected, "fw {fw}: {phase}");
+            }
         }
         // The same events on a Mini don't move its tare: it never sends them,
         // and its Auto comes from the mode index.
         let mut mini = bookoo_with(Some(143), Some(1));
         mini.absorb_frame(&auto_event(0));
-        assert_eq!(*mini.tare_command(), tare);
+        assert_eq!(mini.tare_frames(), &[tare]);
+    }
+
+    #[test]
+    fn a_mode_change_clears_an_ultra_phase() {
+        let tare = hex6("030a01000008");
+        // Done, then the scale reports a different mode index: the phase is
+        // stale, so the tare goes back to 01 alone.
+        let mut ultra = bookoo_with(Some(403), Some(1));
+        ultra.absorb_frame(&auto_event(0));
+        assert_eq!(ultra.tare_frames().len(), 2);
+        // The same index again changes nothing.
+        ultra.absorb(&CommandResponse::Settings {
+            active_mode: 1,
+            enabled_modes: 0b111,
+        });
+        assert_eq!(ultra.tare_frames().len(), 2);
+        ultra.absorb(&CommandResponse::Settings {
+            active_mode: 0,
+            enabled_modes: 0b111,
+        });
+        assert_eq!(ultra.tare_frames(), &[tare]);
     }
 
     #[test]

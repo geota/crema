@@ -2911,9 +2911,11 @@ impl CremaCore {
     /// its first weight frame (scales appendix F-04), hence `&mut self`.
     ///
     /// A heartbeat that only keeps the scale from auto-sleeping (the Bookoo's
-    /// keep-awake, [`Scale::heartbeat_only_keeps_awake`]) is withheld while the
-    /// machine sleeps, so the scale's own auto-off still runs then rather than
-    /// the link holding it awake all night.
+    /// keep-awake, [`Scale::heartbeat_only_keeps_awake`]) goes out only while
+    /// the DE1 is connected and awake. With the machine asleep, or no DE1 at
+    /// all (switched off at the rear switch, so the link dropped and the core
+    /// reset), the scale's own auto-off still runs rather than the link
+    /// holding it awake all night.
     pub fn scale_heartbeat(&mut self) -> Result<CoreOutput, AppError> {
         let scale = Self::scale_for("scale_heartbeat", self.scale.as_ref())?;
         if self
@@ -2923,15 +2925,15 @@ impl CremaCore {
         {
             return Ok(CoreOutput::default());
         }
-        if scale.heartbeat_only_keeps_awake() && self.machine_asleep() {
-            return Ok(CoreOutput::default());
-        }
         if scale.heartbeat_command().is_none() {
             return Err(Self::unsupported(
                 scale,
                 "scale_heartbeat",
                 "no heartbeat command",
             ));
+        }
+        if scale.heartbeat_only_keeps_awake() && !self.machine_awake() {
+            return Ok(CoreOutput::default());
         }
         let writes = self
             .scale
@@ -3157,6 +3159,12 @@ impl CremaCore {
             }
         }
         out
+    }
+
+    /// Whether a DE1 is connected (it has reported a state since the last
+    /// reset) and not asleep.
+    fn machine_awake(&self) -> bool {
+        self.last_state.is_some() && !self.machine_asleep()
     }
 
     /// Whether the DE1 last reported Sleep or GoingToSleep. `false` with no
@@ -4748,25 +4756,15 @@ impl CremaCore {
     /// channel — is silently dropped (it is not a decode failure, just traffic
     /// the core does not model).
     fn handle_scale_command(&mut self, data: &[u8], out: &mut CoreOutput) {
-        let machine_asleep = self.machine_asleep();
         let Some(scale) = &mut self.scale else {
             return;
         };
-        let had_heartbeat = scale.heartbeat_command().is_some();
         // State-only frames (the Eclair's battery) ride the next weight
         // reading; they produce no event of their own. The Bookoo's serial
-        // reply records the firmware its version-gated commands key off.
+        // reply records the firmware its version-gated commands key off; the
+        // shell then re-reads the capabilities and starts the keep-awake
+        // clock (`scale_heartbeat`), well inside the 5-minute auto-off.
         scale.absorb_command_notification(data);
-        // A keep-awake the firmware has just shown the scale takes goes out
-        // at once — the Bookoo doc says to send it early, not a whole
-        // interval later — unless the machine sleeps (see `scale_heartbeat`).
-        if !had_heartbeat
-            && scale.heartbeat_only_keeps_awake()
-            && !machine_asleep
-            && let Some(writes) = scale.heartbeat_command()
-        {
-            Self::push_scale_writes(out, writes);
-        }
         let Some(response) = scale.parse_command_response(data) else {
             return;
         };
@@ -7203,11 +7201,19 @@ mod tests {
         p
     }
 
+    /// The tares in `out`: a Bookoo tare is `01`, or `07` with it in
+    /// automatic mode; one tare's frames count once.
     fn tare_writes(out: &CoreOutput) -> usize {
-        scale_writes(out)
+        let writes = scale_writes(out);
+        let plain = writes
             .iter()
             .filter(|w| **w == bookoo::TARE.as_slice())
-            .count()
+            .count();
+        let and_start = writes
+            .iter()
+            .filter(|w| **w == bookoo::TARE_AND_START.as_slice())
+            .count();
+        plain.max(and_start)
     }
 
     /// Enter Espresso / Heating (preheat, no flow yet) with a Bookoo paired.
@@ -7558,53 +7564,57 @@ mod tests {
     }
 
     #[test]
-    fn a_bookoo_serial_reply_sends_the_first_keep_awake_at_once() {
-        let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC", &[]);
-        // Mini V1.4.3 takes 0x25: it goes out with the reply that shows it.
-        let out = core.on_notification(Source::ScaleCommand, &bookoo_serial(143), 1_000);
-        assert_eq!(scale_writes(&out), vec![bookoo::KEEP_AWAKE.as_slice()]);
-        // A later serial reply (every anti-mistouch write echoes one) does
-        // not repeat it; the shell's clock owns the cadence from here.
-        let out = core.on_notification(Source::ScaleCommand, &bookoo_serial(143), 2_000);
-        assert!(scale_writes(&out).is_empty());
-    }
-
-    #[test]
-    fn a_bookoo_serial_reply_sends_no_keep_awake_where_the_firmware_takes_none() {
-        for fw in [141, 312, 400] {
+    fn a_bookoo_serial_reply_writes_nothing_itself() {
+        // The keep-awake rides the shell's heartbeat clock alone (one write
+        // per tick, none extra at connect).
+        for fw in [141, 142, 143, 312, 400, 401] {
             let mut core = CremaCore::new();
+            core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 500);
             core.connect_scale("BOOKOO_SC", &[]);
             let out = core.on_notification(Source::ScaleCommand, &bookoo_serial(fw), 1_000);
             assert!(scale_writes(&out).is_empty(), "fw {fw}");
         }
-        // Mini V1.4.2 alone gets the 0x12 form.
-        let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC", &[]);
-        let out = core.on_notification(Source::ScaleCommand, &bookoo_serial(142), 1_000);
-        assert_eq!(
-            scale_writes(&out),
-            vec![bookoo::KEEP_AWAKE_V1_4_2.as_slice()]
-        );
     }
 
     #[test]
-    fn the_bookoo_keep_awake_is_withheld_while_the_machine_sleeps() {
-        let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC", &[]);
-        core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 500);
-        let out = core.on_notification(Source::ScaleCommand, &bookoo_serial(401), 1_000);
-        assert!(scale_writes(&out).is_empty());
+    fn the_bookoo_keep_awake_goes_out_only_while_the_de1_is_connected_and_awake() {
+        let mut core = bookoo_core_on(401);
+        // No DE1 state at all (never connected, or switched off and reset).
         let out = core
             .scale_heartbeat()
             .expect("an Ultra V4.0.1 has a keep-awake");
-        assert!(scale_writes(&out).is_empty());
-        // Awake again: the clock's next tick sends it.
-        core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 2_000);
+        assert!(scale_writes(&out).is_empty(), "no DE1: no keep-awake");
+        core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
         let out = core
             .scale_heartbeat()
             .expect("an Ultra V4.0.1 has a keep-awake");
         assert_eq!(scale_writes(&out), vec![bookoo::KEEP_AWAKE.as_slice()]);
+        for asleep in [MachineState::GoingToSleep, MachineState::Sleep] {
+            core.on_notification(Source::De1State, &[asleep as u8, 0], 2_000);
+            let out = core
+                .scale_heartbeat()
+                .expect("an Ultra V4.0.1 has a keep-awake");
+            assert!(scale_writes(&out).is_empty(), "{asleep:?}");
+        }
+        core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 3_000);
+        let out = core
+            .scale_heartbeat()
+            .expect("an Ultra V4.0.1 has a keep-awake");
+        assert_eq!(scale_writes(&out), vec![bookoo::KEEP_AWAKE.as_slice()]);
+        // The DE1 drops (the shells reset the core; the scale link stays).
+        let _ = core.reset();
+        let out = core.scale_heartbeat().expect("the scale is still a V4.0.1");
+        assert!(scale_writes(&out).is_empty(), "DE1 gone: no keep-awake");
+        // Mini V1.4.2 alone gets the 0x12 form.
+        let mut core = bookoo_core_on(142);
+        core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
+        let out = core
+            .scale_heartbeat()
+            .expect("a Mini V1.4.2 has a keep-awake");
+        assert_eq!(
+            scale_writes(&out),
+            vec![bookoo::KEEP_AWAKE_V1_4_2.as_slice()]
+        );
     }
 
     #[test]
@@ -7613,11 +7623,10 @@ mod tests {
         core.connect_scale("BOOKOO_SC", &[]);
         assert!(core.scale_heartbeat().is_err());
         assert!(core.power_off_scale().is_err());
-        let mut core = bookoo_core_on(143);
-        let out = core
-            .scale_heartbeat()
-            .expect("a Mini V1.4.3 has a keep-awake");
-        assert_eq!(scale_writes(&out), vec![bookoo::KEEP_AWAKE.as_slice()]);
+        for fw in [141, 312, 400] {
+            assert!(bookoo_core_on(fw).scale_heartbeat().is_err(), "fw {fw}");
+        }
+        let core = bookoo_core_on(143);
         let out = core
             .power_off_scale()
             .expect("a Mini V1.4.3 has a shutdown");
@@ -7662,62 +7671,134 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_bookoo_ultra_in_its_automatic_submode_is_tared_with_tare_and_start() {
-        let mut core = bookoo_core_on(403);
-        let event = |e: u8| {
-            let mut f = vec![0u8; 20];
-            f[..3].copy_from_slice(&[0x03, 0x0D, e]);
-            f[19] = f[..19].iter().fold(0, |a, &b| a ^ b);
-            f
-        };
-        assert_eq!(
-            scale_writes(&core.tare_scale()),
-            vec![bookoo::TARE.as_slice()]
-        );
-        // Done (00), from either characteristic.
-        core.on_notification(Source::ScaleCommand, &event(0), 1_000);
-        assert_eq!(
-            scale_writes(&core.tare_scale()),
-            vec![bookoo::TARE_AND_START.as_slice()]
-        );
-        core.on_notification(Source::ScaleWeight, &event(4), 1_100); // exit done
-        assert_eq!(
-            scale_writes(&core.tare_scale()),
-            vec![bookoo::TARE.as_slice()]
-        );
-        core.on_notification(Source::ScaleWeight, &event(2), 1_200); // ready
-        assert_eq!(
-            scale_writes(&core.tare_scale()),
-            vec![bookoo::TARE_AND_START.as_slice()]
-        );
+    /// An Ultra `03 0D` automatic-mode event frame.
+    fn ultra_event(e: u8) -> Vec<u8> {
+        let mut f = vec![0u8; 20];
+        f[..3].copy_from_slice(&[0x03, 0x0D, e]);
+        f[19] = f[..19].iter().fold(0, |a, &b| a ^ b);
+        f
     }
 
     #[test]
-    fn a_bookoo_in_auto_mode_is_tared_with_tare_and_start() {
+    fn a_bookoo_ultra_is_tared_by_the_phase_its_events_report() {
+        let tare = bookoo::TARE.as_slice();
+        let tare_and_start = bookoo::TARE_AND_START.as_slice();
+        let mut core = bookoo_core_on(403);
+        assert_eq!(
+            scale_writes(&core.tare_scale()),
+            vec![tare],
+            "phase unknown"
+        );
+        // Ready (02): 01, the documented tare there.
+        core.on_notification(Source::ScaleWeight, &ultra_event(2), 1_000);
+        assert_eq!(scale_writes(&core.tare_scale()), vec![tare], "ready");
+        // Running (01): 01 (nothing tares there).
+        core.on_notification(Source::ScaleCommand, &ultra_event(1), 1_100);
+        assert_eq!(scale_writes(&core.tare_scale()), vec![tare], "running");
+        // Done (00): 07 then 01.
+        core.on_notification(Source::ScaleCommand, &ultra_event(0), 1_200);
+        assert_eq!(
+            scale_writes(&core.tare_scale()),
+            vec![tare_and_start, tare],
+            "done"
+        );
+        // Exit done (04): idle, 01.
+        core.on_notification(Source::ScaleWeight, &ultra_event(4), 1_300);
+        assert_eq!(scale_writes(&core.tare_scale()), vec![tare], "idle");
+        // A stale done (the mode changed on the scale): the next settings
+        // reply with a new index clears it.
+        core.on_notification(Source::ScaleCommand, &bookoo_settings(1), 1_400);
+        core.on_notification(Source::ScaleCommand, &ultra_event(0), 1_500);
+        core.on_notification(Source::ScaleCommand, &bookoo_settings(0), 1_600);
+        assert_eq!(scale_writes(&core.tare_scale()), vec![tare], "mode changed");
+        // A reconnect starts with no phase.
+        core.on_notification(Source::ScaleCommand, &ultra_event(0), 1_700);
+        core.disconnect_scale();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::ScaleCommand, &bookoo_serial(403), 1_800);
+        assert_eq!(scale_writes(&core.tare_scale()), vec![tare], "reconnected");
+    }
+
+    #[test]
+    fn a_bookoo_mini_in_auto_mode_is_tared_with_tare_then_tare_and_start() {
+        let tare = bookoo::TARE.as_slice();
+        let tare_and_start = bookoo::TARE_AND_START.as_slice();
         let mut core = bookoo_core_on(143);
-        assert_eq!(
-            scale_writes(&core.tare_scale()),
-            vec![bookoo::TARE.as_slice()]
-        );
+        assert_eq!(scale_writes(&core.tare_scale()), vec![tare]);
         core.on_notification(Source::ScaleCommand, &bookoo_settings(2), 1_000);
-        assert_eq!(
-            scale_writes(&core.tare_scale()),
-            vec![bookoo::TARE_AND_START.as_slice()]
-        );
-        // The shot-start tare too: once settled at shot start, 0x07 goes out.
+        assert_eq!(scale_writes(&core.tare_scale()), vec![tare, tare_and_start]);
+        // The shot-start tare too, counted once by the helper.
         core.on_notification(Source::De1State, &[2, 0], 1_100);
         let out = core.on_notification(Source::De1State, &[4, 5], 1_200);
         assert!(out.events.contains(&Event::ShotStarted));
         let mut writes: Vec<Vec<u8>> = scale_writes(&out).iter().map(|w| w.to_vec()).collect();
+        let mut tares = tare_writes(&out);
         let mut t = 1_300;
         for _ in 0..6 {
             let out = core.on_notification(Source::ScaleWeight, &bookoo_grams(250.0), t);
             writes.extend(scale_writes(&out).iter().map(|w| w.to_vec()));
+            tares += tare_writes(&out);
             t += 100;
         }
-        assert!(writes.contains(&bookoo::TARE_AND_START.to_vec()));
-        assert!(!writes.contains(&bookoo::TARE.to_vec()));
+        assert_eq!(tares, 1);
+        let at = writes
+            .iter()
+            .position(|w| w == tare)
+            .expect("the shot-start tare");
+        assert_eq!(writes[at + 1], tare_and_start);
+    }
+
+    /// The events of a shot whose tare never zeroes the scale: `cup_cg`
+    /// stays on it through the tare window, then the weight climbs 1 g per
+    /// 100 ms. `mode` is the Mini's reported mode index (2 = Auto, so the
+    /// tare is `01` then `07`; 1 = Timer, so it is `01`).
+    fn untared_shot_events(mode: u8, cup_cg: u32) -> Vec<Vec<Event>> {
+        let mut core = bookoo_core_on(143);
+        core.on_notification(Source::ScaleCommand, &bookoo_settings(mode), 100);
+        core.set_test_profile_yield(Some(36.0));
+        let mut steps = Vec::new();
+        steps.push(core.on_notification(Source::De1State, &[2, 0], 0).events);
+        steps.push(core.on_notification(Source::De1State, &[4, 5], 0).events);
+        let mut at = 200;
+        for _ in 0..8 {
+            steps.push(
+                core.on_notification(Source::ScaleWeight, &bookoo_packet(cup_cg), at)
+                    .events,
+            );
+            at += 400;
+        }
+        steps.push(core.on_notification(Source::De1State, &[4, 4], at).events);
+        for g in 1..=60 {
+            at += 100;
+            steps.push(
+                core.on_notification(Source::ScaleWeight, &bookoo_packet(cup_cg + g * 100), at)
+                    .events,
+            );
+        }
+        steps
+    }
+
+    #[test]
+    fn a_tare_and_start_that_does_not_zero_leaves_the_weight_stop_guard_as_before() {
+        // Under and over the untared guard's 50 g threshold: a 40 g glass
+        // (the guard doesn't trip; the weight stop runs on the un-zeroed
+        // weight) and a 300 g cup (virtual zero). Whatever the guard does,
+        // it does the same whether the tare was 01 or 01 + 07.
+        for cup_cg in [4_000, 30_000] {
+            let auto = untared_shot_events(2, cup_cg);
+            let timer = untared_shot_events(1, cup_cg);
+            assert_eq!(auto, timer, "cup {cup_cg} cg");
+            assert!(
+                auto.iter().flatten().any(|e| matches!(
+                    e,
+                    Event::StopTriggered {
+                        reason: StopReason::Weight
+                    } | Event::SawAutoZeroed { .. }
+                        | Event::SawSuppressedUntaredCup { .. }
+                )),
+                "cup {cup_cg} cg: the guard or the weight stop acted"
+            );
+        }
     }
 
     #[test]
