@@ -70,6 +70,19 @@ fn a_motto_is_a_grinder_and_a_bookoo_scale_is_a_scale() {
 }
 
 #[test]
+fn a_grinder_is_shown_by_its_prefix_only() {
+    assert_eq!(grinder_shown_name(NAME), "BOOKOO MT80");
+    assert_eq!(grinder_shown_name("bookoo mt80 deadbeef"), "BOOKOO MT80");
+    assert_eq!(
+        grinder_shown_name("BOOKOO MT80"),
+        "grinder",
+        "no prefix with its space"
+    );
+    assert_eq!(grinder_shown_name("Phone"), "grinder");
+    assert_eq!(grinder_shown_name("BOOKOO MT8é"), "grinder");
+}
+
+#[test]
 fn no_name_matches_two_kinds() {
     let scales = device_scan_filters(Some(DeviceKind::Scale));
     let grinders = device_scan_filters(Some(DeviceKind::Grinder));

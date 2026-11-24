@@ -594,6 +594,46 @@ fn private_fields_are_redacted_wherever_they_appear() {
     assert_eq!(reassembled(&out).len(), 1);
 }
 
+/// REVIEW-565: a capture keeps `baseInfo`'s fields by an allow-list pinned
+/// to official §7.2 (`releaseVer`, `snCode`, `wifiName`): the release as
+/// sent, the private two rewritten, and any key a later firmware adds
+/// redacted until it is reviewed.
+#[test]
+fn a_captured_base_info_keeps_only_its_reviewed_fields() {
+    assert_eq!(
+        BASE_INFO_RECORDED,
+        ["releaseVer"],
+        "a new recorded key is a reviewed choice"
+    );
+    let mut driver = connected();
+    let later = format!(
+        r#"{{"broadcast":{{"baseInfo":{{"releaseVer":103111020,"snCode":"{SERIAL}","wifiName":"{SSID}","macAddr":"AA:BB:CC:DD:EE:FF","owner":{{"name":"Sam"}}}}}}}}"#
+    );
+    let out = captured(&mut driver, &encode(later.as_bytes(), 1, 20), 0);
+    assert!(!leaks(&out));
+    let docs = reassembled(&out);
+    let base = &docs[0]["broadcast"]["baseInfo"];
+    assert_eq!(
+        base,
+        &serde_json::json!({
+            "releaseVer": 103_111_020,
+            "snCode": "REDACTED",
+            "wifiName": null,
+            "macAddr": "REDACTED",
+            "owner": "REDACTED",
+        })
+    );
+    // The official example keeps its shape: what replay needs is there.
+    let out = captured(&mut connected(), &encode(BASE.as_bytes(), 1, 20), 0);
+    let keys: Vec<String> = reassembled(&out)[0]["broadcast"]["baseInfo"]
+        .as_object()
+        .expect("object")
+        .keys()
+        .cloned()
+        .collect();
+    assert_eq!(keys, ["releaseVer", "snCode", "wifiName"]);
+}
+
 #[test]
 fn fragments_of_an_unfinished_or_broken_base_info_are_zeroed() {
     let mut driver = connected();

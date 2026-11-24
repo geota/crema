@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.util.Log
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.GrinderUuids
+import coffee.crema.core.grinderShownName
 import coffee.crema.core.NotificationSource
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
@@ -214,7 +215,7 @@ class GrinderBleManager(
         dropCoreGrinder()
         val services = runCatching { transport.discoveredServices(device) }.getOrDefault(emptyList())
         val model = bridge.connectGrinder(advertisedName, services)
-            ?: error("Core did not recognise grinder '$advertisedName'")
+            ?: error("Core did not recognise grinder '${grinderShownName(advertisedName)}'")
         val u = json.decodeFromString(
             GrinderUuids.serializer(),
             bridge.grinderUuids() ?: error("Core reported no UUIDs for '$model'"),
@@ -261,8 +262,9 @@ class GrinderBleManager(
         return (GattProperty.WRITE in rx || GattProperty.WRITE_WITHOUT_RESPONSE in rx) && GattProperty.NOTIFY in tx
     }
 
-    /** The device answered the scan by name but has no grinder service. */
-    class GattMismatch(name: String) : IllegalStateException("$name has no grinder service")
+    /** The device answered the scan by name but has no grinder service. Its
+     *  message names the model prefix only: it reaches the status lines. */
+    class GattMismatch(name: String) : IllegalStateException("${grinderShownName(name)} has no grinder service")
 
     private fun dropCoreGrinder() {
         runCatching { onCoreOutput(bridge.disconnectGrinder()) }

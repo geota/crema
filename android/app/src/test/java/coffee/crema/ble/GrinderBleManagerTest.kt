@@ -211,12 +211,17 @@ class GrinderBleManagerTest {
 
     @Test
     fun aLookAlikeWithoutTheServiceIsRefused() {
-        val r = rig(FakeGrinder(services = listOf("0000ffff-0000-1000-8000-00805f9b34fb")))
+        val statuses = CopyOnWriteArrayList<String>()
+        val r = rig(FakeGrinder(services = listOf("0000ffff-0000-1000-8000-00805f9b34fb")), status = { statuses += it })
         r.manager.connect(FakeGrinder.Handle, FakeGrinder.NAME)
         until("the mismatch") { r.mismatched }
         until("stopped") { r.manager.isUserDisconnected }
         Thread.sleep(200)
         assertEquals(0, r.fake.writes.size, "nothing written to it")
+        // REVIEW-565: the name's suffix may derive from the serial; status
+        // lines name the model prefix only.
+        assertTrue(statuses.any { "BOOKOO MT80 has no grinder service" in it }, "$statuses")
+        assertTrue(statuses.none { "1a2b3c4d" in it }, "$statuses")
     }
 
     private companion object {

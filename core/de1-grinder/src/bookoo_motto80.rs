@@ -611,13 +611,37 @@ fn zeroed(mut frame: Vec<u8>) -> Vec<u8> {
     frame
 }
 
-/// Rewrite private fields anywhere in `value`. Returns whether it changed.
+/// The `baseInfo` keys a capture keeps as sent: official §7.2's fields
+/// that aren't private (`snCode` and `wifiName` are rewritten). Any other
+/// key a later firmware adds is redacted until it is reviewed and listed.
+const BASE_INFO_RECORDED: [&str; 1] = ["releaseVer"];
+
+/// A `baseInfo` object for the capture: the private fields rewritten, every
+/// key not in [`BASE_INFO_RECORDED`] redacted.
+fn redact_base_info(object: &mut Map<String, Value>) {
+    for (key, item) in object.iter_mut() {
+        match key.as_str() {
+            "wifiName" => *item = Value::Null,
+            k if BASE_INFO_RECORDED.contains(&k) => {}
+            // `snCode` and anything unlisted.
+            _ => *item = Value::String("REDACTED".to_owned()),
+        }
+    }
+}
+
+/// Rewrite private fields anywhere in `value`: `snCode` and `wifiName` at
+/// any depth, and a `baseInfo` by its allow-list. Returns whether it changed.
 fn redact(value: &mut Value) -> bool {
     let mut changed = false;
     match value {
         Value::Object(object) => {
             for (key, item) in object.iter_mut() {
-                if key == "snCode" {
+                if key == "baseInfo"
+                    && let Value::Object(base) = item
+                {
+                    redact_base_info(base);
+                    changed = true;
+                } else if key == "snCode" {
                     *item = Value::String("REDACTED".to_owned());
                     changed = true;
                 } else if key == "wifiName" {

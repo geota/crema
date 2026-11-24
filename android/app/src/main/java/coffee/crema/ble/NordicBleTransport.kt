@@ -506,7 +506,8 @@ class NordicBleTransport(context: Context) : BleTransport {
      * NOTIFY / INDICATE / …). Called once per connect, after discovery.
      */
     private fun logGatt(handle: NordicDeviceHandle, discovered: RemoteServices.Discovered) {
-        val label = handle.name ?: handle.address
+        // A grinder's name suffix may derive from its serial: logged by its prefix.
+        val label = handle.name?.let { n -> coffee.crema.core.grinderShownName(n).takeIf { it != "grinder" } ?: n } ?: handle.address
         Log.i(TAG, "GATT for $label (${handle.address}): ${discovered.services.size} service(s)")
         for (service in discovered.services) {
             Log.i(TAG, "  service ${service.uuid}")

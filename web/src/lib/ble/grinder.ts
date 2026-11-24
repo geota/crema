@@ -47,7 +47,7 @@ import {
 	type KickResult
 } from './transport';
 import type { ReconnectTrigger } from './reconnect-timeline';
-import { deviceScanFilters } from '#lib/wasm/de1_wasm.js';
+import { deviceScanFilters, grinderShownName } from '#lib/wasm/de1_wasm.js';
 
 /** The core's pre-connect filters for one device kind. */
 interface ScanFilters {
@@ -96,8 +96,9 @@ export interface GrinderManagerCallbacks {
 	onState: (state: BleConnectionState) => void;
 	/** The link ended with no retry, or a problem cleared (`null`). */
 	onProblem: (problem: GrinderProblem | null) => void;
-	/** The core identified the grinder: its model id and advertised name. */
-	onIdentified: (model: string, advertisedName: string) => void;
+	/** The core identified the grinder: its model id and its advertised
+	 *  name as shown (the model prefix, `grinderShownName`). */
+	onIdentified: (model: string, shownName: string) => void;
 }
 
 export class GrinderManager {
@@ -176,7 +177,8 @@ export class GrinderManager {
 		this.setState('connecting');
 		this.callbacks.onProblem(null);
 		this.dropDevice();
-		this.callbacks.onStatus(`Reconnecting to the last grinder (${known.name ?? known.id})…`);
+		// No name: its suffix may derive from the serial (REVIEW-565).
+		this.callbacks.onStatus('Reconnecting to the last grinder…');
 		await this.attach(new BleDevice(known));
 	}
 
@@ -283,7 +285,8 @@ export class GrinderManager {
 				onIdentified: (model, services) => {
 					if (!current()) return;
 					this.services = services;
-					this.callbacks.onIdentified(model, device.name);
+					// Shown by its model prefix: the suffix may derive from the serial.
+					this.callbacks.onIdentified(model, grinderShownName(device.name));
 				},
 				onUuidsResolved: (uuids) => {
 					if (current()) this.installSink(device, uuids);

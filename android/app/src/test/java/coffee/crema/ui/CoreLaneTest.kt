@@ -84,8 +84,22 @@ class CoreLaneTest {
         lane.deliver("""{"events":[{"type":"ShotStarted"}],"commands":[]}""")
         advanceUntilIdle()
         assertTrue(log.any { it.startsWith("JSON parse error") })
-        assertTrue("Core output application failed: boom" in log)
+        assertTrue("Core output application failed: IllegalStateException" in log, "$log")
         assertEquals(2, applied)
+    }
+
+    /** REVIEW-565: a decode failure names the class and the path, never the
+     *  JSON kotlinx echoes (a grinder event carries the serial). */
+    @Test
+    fun `a decode failure logs no JSON input`() = runTest {
+        val lane = lane()
+        lane.deliver("""{"events":[{"type":"GrinderReady","content":{"info":{"model":7,"serial":"SN0000000MT12355"}}}],"commands":[]}""")
+        lane.deliver("""{"events":[{"type":"ShotStarted"}],"commands":[] trailing SN0000000MT12355""")
+        advanceUntilIdle()
+        val lines = log.filter { it.startsWith("JSON parse error") }
+        assertEquals(2, lines.size, "$log")
+        assertTrue(lines.none { "SN0000000MT12355" in it || "JSON input" in it }, "$lines")
+        assertTrue(lines.all { "Exception" in it }, "$lines")
     }
 
     @Test

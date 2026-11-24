@@ -2629,6 +2629,14 @@ pub fn grinder_has_variable_speed(preset_id: Option<String>) -> bool {
     de1_domain::grinder_catalogue::has_variable_speed(preset_id.as_deref())
 }
 
+/// A grinder's advertised name as a log or the screen may show it: the
+/// model prefix only. See `de1_app::grinder_shown_name`.
+#[wasm_bindgen(js_name = grinderShownName)]
+#[must_use]
+pub fn grinder_shown_name(advertised_name: &str) -> String {
+    de1_app::grinder_shown_name(advertised_name)
+}
+
 /// The pre-connect scan filters for one device kind (`"Scale"`,
 /// `"Grinder"`) or, for `undefined`, every kind — as JSON
 /// `{"name_prefixes":[…],"service_uuids":[…]}`. Each Connect asks for its

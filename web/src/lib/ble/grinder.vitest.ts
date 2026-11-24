@@ -365,6 +365,18 @@ describe('the connected grinder over Web Bluetooth', () => {
 		expect(localStorage.getItem(LAST_DEVICES_KEY) ?? '').not.toContain('SECRET');
 	});
 
+	it('shows and logs the advertised name by its model prefix only (REVIEW-565)', async () => {
+		const t = await connectedApp();
+		await t.send(period(), 300);
+		expect(t.view().state).toBe('ready');
+		// The suffix may derive from the serial: never on screen or in the log.
+		expect(t.view().name).toBe('BOOKOO MT80');
+		expect(t.log()).toContain('Connecting to BOOKOO MT80…');
+		expect(t.log()).not.toContain('0011aabb');
+		// The reconnect keeps the full name, on this device only.
+		expect(readLastDevices().grinder?.name).toBe('BOOKOO MT80 0011aabb');
+	});
+
 	it('links the one unlinked Motto record on Ready, with a message', async () => {
 		const lib = getBeanStore();
 		const motto = lib.addGrinder('', MOTTO)!;
