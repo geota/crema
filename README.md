@@ -234,6 +234,8 @@ A pre-push hook in `.githooks/` mirrors the CI `rust` and `web` jobs: `cargo fmt
 scripts/install-hooks.sh   # or: git config core.hooksPath .githooks
 ```
 
+Bypass for a one-off push with `SKIP_CI_CHECKS=1 git push` (or skip one half with `SKIP_RUST=1` / `SKIP_WEB=1`); CI still runs on the remote.
+
 ### CI
 
 - **`ci.yml`** (push / PR to `main`): Rust fmt, clippy, tests, built-in ids and typeshare-bindings freshness, `cargo deny`; web `pnpm check`, vitest and build; the history wasm and its Playwright browser tests; the Android unit tests, lint and debug APKs (`foss` and `play`); an advisory `cargo audit` / `pnpm audit`, which also runs weekly. A nightly schedule runs the relay fuzzer, the long model runs and the history benchmarks.

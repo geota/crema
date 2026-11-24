@@ -93,8 +93,6 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 - **DE1 firmware 1359 is recognised** — the build Decent made for the Decenza
   app showed as "newer than Crema knows"; Settings → Machine now calls it a
   Decenza build, not on Decent's channels. Web, tablet and phone.
-||||||| 17594adc
-||||||| original
 - **The scale steps aside during a firmware update** — while a DE1 firmware
   update runs (15–25 minutes), Crema now drops the scale's Bluetooth link and
   stops scanning for it and reconnecting to it, so the scale's weight stream
