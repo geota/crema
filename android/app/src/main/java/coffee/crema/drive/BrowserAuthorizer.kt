@@ -246,6 +246,7 @@ class BrowserAuthorizer(
 
     override suspend fun complete(result: SignInResult): DriveTokenSet = when (result) {
         is SignInResult.Browser -> exchange(result.code, result.verifier)
+        is SignInResult.Consent -> throw IllegalArgumentException("not a browser redirect")
     }
 
     /** Revoking the refresh token ends the whole grant (final review 05 N-5). */

@@ -78,6 +78,10 @@ data class DriveState(
     /** Google ended the sign-in. Signed out, with a lasting banner until the
      *  user reconnects or disconnects. Additive. */
     val needsReconnect: Boolean = false,
+    /** Google Play services sign-in failed here once in a way the browser
+     *  fixes (or the user chose the browser): later sign-ins skip it. Signing
+     *  out keeps it. Additive (#336). */
+    val browserOnly: Boolean = false,
     /** The last run's core `SyncHealth` as JSON, shown in Settings. A string so
      *  a state a later build adds can't make this file unreadable. Additive. */
     val health: String? = null,

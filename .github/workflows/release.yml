@@ -273,17 +273,56 @@ jobs:
       # The fixed debug key (#336 §6): its SHA-1 is registered on a Drive OAuth
       # client, so the published debug APK can sign in. Absent => the runner's
       # throwaway debug key, as before.
+      # It must never hold the release key: a debuggable build with the release
+      # app ID and signature would install over users' apps and expose their
+      # data. So the SHA-1s are compared, and a run with only some of the four
+      # DEBUG_* secrets fails, naming the missing ones.
       - name: Decode debug keystore (if configured)
         env:
           DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+          DEBUG_KEYSTORE_PASSWORD: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
+          DEBUG_KEY_ALIAS: ${{ secrets.DEBUG_KEY_ALIAS }}
+          DEBUG_KEY_PASSWORD: ${{ secrets.DEBUG_KEY_PASSWORD }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
-            echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/debug.keystore"
-            echo "DEBUG_KEYSTORE_FILE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
-            echo "Debug keystore decoded — the debug APK will carry the fixed debug key."
-          else
+          missing=()
+          for name in DEBUG_KEYSTORE_BASE64 DEBUG_KEYSTORE_PASSWORD DEBUG_KEY_ALIAS DEBUG_KEY_PASSWORD; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if [ "${#missing[@]}" -eq 4 ]; then
             echo "No DEBUG_KEYSTORE_BASE64 — the debug APK is signed with this runner's throwaway key."
+            exit 0
           fi
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::The debug signing secrets are only partly set; missing: ${missing[*]}. Set all four, or none."
+            exit 1
+          fi
+          echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/debug.keystore"
+          sha1() { keytool -list -v -keystore "$1" -storepass "$2" -alias "$3" 2>/dev/null | awk '/SHA1:/ { print $2; exit }'; }
+          debug_sha1=$(sha1 "$RUNNER_TEMP/debug.keystore" "$DEBUG_KEYSTORE_PASSWORD" "$DEBUG_KEY_ALIAS")
+          if [ -z "$debug_sha1" ]; then
+            echo "::error::Couldn't read the debug key: check DEBUG_KEYSTORE_BASE64, DEBUG_KEYSTORE_PASSWORD and DEBUG_KEY_ALIAS."
+            exit 1
+          fi
+          # The public SHA-1s of the release key and Play's app-signing key
+          # (.scratch/drive-auth/SPEC.md §6): checked even with no release keystore here.
+          for shipped in CB:87:64:BA:12:BC:77:46:7E:67:BE:AE:70:9C:F8:45:52:93:B5:D4 \
+                         56:7F:98:95:A6:25:47:8B:88:20:E7:27:97:16:F9:C4:B1:F0:67:68; do
+            if [ "$debug_sha1" = "$shipped" ]; then
+              echo "::error::The debug keystore holds a key that signs shipped builds. Never sign a debug build with it."
+              exit 1
+            fi
+          done
+          if [ -n "${KEYSTORE_FILE:-}" ]; then
+            release_sha1=$(sha1 "$KEYSTORE_FILE" "$KEYSTORE_PASSWORD" "$KEY_ALIAS")
+            if [ -z "$release_sha1" ] || [ "$debug_sha1" = "$release_sha1" ]; then
+              echo "::error::The debug keystore holds the release key (or the release key couldn't be read to compare). Never sign a debug build with the release key."
+              exit 1
+            fi
+          fi
+          echo "DEBUG_KEYSTORE_FILE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
+          echo "Debug keystore decoded — the debug APK will carry the fixed debug key."
 
       - name: Build debug APK + release APKs & AAB
         working-directory: android

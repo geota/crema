@@ -69,7 +69,7 @@ Web, Android tablet and Android phone unless marked. *(nightly)*: on `main` and 
 | Device | Status | What Crema does | Android | Web |
 |---|---|---|---|---|
 | **Decent DE1** | Supported | Connect, upload profiles, run and stop shots, steam, hot water, flush, maintenance cycles, firmware updates. | Yes | Yes |
-| **Bookoo Themis** | Supported | Weight, tare, timer, native flow; beeper, auto-standby, flow smoothing and auto-stop settings. | Yes | Yes |
+| **Bookoo Themis** | Supported | Weight, tare, timer, native flow; beeper, auto-standby and flow smoothing settings; auto-stop setting (not yet on Ultra firmware 4+). | Yes | Yes |
 | **Decent Scale, Half Decent Scale** | Supported | Weight, tare, timer, display and power-off; a Half Decent Scale on firmware 3+ soft-sleeps with the DE1 instead of disconnecting. | Yes | Yes |
 | **Acaia** (Lunar, Pyxis, Pearl, older models) | Supported | Weight and tare. | Yes | Yes |
 | **Skale II, Felicita Arc, Eureka Precisa, Solo Barista, Varia Aku** | Supported | Weight and tare; the scale's timer, except on the Aku. | Yes | Yes |
@@ -87,8 +87,8 @@ Web Bluetooth needs a Chromium browser (Chrome, Edge, or Brave with its Web Blue
 
 | APK | For |
 |---|---|
-| `crema-<version>-play.apk` | Phones with Google Play services |
-| `crema-<version>-foss.apk` | No Google code (the F-Droid / IzzyOnDroid build) |
+| `crema-<version>-play.apk` | Phones with Google Play services or microG. Drive sign-in goes through them, falling back to the browser where they don't work. |
+| `crema-<version>-foss.apk` | No Google code (the F-Droid / IzzyOnDroid build). Drive sign-in opens the browser. |
 
 - **Stable**: tagged releases ([changelog](CHANGELOG.md)).
 - **Nightly**: every push to `main`, as the [`nightly`](https://github.com/geota/crema/releases/tag/nightly) prerelease (the `play` build).

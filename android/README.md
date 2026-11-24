@@ -183,7 +183,7 @@ the same app ID and signature:
 | Flavor | Ships to | Google Drive sign-in |
 |---|---|---|
 | `foss` (the default) | F-Droid, IzzyOnDroid, GitHub (`-foss.apk`) | the browser (PKCE, custom URI scheme) |
-| `play` | Google Play, GitHub (`-play.apk`, the AAB, nightly) | the browser for now; Google Play services next |
+| `play` | Google Play, GitHub (`-play.apk`, the AAB, nightly) | Google Play services' Authorization API (`PlayAuthorizer`), falling back to the browser |
 
 Only `src/play` may use Google Play services, Firebase or Play code:
 `./gradlew :app:checkFossHasNoGoogle` fails if anything in `foss`'s release

@@ -1,5 +1,7 @@
 package coffee.crema.drive
 
+import android.app.PendingIntent
+import android.content.Intent
 import coffee.crema.core.SyncFailure
 import kotlinx.serialization.Serializable
 import java.io.IOException
@@ -74,6 +76,13 @@ sealed interface FreshToken {
 fun interface SignInHost {
     /** Open [url] in a Custom Tab. */
     fun openUrl(url: String)
+
+    /**
+     * Launch a Google Play services consent screen; its result comes back
+     * through [DriveSync.handleConsentResult]. False when nothing can launch
+     * it now (no Activity on screen).
+     */
+    fun launchConsent(consent: PendingIntent): Boolean = false
 }
 
 /** How an interactive sign-in began. */
@@ -83,12 +92,45 @@ sealed interface Begin {
      * redirect (the process can die while the Custom Tab is up), then opens [url].
      */
     class Browser(val verifier: String, val state: String, val url: String) : Begin
+
+    /** Granted with no UI (the grant already stood): the set to store. */
+    class Granted(val tokens: DriveTokenSet) : Begin
+
+    /** A consent screen is up; its result returns through [DriveAuthorizer.complete]. */
+    data object Launched : Begin
 }
 
 /** What came back to the app from an interactive sign-in. */
 sealed interface SignInResult {
     /** The browser redirect's code, checked against the stored handshake, and its verifier. */
     class Browser(val code: String, val verifier: String) : SignInResult
+
+    /** A Google Play services consent screen's Activity result. */
+    class Consent(val resultCode: Int, val data: Intent?) : SignInResult
+}
+
+/**
+ * An interactive sign-in that didn't give a grant, and what [DriveSync] does
+ * about it. The message names the cause, never a token.
+ */
+class SignInFailure(val kind: Kind, message: String, cause: Throwable? = null) : Exception(message, cause) {
+    enum class Kind {
+        /** The user backed out: said, nothing else. */
+        CANCELLED,
+
+        /** No network: said; the next tap tries the same way again. */
+        OFFLINE,
+
+        /** Can't finish now for a reason that isn't the way's (no Activity): said. */
+        FAILED,
+
+        /**
+         * This way doesn't work on this phone (a broken or old Play services,
+         * microG before 0.3.16, a grant with no token): the browser way takes
+         * over, now and for later sign-ins.
+         */
+        UNSUPPORTED,
+    }
 }
 
 /** One way to get a Drive token. */
@@ -104,10 +146,10 @@ interface DriveAuthorizer {
      */
     suspend fun fresh(stored: DriveTokenSet, rejected: Boolean): FreshToken
 
-    /** Start an interactive sign-in; its result returns through [complete]. */
+    /** Start an interactive sign-in; its result returns through [complete]. Throws [SignInFailure]. */
     suspend fun begin(host: SignInHost): Begin
 
-    /** Finish an interactive sign-in: the grant to store. Throws when it failed. */
+    /** Finish an interactive sign-in: the grant to store. Throws when it failed ([SignInFailure] for a way's own). */
     suspend fun complete(result: SignInResult): DriveTokenSet
 
     /** End [stored]'s grant at Google, best-effort. Never throws. */
