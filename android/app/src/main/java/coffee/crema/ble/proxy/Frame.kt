@@ -264,6 +264,19 @@ sealed class Frame {
     @SerialName("config")
     data class Config(val json: String) : Frame()
 
+    /**
+     * Primary → secondary: the hub's **grinder block** on its own (a
+     * `GrinderUpdate`: the block and a `rev` from the [Config] snapshots'
+     * counter), pushed when only the grinder changed (up to 2 Hz while a
+     * collar turns), so the active custom profile isn't re-sent each time
+     * (grinder-ble §6.2). Every [Config] still carries the block too. A remote
+     * that doesn't know this type skips it (spec §4.5) and keeps the grinder
+     * of the last snapshot until the next one.
+     */
+    @Serializable
+    @SerialName("grinder")
+    data class Grinder(val json: String) : Frame()
+
     // ---- Multi-controller "who's driving" (issue 11) ----------------------
 
     /** Primary → secondary, **display-only**: a transient "<who> <did what>" notice
@@ -389,6 +402,7 @@ object FrameCodec {
         is Frame.Notify -> RelayFrame.Notify(address.out(), service.out(), char.out(), hex.out(), t, src?.out())
         is Frame.State -> RelayFrame.State(address.out(), state.out())
         is Frame.Config -> RelayFrame.Config(json.out())
+        is Frame.Grinder -> RelayFrame.Grinder(json.out())
         is Frame.Event -> RelayFrame.Event(text.out())
     }
 
@@ -411,6 +425,7 @@ object FrameCodec {
         is RelayFrame.Notify -> Frame.Notify(address, service, char, hex, t, src)
         is RelayFrame.State -> Frame.State(address, state)
         is RelayFrame.Config -> Frame.Config(json)
+        is RelayFrame.Grinder -> Frame.Grinder(json)
         is RelayFrame.Event -> Frame.Event(text)
     }
 

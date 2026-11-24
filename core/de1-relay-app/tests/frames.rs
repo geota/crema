@@ -205,6 +205,12 @@ fn samples() -> Vec<(&'static str, Frame)> {
             },
         ),
         (
+            "grinder",
+            Frame::Grinder {
+                json: s(r#"{"rev":8,"grinder":{"connected":true,"setting":"480"}}"#),
+            },
+        ),
+        (
             "event",
             Frame::Event {
                 text: s("Sam's phone started a shot"),

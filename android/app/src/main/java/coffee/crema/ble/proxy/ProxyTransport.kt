@@ -89,6 +89,9 @@ class ProxyTransport(
      *  — the secondary applies it so its config mirrors the primary (single-owner
      *  config; the settings-drift fix). Default no-op (tests / read-only path). */
     private val onConfig: (json: String) -> Unit = {},
+    /** Invoked with a [Frame.Grinder]'s JSON: the hub's grinder block on its
+     *  own, between snapshots. Default no-op. */
+    private val onGrinder: (json: String) -> Unit = {},
     /** Invoked with the granted scope ([SCOPE_CONTROL] / [SCOPE_MIRROR]) and the
      *  hub's name from each [Frame.Welcome], so the remote can reflect view-only
      *  state and name its hub before the first config snapshot. Default no-op. */
@@ -237,6 +240,7 @@ class ProxyTransport(
             is Frame.Notify -> channelFor(frame.address, frame.char).trySend(frame.copy(t = clock.rebase(frame.t)))
             is Frame.State -> stateFlow(frame.address).value = parseState(frame.state)
             is Frame.Config -> onConfig(frame.json)
+            is Frame.Grinder -> onGrinder(frame.json)
             is Frame.Event -> onEvent(frame.text)
             else -> Log.w(TAG, "Secondary ignoring unexpected server frame: ${frame::class.simpleName}")
         }

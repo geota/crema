@@ -156,5 +156,21 @@ class ConfigSnapshotGoldenTest {
         val old = coreJson.decodeFromString(ConfigSnapshot.serializer(), JsonObject(full - "grinder").toString())
         kotlin.test.assertNull(old.grinder)
     }
-}
 
+    /** grinder-ble §6.2: the grinder block on its own, in a `Frame.Grinder`
+     *  between snapshots: the same block, numbered from the same counter. */
+    @Test
+    fun `the grinder update is the snapshot's block and a rev`() {
+        val update = GrinderUpdate(rev = 8, grinder = snapshot.grinder)
+        Golden.check("config-snapshot/grinder-update.json", coreJson.encodeToString(GrinderUpdate.serializer(), update))
+        val fixture = coreJson.parseToJsonElement(Golden.require("config-snapshot/grinder-update.json")).jsonObject
+        kotlin.test.assertEquals(setOf("rev", "grinder"), fixture.keys)
+        val schema = coreJson.parseToJsonElement(Golden.require("config-snapshot/schema.json")).jsonObject
+        kotlin.test.assertEquals(schema["grinder"], fixture["grinder"], "the snapshot's block, byte for byte")
+        kotlin.test.assertEquals(update, coreJson.decodeFromString(GrinderUpdate.serializer(), fixture.toString()))
+        // No grinder now: the block goes, and a remote clears its copy.
+        kotlin.test.assertNull(coreJson.decodeFromString(GrinderUpdate.serializer(), """{"rev":9}""").grinder)
+        // The rev is required, as a snapshot's is: without one it is dropped.
+        assertFailsWith<SerializationException> { coreJson.decodeFromString(GrinderUpdate.serializer(), """{"grinder":null}""") }
+    }
+}

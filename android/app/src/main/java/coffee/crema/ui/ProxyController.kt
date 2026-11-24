@@ -154,6 +154,10 @@ class ProxyController(
     private val snapshotConfig: () -> String,
     /** Apply a primary's pushed config snapshot on this secondary (T2). */
     private val applyConfig: (String) -> Unit,
+    /** The hub's grinder block on its own (a `GrinderUpdate`), for [pushGrinder]. */
+    private val snapshotGrinder: () -> String = { "" },
+    /** Apply a hub's grinder block sent between snapshots, on this secondary. */
+    private val applyGrinder: (String) -> Unit = {},
     /** The devices this primary holds (DE1 + scale) for the relay roster. */
     private val roster: () -> List<DeviceInfo>,
     /** Whether (service, char) is snapshot-on-attach vs a counted live stream. */
@@ -1453,6 +1457,8 @@ class ProxyController(
             link, modeScope,
             // Snap this mirror's config to the primary's on every attach (T2).
             onConfig = { applyConfig(it) },
+            // The hub's grinder block between snapshots (grinder-ble §6.2).
+            onGrinder = { applyGrinder(it) },
             // Reflect the granted scope: view-only remotes can't control. The
             // hub's name labels the status line from now on ("Connected
             // through" only now, on Welcome, spec §2.6).
@@ -1742,6 +1748,12 @@ class ProxyController(
      *  single-owner config changes (T2). No-op off-primary. */
     fun pushConfig() {
         relayHub?.pushConfig(snapshotConfig())
+    }
+
+    /** Push only the hub's grinder block to attached mirrors — called when
+     *  the grinder alone changed (grinder-ble §6.2). No-op off-primary. */
+    fun pushGrinder() {
+        relayHub?.pushGrinder(snapshotGrinder())
     }
 
     // ── Persisted proxy config ────────────────────────────────────────────────

@@ -106,6 +106,14 @@ internal class RemoteFixture(private val store: ViewModelStore) {
         VmHarness.idleUntil("the snapshot") { VmHarness.ownState(vm).mirror?.snapshot == numbered }
     }
 
+    /** The hub pushes [grinder] on its own (a `Frame.Grinder`) with its next
+     *  `rev`; waits until the remote shows it. */
+    fun pushGrinder(grinder: coffee.crema.settings.GrinderSnapshot?) {
+        val update = coffee.crema.settings.GrinderUpdate(rev = revs.incrementAndGet(), grinder = grinder)
+        hub.pushGrinder(coreJson.encodeToString(coffee.crema.settings.GrinderUpdate.serializer(), update))
+        VmHarness.idleUntil("the grinder update") { VmHarness.ownState(vm).mirror?.grinderRev == update.rev }
+    }
+
     /** The hub's snapshot counter: the rev of the last snapshot it pushed. */
     private val revs = java.util.concurrent.atomic.AtomicLong(0)
 

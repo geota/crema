@@ -730,6 +730,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         machineActions = machineActions,
         snapshotConfig = { remoteConfig.configSnapshotJson() },
         applyConfig = { remoteConfig.applyRemoteConfig(it) },
+        snapshotGrinder = { remoteConfig.grinderUpdateJson() },
+        applyGrinder = { remoteConfig.applyRemoteGrinder(it) },
         // The devices this primary holds: the DE1, plus the scale when one is
         // connected (issue 04) — its advertised name lets a secondary's scale
         // manager scan-match + re-derive the codec via connectScale.
@@ -1492,14 +1494,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // …and a grinder alone too: its first-reading and silence deadlines.
         viewModelScope.launch { grinder.state.collect { coreTicker.onGrinderState(it) } }
         // A hub sends its grinder block to its remotes when it changes, at
-        // most twice a second (grinder-ble §6.2); a remote's attach gets the
-        // current one with the rest of the snapshot.
+        // most twice a second (grinder-ble §6.2), on its own: a turning collar
+        // doesn't re-send the snapshot and its custom profile. A remote's
+        // attach, and every snapshot, carry the current block too.
         viewModelScope.launch {
             kotlinx.coroutines.flow.combine(ui, _live) { s, l -> grinderSnapshot(s, l.grinderReading) }
                 .distinctUntilChanged()
                 .conflate()
                 .collect {
-                    runCatching { proxy.pushConfig() }
+                    runCatching { proxy.pushGrinder() }
                     kotlinx.coroutines.delay(GRINDER_SNAPSHOT_MIN_MS)
                 }
         }
@@ -2686,6 +2689,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  (AC-20: a normal device or a hub drops it). */
     @androidx.annotation.VisibleForTesting
     internal fun deliverConfigForTest(json: String) = remoteConfig.applyRemoteConfig(json)
+
+    /** Test seam: feed a hub's grinder frame to this device, whatever its role. */
+    @androidx.annotation.VisibleForTesting
+    internal fun deliverGrinderForTest(json: String) = remoteConfig.applyRemoteGrinder(json)
 
     // ── Multi-device pairing (relay v4) ───────────────────────────────────────
     // The pairing ceremony, the pins and the keys live in [ProxyController]

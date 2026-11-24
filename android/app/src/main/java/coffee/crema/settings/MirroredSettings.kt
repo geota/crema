@@ -35,6 +35,11 @@ data class MirroredSettings(
     val frozen: Boolean = false,
     /** The `rev` of the last applied snapshot; reset on each Welcome. */
     val lastRev: Long? = null,
+    /** The hub's grinder block (grinder-ble §6.2): from a snapshot, or from a
+     *  `GrinderUpdate` sent between snapshots; null = none. */
+    val grinder: GrinderSnapshot? = null,
+    /** The `rev` [grinder] came with (a snapshot's or an update's); reset on each Welcome. */
+    val grinderRev: Long? = null,
     /** The last pending edit's generation. */
     val generation: Long = 0L,
 ) {
@@ -48,7 +53,18 @@ data class MirroredSettings(
         pending = pending - unconfirmed,
         unconfirmed = emptySet(),
         lastRev = cfg.rev,
-    )
+    ).let { if (it.isGrinderStale(cfg.rev)) it else it.copy(grinder = cfg.grinder, grinderRev = cfg.rev) }
+
+    /** Apply a hub's grinder block sent on its own. Only the grinder changes:
+     *  it isn't a snapshot, so pending and unconfirmed edits stay. Dropped
+     *  when a newer block, from either frame, is already shown. */
+    fun grinderApplied(update: GrinderUpdate): MirroredSettings =
+        if (isGrinderStale(update.rev)) this else copy(grinder = update.grinder, grinderRev = update.rev)
+
+    /** Whether a grinder block numbered [rev] is older than, or the same as,
+     *  the one shown. A snapshot built before an update but delivered after
+     *  it (an attach's) still applies; only its grinder block is kept back. */
+    fun isGrinderStale(rev: Long): Boolean = grinderRev != null && rev <= grinderRev
 
     /** Whether a snapshot with [rev] is older than, or the same as, the last
      *  applied one. Every v4 snapshot has a rev. */
@@ -60,7 +76,7 @@ data class MirroredSettings(
 
     /** A new Welcome: the hub's `rev` counter may have started over. */
     fun welcomed(hubName: String): MirroredSettings =
-        copy(reconnecting = false, lastRev = null, hubName = hubName.ifBlank { this.hubName })
+        copy(reconnecting = false, lastRev = null, grinderRev = null, hubName = hubName.ifBlank { this.hubName })
 
     /** Show [cmd] until the hub answers; returns the slice and the edit's generation. */
     fun withPending(cmd: MachineCommand.Config): Pair<MirroredSettings, Long> {

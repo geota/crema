@@ -121,6 +121,13 @@ pub enum Frame {
     Config {
         json: String,
     },
+    /// The hub's grinder block on its own (grinder-ble §6.2): an app-level
+    /// JSON blob like [`Frame::Config`]'s, numbered from the same counter, so
+    /// a turning collar doesn't re-send the whole snapshot. A remote that
+    /// doesn't know it skips it and keeps the grinder of the last snapshot.
+    Grinder {
+        json: String,
+    },
     /// A display-only "who drove the machine" notice.
     Event {
         text: String,
@@ -128,7 +135,7 @@ pub enum Frame {
 }
 
 /// Every frame `type` this codec knows.
-pub const FRAME_TYPES: [&str; 19] = [
+pub const FRAME_TYPES: [&str; 20] = [
     "welcome",
     "roster",
     "attach",
@@ -147,6 +154,7 @@ pub const FRAME_TYPES: [&str; 19] = [
     "notify",
     "state",
     "config",
+    "grinder",
     "event",
 ];
 
@@ -206,6 +214,7 @@ impl Frame {
             Self::Notify { .. } => "notify",
             Self::State { .. } => "state",
             Self::Config { .. } => "config",
+            Self::Grinder { .. } => "grinder",
             Self::Event { .. } => "event",
         }
     }
@@ -347,7 +356,7 @@ pub fn encode_frame(frame: &Frame) -> String {
             .long("t", *t)
             .opt("src", src.as_deref()),
         Frame::State { address, state } => w.str("address", address).str("state", state),
-        Frame::Config { json } => w.str("json", json),
+        Frame::Config { json } | Frame::Grinder { json } => w.str("json", json),
         Frame::Event { text } => w.str("text", text),
     }
     .done()
@@ -548,6 +557,9 @@ pub fn decode_frame(text: &str) -> Result<Decoded, FrameError> {
             state: f.str("state")?,
         },
         "config" => Frame::Config {
+            json: f.str("json")?,
+        },
+        "grinder" => Frame::Grinder {
             json: f.str("json")?,
         },
         "event" => Frame::Event {

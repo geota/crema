@@ -20,7 +20,7 @@ class RemoteGrinderFollowTest {
             coffee.crema.settings.ConfigSnapshot.serializer(),
             coffee.crema.ble.proxy.Golden.require("config-snapshot/schema.json"),
         ).copy(grinder = follow?.let { GrinderSnapshot(connected = true, model = "Motto 80", follow = it, setting = "480", grinderName = "Motto 80") })
-        return MainUiState(mirror = MirroredSettings(snapshot = snapshot, hubName = "Kitchen tablet"), mirroringPrimaryName = "Kitchen tablet")
+        return MainUiState(mirror = MirroredSettings(hubName = "Kitchen tablet").applied(snapshot, null, null), mirroringPrimaryName = "Kitchen tablet")
     }
 
     @Test

@@ -57,6 +57,8 @@ class FrameGoldenTest {
         "notify.src" to Frame.Notify(addr, service, stateChar, "0200", 123_457L, src = "DE1_STATE"),
         "state" to Frame.State(addr, "DISCONNECTED"),
         "config" to Frame.Config("""{"activeProfileId":"p-1","stopOnWeight":true}"""),
+        // grinder-ble §6.2: the hub's grinder block on its own, between snapshots.
+        "grinder" to Frame.Grinder("""{"rev":8,"grinder":{"connected":true,"setting":"480"}}"""),
         "event" to Frame.Event("Sam's phone started a shot"),
     )
 

@@ -203,6 +203,15 @@ class RelayHub(
         for (c in clients) if (c.approved) deliver(c, frame)
     }
 
+    /** Push [json], the hub's grinder block on its own (a `GrinderUpdate`), to
+     *  every admitted secondary: what a turning collar changes, without the
+     *  rest of the snapshot (grinder-ble §6.2). */
+    fun pushGrinder(json: String) {
+        if (json.isEmpty()) return
+        val frame = Frame.Grinder(json)
+        for (c in clients) if (c.approved) deliver(c, frame)
+    }
+
     /** Push the primary's current device roster to every connected secondary —
      *  called when a device connects/disconnects (issue 04). The [Frame.Welcome]
      *  roster only covers the set present at attach, so a mirror that joined
