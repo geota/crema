@@ -20,7 +20,7 @@ import kotlin.test.assertTrue
  * library. From #310 A2 Android has the tag filter, and its ties follow the
  * sort's direction (SPEC §6), so every query compares. Pure JVM.
  *
- * Regenerate with `CREMA_REGEN_HISTORY_GOLDEN=1 ./gradlew :app:testDebugUnitTest
+ * Regenerate with `CREMA_REGEN_HISTORY_GOLDEN=1 ./gradlew :app:testFossDebugUnitTest
  * --tests coffee.crema.history.HistoryReferenceGoldenTest`.
  */
 class HistoryReferenceGoldenTest {

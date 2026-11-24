@@ -534,7 +534,7 @@ private class SingleFlight(start: TokenSet) {
         stored = { tokens },
         refreshTokenOf = { it.refreshToken },
         expiring = { false },
-        grant = {
+        grant = { _, _, _ ->
             grants += 1
             TokenSet("fresh", "rt-2", expiresAt = Long.MAX_VALUE)
         },

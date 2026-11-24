@@ -39,6 +39,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   when its bag names another one. The bag's grinder and grind stay stored,
   and come along in exports and backups as before. Groundwork for picking
   a grinder on Brew, with a grind scale per grinder (#488). Android and web.
+- **Two Android APKs: `-foss` and `-play`** — each release now ships
+  `crema-<version>-foss.apk`, with no Google code, for F-Droid and
+  IzzyOnDroid, and `crema-<version>-play.apk`, which will sign in to Google
+  Drive through Google Play services. Both are the same app with the same
+  signature, so either installs over the other and keeps your data. For now
+  both sign in to Drive through the browser, as before. The release APK was
+  `crema-<version>-release.apk` (#336).
 
 ### Fixed
 

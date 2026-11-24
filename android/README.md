@@ -98,7 +98,7 @@ model types — the two are complementary and intentionally co-located.
 The build toolchain is **Gradle 9.3.1 / Android Gradle Plugin 9.1.1 /
 Kotlin 2.2.20**, and the Rust crate is built by the **Mullvad fork** of the
 rust-android plugin (`net.mullvad.rust-android` 0.10.1). A first successful
-on-device build (`./gradlew :app:installDebug`) validates this toolchain
+on-device build (`./gradlew :app:installFossDebug`) validates this toolchain
 migration end to end.
 
 ### One-time setup
@@ -154,7 +154,7 @@ With a DE1 powered on and the tablet (or phone) connected over ADB:
 
 ```sh
 cd android
-./gradlew :app:installDebug
+./gradlew :app:installFossDebug
 ```
 
 This runs, in order:
@@ -174,6 +174,22 @@ This runs, in order:
 
 Then launch the app and tap **Connect to DE1**. Grant the Bluetooth permissions
 when prompted.
+
+### Two distributions: `foss` and `play`
+
+The app builds in two flavors of one `distribution` dimension (#336), with
+the same app ID and signature:
+
+| Flavor | Ships to | Google Drive sign-in |
+|---|---|---|
+| `foss` (the default) | F-Droid, IzzyOnDroid, GitHub (`-foss.apk`) | the browser (PKCE, custom URI scheme) |
+| `play` | Google Play, GitHub (`-play.apk`, the AAB, nightly) | the browser for now; Google Play services next |
+
+Only `src/play` may use Google Play services, Firebase or Play code:
+`./gradlew :app:checkFossHasNoGoogle` fails if anything in `foss`'s release
+classpath, `src/main` or `src/foss` does. Variants are `fossDebug`,
+`playRelease`, `playNightly` and so on, so tasks name the flavor:
+`:app:testFossDebugUnitTest`, `:app:installPlayDebug`.
 
 ### Manual fallback (no rust-android plugin)
 

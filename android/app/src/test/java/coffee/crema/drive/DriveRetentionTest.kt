@@ -168,7 +168,7 @@ class DriveRetentionTest {
         backupZip = { null },
         backupFileName = { "b" },
         applyRestore = { file, wipe, _ -> restored += file.readText() to wipe },
-        refreshToken = { error("no refresh expected") },
+        authorizers = listOf(BrowserAuthorizer("cid", json, refresh = { error("no refresh expected") })),
     ).also {
         runBlocking {
             store.load()
@@ -194,7 +194,7 @@ class DriveRetentionTest {
             backupZip = { BackupZip(zipFile(), BackupCounts(1u, 1u)) },
             backupFileName = { "crema-backup-tablet-20261108-0800.crema.zip" },
             applyRestore = { _, _, _ -> },
-            refreshToken = { error("no refresh expected") },
+            authorizers = listOf(BrowserAuthorizer("cid", json, refresh = { error("no refresh expected") })),
             restoreRunning = { restoring },
         ).also { runBlocking { store.load(); store.save(DriveState(tokens = tokens)); it.load() } }
         sync.backupNow()
@@ -246,7 +246,7 @@ class DriveRetentionTest {
             quickMark = { mark },
             backupFileName = { "crema-backup-tablet-20261106-0800.crema.zip" },
             applyRestore = { _, _, _ -> },
-            refreshToken = { error("no refresh expected") },
+            authorizers = listOf(BrowserAuthorizer("cid", json, refresh = { error("no refresh expected") })),
             autoBackupBlocked = { blocked },
             damageByStore = { damage },
             unmetered = { onWifi },
@@ -524,7 +524,7 @@ class DriveRetentionTest {
         val sync = DriveSync(
             store, json, scope, "cid",
             notify = {}, backupZip = { null }, backupFileName = { "b" }, applyRestore = { _, _, _ -> },
-            refreshToken = { error("no refresh expected") },
+            authorizers = listOf(BrowserAuthorizer("cid", json, refresh = { error("no refresh expected") })),
         )
         sync.load()
         sync.restoreCompleted(written, from)

@@ -73,11 +73,16 @@ class DriveOwnStateTest {
         },
         backupFileName = { "b" },
         applyRestore = { _, _, _ -> },
-        exchangeCode = { code, verifier ->
-            exchanged += "$code/$verifier"
-            DriveTokenSet(accessToken = "new", refreshToken = "new-r", expiresAt = Long.MAX_VALUE)
-        },
-        refreshToken = { error("no refresh expected") },
+        authorizers = listOf(
+            BrowserAuthorizer(
+                "cid", json,
+                exchange = { code, verifier ->
+                    exchanged += "$code/$verifier"
+                    DriveTokenSet(accessToken = "new", refreshToken = "new-r", expiresAt = Long.MAX_VALUE)
+                },
+                refresh = { error("no refresh expected") },
+            ),
+        ),
     )
 
     @After

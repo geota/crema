@@ -15,8 +15,11 @@
 # )
 #
 # Outputs:
-#   • Android  — a debug-signed installable APK (always) + a release-signed APK
-#                (when the keystore secrets below are set; otherwise unsigned).
+#   • Android  — a debug-signed installable APK (always, `play`) + release-signed
+#                `-foss.apk` and `-play.apk` and the Play AAB (when the keystore
+#                secrets below are set; otherwise unsigned). Two distributions
+#                (#336): `foss` carries no Google code (F-Droid, IzzyOnDroid);
+#                `play` may use Google Play services (Google Play).
 #   • Web PWA  — the static bundle (web/build) zipped, plus a `wrangler pages
 #                deploy` to Cloudflare (when the CF secrets below are set).
 #                Its version is stamped from the tag at build time, the same as
@@ -28,6 +31,12 @@
 #     KEYSTORE_PASSWORD    keystore (store) password
 #     KEY_ALIAS            key alias
 #     KEY_PASSWORD         key password
+#   Android debug signing (one fixed debug key, so one OAuth client fits every
+#   published debug APK; never the release key):
+#     DEBUG_KEYSTORE_BASE64   base64 of the debug keystore
+#     DEBUG_KEYSTORE_PASSWORD keystore password
+#     DEBUG_KEY_ALIAS         key alias
+#     DEBUG_KEY_PASSWORD      key password
 #   Web build + Cloudflare deploy:
 #     VITE_VISUALIZER_CLIENT_ID   prod Doorkeeper client UID (baked into the bundle)
 #     CLOUDFLARE_API_TOKEN        token with Pages:Edit
@@ -206,7 +215,7 @@ jobs:
           command: pages deploy web/build --project-name crema --branch main
 
   # ─────────────────────────────────────────────────────────────────────
-  # Android — build the APKs + a Play AAB. The Rust de1-ffi cdylib (arm64) is
+  # Android — build the APKs (`foss`, `play`) + a Play AAB (`play`). The Rust de1-ffi cdylib (arm64) is
   # built by the Mullvad rust-android Gradle plugin + UniFFI bindgen, so the job
   # needs the NDK, the android Rust target, and cargo on PATH. Produces a debug-
   # signed APK always; a release APK + AAB signed iff the keystore secrets are set.
@@ -261,12 +270,30 @@ jobs:
             echo "No KEYSTORE_BASE64 — release APK will be UNSIGNED (debug APK still installable)."
           fi
 
-      - name: Build debug APK + release APK & AAB
+      # The fixed debug key (#336 §6): its SHA-1 is registered on a Drive OAuth
+      # client, so the published debug APK can sign in. Absent => the runner's
+      # throwaway debug key, as before.
+      - name: Decode debug keystore (if configured)
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
+            echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/debug.keystore"
+            echo "DEBUG_KEYSTORE_FILE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
+            echo "Debug keystore decoded — the debug APK will carry the fixed debug key."
+          else
+            echo "No DEBUG_KEYSTORE_BASE64 — the debug APK is signed with this runner's throwaway key."
+          fi
+
+      - name: Build debug APK + release APKs & AAB
         working-directory: android
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          DEBUG_KEYSTORE_PASSWORD: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
+          DEBUG_KEY_ALIAS: ${{ secrets.DEBUG_KEY_ALIAS }}
+          DEBUG_KEY_PASSWORD: ${{ secrets.DEBUG_KEY_PASSWORD }}
           # Prod Android OAuth clients — the release buildType falls back to "" (+
           # the "unconfigured" Drive redirect scheme) without them, leaving
           # Visualizer / Google Drive sign-in dead in the shipped APK/AAB.
@@ -275,25 +302,27 @@ jobs:
           VERSION_NAME: ${{ needs.version.outputs.name }}
           VERSION_CODE: ${{ needs.version.outputs.code }}
         run: |
-          # Debug APK — fast debug-profile native lib (installable test build).
-          ./gradlew :app:assembleDebug \
+          # Debug APK — fast debug-profile native lib (installable test build),
+          # `play`, so it carries every Drive sign-in way.
+          ./gradlew :app:assemblePlayDebug \
             -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE" \
             --no-daemon --stacktrace
-          # Release APK + Play AAB — fully optimized release-profile native lib
-          # (LTO + opt-3), signed when a keystore is configured. One invocation so
-          # the cargo release build + bindgen run once for both outputs.
-          ./gradlew :app:assembleRelease :app:bundleRelease -PcargoProfile=release \
+          # Release APKs (`foss`, `play`) + Play AAB — fully optimized
+          # release-profile native lib (LTO + opt-3), signed when a keystore is
+          # configured. One invocation so the cargo release build + bindgen run
+          # once for every output.
+          ./gradlew :app:assembleFossRelease :app:assemblePlayRelease :app:bundlePlayRelease -PcargoProfile=release \
             -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE" \
             --no-daemon --stacktrace
 
-      # AC-54: the shipped APK's and Play AAB's libde1_ffi.so and their Kotlin
-      # bindings carry no deterministic relay test constructors. Fails if
-      # neither artifact is there, so a renamed output can't skip the check.
+      # AC-54: the shipped APKs' and Play AAB's libde1_ffi.so and their Kotlin
+      # bindings carry no deterministic relay test constructors. Fails if any
+      # artifact is missing, so a renamed output can't skip the check.
       - name: Relay release-symbols check
         run: |
           shopt -s nullglob
-          artifacts=(android/app/build/outputs/apk/release/*.apk android/app/build/outputs/bundle/release/*.aab)
-          [ "${#artifacts[@]}" -ge 2 ] || { echo "::error::expected a release APK and AAB, found: ${artifacts[*]}"; exit 1; }
+          artifacts=(android/app/build/outputs/apk/foss/release/*.apk android/app/build/outputs/apk/play/release/*.apk android/app/build/outputs/bundle/playRelease/*.aab)
+          [ "${#artifacts[@]}" -ge 3 ] || { echo "::error::expected the foss and play release APKs and the AAB, found: ${artifacts[*]}"; exit 1; }
           for artifact in "${artifacts[@]}"; do
             scripts/relay-release-symbols-check.sh apk "$artifact" android/app/build/generated/uniffi
           done
@@ -303,14 +332,17 @@ jobs:
           VERSION_NAME: ${{ needs.version.outputs.name }}
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk "dist/crema-${VERSION_NAME}-debug.apk"
-          for rel in android/app/build/outputs/apk/release/*.apk; do
-            [ -e "$rel" ] || continue
-            cp "$rel" "dist/crema-${VERSION_NAME}-release.apk"
-            # v4 signature sidecar (incremental install / Obtainium), when present.
-            [ -f "$rel.idsig" ] && cp "$rel.idsig" "dist/crema-${VERSION_NAME}-release.apk.idsig" || true
+          cp android/app/build/outputs/apk/play/debug/app-play-debug.apk "dist/crema-${VERSION_NAME}-debug.apk"
+          # crema-<v>-foss.apk (F-Droid, IzzyOnDroid) and crema-<v>-play.apk.
+          for flavor in foss play; do
+            for rel in android/app/build/outputs/apk/$flavor/release/*.apk; do
+              [ -e "$rel" ] || continue
+              cp "$rel" "dist/crema-${VERSION_NAME}-$flavor.apk"
+              # v4 signature sidecar (incremental install / Obtainium), when present.
+              [ -f "$rel.idsig" ] && cp "$rel.idsig" "dist/crema-${VERSION_NAME}-$flavor.apk.idsig" || true
+            done
           done
-          for aab in android/app/build/outputs/bundle/release/*.aab; do
+          for aab in android/app/build/outputs/bundle/playRelease/*.aab; do
             [ -e "$aab" ] && cp "$aab" "dist/crema-${VERSION_NAME}.aab"
           done
           # SHA-256 checksums next to each APK / AAB.
@@ -343,7 +375,7 @@ jobs:
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: dev.maceiras.crema
-          releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
+          releaseFiles: android/app/build/outputs/bundle/playRelease/app-play-release.aab
           track: ${{ vars.PLAY_TRACK || 'internal' }}
           status: ${{ vars.PLAY_STATUS || 'draft' }}
           whatsNewDirectory: android/distribution/whatsnew

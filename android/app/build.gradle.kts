@@ -50,6 +50,20 @@ val releaseKeyPassword: String? = System.getenv("KEY_PASSWORD") ?: localProps.ge
 val hasReleaseSigning = releaseKeystoreFile != null &&
     releaseStorePassword != null && releaseKeyAlias != null && releaseKeyPassword != null
 
+// Fixed debug signing (#336 §6): release.yml decodes a debug keystore from a CI
+// secret and exports DEBUG_KEYSTORE_FILE / DEBUG_KEYSTORE_PASSWORD /
+// DEBUG_KEY_ALIAS / DEBUG_KEY_PASSWORD, so every published debug APK carries one
+// SHA-1, which one Android OAuth client is registered for. Never the release key:
+// a debuggable build with the release app ID and signature could install over a
+// user's app and expose its data. Without them (local builds, CI's PR job) AGP's
+// own debug key signs, as before: ~/.android/debug.keystore locally.
+val debugKeystoreFile: File? = System.getenv("DEBUG_KEYSTORE_FILE")?.let { rootProject.file(it) }?.takeIf { it.exists() }
+val debugStorePassword: String? = System.getenv("DEBUG_KEYSTORE_PASSWORD")
+val debugKeyAlias: String? = System.getenv("DEBUG_KEY_ALIAS")
+val debugKeyPassword: String? = System.getenv("DEBUG_KEY_PASSWORD")
+val hasFixedDebugSigning = debugKeystoreFile != null &&
+    debugStorePassword != null && debugKeyAlias != null && debugKeyPassword != null
+
 android {
     namespace = "coffee.crema"
     // 37.1, the minor SDK release: Compose 1.13 (BOM 2026.11) needs it
@@ -89,7 +103,7 @@ android {
         manifestPlaceholders["googleRedirectScheme"] = "com.googleusercontent.apps.unconfigured"
     }
 
-    // JVM unit tests (`./gradlew :app:testDebugUnitTest`) for the shell logic
+    // JVM unit tests (`./gradlew :app:testFossDebugUnitTest`) for the shell logic
     // — wire assembly, fingerprint-skip decisions, formatters. They never touch
     // BLE (that needs a device); the few that need the core load its HOST build
     // (cargoBuildHostCore). Stubbed android.* calls return defaults rather than
@@ -140,9 +154,43 @@ android {
         }
     }
 
+    // Two distributions of the same app (#336): `foss` (F-Droid, IzzyOnDroid,
+    // GitHub) carries no Google code and signs in to Drive through the browser;
+    // `play` (Google Play, GitHub) may add Google's Authorization API. The
+    // variant is chosen by which source set compiles (src/foss, src/play): no
+    // BuildConfig.FLAVOR branches. Both keep `dev.maceiras.crema`, as the OAuth
+    // clients are keyed on package + SHA-1 and a user can swap one for the
+    // other keeping their data. The shared manifest keeps the Drive redirect
+    // intent filter, which both need.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("foss") {
+            dimension = "distribution"
+            isDefault = true
+        }
+        create("play") {
+            dimension = "distribution"
+        }
+    }
+
+    // F-Droid and IzzyOnDroid reject the encrypted dependency block AGP signs
+    // into an APK; Play reads it from the bundle.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = true
+    }
+
     // Created only when a keystore is available (CI env or local.properties) — see
     // the `hasReleaseSigning` wiring above the `android {}` block.
     signingConfigs {
+        if (hasFixedDebugSigning) {
+            getByName("debug") {
+                storeFile = debugKeystoreFile
+                storePassword = debugStorePassword
+                keyAlias = debugKeyAlias
+                keyPassword = debugKeyPassword
+            }
+        }
         if (hasReleaseSigning) {
             create("release") {
                 storeFile = releaseKeystoreFile
@@ -738,4 +786,75 @@ androidComponents {
             GenerateUniffiBindings::outputDirectory,
         )
     }
+}
+
+// ---------------------------------------------------------------------------
+// The F-Droid guard (#336 §7): the `foss` build carries no Google code
+// ---------------------------------------------------------------------------
+// F-Droid and IzzyOnDroid take only the `foss` APK, and promise no Google Play
+// services. This fails when the shipped foss release classpath holds any module
+// from Google's proprietary groups, or when a source file in `src/main` or
+// `src/foss` (compiled into foss) imports one. Only `src/play` may. CI runs it.
+val googleOnlyPrefixes = listOf("com.google.android.gms", "com.google.firebase", "com.google.android.play")
+
+abstract class CheckFossHasNoGoogle : DefaultTask() {
+    /** Every module the foss release build resolves, as `group:name:version`. */
+    @get:Input
+    abstract val modules: ListProperty<String>
+
+    /** The sources compiled into foss. */
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sources: ConfigurableFileCollection
+
+    @get:Input
+    abstract val prefixes: ListProperty<String>
+
+    @TaskAction
+    fun check() {
+        val prefixes = prefixes.get()
+        fun google(name: String) = prefixes.any { name == it || name.startsWith("$it.") || name.startsWith("$it:") }
+        val badModules = modules.get().filter(::google)
+        val importLine = Regex("""^\s*import\s+([\w.]+)""")
+        val badImports = sources.files.sorted().flatMap { file ->
+            file.readLines().mapIndexedNotNull { i, line ->
+                importLine.find(line)?.groupValues?.get(1)?.takeIf(::google)?.let { "${file.path}:${i + 1}: $it" }
+            }
+        }
+        if (badModules.isEmpty() && badImports.isEmpty()) return
+        throw GradleException(
+            buildString {
+                appendLine("The foss build must carry no Google Play services, Firebase or Play code (#336).")
+                badModules.forEach { appendLine("  fossReleaseRuntimeClasspath: $it") }
+                badImports.forEach { appendLine("  $it") }
+                append("Move it to src/play and a playImplementation dependency.")
+            },
+        )
+    }
+}
+
+tasks.register<CheckFossHasNoGoogle>("checkFossHasNoGoogle") {
+    description = "Fail if the foss build would carry Google Play services, Firebase or Play code."
+    group = "verification"
+    prefixes.set(googleOnlyPrefixes)
+    modules.set(
+        configurations.named("fossReleaseRuntimeClasspath").flatMap { cfg ->
+            cfg.incoming.resolutionResult.rootComponent.map { root ->
+                val seen = mutableSetOf<String>()
+                fun walk(c: org.gradle.api.artifacts.result.ResolvedComponentResult) {
+                    for (dep in c.dependencies) {
+                        val next = (dep as? org.gradle.api.artifacts.result.ResolvedDependencyResult)?.selected ?: continue
+                        val id = next.moduleVersion?.let { "${it.group}:${it.name}:${it.version}" } ?: next.id.displayName
+                        if (seen.add(id)) walk(next)
+                    }
+                }
+                walk(root)
+                seen.sorted()
+            }
+        },
+    )
+    sources.from(
+        fileTree("src/main") { include("**/*.kt", "**/*.java") },
+        fileTree("src/foss") { include("**/*.kt", "**/*.java") },
+    )
 }

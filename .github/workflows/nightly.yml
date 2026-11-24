@@ -113,7 +113,8 @@ jobs:
       # Release cargo profile: the nightly ships to users (Obtainium prerelease,
       # same package and signature as stable), and the debug profile's overflow
       # checks turn any wrapped integer into a crash only nightly users see
-      # (cohort review 2026-10-25, report 01 P1-3).
+      # (cohort review 2026-10-25, report 01 P1-3). The `play` distribution
+      # (#336), like the release's `-play.apk`: it has every Drive sign-in way.
       - name: Build nightly APK
         working-directory: android
         env:
@@ -129,7 +130,7 @@ jobs:
           VERSION_NAME: ${{ steps.v.outputs.name }}
           VERSION_CODE: ${{ steps.v.outputs.code }}
         run: |
-          ./gradlew :app:assembleNightly -PcargoProfile=release \
+          ./gradlew :app:assemblePlayNightly -PcargoProfile=release \
             -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE" \
             --no-daemon --stacktrace
 
@@ -138,18 +139,18 @@ jobs:
       - name: Relay release-symbols check
         run: |
           scripts/relay-release-symbols-check.sh apk \
-            android/app/build/outputs/apk/nightly/app-nightly.apk android/app/build/generated/uniffi
+            android/app/build/outputs/apk/play/nightly/app-play-nightly.apk android/app/build/generated/uniffi
 
       - name: Collect APK
         env:
           VERSION_NAME: ${{ steps.v.outputs.name }}
         run: |
           mkdir -p dist
-          out=android/app/build/outputs/apk/nightly
+          out=android/app/build/outputs/apk/play/nightly
           base="crema-nightly-${VERSION_NAME}"
-          cp "$out/app-nightly.apk" "dist/$base.apk"
+          cp "$out/app-play-nightly.apk" "dist/$base.apk"
           # v4 signature sidecar (incremental install / Obtainium), when present.
-          [ -f "$out/app-nightly.apk.idsig" ] && cp "$out/app-nightly.apk.idsig" "dist/$base.apk.idsig" || true
+          [ -f "$out/app-play-nightly.apk.idsig" ] && cp "$out/app-play-nightly.apk.idsig" "dist/$base.apk.idsig" || true
           # SHA-256 checksum for verification, next to the APK.
           ( cd dist && sha256sum "$base.apk" > "$base.apk.sha256" )
           ls -la dist
