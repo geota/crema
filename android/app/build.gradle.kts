@@ -407,6 +407,12 @@ dependencies {
     // nothing resolved. Keep -android and -test on the same version.
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
+    // `play` only (#336): Google's Authorization API for Drive sign-in
+    // (PlayAuthorizer, src/play), and Task.await for it, on the coroutines
+    // version above. Proprietary, so never in `foss`: checkFossHasNoGoogle.
+    "playImplementation"("com.google.android.gms:play-services-auth:22.0.0")
+    "playImplementation"("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.11.0")
+
     // The de1-app `CoreOutput` JSON is deserialized with kotlinx.serialization.
     // The generated `core/bindings/crema-core.kt` types are @Serializable.
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.13.0")
@@ -792,17 +798,27 @@ androidComponents {
 // The F-Droid guard (#336 §7): the `foss` build carries no Google code
 // ---------------------------------------------------------------------------
 // F-Droid and IzzyOnDroid take only the `foss` APK, and promise no Google Play
-// services. This fails when the shipped foss release classpath holds any module
-// from Google's proprietary groups, or when a source file in `src/main` or
-// `src/foss` (compiled into foss) imports one. Only `src/play` may. CI runs it.
-val googleOnlyPrefixes = listOf("com.google.android.gms", "com.google.firebase", "com.google.android.play")
+// services. This fails when the foss release compile or runtime classpath holds
+// any module from Google's proprietary groups (a `compileOnly` one too), or when
+// a source file any foss variant can compile imports one: every `src/*` but
+// `src/play*` and the test source sets. Only `src/play` may. CI runs it, and
+// every foss release build depends on it.
+val googleOnlyPrefixes = listOf(
+    "com.google.android.gms",
+    "com.google.firebase",
+    "com.google.android.play",
+    "com.google.mlkit",
+    "com.google.android.libraries",
+    "com.google.android.datatransport",
+    "com.google.android.ump",
+)
 
 abstract class CheckFossHasNoGoogle : DefaultTask() {
-    /** Every module the foss release build resolves, as `group:name:version`. */
+    /** Every module the foss release build compiles against or ships, as `classpath: group:name:version`. */
     @get:Input
     abstract val modules: ListProperty<String>
 
-    /** The sources compiled into foss. */
+    /** The sources a foss variant can compile. */
     @get:InputFiles
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val sources: ConfigurableFileCollection
@@ -814,7 +830,7 @@ abstract class CheckFossHasNoGoogle : DefaultTask() {
     fun check() {
         val prefixes = prefixes.get()
         fun google(name: String) = prefixes.any { name == it || name.startsWith("$it.") || name.startsWith("$it:") }
-        val badModules = modules.get().filter(::google)
+        val badModules = modules.get().filter { google(it.substringAfter(": ")) }
         val importLine = Regex("""^\s*import\s+([\w.]+)""")
         val badImports = sources.files.sorted().flatMap { file ->
             file.readLines().mapIndexedNotNull { i, line ->
@@ -825,7 +841,7 @@ abstract class CheckFossHasNoGoogle : DefaultTask() {
         throw GradleException(
             buildString {
                 appendLine("The foss build must carry no Google Play services, Firebase or Play code (#336).")
-                badModules.forEach { appendLine("  fossReleaseRuntimeClasspath: $it") }
+                badModules.forEach { appendLine("  $it") }
                 badImports.forEach { appendLine("  $it") }
                 append("Move it to src/play and a playImplementation dependency.")
             },
@@ -833,28 +849,36 @@ abstract class CheckFossHasNoGoogle : DefaultTask() {
     }
 }
 
-tasks.register<CheckFossHasNoGoogle>("checkFossHasNoGoogle") {
+/** Every module [configuration] resolves, as `configuration: group:name:version`. */
+fun resolvedModules(configuration: String): Provider<List<String>> =
+    configurations.named(configuration).flatMap { cfg ->
+        cfg.incoming.resolutionResult.rootComponent.map { root ->
+            val seen = mutableSetOf<String>()
+            fun walk(c: org.gradle.api.artifacts.result.ResolvedComponentResult) {
+                for (dep in c.dependencies) {
+                    val next = (dep as? org.gradle.api.artifacts.result.ResolvedDependencyResult)?.selected ?: continue
+                    val id = next.moduleVersion?.let { "${it.group}:${it.name}:${it.version}" } ?: next.id.displayName
+                    if (seen.add(id)) walk(next)
+                }
+            }
+            walk(root)
+            seen.sorted().map { "$configuration: $it" }
+        }
+    }
+
+val checkFossHasNoGoogle: TaskProvider<CheckFossHasNoGoogle> = tasks.register<CheckFossHasNoGoogle>("checkFossHasNoGoogle") {
     description = "Fail if the foss build would carry Google Play services, Firebase or Play code."
     group = "verification"
     prefixes.set(googleOnlyPrefixes)
-    modules.set(
-        configurations.named("fossReleaseRuntimeClasspath").flatMap { cfg ->
-            cfg.incoming.resolutionResult.rootComponent.map { root ->
-                val seen = mutableSetOf<String>()
-                fun walk(c: org.gradle.api.artifacts.result.ResolvedComponentResult) {
-                    for (dep in c.dependencies) {
-                        val next = (dep as? org.gradle.api.artifacts.result.ResolvedDependencyResult)?.selected ?: continue
-                        val id = next.moduleVersion?.let { "${it.group}:${it.name}:${it.version}" } ?: next.id.displayName
-                        if (seen.add(id)) walk(next)
-                    }
-                }
-                walk(root)
-                seen.sorted()
-            }
+    modules.addAll(resolvedModules("fossReleaseCompileClasspath"))
+    modules.addAll(resolvedModules("fossReleaseRuntimeClasspath"))
+    sources.from(
+        fileTree("src") {
+            include("**/*.kt", "**/*.java")
+            exclude("play*/**", "test*/**", "androidTest*/**")
         },
     )
-    sources.from(
-        fileTree("src/main") { include("**/*.kt", "**/*.java") },
-        fileTree("src/foss") { include("**/*.kt", "**/*.java") },
-    )
 }
+
+// A local `assembleFossRelease` trips it too, not only CI.
+tasks.matching { it.name == "preFossReleaseBuild" }.configureEach { dependsOn(checkFossHasNoGoogle) }

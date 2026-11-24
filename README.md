@@ -106,7 +106,7 @@ Everything below ships in the web app and the Android app (tablet and phone) unl
 **Stable**: tagged releases.
 
 - Download the APK from the [latest release](https://github.com/geota/crema/releases/latest). See the **[changelog](CHANGELOG.md)** for what each release includes. Each release has two:
-  - **`crema-<version>-play.apk`**: for phones with Google Play services. Google Drive sign-in will use them; for now it opens the browser, as in `-foss`.
+  - **`crema-<version>-play.apk`**: for phones with Google Play services (or microG). Google Drive sign-in goes through them, and opens the browser where they don't work. Settings → Google Drive can also sign in through the browser instead.
   - **`crema-<version>-foss.apk`**: no Google code at all, the build F-Droid and IzzyOnDroid ship. Google Drive sign-in opens the browser.
 
   Both are the same app with the same signature, so either installs over the other and keeps your data. Obtainium asks which one to follow.
