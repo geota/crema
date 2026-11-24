@@ -15,11 +15,12 @@
 # )
 #
 # Outputs:
-#   • Android  — a debug-signed installable APK (always, `play`) + release-signed
-#                `-foss.apk` and `-play.apk` and the Play AAB (when the keystore
-#                secrets below are set; otherwise unsigned). Two distributions
-#                (#336): `foss` carries no Google code (F-Droid, IzzyOnDroid);
-#                `play` may use Google Play services (Google Play).
+#   • Android  — release-signed `-foss.apk` and `-play.apk` and the Play AAB
+#                (when the keystore secrets below are set; otherwise unsigned).
+#                Two distributions (#336): `foss` carries no Google code
+#                (F-Droid, IzzyOnDroid); `play` may use Google Play services
+#                (Google Play). No debug APK: the test build is the nightly
+#                (release-signed, `play`).
 #   • Web PWA  — the static bundle (web/build) zipped, plus a `wrangler pages
 #                deploy` to Cloudflare (when the CF secrets below are set).
 #                Its version is stamped from the tag at build time, the same as
@@ -31,12 +32,6 @@
 #     KEYSTORE_PASSWORD    keystore (store) password
 #     KEY_ALIAS            key alias
 #     KEY_PASSWORD         key password
-#   Android debug signing (one fixed debug key, so one OAuth client fits every
-#   published debug APK; never the release key):
-#     DEBUG_KEYSTORE_BASE64   base64 of the debug keystore
-#     DEBUG_KEYSTORE_PASSWORD keystore password
-#     DEBUG_KEY_ALIAS         key alias
-#     DEBUG_KEY_PASSWORD      key password
 #   Web build + Cloudflare deploy:
 #     VITE_VISUALIZER_CLIENT_ID   prod Doorkeeper client UID (baked into the bundle)
 #     CLOUDFLARE_API_TOKEN        token with Pages:Edit
@@ -217,8 +212,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   # Android — build the APKs (`foss`, `play`) + a Play AAB (`play`). The Rust de1-ffi cdylib (arm64) is
   # built by the Mullvad rust-android Gradle plugin + UniFFI bindgen, so the job
-  # needs the NDK, the android Rust target, and cargo on PATH. Produces a debug-
-  # signed APK always; a release APK + AAB signed iff the keystore secrets are set.
+  # needs the NDK, the android Rust target, and cargo on PATH. The release APKs +
+  # AAB are signed iff the keystore secrets are set.
   # ─────────────────────────────────────────────────────────────────────
   android:
     name: android (apk + aab)
@@ -267,72 +262,15 @@ jobs:
             echo "KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
             echo "Release keystore decoded — release APK will be signed."
           else
-            echo "No KEYSTORE_BASE64 — release APK will be UNSIGNED (debug APK still installable)."
+            echo "No KEYSTORE_BASE64 — release APK will be UNSIGNED."
           fi
 
-      # The fixed debug key (#336 §6): its SHA-1 is registered on a Drive OAuth
-      # client, so the published debug APK can sign in. Absent => the runner's
-      # throwaway debug key, as before.
-      # It must never hold the release key: a debuggable build with the release
-      # app ID and signature would install over users' apps and expose their
-      # data. So the SHA-1s are compared, and a run with only some of the four
-      # DEBUG_* secrets fails, naming the missing ones.
-      - name: Decode debug keystore (if configured)
-        env:
-          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
-          DEBUG_KEYSTORE_PASSWORD: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
-          DEBUG_KEY_ALIAS: ${{ secrets.DEBUG_KEY_ALIAS }}
-          DEBUG_KEY_PASSWORD: ${{ secrets.DEBUG_KEY_PASSWORD }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-        run: |
-          missing=()
-          for name in DEBUG_KEYSTORE_BASE64 DEBUG_KEYSTORE_PASSWORD DEBUG_KEY_ALIAS DEBUG_KEY_PASSWORD; do
-            [ -n "${!name}" ] || missing+=("$name")
-          done
-          if [ "${#missing[@]}" -eq 4 ]; then
-            echo "No DEBUG_KEYSTORE_BASE64 — the debug APK is signed with this runner's throwaway key."
-            exit 0
-          fi
-          if [ "${#missing[@]}" -gt 0 ]; then
-            echo "::error::The debug signing secrets are only partly set; missing: ${missing[*]}. Set all four, or none."
-            exit 1
-          fi
-          echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/debug.keystore"
-          sha1() { keytool -list -v -keystore "$1" -storepass "$2" -alias "$3" 2>/dev/null | awk '/SHA1:/ { print $2; exit }'; }
-          debug_sha1=$(sha1 "$RUNNER_TEMP/debug.keystore" "$DEBUG_KEYSTORE_PASSWORD" "$DEBUG_KEY_ALIAS")
-          if [ -z "$debug_sha1" ]; then
-            echo "::error::Couldn't read the debug key: check DEBUG_KEYSTORE_BASE64, DEBUG_KEYSTORE_PASSWORD and DEBUG_KEY_ALIAS."
-            exit 1
-          fi
-          # The public SHA-1s of the release key and Play's app-signing key
-          # (.scratch/drive-auth/SPEC.md §6): checked even with no release keystore here.
-          for shipped in CB:87:64:BA:12:BC:77:46:7E:67:BE:AE:70:9C:F8:45:52:93:B5:D4 \
-                         56:7F:98:95:A6:25:47:8B:88:20:E7:27:97:16:F9:C4:B1:F0:67:68; do
-            if [ "$debug_sha1" = "$shipped" ]; then
-              echo "::error::The debug keystore holds a key that signs shipped builds. Never sign a debug build with it."
-              exit 1
-            fi
-          done
-          if [ -n "${KEYSTORE_FILE:-}" ]; then
-            release_sha1=$(sha1 "$KEYSTORE_FILE" "$KEYSTORE_PASSWORD" "$KEY_ALIAS")
-            if [ -z "$release_sha1" ] || [ "$debug_sha1" = "$release_sha1" ]; then
-              echo "::error::The debug keystore holds the release key (or the release key couldn't be read to compare). Never sign a debug build with the release key."
-              exit 1
-            fi
-          fi
-          echo "DEBUG_KEYSTORE_FILE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
-          echo "Debug keystore decoded — the debug APK will carry the fixed debug key."
-
-      - name: Build debug APK + release APKs & AAB
+      - name: Build release APKs & AAB
         working-directory: android
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          DEBUG_KEYSTORE_PASSWORD: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
-          DEBUG_KEY_ALIAS: ${{ secrets.DEBUG_KEY_ALIAS }}
-          DEBUG_KEY_PASSWORD: ${{ secrets.DEBUG_KEY_PASSWORD }}
           # Prod Android OAuth clients — the release buildType falls back to "" (+
           # the "unconfigured" Drive redirect scheme) without them, leaving
           # Visualizer / Google Drive sign-in dead in the shipped APK/AAB.
@@ -341,11 +279,6 @@ jobs:
           VERSION_NAME: ${{ needs.version.outputs.name }}
           VERSION_CODE: ${{ needs.version.outputs.code }}
         run: |
-          # Debug APK — fast debug-profile native lib (installable test build),
-          # `play`, so it carries every Drive sign-in way.
-          ./gradlew :app:assemblePlayDebug \
-            -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE" \
-            --no-daemon --stacktrace
           # Release APKs (`foss`, `play`) + Play AAB — fully optimized
           # release-profile native lib (LTO + opt-3), signed when a keystore is
           # configured. One invocation per flavor: compiling both at once ran
@@ -375,7 +308,6 @@ jobs:
           VERSION_NAME: ${{ needs.version.outputs.name }}
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/play/debug/app-play-debug.apk "dist/crema-${VERSION_NAME}-debug.apk"
           # crema-<v>-foss.apk (F-Droid, IzzyOnDroid) and crema-<v>-play.apk.
           for flavor in foss play; do
             for rel in android/app/build/outputs/apk/$flavor/release/*.apk; do

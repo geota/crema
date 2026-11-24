@@ -40,8 +40,7 @@ val gitSha: String = runCatching {
 // Release signing — from CI env (the release workflow base64-decodes the keystore to
 // a file and exports KEYSTORE_FILE / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD) or
 // from local.properties (release.keystoreFile / .storePassword / .keyAlias /
-// .keyPassword). When none are present the `release` build stays UNSIGNED — CI still
-// publishes an installable debug-signed APK alongside it.
+// .keyPassword). When none are present the `release` build stays UNSIGNED.
 val releaseKeystoreFile: File? = (System.getenv("KEYSTORE_FILE") ?: localProps.getProperty("release.keystoreFile"))
     ?.let { rootProject.file(it) }?.takeIf { it.exists() }
 val releaseStorePassword: String? = System.getenv("KEYSTORE_PASSWORD") ?: localProps.getProperty("release.storePassword")
@@ -49,20 +48,6 @@ val releaseKeyAlias: String? = System.getenv("KEY_ALIAS") ?: localProps.getPrope
 val releaseKeyPassword: String? = System.getenv("KEY_PASSWORD") ?: localProps.getProperty("release.keyPassword")
 val hasReleaseSigning = releaseKeystoreFile != null &&
     releaseStorePassword != null && releaseKeyAlias != null && releaseKeyPassword != null
-
-// Fixed debug signing (#336 §6): release.yml decodes a debug keystore from a CI
-// secret and exports DEBUG_KEYSTORE_FILE / DEBUG_KEYSTORE_PASSWORD /
-// DEBUG_KEY_ALIAS / DEBUG_KEY_PASSWORD, so every published debug APK carries one
-// SHA-1, which one Android OAuth client is registered for. Never the release key:
-// a debuggable build with the release app ID and signature could install over a
-// user's app and expose its data. Without them (local builds, CI's PR job) AGP's
-// own debug key signs, as before: ~/.android/debug.keystore locally.
-val debugKeystoreFile: File? = System.getenv("DEBUG_KEYSTORE_FILE")?.let { rootProject.file(it) }?.takeIf { it.exists() }
-val debugStorePassword: String? = System.getenv("DEBUG_KEYSTORE_PASSWORD")
-val debugKeyAlias: String? = System.getenv("DEBUG_KEY_ALIAS")
-val debugKeyPassword: String? = System.getenv("DEBUG_KEY_PASSWORD")
-val hasFixedDebugSigning = debugKeystoreFile != null &&
-    debugStorePassword != null && debugKeyAlias != null && debugKeyPassword != null
 
 android {
     namespace = "coffee.crema"
@@ -183,14 +168,6 @@ android {
     // Created only when a keystore is available (CI env or local.properties) — see
     // the `hasReleaseSigning` wiring above the `android {}` block.
     signingConfigs {
-        if (hasFixedDebugSigning) {
-            getByName("debug") {
-                storeFile = debugKeystoreFile
-                storePassword = debugStorePassword
-                keyAlias = debugKeyAlias
-                keyPassword = debugKeyPassword
-            }
-        }
         if (hasReleaseSigning) {
             create("release") {
                 storeFile = releaseKeystoreFile
