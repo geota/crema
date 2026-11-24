@@ -39,6 +39,8 @@ mod profile_sync;
 #[cfg(test)]
 mod request_gate_tests;
 #[cfg(test)]
+mod scale_dose_tests;
+#[cfg(test)]
 mod scale_estimate_tests;
 #[cfg(test)]
 mod scale_robustness_tests;
@@ -3093,6 +3095,33 @@ impl CremaCore {
         }
     }
 
+    /// The shot's dose, grams: the Quick Controls dose, else the profile's,
+    /// of the profile the stop targets follow (a running shot's, else the
+    /// desired one). `None` with no profile; a dose of 0 (none set) is left
+    /// to the scale's range check.
+    fn shot_dose_g(&self) -> Option<f32> {
+        let (profile, qc) = self.target_source()?;
+        Some(qc.dose.unwrap_or(profile.dose))
+    }
+
+    /// Give the connected scale the shot's dose when it computes a ratio
+    /// itself (a Bookoo Ultra, [`Scale::dose_write`]): on the firmware
+    /// becoming known, and on every change of the dose. The scale remembers
+    /// what this link was sent, so an unchanged dose is not resent and a
+    /// reconnect sends it again. Nothing while writes are gated (a read-only
+    /// mirror, a firmware flash), so the dose is not marked sent unsent.
+    fn push_scale_dose(&mut self, out: &mut CoreOutput) {
+        if self.read_only || self.firmware_locks_writes() {
+            return;
+        }
+        let Some(dose_g) = self.shot_dose_g() else {
+            return;
+        };
+        if let Some(bytes) = self.scale.as_mut().and_then(|s| s.dose_write(dose_g)) {
+            Self::push_scale_write(out, bytes);
+        }
+    }
+
     /// Emit the one-shot connect-time scale-config queries the first time a
     /// capability-bearing scale reports weight.
     ///
@@ -4766,7 +4795,11 @@ impl CremaCore {
         // shell then re-reads the capabilities and starts the keep-awake
         // clock (`scale_heartbeat`), well inside the 5-minute auto-off.
         scale.absorb_command_notification(data);
-        let Some(response) = scale.parse_command_response(data) else {
+        let response = scale.parse_command_response(data);
+        // The firmware may now be known to take the shot's dose (an Ultra's
+        // ratio mode); unchanged doses are not resent.
+        self.push_scale_dose(out);
+        let Some(response) = response else {
             return;
         };
         let event = match response {
@@ -6262,8 +6295,9 @@ impl CremaCore {
                     self.finalize_shot_completed(settle, now, out);
                 }
                 // A profile picked during the shot takes over now, after the
-                // shot's own stop has been harvested.
+                // shot's own stop has been harvested, its dose too.
                 self.release_target_hold();
+                self.push_scale_dose(out);
             }
         }
     }

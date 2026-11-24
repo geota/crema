@@ -1584,6 +1584,18 @@ impl Scale {
         }
     }
 
+    /// Build the write that gives the scale the shot's dose, `dose_g`, for a
+    /// scale that computes a brew ratio itself — a Bookoo Ultra on firmware
+    /// that takes it ([`bookoo::BookooScale::powder_weight_write`]). `None`
+    /// for every other scale, a dose out of the scale's range, and a dose this
+    /// link was already sent (a new connection sends it again).
+    pub fn dose_write(&mut self, dose_g: f32) -> Option<Vec<u8>> {
+        match &mut self.inner {
+            Inner::Bookoo(state) => state.powder_weight_write(dose_g).map(|cmd| cmd.to_vec()),
+            _ => None,
+        }
+    }
+
     /// The writes for one logical tare: [`tare`](Self::tare)'s frame, sent
     /// twice to a Decent Scale that may drop commands (see
     /// [`DecentScale::drops_commands`](decent_scale::DecentScale::drops_commands);
@@ -2104,6 +2116,23 @@ mod tests {
         let mut bookoo = Scale::from_label("Bookoo").unwrap();
         bookoo.absorb_command_notification(&bookoo_serial_frame(fw));
         bookoo
+    }
+
+    #[test]
+    fn only_a_bookoo_ultra_on_v3_2_4_or_later_is_sent_the_dose() {
+        let mut unknown = Scale::from_label("Bookoo").unwrap();
+        assert_eq!(unknown.dose_write(18.0), None, "firmware unknown");
+        for fw in [141, 143, 312] {
+            assert_eq!(bookoo_on(fw).dose_write(18.0), None, "fw {fw}");
+        }
+        let mut ultra = bookoo_on(324);
+        assert_eq!(
+            ultra.dose_write(18.0),
+            Some(bookoo::set_powder_weight(180).to_vec())
+        );
+        assert_eq!(ultra.dose_write(18.0), None, "already sent");
+        let mut acaia = Scale::from_label("Acaia").unwrap();
+        assert_eq!(acaia.dose_write(18.0), None);
     }
 
     #[test]

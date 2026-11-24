@@ -151,6 +151,9 @@
 //! 0x0A QUERY_SERIAL           query serial number (scale replies 03 0c …)
 //! 0x0B set_auto_stop_mode     auto-stop, Mini / Ultra <= V3.1.2 format
 //! 0x0B set_auto_stop_v4       auto-stop, Ultra >= V4.0.0 format
+//! 0x0D set_powder_weight      powder weight (the dose) for ratio mode,
+//!                             grams × 10 as u16 big-endian in p1 p2;
+//!                             Ultra >= beta V3.2.4 / release V4.0.0
 //! 0x0E set_mode_enabled       enable/disable a display mode (Mini only)
 //! 0x0F QUERY_SETTINGS         query settings (scale replies 03 0e …)
 //! 0x10 set_anti_mistouch      anti-mistouch on/off, p1 = 0|1
@@ -162,7 +165,7 @@
 //! ```
 //!
 //! `0x01`–`0x08`, `0x11`/`0x12`, `0x15` and `0x25` are in the published
-//! protocol, as is `0x0B` on the Ultra. `0x0A`, `0x0E`, `0x0F`, `0x10` and the
+//! protocol, as are `0x0B` and `0x0D` on the Ultra. `0x0A`, `0x0E`, `0x0F`, `0x10` and the
 //! Mini's `0x0B` are not ("other data is not open"): they were
 //! reverse-engineered from a Bluetooth-HCI capture of the official BOOKOO app
 //! with a known action order — see each builder's doc comment.
@@ -462,6 +465,33 @@ pub const fn set_auto_stop_v4(target: AutoStopTarget, mode: AutoStopMode) -> [u8
     command(0x0B, target as u8, mode.v4_condition())
 }
 
+/// Command `0x0D`: set the Ultra's powder weight — the dose its ratio mode
+/// divides the liquid weight by (ratio = liquid / powder) — in tenths of a
+/// gram, big-endian in p1 p2 (`18.0 g` is `00 B4`).
+///
+/// Documented for the Ultra on beta firmware V3.2.4 and later and release
+/// V4.0.0 and later, valid 0.1–999.9 g; the Mini doc has no `0x0D`. Send it
+/// only through [`BookooScale::powder_weight_write`], which checks the
+/// firmware and the range.
+#[must_use]
+pub const fn set_powder_weight(tenths: u16) -> [u8; 6] {
+    let [hi, lo] = tenths.to_be_bytes();
+    command(0x0D, hi, lo)
+}
+
+/// A dose in grams as [`set_powder_weight`]'s tenths, rounded to 0.1 g;
+/// `None` outside the documented 0.1–999.9 g (or not finite).
+#[must_use]
+pub fn powder_weight_tenths(grams: f32) -> Option<u16> {
+    let tenths = (f64::from(grams) * 10.0).round();
+    if !(1.0..=9999.0).contains(&tenths) {
+        return None;
+    }
+    // A whole number in 1..=9999: the cast is exact.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Some(tenths as u16)
+}
+
 /// The model a firmware version belongs to — see [`BookooFirmware::model`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BookooModel {
@@ -490,6 +520,8 @@ const MINI_V1_4_3: u16 = 143;
 const MINI_BETA_V1_5_0: u16 = 150;
 /// Ultra V3.1.2: the last release with the V3 `0x0B` format.
 const ULTRA_V3_1_2: u16 = 312;
+/// Ultra beta V3.2.4: the first firmware with `0x0D` (powder weight).
+const ULTRA_BETA_V3_2_4: u16 = 324;
 /// Ultra V4.0.0: the V4 `0x0B` format and `0x15`.
 const ULTRA_V4_0_0: u16 = 400;
 /// Ultra V4.0.1: the first release with `0x25`.
@@ -594,6 +626,13 @@ impl BookooFirmware {
     pub const fn echoes_auto_stop(self) -> bool {
         matches!(self.model(), Some(BookooModel::Mini))
     }
+
+    /// Whether this firmware takes `0x0D`, the powder weight: an Ultra on
+    /// beta V3.2.4 or later (release V4.0.0 and later included). Never a Mini.
+    #[must_use]
+    pub const fn takes_powder_weight(self) -> bool {
+        matches!(self.model(), Some(BookooModel::Ultra)) && self.0 >= ULTRA_BETA_V3_2_4
+    }
 }
 
 /// An Ultra automatic-mode event (`03 0D`, documented for beta V3.2.4+ and
@@ -649,13 +688,16 @@ enum AutoPhase {
 
 /// What Crema has learnt about a connected Bookoo from its replies: the
 /// firmware (from `03 0c`), the Mini's active mode (from `03 0e`) and the
-/// Ultra's automatic-submode phase (from `03 0D` events). A new connection
-/// starts empty; until the firmware arrives, no version-gated command is sent.
+/// Ultra's automatic-submode phase (from `03 0D` events), plus the powder
+/// weight Crema last sent it. A new connection starts empty; until the
+/// firmware arrives, no version-gated command is sent.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BookooScale {
     firmware: Option<BookooFirmware>,
     active_mode: Option<u8>,
     auto_phase: Option<AutoPhase>,
+    /// The `0x0D` powder weight (tenths of a gram) sent on this link.
+    powder_weight_sent: Option<u16>,
 }
 
 impl BookooScale {
@@ -786,6 +828,30 @@ impl BookooScale {
     #[must_use]
     pub fn reports_auto_stop(&self) -> bool {
         self.firmware.is_some_and(BookooFirmware::echoes_auto_stop)
+    }
+
+    /// The `0x0D` write that gives the scale `dose_g` as its powder weight,
+    /// recorded as sent; `None` unless the firmware takes it
+    /// ([`BookooFirmware::takes_powder_weight`]), the dose is in range
+    /// ([`powder_weight_tenths`]) and it differs from what this link was last
+    /// sent.
+    ///
+    /// Crema can't tell an Ultra's timing mode from its ratio mode (no frame
+    /// reports it), so the dose goes out in either; timing mode ignores it.
+    /// A new connection starts with nothing sent, so a reconnect resends.
+    pub fn powder_weight_write(&mut self, dose_g: f32) -> Option<[u8; 6]> {
+        if !self
+            .firmware
+            .is_some_and(BookooFirmware::takes_powder_weight)
+        {
+            return None;
+        }
+        let tenths = powder_weight_tenths(dose_g)?;
+        if self.powder_weight_sent == Some(tenths) {
+            return None;
+        }
+        self.powder_weight_sent = Some(tenths);
+        Some(set_powder_weight(tenths))
     }
 }
 
@@ -1490,6 +1556,90 @@ mod tests {
             assert_ne!(keep(fw), Some(KEEP_AWAKE_V1_4_2), "fw {fw}");
             assert_ne!(off(fw), Some(SHUTDOWN_V1_4_2), "fw {fw}");
         }
+    }
+
+    #[test]
+    fn set_powder_weight_is_the_dose_times_ten_big_endian() {
+        // 03 0a 0d hi lo xor, per the Ultra's published protocol.
+        assert_eq!(set_powder_weight(180), hex6("030a0d00b4b0"));
+        assert_eq!(set_powder_weight(1), hex6("030a0d000105"));
+        assert_eq!(set_powder_weight(9999), hex6("030a0d270f2c"));
+    }
+
+    #[test]
+    fn powder_weight_tenths_rounds_to_a_tenth_inside_the_documented_range() {
+        assert_eq!(powder_weight_tenths(18.0), Some(180));
+        assert_eq!(powder_weight_tenths(18.04), Some(180));
+        assert_eq!(powder_weight_tenths(18.06), Some(181));
+        assert_eq!(powder_weight_tenths(0.1), Some(1));
+        assert_eq!(powder_weight_tenths(999.9), Some(9999));
+        for out_of_range in [0.0, 0.04, -1.0, 999.96, 1500.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(powder_weight_tenths(out_of_range), None, "{out_of_range}");
+        }
+    }
+
+    #[test]
+    fn only_an_ultra_on_v3_2_4_or_later_takes_the_powder_weight() {
+        for fw in [100, 141, 143, 150, 199, 300, 312, 323] {
+            assert!(!BookooFirmware(fw).takes_powder_weight(), "fw {fw}");
+        }
+        for fw in [324, 330, 400, 401, 403, 500] {
+            assert!(BookooFirmware(fw).takes_powder_weight(), "fw {fw}");
+        }
+        // Unknown models (major 0 / 2, debug builds) never do.
+        for fw in [0, 250, 1234] {
+            assert!(!BookooFirmware(fw).takes_powder_weight(), "fw {fw}");
+        }
+    }
+
+    #[test]
+    fn the_powder_weight_goes_only_to_an_ultra_on_v3_2_4_or_later() {
+        assert_eq!(bookoo_with(None, None).powder_weight_write(18.0), None);
+        for fw in [141, 143, 312, 323] {
+            assert_eq!(
+                bookoo_with(Some(fw), None).powder_weight_write(18.0),
+                None,
+                "fw {fw}"
+            );
+        }
+        for fw in [324, 400, 403] {
+            assert_eq!(
+                bookoo_with(Some(fw), None).powder_weight_write(18.0),
+                Some(hex6("030a0d00b4b0")),
+                "fw {fw}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_powder_weight_is_sent_once_per_value_and_again_on_a_new_link() {
+        let mut scale = bookoo_with(Some(403), None);
+        assert_eq!(scale.powder_weight_write(0.0), None, "no dose");
+        assert_eq!(
+            scale.powder_weight_write(18.0),
+            Some(set_powder_weight(180))
+        );
+        assert_eq!(scale.powder_weight_write(18.0), None, "unchanged");
+        assert_eq!(scale.powder_weight_write(18.04), None, "same tenth");
+        assert_eq!(scale.powder_weight_write(1000.0), None, "out of range");
+        assert_eq!(scale.powder_weight_write(18.0), None, "still 18.0 g");
+        assert_eq!(
+            scale.powder_weight_write(20.5),
+            Some(set_powder_weight(205))
+        );
+        // A firmware reported again on the same link changes nothing.
+        scale.absorb(&CommandResponse::Serial {
+            firmware_version: 403,
+            serial: String::new(),
+            anti_mistouch: false,
+        });
+        assert_eq!(scale.powder_weight_write(20.5), None);
+        // A reconnect starts a fresh `BookooScale`: the dose goes out again.
+        let mut reconnected = bookoo_with(Some(403), None);
+        assert_eq!(
+            reconnected.powder_weight_write(20.5),
+            Some(set_powder_weight(205))
+        );
     }
 
     /// A Bookoo that has answered `03 0c` with `fw` and, if given, `03 0e`

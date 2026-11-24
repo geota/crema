@@ -355,6 +355,8 @@ impl CremaCore {
             self.profile_sync.settle_now();
         }
         let mut out = CoreOutput::default();
+        // A scale that computes the ratio itself takes the new dose at once.
+        self.push_scale_dose(&mut out);
         // The packet's group target follows the profile (F5.3); it goes
         // before any upload, as in the connect sweep.
         self.drive_shot_settings(&mut out, false);
