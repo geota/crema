@@ -268,24 +268,14 @@
 	}
 
 	/**
-	 * Auto-stop — the scale's "stop the built-in timer when outflow drops to
-	 * zero" feature. Capability-gated via `caps?.auto_stop`; the current
-	 * mode id comes from the snapshot's `scaleAutoStop` (populated on every
-	 * weight notification that echoes the setting). The Bookoo today
-	 * exposes a binary 0/1 mode (off/on); the toggle just flips between
-	 * those. Scales that report `device_auto_stop` but have additional
-	 * modes would be handled by extending this to a segment control.
+	 * Auto-stop — what ends the scale's automatic mode. The conditions come
+	 * from the core (`caps.auto_stop_modes`: flow stops, cup removed, and on
+	 * an Ultra with firmware 4+ filter removed). One setting (`caps.auto_stop`,
+	 * active = the snapshot's `scaleAutoStop`: a Mini's echo, else what Crema
+	 * last set), or one per mode (`caps.auto_stop_targets`, active =
+	 * `scaleAutoStopFor`).
 	 */
-	const autoStopOn = $derived(snap?.scaleAutoStop != null && snap.scaleAutoStop !== 0);
-	/** The auto-stop mode ids (`AutoStopMode`) and their labels. */
-	const AUTO_STOP_OPTIONS = [
-		{ id: 0, label: 'Flow stops' },
-		{ id: 1, label: 'Cup removed' }
-	] as const;
-	function toggleAutoStop(): void {
-		if (!caps?.auto_stop) return;
-		app?.setScaleAutoStop(autoStopOn ? 0 : 1);
-	}
+	const autoStopModes = $derived(caps?.auto_stop_modes ?? []);
 
 	/** Beep the scale's buzzer — a locate / test-tone ping. Capability-gated. */
 	function beep(): void {
@@ -565,12 +555,12 @@
 							</div>
 						</div>
 						<div class="st-segment" role="group" aria-labelledby="sc-autostop-{t.id}">
-							{#each AUTO_STOP_OPTIONS as o (o.id)}
+							{#each autoStopModes as o (o.id)}
 								<button
 									type="button"
 									class:is-active={snap?.scaleAutoStopFor[t.id] === o.id}
 									aria-pressed={snap?.scaleAutoStopFor[t.id] === o.id}
-									onclick={() => app?.setScaleAutoStopFor(t.id, o.id)}>{o.label}</button
+									onclick={() => app?.setScaleAutoStopFor(t.id, o.id)}>{o.name}</button
 								>
 							{/each}
 						</div>
@@ -579,19 +569,21 @@
 			{:else if caps?.auto_stop}
 				<div class="sc-set-row">
 					<div>
-						<div class="sc-set-title">Auto-stop on flow drop</div>
+						<div class="sc-set-title" id="sc-autostop">Auto-stop</div>
 						<div class="sc-set-sub">
-							Stops the scale's built-in timer when outflow drops to zero —
-							handy for ratio-mode shots where the timer would otherwise
-							keep running after the cup is full.
+							What ends the scale's automatic mode and stops its timer.
 						</div>
 					</div>
-					<button
-						class="qmini-tog"
-						class:on={autoStopOn}
-						onclick={toggleAutoStop}
-						aria-label="Auto-stop"
-					></button>
+					<div class="st-segment" role="group" aria-labelledby="sc-autostop">
+						{#each autoStopModes as o (o.id)}
+							<button
+								type="button"
+								class:is-active={snap?.scaleAutoStop === o.id}
+								aria-pressed={snap?.scaleAutoStop === o.id}
+								onclick={() => app?.setScaleAutoStop(o.id)}>{o.name}</button
+							>
+						{/each}
+					</div>
 				</div>
 			{/if}
 

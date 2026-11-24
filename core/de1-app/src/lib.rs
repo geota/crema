@@ -39,6 +39,8 @@ mod profile_sync;
 #[cfg(test)]
 mod request_gate_tests;
 #[cfg(test)]
+mod scale_dose_tests;
+#[cfg(test)]
 mod scale_estimate_tests;
 #[cfg(test)]
 mod scale_robustness_tests;
@@ -3093,6 +3095,33 @@ impl CremaCore {
         }
     }
 
+    /// The shot's dose, grams: the Quick Controls dose, else the profile's,
+    /// of the profile the stop targets follow (a running shot's, else the
+    /// desired one). `None` with no profile; a dose of 0 (none set) is left
+    /// to the scale's range check.
+    fn shot_dose_g(&self) -> Option<f32> {
+        let (profile, qc) = self.target_source()?;
+        Some(qc.dose.unwrap_or(profile.dose))
+    }
+
+    /// Give the connected scale the shot's dose when it computes a ratio
+    /// itself (a Bookoo Ultra, [`Scale::dose_write`]): on the firmware
+    /// becoming known, and on every change of the dose. The scale remembers
+    /// what this link was sent, so an unchanged dose is not resent and a
+    /// reconnect sends it again. Nothing while writes are gated (a read-only
+    /// mirror, a firmware flash), so the dose is not marked sent unsent.
+    fn push_scale_dose(&mut self, out: &mut CoreOutput) {
+        if self.read_only || self.firmware_locks_writes() {
+            return;
+        }
+        let Some(dose_g) = self.shot_dose_g() else {
+            return;
+        };
+        if let Some(bytes) = self.scale.as_mut().and_then(|s| s.dose_write(dose_g)) {
+            Self::push_scale_write(out, bytes);
+        }
+    }
+
     /// Emit the one-shot connect-time scale-config queries the first time a
     /// capability-bearing scale reports weight.
     ///
@@ -3256,7 +3285,8 @@ impl CremaCore {
     }
 
     /// Build the [`Command`]s that select the connected scale's auto-stop
-    /// mode (`0` = flow-stop, `1` = cup-removal). Routed through
+    /// mode (`0` = flow-stop, `1` = cup-removal, `2` = filter-removal, one of
+    /// [`ScaleCapabilities::auto_stop_modes`]). Routed through
     /// [`Scale::set_auto_stop_command`], which picks the frame format the
     /// scale's firmware takes (one write per automatic submode on a Bookoo
     /// Ultra V4); empty [`CoreOutput`] when the capability is absent — on a
@@ -3275,7 +3305,7 @@ impl CremaCore {
     }
 
     /// Build the [`Command`] that sets the auto-stop mode (`0` = flow-stop,
-    /// `1` = cup-removal) for one of the connected scale's
+    /// `1` = cup-removal, `2` = filter-removal) for one of the connected scale's
     /// [`ScaleCapabilities::auto_stop_targets`] — a Bookoo Ultra on firmware
     /// 4+ sets it separately for timing (`1`) and ratio (`2`) mode — then the
     /// settings query. Empty when the scale has no such target or either id
@@ -4766,7 +4796,11 @@ impl CremaCore {
         // shell then re-reads the capabilities and starts the keep-awake
         // clock (`scale_heartbeat`), well inside the 5-minute auto-off.
         scale.absorb_command_notification(data);
-        let Some(response) = scale.parse_command_response(data) else {
+        let response = scale.parse_command_response(data);
+        // The firmware may now be known to take the shot's dose (an Ultra's
+        // ratio mode); unchanged doses are not resent.
+        self.push_scale_dose(out);
+        let Some(response) = response else {
             return;
         };
         let event = match response {
@@ -6262,8 +6296,9 @@ impl CremaCore {
                     self.finalize_shot_completed(settle, now, out);
                 }
                 // A profile picked during the shot takes over now, after the
-                // shot's own stop has been harvested.
+                // shot's own stop has been harvested, its dose too.
                 self.release_target_hold();
+                self.push_scale_dose(out);
             }
         }
     }
@@ -9763,7 +9798,7 @@ mod tests {
         };
         assert_eq!(
             flow_stop,
-            bookoo::set_auto_stop_mode(bookoo::AutoStopMode::FlowStop)
+            bookoo::set_auto_stop_mode(bookoo::AutoStopMode::FlowStop).unwrap()
         );
         let Some(Command::WriteScale { data: cup_removal }) =
             core.set_scale_auto_stop(1).commands.into_iter().next()
@@ -9772,7 +9807,7 @@ mod tests {
         };
         assert_eq!(
             cup_removal,
-            bookoo::set_auto_stop_mode(bookoo::AutoStopMode::CupRemoval)
+            bookoo::set_auto_stop_mode(bookoo::AutoStopMode::CupRemoval).unwrap()
         );
     }
 
@@ -9780,8 +9815,41 @@ mod tests {
     fn set_scale_auto_stop_emits_nothing_for_an_out_of_range_mode_id() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
-        // 2 is not a valid auto-stop mode — rejected gracefully, empty output.
+        // 3 is not an auto-stop mode — rejected gracefully, empty output.
+        assert!(core.set_scale_auto_stop(3).commands.is_empty());
+        // Filter removed (2) before the firmware is known, and on a Mini or
+        // an Ultra <= 3.1.2, which have no frame for it: nothing either.
         assert!(core.set_scale_auto_stop(2).commands.is_empty());
+        for fw in [141, 312] {
+            let core = bookoo_core_on(fw);
+            assert!(core.set_scale_auto_stop(2).commands.is_empty(), "fw {fw}");
+            assert!(
+                core.set_scale_auto_stop_for(1, 2).commands.is_empty(),
+                "fw {fw}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ultra_v4_sets_filter_removed_per_mode() {
+        let core = bookoo_core_on(403);
+        let writes = |out: CoreOutput| -> Vec<Vec<u8>> {
+            out.commands
+                .into_iter()
+                .filter_map(|c| match c {
+                    Command::WriteScale { data } if data[2] == 0x0B => Some(data),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(
+            writes(core.set_scale_auto_stop_for(1, 2)),
+            vec![vec![0x03, 0x0A, 0x0B, 0x01, 0x01, 0x02]]
+        );
+        assert_eq!(
+            writes(core.set_scale_auto_stop_for(2, 2)),
+            vec![vec![0x03, 0x0A, 0x0B, 0x02, 0x01, 0x01]]
+        );
     }
 
     #[test]

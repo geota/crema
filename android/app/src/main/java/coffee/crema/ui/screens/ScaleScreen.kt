@@ -378,6 +378,17 @@ private fun RecentActivity(connected: Boolean, modifier: Modifier = Modifier) {
 }
 
 /**
+ * A short segment label for one of the core's auto-stop conditions (`0` flow
+ * stops, `1` cup removed, `2` filter removed); the core's name otherwise.
+ */
+private fun autoStopLabel(mode: coffee.crema.core.ModeInfo): String = when (mode.id.toInt()) {
+    0 -> "Flow"
+    1 -> "Cup"
+    2 -> "Filter"
+    else -> mode.name
+}
+
+/**
  * The capability-gated scale settings rows, shared by both shells (issue 33).
  * Renders only the rows the connected scale supports, each via [CremaSettingsRow]
  * — so the phone gets dense rows under its `LocalSettingsRowDense`, the tablet the
@@ -400,18 +411,21 @@ fun ScaleCapabilityRows(
         CremaSwitch(ui.scaleAntiMistouch, vm::setScaleAntiMistouch)
     }
     // A scale that sets auto-stop per mode (a Bookoo Ultra on firmware 4+:
-    // timing and ratio) gets one row per mode; it doesn't echo them.
+    // timing and ratio) gets one row per mode; it doesn't echo them. The
+    // conditions offered are the core's `auto_stop_modes` (V4 adds filter
+    // removed).
+    val autoStopOptions = caps.auto_stop_modes.map { SegOption(it.id.toString(), autoStopLabel(it)) }
     if (caps.auto_stop_targets.isNotEmpty()) for (target in caps.auto_stop_targets) {
         CremaSettingsRow("Auto-stop · ${target.name}", "What ends the scale's automatic ${target.name.lowercase()} mode.", gate = ui.gate(Setting.SCALE_AUTO_STOP)) {
             CremaSegmentedButton(
-                options = listOf(SegOption("0", "Flow"), SegOption("1", "Cup")),
+                options = autoStopOptions,
                 value = ui.scaleAutoStopFor[target.id.toInt()]?.toString() ?: "",
                 onChange = { vm.setScaleAutoStopFor(target.id.toInt(), it.toInt()) },
             )
         }
     } else if (caps.auto_stop) CremaSettingsRow("Auto-stop", "How the scale's built-in timer ends.", gate = ui.gate(Setting.SCALE_AUTO_STOP)) {
         CremaSegmentedButton(
-            options = listOf(SegOption("0", "Flow"), SegOption("1", "Cup")),
+            options = autoStopOptions,
             value = (ui.scaleAutoStop ?: 0).toString(),
             onChange = { vm.setScaleAutoStop(it.toInt()) },
         )

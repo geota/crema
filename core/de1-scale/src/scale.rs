@@ -324,7 +324,7 @@ pub struct ScaleCapabilities {
     /// The scale accepts a command to toggle anti-mistouch.
     pub anti_mistouch: bool,
     /// The scale accepts a command to select its auto-stop mode (the Bookoo's
-    /// flow-stop / cup-removal setting). On a Bookoo this turns on only once
+    /// flow-stop / cup-removal setting; see [`auto_stop_modes`](Self::auto_stop_modes)). On a Bookoo this turns on only once
     /// the firmware has been reported, so the shell re-reads the capabilities
     /// when a `ScaleConfig` event carries the firmware.
     pub auto_stop: bool,
@@ -335,6 +335,14 @@ pub struct ScaleCapabilities {
     /// scale doesn't echo these settings, so the shell keeps what it last set.
     #[cfg_attr(feature = "serde", serde(default))]
     pub auto_stop_targets: Vec<ModeInfo>,
+    /// The auto-stop conditions the scale takes, in display order — the ids
+    /// `set_scale_auto_stop` / `set_scale_auto_stop_for` accept (`0` = flow
+    /// stops, `1` = cup removed, `2` = filter removed), each with a display
+    /// `name`. Empty when [`auto_stop`](Self::auto_stop) is `false`. A Bookoo
+    /// Mini or Ultra ≤ 3.1.2 takes flow stops and cup removed; an Ultra on
+    /// firmware 4+ adds filter removed.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub auto_stop_modes: Vec<ModeInfo>,
     /// The selectable display/behaviour modes the scale exposes — empty when
     /// the scale has no switchable modes. Each entry carries the mode's wire
     /// `id` and a display `name`.
@@ -871,6 +879,14 @@ impl Scale {
                     .map(|target| ModeInfo {
                         id: target.id(),
                         name: target.name().to_owned(),
+                    })
+                    .collect(),
+                auto_stop_modes: state
+                    .auto_stop_modes()
+                    .iter()
+                    .map(|mode| ModeInfo {
+                        id: mode.id(),
+                        name: mode.name().to_owned(),
                     })
                     .collect(),
                 // The Flow-Rate / Timer / Auto selector is the Mini's
@@ -1547,10 +1563,12 @@ impl Scale {
     }
 
     /// Build the ordered writes that set the connected scale's auto-stop
-    /// mode (`0` = flow-stop, `1` = cup-removal). `None` when the scale
-    /// exposes no auto-stop mode setting ([`ScaleCapabilities::auto_stop`]
-    /// is `false` — on a Bookoo, until its firmware says which `0x0B`
-    /// format it takes) or `mode_id` maps to no known mode.
+    /// mode (`0` = flow-stop, `1` = cup-removal, `2` = filter-removal). `None`
+    /// when the scale exposes no auto-stop mode setting
+    /// ([`ScaleCapabilities::auto_stop`] is `false` — on a Bookoo, until its
+    /// firmware says which `0x0B` format it takes) or `mode_id` is not one of
+    /// its [`ScaleCapabilities::auto_stop_modes`] (filter-removal on a Mini or
+    /// an Ultra ≤ 3.1.2).
     ///
     /// A Bookoo Ultra on V4 takes one write per automatic submode (timing,
     /// then ratio); a Mini or an Ultra on V3, one.
@@ -1567,7 +1585,7 @@ impl Scale {
     }
 
     /// Build the write that sets the auto-stop mode (`0` = flow-stop, `1` =
-    /// cup-removal) for one of [`ScaleCapabilities::auto_stop_targets`]
+    /// cup-removal, `2` = filter-removal) for one of [`ScaleCapabilities::auto_stop_targets`]
     /// (`target_id`). `None` when the scale sets auto-stop for no separate
     /// modes, or either id is unknown.
     #[must_use]
@@ -1580,6 +1598,18 @@ impl Scale {
                     .auto_stop_target_write(target, mode)
                     .map(|cmd| cmd.to_vec())
             }
+            _ => None,
+        }
+    }
+
+    /// Build the write that gives the scale the shot's dose, `dose_g`, for a
+    /// scale that computes a brew ratio itself — a Bookoo Ultra on firmware
+    /// that takes it ([`bookoo::BookooScale::powder_weight_write`]). `None`
+    /// for every other scale, a dose out of the scale's range, and a dose this
+    /// link was already sent (a new connection sends it again).
+    pub fn dose_write(&mut self, dose_g: f32) -> Option<Vec<u8>> {
+        match &mut self.inner {
+            Inner::Bookoo(state) => state.powder_weight_write(dose_g).map(|cmd| cmd.to_vec()),
             _ => None,
         }
     }
@@ -2107,6 +2137,61 @@ mod tests {
     }
 
     #[test]
+    fn bookoo_auto_stop_modes_add_filter_removed_on_ultra_v4_only() {
+        let ids = |scale: &Scale| -> Vec<(u8, String)> {
+            scale
+                .capabilities()
+                .auto_stop_modes
+                .into_iter()
+                .map(|m| (m.id, m.name))
+                .collect()
+        };
+        let two = vec![(0, "Flow stops".to_owned()), (1, "Cup removed".to_owned())];
+        for fw in [141, 312] {
+            let scale = bookoo_on(fw);
+            assert_eq!(ids(&scale), two, "fw {fw}");
+            // Filter removed has no V3 frame: refused.
+            assert_eq!(scale.set_auto_stop_command(2), None, "fw {fw}");
+        }
+        assert_eq!(
+            ids(&bookoo_on(403)),
+            vec![
+                (0, "Flow stops".to_owned()),
+                (2, "Filter removed".to_owned()),
+                (1, "Cup removed".to_owned()),
+            ]
+        );
+        assert_eq!(
+            bookoo_on(403).set_auto_stop_command(2),
+            Some(vec![
+                vec![0x03, 0x0A, 0x0B, 0x01, 0x01, 0x02],
+                vec![0x03, 0x0A, 0x0B, 0x02, 0x01, 0x01],
+            ])
+        );
+        let unknown = Scale::from_label("Bookoo").unwrap();
+        assert!(ids(&unknown).is_empty());
+        assert_eq!(unknown.set_auto_stop_command(2), None);
+        assert!(ids(&Scale::from_label("Acaia Pyxis").unwrap()).is_empty());
+    }
+
+    #[test]
+    fn only_a_bookoo_ultra_on_v3_2_4_or_later_is_sent_the_dose() {
+        let mut unknown = Scale::from_label("Bookoo").unwrap();
+        assert_eq!(unknown.dose_write(18.0), None, "firmware unknown");
+        for fw in [141, 143, 312] {
+            assert_eq!(bookoo_on(fw).dose_write(18.0), None, "fw {fw}");
+        }
+        let mut ultra = bookoo_on(324);
+        assert_eq!(
+            ultra.dose_write(18.0),
+            Some(bookoo::set_powder_weight(180).to_vec())
+        );
+        assert_eq!(ultra.dose_write(18.0), None, "already sent");
+        let mut acaia = Scale::from_label("Acaia Pyxis").unwrap();
+        assert_eq!(acaia.dose_write(18.0), None);
+    }
+
+    #[test]
     fn bookoo_auto_stop_writes_follow_the_firmware() {
         // Unknown firmware: no 0x0B at all, and no capability.
         let unknown = Scale::from_label("Bookoo").unwrap();
@@ -2184,8 +2269,17 @@ mod tests {
             v4.set_auto_stop_for_command(1, 0),
             Some(vec![0x03, 0x0A, 0x0B, 0x01, 0x00, 0x03])
         );
+        // Filter removed (id 2) is V4's third condition: 0B <target> 01.
+        assert_eq!(
+            v4.set_auto_stop_for_command(1, 2),
+            Some(vec![0x03, 0x0A, 0x0B, 0x01, 0x01, 0x02])
+        );
+        assert_eq!(
+            v4.set_auto_stop_for_command(2, 2),
+            Some(vec![0x03, 0x0A, 0x0B, 0x02, 0x01, 0x01])
+        );
         assert_eq!(v4.set_auto_stop_for_command(3, 0), None);
-        assert_eq!(v4.set_auto_stop_for_command(1, 2), None);
+        assert_eq!(v4.set_auto_stop_for_command(1, 3), None);
         // One setting on V3 and the Mini: no per-target write.
         assert_eq!(bookoo_on(312).set_auto_stop_for_command(1, 0), None);
         assert_eq!(bookoo_on(143).set_auto_stop_for_command(1, 0), None);
@@ -2399,7 +2493,7 @@ mod tests {
 
     #[test]
     fn parse_weight_reassembles_an_acaia_frame_across_notifications() {
-        let mut acaia = Scale::from_label("Acaia").unwrap();
+        let mut acaia = Scale::from_label("Acaia Pyxis").unwrap();
         let frame = [0xEF, 0xDD, 12, 6, 5, 180, 0, 0, 0, 1, 0];
         assert_eq!(acaia.parse_weight(&frame[..4]), None);
         assert_eq!(acaia.parse_weight(&frame[4..]), Some(18.0));
@@ -2685,7 +2779,7 @@ mod tests {
 
     #[test]
     fn acaia_tares_but_has_no_timer() {
-        let mut acaia = Scale::from_label("Acaia").unwrap();
+        let mut acaia = Scale::from_label("Acaia Pyxis").unwrap();
         assert!(acaia.tare().is_some());
         assert_eq!(acaia.timer(TimerCommand::Reset), None);
     }

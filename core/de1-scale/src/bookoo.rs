@@ -151,6 +151,9 @@
 //! 0x0A QUERY_SERIAL           query serial number (scale replies 03 0c …)
 //! 0x0B set_auto_stop_mode     auto-stop, Mini / Ultra <= V3.1.2 format
 //! 0x0B set_auto_stop_v4       auto-stop, Ultra >= V4.0.0 format
+//! 0x0D set_powder_weight      powder weight (the dose) for ratio mode,
+//!                             grams × 10 as u16 big-endian in p1 p2;
+//!                             Ultra >= beta V3.2.4 / release V4.0.0
 //! 0x0E set_mode_enabled       enable/disable a display mode (Mini only)
 //! 0x0F QUERY_SETTINGS         query settings (scale replies 03 0e …)
 //! 0x10 set_anti_mistouch      anti-mistouch on/off, p1 = 0|1
@@ -162,7 +165,7 @@
 //! ```
 //!
 //! `0x01`–`0x08`, `0x11`/`0x12`, `0x15` and `0x25` are in the published
-//! protocol, as is `0x0B` on the Ultra. `0x0A`, `0x0E`, `0x0F`, `0x10` and the
+//! protocol, as are `0x0B` and `0x0D` on the Ultra. `0x0A`, `0x0E`, `0x0F`, `0x10` and the
 //! Mini's `0x0B` are not ("other data is not open"): they were
 //! reverse-engineered from a Bluetooth-HCI capture of the official BOOKOO app
 //! with a known action order — see each builder's doc comment.
@@ -359,49 +362,84 @@ pub const fn set_flow_smoothing(enabled: bool) -> [u8; 6] {
 
 /// The scale's auto-stop condition: what ends an automatic-mode extraction.
 ///
-/// Crema's id for each is the discriminant (`0` / `1`), which is also the
-/// `p1` byte of the Mini / Ultra-V3 format. The Ultra-V4 format numbers the
+/// Crema's id for each is the discriminant (`0` / `1` / `2`). For flow-stop
+/// and cup-removal it is also the `p1` byte of the Mini / Ultra-V3 format;
+/// filter-removal exists only in the Ultra-V4 format, which numbers the
 /// conditions differently — see [`AutoStopMode::v4_condition`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoStopMode {
-    /// Stop when the liquid flow stops (`p1 = 0`).
+    /// Stop when the liquid flow stops (`p1 = 0`; V4 `00`).
     FlowStop = 0,
     /// Stop when the cup is removed (`p1 = 1`; on Ultra V4, "server being
-    /// removed").
+    /// removed", `02`).
     CupRemoval = 1,
+    /// Stop when the filter is removed — a pour-over dripper lifted off
+    /// (Ultra V4 only, `01`; the Mini / V3 format has no such condition).
+    FilterRemoval = 2,
 }
 
 impl AutoStopMode {
-    /// The `p1` byte the scale uses for this mode in the Mini / Ultra-V3
-    /// command `0x0B`.
+    /// The flow-stop and cup-removal pair the Mini / Ultra-V3 format takes.
+    pub const TWO: [AutoStopMode; 2] = [AutoStopMode::FlowStop, AutoStopMode::CupRemoval];
+    /// Ultra V4's three conditions, in display order.
+    pub const V4: [AutoStopMode; 3] = [
+        AutoStopMode::FlowStop,
+        AutoStopMode::FilterRemoval,
+        AutoStopMode::CupRemoval,
+    ];
+
+    /// Crema's id for the mode (the discriminant).
     #[must_use]
-    pub const fn p1(self) -> u8 {
+    pub const fn id(self) -> u8 {
         self as u8
     }
 
+    /// The `p1` byte the scale uses for this mode in the Mini / Ultra-V3
+    /// command `0x0B`; `None` for filter-removal, which that format lacks.
+    #[must_use]
+    pub const fn p1(self) -> Option<u8> {
+        match self {
+            AutoStopMode::FlowStop => Some(0x00),
+            AutoStopMode::CupRemoval => Some(0x01),
+            AutoStopMode::FilterRemoval => None,
+        }
+    }
+
     /// The Ultra-V4 stop-condition byte (`0x0B`'s BYTE5): `00` liquid flow
-    /// stopping, `02` server being removed. V4's third condition, `01` filter
-    /// being removed (a pour-over dripper lifted off), has no Crema setting.
+    /// stopping, `01` filter being removed, `02` server being removed.
     #[must_use]
     pub const fn v4_condition(self) -> u8 {
         match self {
             AutoStopMode::FlowStop => 0x00,
+            AutoStopMode::FilterRemoval => 0x01,
             AutoStopMode::CupRemoval => 0x02,
         }
     }
 
-    /// The mode for Crema's id (`0` / `1`), or `None` for any other id.
+    /// The mode for Crema's id (`0` / `1` / `2`), or `None` for any other id.
     #[must_use]
     pub const fn from_id(id: u8) -> Option<AutoStopMode> {
         match id {
             0 => Some(AutoStopMode::FlowStop),
             1 => Some(AutoStopMode::CupRemoval),
+            2 => Some(AutoStopMode::FilterRemoval),
             _ => None,
+        }
+    }
+
+    /// A display name for the condition.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            AutoStopMode::FlowStop => "Flow stops",
+            AutoStopMode::CupRemoval => "Cup removed",
+            AutoStopMode::FilterRemoval => "Filter removed",
         }
     }
 }
 
-/// Command `0x0B` in the Mini / Ultra ≤ V3.1.2 format: `0B <stop> 00`.
+/// Command `0x0B` in the Mini / Ultra ≤ V3.1.2 format: `0B <stop> 00`;
+/// `None` for filter-removal, which this format has no byte for.
 ///
 /// The Ultra doc gives this format for release firmware V3.1.2 and earlier and
 /// says not to use it on V4.0.0 and later. The Mini doc does not list `0x0B`;
@@ -409,8 +447,11 @@ impl AutoStopMode {
 /// capture, cross-checked with the scale's echo in weight byte `[18]`). Send it
 /// only through [`BookooScale::auto_stop_writes`], which checks the firmware.
 #[must_use]
-pub const fn set_auto_stop_mode(mode: AutoStopMode) -> [u8; 6] {
-    command(0x0B, mode.p1(), 0x00)
+pub const fn set_auto_stop_mode(mode: AutoStopMode) -> Option<[u8; 6]> {
+    match mode.p1() {
+        Some(p1) => Some(command(0x0B, p1, 0x00)),
+        None => None,
+    }
 }
 
 /// The Ultra-V4 mode whose automatic submode a `0x0B` stop condition applies
@@ -462,6 +503,33 @@ pub const fn set_auto_stop_v4(target: AutoStopTarget, mode: AutoStopMode) -> [u8
     command(0x0B, target as u8, mode.v4_condition())
 }
 
+/// Command `0x0D`: set the Ultra's powder weight — the dose its ratio mode
+/// divides the liquid weight by (ratio = liquid / powder) — in tenths of a
+/// gram, big-endian in p1 p2 (`18.0 g` is `00 B4`).
+///
+/// Documented for the Ultra on beta firmware V3.2.4 and later and release
+/// V4.0.0 and later, valid 0.1–999.9 g; the Mini doc has no `0x0D`. Send it
+/// only through [`BookooScale::powder_weight_write`], which checks the
+/// firmware and the range.
+#[must_use]
+pub const fn set_powder_weight(tenths: u16) -> [u8; 6] {
+    let [hi, lo] = tenths.to_be_bytes();
+    command(0x0D, hi, lo)
+}
+
+/// A dose in grams as [`set_powder_weight`]'s tenths, rounded to 0.1 g;
+/// `None` outside the documented 0.1–999.9 g (or not finite).
+#[must_use]
+pub fn powder_weight_tenths(grams: f32) -> Option<u16> {
+    let tenths = (f64::from(grams) * 10.0).round();
+    if !(1.0..=9999.0).contains(&tenths) {
+        return None;
+    }
+    // A whole number in 1..=9999: the cast is exact.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Some(tenths as u16)
+}
+
 /// The model a firmware version belongs to — see [`BookooFirmware::model`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BookooModel {
@@ -490,6 +558,8 @@ const MINI_V1_4_3: u16 = 143;
 const MINI_BETA_V1_5_0: u16 = 150;
 /// Ultra V3.1.2: the last release with the V3 `0x0B` format.
 const ULTRA_V3_1_2: u16 = 312;
+/// Ultra beta V3.2.4: the first firmware with `0x0D` (powder weight).
+const ULTRA_BETA_V3_2_4: u16 = 324;
 /// Ultra V4.0.0: the V4 `0x0B` format and `0x15`.
 const ULTRA_V4_0_0: u16 = 400;
 /// Ultra V4.0.1: the first release with `0x25`.
@@ -566,11 +636,24 @@ impl BookooFirmware {
         matches!(self.model(), Some(BookooModel::Mini))
     }
 
+    /// The auto-stop conditions this firmware takes: flow-stop and
+    /// cup-removal on a Mini and an Ultra ≤ V3.1.2; those and filter-removal
+    /// on an Ultra ≥ V4.0.0; none where Crema can't set auto-stop.
+    #[must_use]
+    pub const fn auto_stop_modes(self) -> &'static [AutoStopMode] {
+        match self.model() {
+            Some(BookooModel::Mini) => &AutoStopMode::TWO,
+            Some(BookooModel::Ultra) if self.0 <= ULTRA_V3_1_2 => &AutoStopMode::TWO,
+            Some(BookooModel::Ultra) if self.0 >= ULTRA_V4_0_0 => &AutoStopMode::V4,
+            _ => &[],
+        }
+    }
+
     /// The `0x0B` writes that set `mode` on this firmware; empty when Crema
     /// can't set it correctly.
     ///
-    /// - Mini: the captured `0B <stop> 00`.
-    /// - Ultra ≤ V3.1.2: the documented V3 `0B <stop> 00`.
+    /// - Mini: the captured `0B <stop> 00` (no filter-removal).
+    /// - Ultra ≤ V3.1.2: the documented V3 `0B <stop> 00` (no filter-removal).
     /// - Ultra ≥ V4.0.0: `0B <target> <stop>` for both automatic submodes
     ///   (timing, then ratio), so Crema's one setting means the same in each.
     /// - Ultra V3.1.3–V3.9.9 (betas such as V3.2.4, neither format documented)
@@ -578,8 +661,10 @@ impl BookooFirmware {
     #[must_use]
     pub fn auto_stop_writes(self, mode: AutoStopMode) -> Vec<[u8; 6]> {
         match self.model() {
-            Some(BookooModel::Mini) => vec![set_auto_stop_mode(mode)],
-            Some(BookooModel::Ultra) if self.0 <= ULTRA_V3_1_2 => vec![set_auto_stop_mode(mode)],
+            Some(BookooModel::Mini) => set_auto_stop_mode(mode).into_iter().collect(),
+            Some(BookooModel::Ultra) if self.0 <= ULTRA_V3_1_2 => {
+                set_auto_stop_mode(mode).into_iter().collect()
+            }
             Some(BookooModel::Ultra) if self.0 >= ULTRA_V4_0_0 => vec![
                 set_auto_stop_v4(AutoStopTarget::Timing, mode),
                 set_auto_stop_v4(AutoStopTarget::Ratio, mode),
@@ -593,6 +678,13 @@ impl BookooFirmware {
     #[must_use]
     pub const fn echoes_auto_stop(self) -> bool {
         matches!(self.model(), Some(BookooModel::Mini))
+    }
+
+    /// Whether this firmware takes `0x0D`, the powder weight: an Ultra on
+    /// beta V3.2.4 or later (release V4.0.0 and later included). Never a Mini.
+    #[must_use]
+    pub const fn takes_powder_weight(self) -> bool {
+        matches!(self.model(), Some(BookooModel::Ultra)) && self.0 >= ULTRA_BETA_V3_2_4
     }
 }
 
@@ -649,13 +741,16 @@ enum AutoPhase {
 
 /// What Crema has learnt about a connected Bookoo from its replies: the
 /// firmware (from `03 0c`), the Mini's active mode (from `03 0e`) and the
-/// Ultra's automatic-submode phase (from `03 0D` events). A new connection
-/// starts empty; until the firmware arrives, no version-gated command is sent.
+/// Ultra's automatic-submode phase (from `03 0D` events), plus the powder
+/// weight Crema last sent it. A new connection starts empty; until the
+/// firmware arrives, no version-gated command is sent.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BookooScale {
     firmware: Option<BookooFirmware>,
     active_mode: Option<u8>,
     auto_phase: Option<AutoPhase>,
+    /// The `0x0D` powder weight (tenths of a gram) sent on this link.
+    powder_weight_sent: Option<u16>,
 }
 
 impl BookooScale {
@@ -772,6 +867,13 @@ impl BookooScale {
         self.firmware.and_then(BookooFirmware::shutdown_command)
     }
 
+    /// The auto-stop conditions the scale takes — see
+    /// [`BookooFirmware::auto_stop_modes`]. Empty until the firmware is known.
+    #[must_use]
+    pub fn auto_stop_modes(&self) -> &'static [AutoStopMode] {
+        self.firmware.map_or(&[], BookooFirmware::auto_stop_modes)
+    }
+
     /// The `0x0B` writes for `mode`; empty until the firmware is known, and on
     /// firmware whose format Crema can't set (see
     /// [`BookooFirmware::auto_stop_writes`]).
@@ -786,6 +888,30 @@ impl BookooScale {
     #[must_use]
     pub fn reports_auto_stop(&self) -> bool {
         self.firmware.is_some_and(BookooFirmware::echoes_auto_stop)
+    }
+
+    /// The `0x0D` write that gives the scale `dose_g` as its powder weight,
+    /// recorded as sent; `None` unless the firmware takes it
+    /// ([`BookooFirmware::takes_powder_weight`]), the dose is in range
+    /// ([`powder_weight_tenths`]) and it differs from what this link was last
+    /// sent.
+    ///
+    /// Crema can't tell an Ultra's timing mode from its ratio mode (no frame
+    /// reports it), so the dose goes out in either; timing mode ignores it.
+    /// A new connection starts with nothing sent, so a reconnect resends.
+    pub fn powder_weight_write(&mut self, dose_g: f32) -> Option<[u8; 6]> {
+        if !self
+            .firmware
+            .is_some_and(BookooFirmware::takes_powder_weight)
+        {
+            return None;
+        }
+        let tenths = powder_weight_tenths(dose_g)?;
+        if self.powder_weight_sent == Some(tenths) {
+            return None;
+        }
+        self.powder_weight_sent = Some(tenths);
+        Some(set_powder_weight(tenths))
     }
 }
 
@@ -1358,12 +1484,23 @@ mod tests {
         // 0x0B 00 = Flow-Stop, 0x0B 01 = Cup-Removal (confirmed by capture).
         assert_eq!(
             set_auto_stop_mode(AutoStopMode::FlowStop),
-            hex6("030a0b000002")
+            Some(hex6("030a0b000002"))
         );
         assert_eq!(
             set_auto_stop_mode(AutoStopMode::CupRemoval),
-            hex6("030a0b010003")
+            Some(hex6("030a0b010003"))
         );
+        // The V3 format has no filter-removal byte: no frame.
+        assert_eq!(set_auto_stop_mode(AutoStopMode::FilterRemoval), None);
+    }
+
+    #[test]
+    fn auto_stop_mode_ids_round_trip() {
+        for mode in AutoStopMode::V4 {
+            assert_eq!(AutoStopMode::from_id(mode.id()), Some(mode));
+        }
+        assert_eq!(AutoStopMode::from_id(2), Some(AutoStopMode::FilterRemoval));
+        assert_eq!(AutoStopMode::from_id(3), None);
     }
 
     #[test]
@@ -1396,6 +1533,51 @@ mod tests {
         assert_eq!(
             set_auto_stop_v4(AutoStopTarget::Ratio, AutoStopMode::CupRemoval),
             hex6("030a0b020202")
+        );
+        // Filter removed: 03 0a 0b <target> 01.
+        assert_eq!(
+            set_auto_stop_v4(AutoStopTarget::Timing, AutoStopMode::FilterRemoval),
+            hex6("030a0b010102")
+        );
+        assert_eq!(
+            set_auto_stop_v4(AutoStopTarget::Ratio, AutoStopMode::FilterRemoval),
+            hex6("030a0b020101")
+        );
+    }
+
+    #[test]
+    fn filter_removal_is_offered_and_sent_only_on_ultra_v4() {
+        let filter = AutoStopMode::FilterRemoval;
+        for fw in [141, 143, 300, 312] {
+            let firmware = BookooFirmware(fw);
+            assert_eq!(firmware.auto_stop_modes(), &AutoStopMode::TWO, "fw {fw}");
+            assert!(firmware.auto_stop_writes(filter).is_empty(), "fw {fw}");
+        }
+        for fw in [400, 403] {
+            let firmware = BookooFirmware(fw);
+            assert_eq!(firmware.auto_stop_modes(), &AutoStopMode::V4, "fw {fw}");
+            assert_eq!(
+                firmware.auto_stop_writes(filter),
+                vec![hex6("030a0b010102"), hex6("030a0b020101")],
+                "fw {fw}"
+            );
+            assert_eq!(
+                firmware.auto_stop_target_write(AutoStopTarget::Ratio, filter),
+                Some(hex6("030a0b020101")),
+                "fw {fw}"
+            );
+        }
+        for fw in [324, 0, 202, 1234] {
+            let firmware = BookooFirmware(fw);
+            assert!(firmware.auto_stop_modes().is_empty(), "fw {fw}");
+            assert!(firmware.auto_stop_writes(filter).is_empty(), "fw {fw}");
+        }
+        let unknown = BookooScale::default();
+        assert!(unknown.auto_stop_modes().is_empty());
+        assert!(unknown.auto_stop_writes(filter).is_empty());
+        assert_eq!(
+            unknown.auto_stop_target_write(AutoStopTarget::Timing, filter),
+            None
         );
     }
 
@@ -1490,6 +1672,90 @@ mod tests {
             assert_ne!(keep(fw), Some(KEEP_AWAKE_V1_4_2), "fw {fw}");
             assert_ne!(off(fw), Some(SHUTDOWN_V1_4_2), "fw {fw}");
         }
+    }
+
+    #[test]
+    fn set_powder_weight_is_the_dose_times_ten_big_endian() {
+        // 03 0a 0d hi lo xor, per the Ultra's published protocol.
+        assert_eq!(set_powder_weight(180), hex6("030a0d00b4b0"));
+        assert_eq!(set_powder_weight(1), hex6("030a0d000105"));
+        assert_eq!(set_powder_weight(9999), hex6("030a0d270f2c"));
+    }
+
+    #[test]
+    fn powder_weight_tenths_rounds_to_a_tenth_inside_the_documented_range() {
+        assert_eq!(powder_weight_tenths(18.0), Some(180));
+        assert_eq!(powder_weight_tenths(18.04), Some(180));
+        assert_eq!(powder_weight_tenths(18.06), Some(181));
+        assert_eq!(powder_weight_tenths(0.1), Some(1));
+        assert_eq!(powder_weight_tenths(999.9), Some(9999));
+        for out_of_range in [0.0, 0.04, -1.0, 999.96, 1500.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(powder_weight_tenths(out_of_range), None, "{out_of_range}");
+        }
+    }
+
+    #[test]
+    fn only_an_ultra_on_v3_2_4_or_later_takes_the_powder_weight() {
+        for fw in [100, 141, 143, 150, 199, 300, 312, 323] {
+            assert!(!BookooFirmware(fw).takes_powder_weight(), "fw {fw}");
+        }
+        for fw in [324, 330, 400, 401, 403, 500] {
+            assert!(BookooFirmware(fw).takes_powder_weight(), "fw {fw}");
+        }
+        // Unknown models (major 0 / 2, debug builds) never do.
+        for fw in [0, 250, 1234] {
+            assert!(!BookooFirmware(fw).takes_powder_weight(), "fw {fw}");
+        }
+    }
+
+    #[test]
+    fn the_powder_weight_goes_only_to_an_ultra_on_v3_2_4_or_later() {
+        assert_eq!(bookoo_with(None, None).powder_weight_write(18.0), None);
+        for fw in [141, 143, 312, 323] {
+            assert_eq!(
+                bookoo_with(Some(fw), None).powder_weight_write(18.0),
+                None,
+                "fw {fw}"
+            );
+        }
+        for fw in [324, 400, 403] {
+            assert_eq!(
+                bookoo_with(Some(fw), None).powder_weight_write(18.0),
+                Some(hex6("030a0d00b4b0")),
+                "fw {fw}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_powder_weight_is_sent_once_per_value_and_again_on_a_new_link() {
+        let mut scale = bookoo_with(Some(403), None);
+        assert_eq!(scale.powder_weight_write(0.0), None, "no dose");
+        assert_eq!(
+            scale.powder_weight_write(18.0),
+            Some(set_powder_weight(180))
+        );
+        assert_eq!(scale.powder_weight_write(18.0), None, "unchanged");
+        assert_eq!(scale.powder_weight_write(18.04), None, "same tenth");
+        assert_eq!(scale.powder_weight_write(1000.0), None, "out of range");
+        assert_eq!(scale.powder_weight_write(18.0), None, "still 18.0 g");
+        assert_eq!(
+            scale.powder_weight_write(20.5),
+            Some(set_powder_weight(205))
+        );
+        // A firmware reported again on the same link changes nothing.
+        scale.absorb(&CommandResponse::Serial {
+            firmware_version: 403,
+            serial: String::new(),
+            anti_mistouch: false,
+        });
+        assert_eq!(scale.powder_weight_write(20.5), None);
+        // A reconnect starts a fresh `BookooScale`: the dose goes out again.
+        let mut reconnected = bookoo_with(Some(403), None);
+        assert_eq!(
+            reconnected.powder_weight_write(20.5),
+            Some(set_powder_weight(205))
+        );
     }
 
     /// A Bookoo that has answered `03 0c` with `fw` and, if given, `03 0e`

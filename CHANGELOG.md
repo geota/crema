@@ -40,6 +40,17 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   instead". A Drive connection you already have keeps working as it is
   until you next sign in. `-foss` signs in through the browser as before
   (#336).
+- **The dose goes to a BOOKOO Ultra for ratio mode** — on firmware 3.2.4 or
+  later, Crema sends the Ultra the shot's dose (the Quick Controls dose, else
+  the profile's) when it connects and whenever the dose changes, so the
+  scale's ratio mode divides by the right weight. A profile picked mid-shot
+  sends its dose when the shot ends. The Mini and older Ultra firmware are
+  left alone. Android and web.
+- **"Filter removed" auto-stop on a BOOKOO Ultra with firmware 4** — the
+  per-mode auto-stop settings for timing and ratio mode now offer Flow stops,
+  Filter removed (a pour-over dripper lifted off) or Cup removed. The Mini and
+  older Ultra firmware have no such condition and keep their two choices.
+  Android and web.
 
 ### Changed
 
@@ -69,6 +80,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   there. On firmware that supports it, Crema keeps the scale awake while the
   DE1 is connected and awake, and can power it off. Device flow keeps its
   sign, and an Ultra no longer shows a stand-in auto-stop value.
+- **The web's scale auto-stop setting says what it does** — on a Mini or an
+  Ultra with firmware 3.1.2 or earlier, the web's Scale page showed an
+  "Auto-stop on flow drop" toggle whose "on" set *cup removed*. It's now an
+  "Auto-stop" choice of Flow stops / Cup removed, like the per-mode rows.
 
 - **de1app shot imports keep their profile and frames** — a `.shot` file
   from de1app's history now brings in the profile it was pulled with, steps
