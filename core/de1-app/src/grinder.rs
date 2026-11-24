@@ -443,14 +443,18 @@ impl CremaCore {
         out.events.push(Event::GrindCompleted { session });
     }
 
-    /// Record a grinder notification in the capture, redacted by its driver.
-    /// With no driver there is nothing to redact with, so nothing is kept.
-    pub(crate) fn capture_grinder(&mut self, data: &[u8], now_ms: u64) {
-        if let Some(driver) = &mut self.grinder.driver {
-            for frame in driver.redact_for_capture(data, now_ms) {
-                self.capture.record(Source::GrinderNotify, &frame, now_ms);
-            }
+    /// Record a grinder notification in the capture, redacted by its driver,
+    /// and return the frames recorded. With no driver there is nothing to
+    /// redact with, so nothing is kept.
+    pub(crate) fn capture_grinder(&mut self, data: &[u8], now_ms: u64) -> Vec<Vec<u8>> {
+        let Some(driver) = &mut self.grinder.driver else {
+            return Vec::new();
+        };
+        let frames = driver.redact_for_capture(data, now_ms);
+        for frame in &frames {
+            self.capture.record(Source::GrinderNotify, frame, now_ms);
         }
+        frames
     }
 
     pub(crate) fn handle_grinder_notify(&mut self, data: &[u8], now_ms: u64, out: &mut CoreOutput) {

@@ -56,8 +56,13 @@ class DriveUnopenedSignInTest {
         keystore.notReady = true
         DriveSync(
             store, json, scope, "cid", notify = {}, backupZip = { null }, backupFileName = { "b" }, applyRestore = { _, _, _ -> },
-            exchangeCode = { _, _ -> issued },
-            refreshToken = { throw DriveHttpError(400, """{"error":"invalid_grant"}""", "refresh refused") },
+            authorizers = listOf(
+                BrowserAuthorizer(
+                    "cid", json,
+                    exchange = { _, _ -> issued },
+                    refresh = { throw DriveHttpError(400, """{"error":"invalid_grant"}""", "refresh refused") },
+                ),
+            ),
         ).also {
                 it.load()
                 keystore.notReady = false

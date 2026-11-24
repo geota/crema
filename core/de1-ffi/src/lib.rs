@@ -232,6 +232,18 @@ impl From<MmrReg> for MmrRegister {
     }
 }
 
+/// One grinder notification's result ([`CremaBridge::on_grinder_notification`]).
+#[derive(uniffi::Record)]
+pub struct GrinderNotified {
+    /// The JSON-encoded [`CoreOutput`], as `on_notification` returns it.
+    pub output: String,
+    /// The frames the core recorded in its capture for it, for the shell's
+    /// own capture file: redacted and re-serialized by the grinder's driver,
+    /// so they never hold its serial or Wi-Fi name. Never the raw bytes.
+    /// Empty on a read-only mirror, or while a message is still arriving.
+    pub capture: Vec<Vec<u8>>,
+}
+
 /// A DE1 sensor the shell can ask the core to read calibration for — mirrors
 /// [`de1_protocol::CalTarget`] across the FFI boundary.
 #[derive(uniffi::Enum)]
@@ -3868,6 +3880,19 @@ impl CremaBridge {
         self.emit(self.core().on_notification(source.into(), &data, now_ms))
     }
 
+    /// Feed one grinder notification ([`NotificationSource::GrinderNotify`]),
+    /// as [`on_notification`](Self::on_notification) does, and get back what
+    /// the core recorded for it: the frames to write to the shell's capture
+    /// file in place of the raw bytes. See
+    /// [`CremaCore::on_grinder_notification`](de1_app::CremaCore::on_grinder_notification).
+    pub fn on_grinder_notification(&self, data: Vec<u8>, now_ms: u64) -> GrinderNotified {
+        let (out, capture) = self.core().on_grinder_notification(&data, now_ms);
+        GrinderNotified {
+            output: self.emit(out),
+            capture,
+        }
+    }
+
     /// The synthesised ack for a profile write of upload `upload_id` (its
     /// `ProfileUploadStarted` number). Ignored unless that upload is still
     /// running. See
@@ -5401,6 +5426,62 @@ mod tests {
         let out: serde_json::Value = serde_json::from_str(&bridge.disconnect_grinder()).unwrap();
         assert_eq!(out["events"], serde_json::json!([]));
         assert!(bridge.grinder_uuids().is_none());
+    }
+
+    /// Android's capture file gets the core's redacted grinder frames
+    /// (grinder-ble §6.4): never the serial or the Wi-Fi name, and nothing
+    /// on a read-only mirror. The decode is the same as `on_notification`'s.
+    #[test]
+    fn a_grinder_notification_exports_its_redacted_capture() {
+        const SERIAL: &str = "SN0000000MT12355";
+        const SSID: &str = "BK-WIFI";
+        let base = format!(
+            r#"{{"broadcast":{{"baseInfo":{{"releaseVer":103111020,"snCode":"{SERIAL}","wifiName":"{SSID}"}}}}}}"#
+        );
+        let frame_of = |message: &[u8]| {
+            let mut frame = vec![0xA5, 0x01, 0x01, 0x00];
+            frame.extend_from_slice(&u16::try_from(message.len()).unwrap().to_le_bytes());
+            frame.extend_from_slice(&[0, 0]);
+            frame.extend_from_slice(message);
+            frame
+        };
+        let frame = frame_of(base.as_bytes());
+        let connected = || {
+            let bridge = CremaBridge::new();
+            bridge.connect_grinder("BOOKOO MT80 0011aabb".to_owned(), vec![]);
+            bridge.grinder_subscribed(20, 0);
+            bridge
+        };
+        let contains =
+            |hay: &[u8], needle: &str| hay.windows(needle.len()).any(|w| w == needle.as_bytes());
+
+        let bridge = connected();
+        let got = bridge.on_grinder_notification(frame.clone(), 100);
+        assert!(!got.capture.is_empty());
+        // Decoded as on_notification decodes: ready at the first reading.
+        let period = br#"{"broadcast":{"periodInfo":{"bladeGap":480,"devState":"IDLE"}}}"#;
+        let out: serde_json::Value =
+            serde_json::from_str(&bridge.on_grinder_notification(frame_of(period), 200).output)
+                .unwrap();
+        assert_eq!(out["events"][0]["type"], "GrinderReady", "{out}");
+        assert_eq!(
+            out["events"][0]["content"]["info"]["firmware"],
+            "1.3.11.1020"
+        );
+        let all = got.capture.concat();
+        assert!(contains(&all, "REDACTED"));
+        for secret in [SERIAL, SSID, "MT12355"] {
+            assert!(!contains(&all, secret), "{secret} exported");
+        }
+
+        let mirror = connected();
+        mirror.set_read_only(true);
+        assert!(
+            mirror
+                .on_grinder_notification(frame, 100)
+                .capture
+                .is_empty()
+        );
     }
 
     #[test]

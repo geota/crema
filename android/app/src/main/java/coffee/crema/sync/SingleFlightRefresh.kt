@@ -22,11 +22,12 @@ import kotlinx.coroutines.sync.withLock
 internal class SingleFlightRefresh<T : Any>(
     /** The set stored now. */
     private val stored: () -> T?,
+    /** The refresh token the grant spends: what [store] and [end] key on. */
     private val refreshTokenOf: (T) -> String?,
     /** Whether a set is too near its expiry to use as it stands. */
     private val expiring: (T) -> Boolean,
-    /** The refresh-token grant. */
-    private val grant: suspend (refreshToken: String) -> T,
+    /** The refresh-token grant for [current], whose refresh token is [spent]. [rejected] as passed to [refresh]. */
+    private val grant: suspend (spent: String, current: T, rejected: Boolean) -> T,
     /** Whether a failed grant proves the session is over. */
     private val endsSession: (Throwable) -> Boolean,
     /** Store [T] if the refresh token spent is still the stored one. */
@@ -51,7 +52,7 @@ internal class SingleFlightRefresh<T : Any>(
             return stored()
         }
         val fresh = try {
-            grant(spent)
+            grant(spent, current, rejected)
         } catch (c: CancellationException) {
             throw c
         } catch (e: Exception) {

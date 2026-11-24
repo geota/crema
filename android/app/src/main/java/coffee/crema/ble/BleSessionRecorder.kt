@@ -17,9 +17,11 @@ import java.util.Locale
  * decode logic be validated with no DE1, no scale, and no Bluetooth.
  *
  * One recorder instance is shared per *session*: [MainViewModel] owns it and
- * hands the same instance to both [De1BleManager] and [ScaleBleManager], so a
- * session with a DE1 and/or a Bookoo scale produces ONE interleaved capture
- * file. Replaying that file reconstructs the whole timeline through a single
+ * hands the same instance to [De1BleManager], [ScaleBleManager] and
+ * [GrinderBleManager], so a session with a DE1, a scale and/or a grinder
+ * produces ONE interleaved capture file. The grinder's lines are the core's
+ * redacted frames (`GRINDER_TX`), never its raw bytes: its serial and the
+ * Wi-Fi name never reach a file. Replaying that file reconstructs the whole timeline through a single
  * `CremaCore`, which matters for scale-aware behaviour like shot-start
  * auto-tare. A connection counter opens the file on the first device connect
  * and closes it on the last disconnect — see [open] / [close].

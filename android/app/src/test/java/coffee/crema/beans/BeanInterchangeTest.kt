@@ -22,7 +22,7 @@ import kotlin.test.assertTrue
  * in `core/de1-domain/tests/fixtures/beans/` was written by [beanLibraryJsonl]
  * from [beans] / [roasters] below and is what web's import test reads
  * (`web/src/lib/bean/android-export.vitest.ts`). Regenerate with
- * `CREMA_REGEN_BEAN_FIXTURES=1 ./gradlew :app:testDebugUnitTest --tests
+ * `CREMA_REGEN_BEAN_FIXTURES=1 ./gradlew :app:testFossDebugUnitTest --tests
  * coffee.crema.beans.BeanInterchangeTest`.
  */
 class BeanInterchangeTest {

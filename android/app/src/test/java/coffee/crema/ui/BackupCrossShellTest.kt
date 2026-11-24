@@ -30,7 +30,7 @@ import kotlin.test.assertTrue
  * `web/src/lib/backup/cross-shell.vitest.ts`) and `android-backup.crema.jsonl`
  * by [backupBundleJsonl] from [seed] below. They are committed artifacts, so an
  * old backup keeps restoring as both shells change. Regenerate with
- * `CREMA_REGEN_BACKUP_FIXTURES=1 ./gradlew :app:testDebugUnitTest --tests
+ * `CREMA_REGEN_BACKUP_FIXTURES=1 ./gradlew :app:testFossDebugUnitTest --tests
  * coffee.crema.ui.BackupCrossShellTest` (and the web vitest for its file).
  */
 class BackupCrossShellTest {

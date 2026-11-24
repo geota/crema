@@ -37,7 +37,7 @@ class GrinderBleManagerTest {
 
     private class Rig(val fake: FakeGrinder, val manager: GrinderBleManager, val lane: CoreLane, var mismatched: Boolean = false)
 
-    private fun rig(fake: FakeGrinder = FakeGrinder()): Rig {
+    private fun rig(fake: FakeGrinder = FakeGrinder(), recorder: BleSessionRecorder? = null, status: (String) -> Unit = {}): Rig {
         lateinit var manager: GrinderBleManager
         val lane = CoreLane(
             scope = scope,
@@ -58,8 +58,9 @@ class GrinderBleManagerTest {
         manager = GrinderBleManager(
             transport = fake,
             bridge = bridge,
+            recorder = recorder,
             onCoreOutput = lane::deliver,
-            onStatus = {},
+            onStatus = status,
             onMismatch = { rigRef?.mismatched = true },
             nowMs = { fake.clock.get() },
         )
@@ -222,6 +223,49 @@ class GrinderBleManagerTest {
         // lines name the model prefix only.
         assertTrue(statuses.any { "BOOKOO MT80 has no grinder service" in it }, "$statuses")
         assertTrue(statuses.none { "1a2b3c4d" in it }, "$statuses")
+    }
+
+    /**
+     * Android's capture file holds the grinder as web's does (grinder-ble
+     * §6.4): the core's redacted, re-serialized frames as `GRINDER_TX`
+     * lines, never the raw bytes. Neither the serial nor the Wi-Fi name
+     * reaches the file, in clear, in hex or across fragments, nor a status line.
+     */
+    @Test
+    fun theCaptureFileHoldsTheRedactedGrinderAndNoSecret() {
+        val dir = kotlin.io.path.createTempDirectory("grinder-capture").toFile()
+        val context = object : android.content.ContextWrapper(null) {
+            override fun getExternalFilesDir(type: String?): java.io.File = dir
+        }
+        val statuses = CopyOnWriteArrayList<String>()
+        val r = rig(recorder = BleSessionRecorder(context), status = { statuses += it })
+        connected(r)
+        val t0 = r.fake.clock.get()
+        r.fake.send(FakeGrinder.base(), seq = 1, atMs = t0 + 100)
+        r.fake.send(FakeGrinder.period("IDLE", 10), seq = 2, atMs = t0 + 200)
+        until("ready") { seen<Event.GrinderReady>().isNotEmpty() && seen<Event.GrinderReading>().isNotEmpty() }
+        r.manager.disconnect() // the last device: the file closes
+
+        val file = java.io.File(dir, "captures").listFiles().orEmpty().single()
+        val text = file.readText()
+        val lines = text.lines().filter { it.isNotBlank() }.map { json.parseToJsonElement(it) as kotlinx.serialization.json.JsonObject }
+        assertEquals(2, lines.size, "the base info and the reading, each one re-serialized frame: $text")
+        for (line in lines) {
+            assertEquals("GRINDER_TX", line["src"].toString().trim('"'))
+            assertEquals("in", line["dir"].toString().trim('"'))
+        }
+        val frames = lines.map { coffee.crema.ble.proxy.Hex.decode(it["hex"].toString().trim('"')) }
+        // The payloads, headers stripped and joined, as replay reassembles them.
+        val payloads = frames.joinToString("") { String(it.copyOfRange(8, it.size), Charsets.UTF_8) }
+        assertTrue("\"snCode\":\"REDACTED\"" in payloads, payloads)
+        assertTrue("\"wifiName\":null" in payloads, payloads)
+        for (secret in listOf(FakeGrinder.SERIAL, FakeGrinder.SSID, "MT12355")) {
+            assertFalse(secret in payloads, "$secret in the capture")
+            assertFalse(secret in text, "$secret in the file")
+            assertFalse(hex(secret.toByteArray()) in text, "$secret in the file, as hex")
+            assertTrue(statuses.none { secret in it }, "$secret in a status line")
+        }
+        dir.deleteRecursively()
     }
 
     private companion object {

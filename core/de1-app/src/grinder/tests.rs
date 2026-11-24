@@ -315,6 +315,61 @@ fn the_capture_never_holds_the_serial_or_the_ssid() {
     assert!(jsonl.contains(&hex("REDACTED")));
 }
 
+/// What `on_grinder_notification` hands a shell for its own capture file
+/// (Android's) is exactly what the core recorded: redacted, re-serialized,
+/// never the serial or the Wi-Fi name, and nothing on a read-only mirror.
+#[test]
+fn the_exported_capture_is_the_recorded_one_and_holds_no_secret() {
+    let mut core = connected();
+    let mut exported = Vec::new();
+    let mut events = Vec::new();
+    for (i, message) in [base(), period("IDLE", 1), period("IDLE", 1)]
+        .iter()
+        .enumerate()
+    {
+        for fragment in encode(message.as_bytes(), 1, 20) {
+            let (out, frames) = core.on_grinder_notification(&fragment, 100 + i as u64 * 200);
+            events.extend(out.events);
+            exported.extend(frames);
+        }
+    }
+    assert!(
+        matches!(&events[0], Event::GrinderReady { .. }),
+        "decoded as before: {events:?}"
+    );
+    // The base info and one reading: the repeat within a second is skipped.
+    let recorded: Vec<String> = core
+        .capture_slice_jsonl(0, 10_000)
+        .lines()
+        .filter(|l| l.contains("GRINDER_TX"))
+        .map(str::to_owned)
+        .collect();
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    assert_eq!(recorded.len(), exported.len());
+    for (line, frame) in recorded.iter().zip(&exported) {
+        assert!(
+            line.contains(&format!("\"hex\":\"{}\"", hex(frame))),
+            "{line}"
+        );
+    }
+    let all: Vec<u8> = exported.concat();
+    for secret in [SERIAL, SSID, "MT12355"] {
+        assert!(
+            !all.windows(secret.len()).any(|w| w == secret.as_bytes()),
+            "{secret} exported"
+        );
+    }
+    assert!(all.windows(8).any(|w| w == b"REDACTED"));
+
+    // A read-only mirror records nothing, so it exports nothing.
+    let mut mirror = connected();
+    mirror.set_read_only(true);
+    for fragment in encode(base().as_bytes(), 1, 20) {
+        assert!(mirror.on_grinder_notification(&fragment, 100).1.is_empty());
+    }
+    assert!(!mirror.capture_slice_jsonl(0, 10_000).contains("GRINDER_TX"));
+}
+
 // ── Follow mode and the shot observation (G3) ─────────────────────────────
 
 fn selections(grinder: &str, grind: Option<&str>) -> de1_domain::ShotSelections {

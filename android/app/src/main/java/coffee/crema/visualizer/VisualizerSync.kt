@@ -783,7 +783,7 @@ class VisualizerSync(
         stored = { persisted.tokens },
         refreshTokenOf = { it.refreshToken },
         expiring = ::expiring,
-        grant = { spent -> refreshTokens(spent).let { it.copy(refreshToken = it.refreshToken ?: spent) } },
+        grant = { spent, _, _ -> refreshTokens(spent).let { it.copy(refreshToken = it.refreshToken ?: spent) } },
         endsSession = { uploadPolicy.refreshEndsSession(it) },
         store = { spent, fresh ->
             persist { st -> if (st.tokens?.refreshToken == spent) st.copy(tokens = fresh) else st }

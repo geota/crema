@@ -3290,6 +3290,33 @@ impl CremaCore {
     /// [`on_profile_write_ack`](Self::on_profile_write_ack) with its upload
     /// id, which drops a superseded upload's ack (round-3 clean check C3 #5).
     pub fn on_notification(&mut self, source: Source, data: &[u8], now_ms: u64) -> CoreOutput {
+        self.record_notification(source, data, now_ms);
+        self.decode_notification(source, data, now_ms)
+    }
+
+    /// [`on_notification`](Self::on_notification) for one grinder
+    /// notification ([`Source::GrinderNotify`]), also returning the frames it
+    /// recorded in the capture: the driver's redacted, re-serialized ones,
+    /// which never hold the grinder's serial or Wi-Fi name. For a shell that
+    /// writes its own capture file (Android's `BleSessionRecorder`), so the
+    /// file holds what this core's capture holds and never the raw bytes.
+    /// Empty on a read-only mirror, with no grinder, or while a message is
+    /// still arriving in fragments.
+    pub fn on_grinder_notification(
+        &mut self,
+        data: &[u8],
+        now_ms: u64,
+    ) -> (CoreOutput, Vec<Vec<u8>>) {
+        let frames = self.record_notification(Source::GrinderNotify, data, now_ms);
+        (
+            self.decode_notification(Source::GrinderNotify, data, now_ms),
+            frames,
+        )
+    }
+
+    /// The capture side of [`on_notification`](Self::on_notification): the
+    /// grinder frames recorded (empty for any other source).
+    fn record_notification(&mut self, source: Source, data: &[u8], now_ms: u64) -> Vec<Vec<u8>> {
         // Capture side-effect first — the recorder needs the raw notification
         // bytes regardless of whether the decode that follows succeeds, and
         // running it here (rather than at each shell's BLE-manager layer)
@@ -3300,15 +3327,20 @@ impl CremaCore {
         // belongs to the primary, which records the authoritative session; a
         // mirror recording every shot it watches just litters its captures dir
         // and feeds the replay-primary's "newest capture" loop (issue 14).
-        if !self.read_only {
-            // The grinder's bytes go through its driver's redaction first:
-            // its serial and Wi-Fi name never reach a capture.
-            if source == Source::GrinderNotify {
-                self.capture_grinder(data, now_ms);
-            } else {
-                self.capture.record(source, data, now_ms);
-            }
+        if self.read_only {
+            return Vec::new();
         }
+        // The grinder's bytes go through its driver's redaction first: its
+        // serial and Wi-Fi name never reach a capture.
+        if source == Source::GrinderNotify {
+            return self.capture_grinder(data, now_ms);
+        }
+        self.capture.record(source, data, now_ms);
+        Vec::new()
+    }
+
+    /// The decode side of [`on_notification`](Self::on_notification).
+    fn decode_notification(&mut self, source: Source, data: &[u8], now_ms: u64) -> CoreOutput {
         let now = ms_to_duration(now_ms);
         self.clock = self.clock.max(now);
         let mut out = CoreOutput::default();

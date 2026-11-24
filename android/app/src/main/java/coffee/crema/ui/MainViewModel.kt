@@ -16,6 +16,7 @@ import coffee.crema.core.MachineRequest
 import coffee.crema.core.WaterSessionKind
 import coffee.crema.core.MmrReg
 import coffee.crema.core.Bean
+import coffee.crema.drive.DriveAuthorizers
 import coffee.crema.drive.DriveStore
 import coffee.crema.drive.DriveSync
 import coffee.crema.core.builtinCremaProfiles
@@ -422,7 +423,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Google Drive backup controller — a self-contained sibling of [visualizer].
-     * Owns the Drive OAuth + token freshness + the upload/list/download calls; the
+     * Owns the Drive sign-in (the build's DriveAuthorizers) + token freshness + the upload/list/download calls; the
      * backup BYTES come from this VM via the callbacks (the same `crema-backup/v1`
      * JSONL the local SAF backup writes). [state] is mirrored into [MainUiState.drive].
      */
@@ -439,6 +440,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         applyRestore = { file, wipe, from ->
             startRestoreFile(file, from?.name?.ifBlank { null } ?: "your Google Drive backup", if (wipe) RestoreMode.WIPE else RestoreMode.MERGE, from, adopt = true)
         },
+        authorizers = DriveAuthorizers.create(app, coffee.crema.BuildConfig.GOOGLE_DRIVE_CLIENT_ID, json),
         restoreDownloadFile = { newDriveDownload() },
         autoBackupBlocked = { autoBackupBlocked() },
         damageByStore = { damageByStore() },
@@ -934,6 +936,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val grinder: coffee.crema.ble.GrinderBleManager = coffee.crema.ble.GrinderBleManager(
         transport = proxy.transport,
         bridge = bridge,
+        recorder = bleRecorder,
         onCoreOutput = lane::deliver,
         onStatus = { line -> appendLog(line) },
         onIdentified = { model, caps -> grinderController.onIdentified(model, caps) },
