@@ -69,7 +69,7 @@ pub use firmware_flash::{
     FLASHABLE_MODELS, FirmwareFlash, FlashAction, FlashBlocker, FlashFailure, FlashPhase,
     FlashShellConditions, FlashStartError, FlashStatus, FlashStep,
 };
-pub use grinder::{RECENT_GRINDS, device_scan_filters, identify_device};
+pub use grinder::{RECENT_GRINDS, device_scan_filters, grinder_shown_name, identify_device};
 pub use machine_requests::{
     MAX_HOLD, MachineRequestDrop, MachineRequestRefusal, PROFILE_DOWNLOAD_GUARD,
 };

@@ -42,6 +42,7 @@ import no.nordicsemi.kotlin.ble.client.android.CentralManager
 import no.nordicsemi.kotlin.ble.client.android.ConnectionPriority
 import no.nordicsemi.kotlin.ble.client.android.Peripheral
 import no.nordicsemi.kotlin.ble.client.android.native
+import no.nordicsemi.kotlin.ble.core.CharacteristicProperty
 import no.nordicsemi.kotlin.ble.core.ConnectionState
 import no.nordicsemi.kotlin.ble.core.Manager
 import no.nordicsemi.kotlin.ble.core.WriteType
@@ -122,6 +123,10 @@ class NordicBleTransport(context: Context) : BleTransport {
     /** Per-device discovered GATT service UUIDs (lowercased), captured once at
      *  [connect] and served by [discoveredServices] for scale identification. */
     private val serviceUuids = ConcurrentHashMap<NordicDeviceHandle, List<String>>()
+
+    /** Per-device discovered characteristics' properties, by lowercased
+     *  "service/characteristic", captured with [serviceUuids]. */
+    private val characteristicProps = ConcurrentHashMap<NordicDeviceHandle, Map<String, Set<GattProperty>>>()
 
     /** Per-device job mirroring [Peripheral.state] into [states]; cancelled + replaced
      *  on every [connect] so repeated connects (each reconnect attempt) don't stack
@@ -461,6 +466,11 @@ class NordicBleTransport(context: Context) : BleTransport {
                 // (a distinctive service names the codec when the advertised
                 // name can't — Acaia generation, rebrand, mixed-case).
                 serviceUuids[handle] = resolved.services.map { it.uuid.toString().lowercase() }
+                characteristicProps[handle] = resolved.services.flatMap { s ->
+                    s.characteristics.map { c ->
+                        gattKey(s.uuid.toString(), c.uuid.toString()) to c.properties.mapNotNull { it.toGattProperty() }.toSet()
+                    }
+                }.toMap()
                 // Dump the full GATT table to Logcat. This is how Bookoo
                 // characteristics beyond the weight-notify one (e.g. a
                 // battery/timer/command channel) get discovered without a
@@ -474,13 +484,30 @@ class NordicBleTransport(context: Context) : BleTransport {
     override fun discoveredServices(device: BleTransport.DeviceHandle): List<String> =
         serviceUuids[device as? NordicDeviceHandle] ?: emptyList()
 
+    override fun characteristicProperties(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID): Set<GattProperty>? {
+        val table = characteristicProps[device as? NordicDeviceHandle] ?: return null
+        return table[gattKey(service.toString(), characteristic.toString())] ?: emptySet()
+    }
+
+    private fun gattKey(service: String, characteristic: String) = "${service.lowercase()}/${characteristic.lowercase()}"
+
+    private fun CharacteristicProperty.toGattProperty(): GattProperty? = when (this) {
+        CharacteristicProperty.READ -> GattProperty.READ
+        CharacteristicProperty.WRITE -> GattProperty.WRITE
+        CharacteristicProperty.WRITE_WITHOUT_RESPONSE -> GattProperty.WRITE_WITHOUT_RESPONSE
+        CharacteristicProperty.NOTIFY -> GattProperty.NOTIFY
+        CharacteristicProperty.INDICATE -> GattProperty.INDICATE
+        else -> null
+    }
+
     /**
      * Log every discovered GATT service and, under each, every characteristic
      * with its UUID and decoded properties (READ / WRITE / WRITE_NO_RESPONSE /
      * NOTIFY / INDICATE / …). Called once per connect, after discovery.
      */
     private fun logGatt(handle: NordicDeviceHandle, discovered: RemoteServices.Discovered) {
-        val label = handle.name ?: handle.address
+        // A grinder's name suffix may derive from its serial: logged by its prefix.
+        val label = handle.name?.let { n -> coffee.crema.core.grinderShownName(n).takeIf { it != "grinder" } ?: n } ?: handle.address
         Log.i(TAG, "GATT for $label (${handle.address}): ${discovered.services.size} service(s)")
         for (service in discovered.services) {
             Log.i(TAG, "  service ${service.uuid}")
@@ -720,6 +747,7 @@ class NordicBleTransport(context: Context) : BleTransport {
         stateMirrorJobs.values.forEach { it.cancel() }
         stateMirrorJobs.clear()
         serviceUuids.clear()
+        characteristicProps.clear()
         peripherals.clear()
         states.clear()
     }

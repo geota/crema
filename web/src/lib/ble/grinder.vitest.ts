@@ -104,9 +104,12 @@ function fakeGrinder(id = 'grinder-A') {
 	return {
 		device,
 		writes,
-		/** Send one message, fragmented, from the notify characteristic. */
-		send(json: string, atMs: number) {
-			for (const data of frames(json)) sink?.({ characteristic: NOTIFY, data, atMs });
+		/** Send one message, fragmented, from the notify characteristic;
+		 *  the fragments at [lost] never arrive. */
+		send(json: string, atMs: number, lost: readonly number[] = []) {
+			frames(json).forEach((data, i) => {
+				if (!lost.includes(i)) sink?.({ characteristic: NOTIFY, data, atMs });
+			});
 		},
 		/** The link drops on its own. */
 		drop() {
@@ -165,8 +168,8 @@ async function connectedApp(id?: string) {
 		internals.applyCoreOutput(await core.onTick(nowMs));
 		await settle();
 	};
-	const send = async (json: string, atMs: number) => {
-		grinder.send(json, atMs);
+	const send = async (json: string, atMs: number, lost: readonly number[] = []) => {
+		grinder.send(json, atMs, lost);
 		await settle();
 	};
 	return {
@@ -217,6 +220,21 @@ describe('the connected grinder over Web Bluetooth', () => {
 			name: 'BOOKOO MT80 0011aabb',
 			auto: true
 		});
+	});
+
+	it('a lost first fragment drops that reading, not the link (official §5.1)', async () => {
+		// BOOKOO's README periodInfo: 248 bytes, 21 fragments at 20-byte packets.
+		const readme =
+			'{"broadcast":{"periodInfo":{"feedingRpm":65,"bladeGap":500,"grindRpm":700,"humidity":25,"devState":"IDLE","netState":"CONNECTED","totalGrinds":120,"cupDetect":true,"autoStop":true,"fastClean":true,"brightness":5,"standbySec":60,"selectPreset":-1}}}';
+		expect(frames(readme)).toHaveLength(21);
+		const t = await connectedApp();
+		await t.send(period(), 200);
+		for (const at of [400, 600, 800]) await t.send(readme, at, [0]);
+		await t.send(readme, 1_000);
+		await t.tick(1_100);
+		expect(t.grinder.device.recycle).not.toHaveBeenCalled();
+		expect(t.view().state).toBe('ready');
+		expect(t.view().reading?.setting?.value).toBe('500');
 	});
 
 	it('a silent link is dropped into the reconnect ladder once, and the reconnect handshakes again', async () => {
@@ -345,6 +363,18 @@ describe('the connected grinder over Web Bluetooth', () => {
 		expect(t.log()).not.toContain('SECRET');
 		expect(t.log()).not.toContain('HOME-SSID');
 		expect(localStorage.getItem(LAST_DEVICES_KEY) ?? '').not.toContain('SECRET');
+	});
+
+	it('shows and logs the advertised name by its model prefix only (REVIEW-565)', async () => {
+		const t = await connectedApp();
+		await t.send(period(), 300);
+		expect(t.view().state).toBe('ready');
+		// The suffix may derive from the serial: never on screen or in the log.
+		expect(t.view().name).toBe('BOOKOO MT80');
+		expect(t.log()).toContain('Connecting to BOOKOO MT80…');
+		expect(t.log()).not.toContain('0011aabb');
+		// The reconnect keeps the full name, on this device only.
+		expect(readLastDevices().grinder?.name).toBe('BOOKOO MT80 0011aabb');
 	});
 
 	it('links the one unlinked Motto record on Ready, with a message', async () => {

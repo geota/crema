@@ -110,7 +110,7 @@ internal class CoreLane(
     fun deliver(raw: String) {
         scope.launch(dispatcher) {
             runCatching { applyJson(raw) }
-                .onFailure { log("Core output application failed: ${it.message}") }
+                .onFailure { log("Core output application failed: ${failureLabel(it)}") }
         }
     }
 
@@ -129,7 +129,7 @@ internal class CoreLane(
         val output: CoreOutput = runCatching {
             json.decodeFromString(CoreOutput.serializer(), raw)
         }.getOrElse {
-            log("JSON parse error: ${it.message}")
+            log("JSON parse error: ${failureLabel(it)}")
             return
         }
         applyOutput(output)
@@ -356,10 +356,23 @@ internal class CoreLane(
         )
     }
 
-    private companion object {
+    internal companion object {
+        /**
+         * A failure as a log may name it: the exception's class and, for a
+         * kotlinx decode, the JSON path. Never the message, which echoes its
+         * "JSON input" (a grinder event carries the serial, REVIEW-565).
+         */
+        fun failureLabel(e: Throwable): String {
+            val path = e.message?.let { PATH.find(it)?.groupValues?.get(1) }
+            return e.javaClass.simpleName + (path?.let { " at $it" } ?: "")
+        }
+
+        /** kotlinx's "at path: $.events[0].content" (its key names, no values). */
+        private val PATH = Regex("""at path: (\$[\w.\[\]]*)""")
+
         /** `Command.Stop`'s write: Idle (`0x02`) to the requested-state
          *  characteristic, the byte the core's own Idle request carries. */
-        val STOP_WRITE = Command.WriteCharacteristic(
+        private val STOP_WRITE = Command.WriteCharacteristic(
             coffee.crema.core.CommandWriteCharacteristicInner(WriteTarget.De1RequestedState, listOf(0x02u)),
         )
     }

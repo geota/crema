@@ -158,14 +158,71 @@ class GrinderBleManagerTest {
         assertTrue(r.manager.isUserDisconnected, "no reconnect after giving up")
     }
 
+    /** M1 (BOOKOO §5.1): a lost notification drops that message, never the
+     *  link. The README `periodInfo` is 21 frames at 20 bytes; without frame
+     *  0 the other 20 are orphans, which once killed the link. */
+    @Test
+    fun aLostFirstFragmentDropsTheReadingNotTheLink() {
+        val r = rig()
+        connected(r)
+        val t0 = r.fake.clock.get()
+        r.fake.send(FakeGrinder.base(), seq = 1, atMs = t0 + 100)
+        r.fake.send(README_PERIOD, seq = 2, atMs = t0 + 200)
+        until("ready") { seen<Event.GrinderReading>().size == 1 }
+        assertEquals(21, FakeGrinder.frames(README_PERIOD.toByteArray(), 3).size)
+        for (i in 0 until 3) r.fake.send(README_PERIOD, seq = 3 + i, atMs = t0 + 400 + i * 200L, lost = setOf(0))
+        r.fake.send(README_PERIOD.replace("\"bladeGap\":500", "\"bladeGap\":510"), seq = 9, atMs = t0 + 1_200)
+        until("the next reading") { seen<Event.GrinderReading>().size == 2 }
+        assertEquals("510", seen<Event.GrinderReading>().last().content.reading.setting?.value)
+        assertTrue(seen<Event.GrinderLinkDead>().isEmpty(), "the link stands")
+        r.manager.disconnect()
+    }
+
+    /** S1 (BOOKOO §4.3): the service is there, but RX can't be written or TX
+     *  doesn't notify: the "doesn't look like a Motto 80" mismatch, nothing written. */
+    @Test
+    fun aMottoServiceWithoutAWritableRxOrNotifyingTxIsRefused() {
+        val readOnly = setOf(GattProperty.READ)
+        for (chars in listOf(
+            mapOf(FakeGrinder.RX to readOnly, FakeGrinder.TX to setOf(GattProperty.NOTIFY)),
+            mapOf(FakeGrinder.RX to setOf(GattProperty.WRITE), FakeGrinder.TX to setOf(GattProperty.INDICATE)),
+            mapOf(FakeGrinder.TX to setOf(GattProperty.NOTIFY)),
+        )) {
+            val r = rig(FakeGrinder(characteristics = chars))
+            r.manager.connect(FakeGrinder.Handle, FakeGrinder.NAME)
+            until("the mismatch for $chars") { r.mismatched }
+            until("stopped") { r.manager.isUserDisconnected }
+            assertEquals(0, r.fake.writes.size, "nothing written to it")
+        }
+        // Write without response alone is enough, as BOOKOO's client checks it.
+        val r = rig(FakeGrinder(characteristics = mapOf(FakeGrinder.RX to setOf(GattProperty.WRITE_WITHOUT_RESPONSE), FakeGrinder.TX to setOf(GattProperty.NOTIFY))))
+        connected(r)
+        assertFalse(r.mismatched)
+        r.manager.disconnect()
+    }
+
+    /** A device with the grinder's name and no services at all is a mismatch too. */
+    @Test
+    fun aLookAlikeWithNoServicesIsRefused() {
+        val r = rig(FakeGrinder(services = emptyList()))
+        r.manager.connect(FakeGrinder.Handle, FakeGrinder.NAME)
+        until("the mismatch") { r.mismatched }
+        assertEquals(0, r.fake.writes.size)
+    }
+
     @Test
     fun aLookAlikeWithoutTheServiceIsRefused() {
-        val r = rig(FakeGrinder(services = listOf("0000ffff-0000-1000-8000-00805f9b34fb")))
+        val statuses = CopyOnWriteArrayList<String>()
+        val r = rig(FakeGrinder(services = listOf("0000ffff-0000-1000-8000-00805f9b34fb")), status = { statuses += it })
         r.manager.connect(FakeGrinder.Handle, FakeGrinder.NAME)
         until("the mismatch") { r.mismatched }
         until("stopped") { r.manager.isUserDisconnected }
         Thread.sleep(200)
         assertEquals(0, r.fake.writes.size, "nothing written to it")
+        // REVIEW-565: the name's suffix may derive from the serial; status
+        // lines name the model prefix only.
+        assertTrue(statuses.any { "BOOKOO MT80 has no grinder service" in it }, "$statuses")
+        assertTrue(statuses.none { "1a2b3c4d" in it }, "$statuses")
     }
 
     /**
@@ -209,5 +266,10 @@ class GrinderBleManagerTest {
             assertTrue(statuses.none { secret in it }, "$secret in a status line")
         }
         dir.deleteRecursively()
+    }
+
+    private companion object {
+        /** BOOKOO's README §7.3 `periodInfo`: 248 bytes. */
+        const val README_PERIOD = """{"broadcast":{"periodInfo":{"feedingRpm":65,"bladeGap":500,"grindRpm":700,"humidity":25,"devState":"IDLE","netState":"CONNECTED","totalGrinds":120,"cupDetect":true,"autoStop":true,"fastClean":true,"brightness":5,"standbySec":60,"selectPreset":-1}}}"""
     }
 }

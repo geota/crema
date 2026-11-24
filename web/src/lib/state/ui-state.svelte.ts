@@ -498,7 +498,8 @@ export interface ConnectedGrinderView {
 	readonly state: BleConnectionState;
 	/** The browser's Bluetooth id (the link's key, `#lib/grinder/connected-link`), or null. */
 	readonly deviceId: string | null;
-	/** The advertised name, or null. */
+	/** The advertised name as shown: its model prefix only ("BOOKOO MT80"),
+	 *  since the suffix may derive from the serial. Null before identify. */
 	readonly name: string | null;
 	/** The model id the core identified (a grinder catalogue id), or null. */
 	readonly model: string | null;

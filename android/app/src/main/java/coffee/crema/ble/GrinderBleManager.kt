@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.util.Log
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.GrinderUuids
+import coffee.crema.core.grinderShownName
 import coffee.crema.core.NotificationSource
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
@@ -226,14 +227,14 @@ class GrinderBleManager(
         dropCoreGrinder()
         val services = runCatching { transport.discoveredServices(device) }.getOrDefault(emptyList())
         val model = bridge.connectGrinder(advertisedName, services)
-            ?: error("Core did not recognise grinder '$advertisedName'")
+            ?: error("Core did not recognise grinder '${grinderShownName(advertisedName)}'")
         val u = json.decodeFromString(
             GrinderUuids.serializer(),
             bridge.grinderUuids() ?: error("Core reported no UUIDs for '$model'"),
         )
-        // The service, RX and TX must be there (BOOKOO §4.3: else disconnect
-        // and report a mismatch). Services come lowercased from the transport.
-        if (services.isNotEmpty() && services.none { it.equals(u.service, ignoreCase = true) }) {
+        // BOOKOO §4.3: the service, a writable RX and a TX that notifies,
+        // else disconnect and report a mismatch.
+        if (!gattFits(device, u, services)) {
             // Retrying can't help: stop the session (off this coroutine, which
             // the stop cancels).
             onMismatch()
@@ -264,8 +265,23 @@ class GrinderBleManager(
         onCoreOutput(bridge.grinderSubscribed(SAFE_PACKET.toUInt(), nowMs().toULong()))
     }
 
-    /** The device answered the scan by name but has no grinder service. */
-    class GattMismatch(name: String) : IllegalStateException("$name has no grinder service")
+    /**
+     * BOOKOO §4.3 as its client checks it (`mt80_gatt_client.py`): the custom
+     * service, RX with `write` or `write-without-response`, and TX with
+     * `notify`. A transport that can't list characteristics falls back to the
+     * service list; one that listed none can't tell, and the subscribe decides.
+     */
+    private fun gattFits(device: BleTransport.DeviceHandle, u: GrinderUuids, services: List<String>): Boolean {
+        val service = UUID.fromString(u.service)
+        val rx = transport.characteristicProperties(device, service, UUID.fromString(u.write))
+        val tx = transport.characteristicProperties(device, service, UUID.fromString(u.notify))
+        if (rx == null || tx == null) return services.isEmpty() || services.any { it.equals(u.service, ignoreCase = true) }
+        return (GattProperty.WRITE in rx || GattProperty.WRITE_WITHOUT_RESPONSE in rx) && GattProperty.NOTIFY in tx
+    }
+
+    /** The device answered the scan by name but has no grinder service. Its
+     *  message names the model prefix only: it reaches the status lines. */
+    class GattMismatch(name: String) : IllegalStateException("${grinderShownName(name)} has no grinder service")
 
     /** Leave the shared recording: its file closes once the last device has gone. */
     private fun leaveRecording() {

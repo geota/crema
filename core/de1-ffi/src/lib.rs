@@ -2862,6 +2862,14 @@ pub fn grinder_has_variable_speed(preset_id: Option<String>) -> bool {
     de1_domain::grinder_catalogue::has_variable_speed(preset_id.as_deref())
 }
 
+/// A grinder's advertised name as a log or the screen may show it: the
+/// model prefix only. See [`de1_app::grinder_shown_name`].
+#[uniffi::export]
+#[must_use]
+pub fn grinder_shown_name(advertised_name: String) -> String {
+    de1_app::grinder_shown_name(&advertised_name)
+}
+
 /// The pre-connect scan filters for one device kind (`"Scale"`,
 /// `"Grinder"`) or, for `None`, every kind (Android's one scanner) — as JSON
 /// `{"name_prefixes":[…],"service_uuids":[…]}`. An unknown kind gets empty

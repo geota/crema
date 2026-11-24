@@ -21,6 +21,7 @@ import { Effect } from 'effect';
 import type { CoreOutput, CremaCore, GrinderUuids } from '#lib/core/index.js';
 import type { BleDevice } from '#lib/ble/transport.js';
 import { GrinderConnectStepFailed } from '../effect/errors.ts';
+import { grinderShownName } from '#lib/wasm/de1_wasm.js';
 
 /**
  * Web Bluetooth can't tell the negotiated MTU, so the handshake goes in
@@ -79,7 +80,7 @@ export const grinderHandshakeProgram = (
 		if (model === undefined) {
 			return yield* new GrinderConnectStepFailed({
 				step: 'grinder identification',
-				cause: `Not a grinder Crema knows: '${d.advertisedName}'`
+				cause: `Not a grinder Crema knows: '${grinderShownName(d.advertisedName)}'`
 			});
 		}
 		const uuids = yield* step('grinder UUIDs')(() => d.core.grinderUuids());
@@ -116,7 +117,8 @@ export const grinderConnectProgram = (
 	d: GrinderConnectDeps
 ): Effect.Effect<void, GrinderConnectStepFailed> =>
 	Effect.gen(function* () {
-		d.onStatus(`Connecting to ${d.advertisedName}…`);
+		// The model prefix only: the name's suffix may derive from the serial.
+		d.onStatus(`Connecting to ${grinderShownName(d.advertisedName)}…`);
 		yield* step('GATT connect')(() => d.device.connectGatt());
 		const services = yield* Effect.promise(
 			(): Promise<readonly string[]> => d.device.discoveredServiceUuids?.() ?? Promise.resolve([])
@@ -127,7 +129,7 @@ export const grinderConnectProgram = (
 		if (model === undefined) {
 			return yield* new GrinderConnectStepFailed({
 				step: 'grinder identification',
-				cause: `Not a grinder Crema knows: '${d.advertisedName}'`
+				cause: `Not a grinder Crema knows: '${grinderShownName(d.advertisedName)}'`
 			});
 		}
 		d.onIdentified(model, services);

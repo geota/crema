@@ -106,6 +106,23 @@ pub fn identify_device(
     })
 }
 
+/// A grinder's advertised name as a log, a status line or the screen may
+/// show it: its model prefix only (`"BOOKOO MT80"`), never the suffix after
+/// it, which may derive from the serial (REVIEW-565). `"grinder"` for a name
+/// no grinder prefix matches. The full name stays where a reconnect needs it.
+#[must_use]
+pub fn grinder_shown_name(advertised_name: &str) -> String {
+    ScanFilters::of(GRINDERS)
+        .name_prefixes
+        .iter()
+        .find(|p| {
+            advertised_name
+                .get(..p.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(p))
+        })
+        .map_or_else(|| "grinder".to_owned(), |p| p.trim_end().to_owned())
+}
+
 /// The pre-connect scan filters for one kind (`Some`) or for every kind
 /// (`None`, Android's one scanner). Web asks per kind, so the Grinder tab's
 /// chooser lists no scales.
