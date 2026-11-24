@@ -66,9 +66,8 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   it. In the scale's own automatic mode, Crema picks the tare commands that
   land in each documented state: after an automatic run, where the plain tare
   is ignored, it adds BOOKOO's "tare and start", which newer firmware takes
-  there. On
-  firmware that supports it, Crema keeps the scale awake while the DE1 is
-  connected and awake, and can power it off. Device flow keeps its
+  there. On firmware that supports it, Crema keeps the scale awake while the
+  DE1 is connected and awake, and can power it off. Device flow keeps its
   sign, and an Ultra no longer shows a stand-in auto-stop value.
 
 - **de1app shot imports keep their profile and frames** — a `.shot` file
@@ -107,8 +106,6 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 - **DE1 firmware 1359 is recognised** — the build Decent made for the Decenza
   app showed as "newer than Crema knows"; Settings → Machine now calls it a
   Decenza build, not on Decent's channels. Web, tablet and phone.
-||||||| 17594adc
-||||||| original
 - **The scale steps aside during a firmware update** — while a DE1 firmware
   update runs (15–25 minutes), Crema now drops the scale's Bluetooth link and
   stops scanning for it and reconnecting to it, so the scale's weight stream
