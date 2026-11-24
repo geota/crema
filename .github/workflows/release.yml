@@ -309,9 +309,13 @@ jobs:
             --no-daemon --stacktrace
           # Release APKs (`foss`, `play`) + Play AAB — fully optimized
           # release-profile native lib (LTO + opt-3), signed when a keystore is
-          # configured. One invocation so the cargo release build + bindgen run
-          # once for every output.
-          ./gradlew :app:assembleFossRelease :app:assemblePlayRelease :app:bundlePlayRelease -PcargoProfile=release \
+          # configured. One invocation per flavor: compiling both at once ran
+          # the Kotlin compiler out of memory in CI. The second's cargo build
+          # finds the first's library current.
+          ./gradlew :app:assembleFossRelease -PcargoProfile=release \
+            -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE" \
+            --no-daemon --stacktrace
+          ./gradlew :app:assemblePlayRelease :app:bundlePlayRelease -PcargoProfile=release \
             -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE" \
             --no-daemon --stacktrace
 

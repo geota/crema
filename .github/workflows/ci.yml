@@ -732,14 +732,22 @@ jobs:
           restore-keys: robolectric-
 
       # Two distributions (#336): the full suite, lint and an APK on `foss`; on
-      # `play`, the Drive tests (its sign-in differs) and an APK. Then the
-      # F-Droid guard: no Google Play services, Firebase or Play code in what
-      # `foss` ships or compiles (checkFossHasNoGoogle, app/build.gradle.kts).
-      - name: Unit tests + lint + debug APKs + F-Droid guard
+      # `play`, the Drive tests (its sign-in differs) and an APK. Two
+      # invocations: compiling both variants at once ran the Kotlin compiler
+      # out of memory. Then the F-Droid guard: no Google Play services,
+      # Firebase or Play code in what `foss` ships or compiles
+      # (checkFossHasNoGoogle, app/build.gradle.kts).
+      - name: Unit tests + lint + debug APK (foss)
         working-directory: android
         run: |
           ./gradlew :app:testFossDebugUnitTest :app:lintFossDebug :app:assembleFossDebug \
-            :app:testPlayDebugUnitTest --tests 'coffee.crema.drive.*' :app:assemblePlayDebug \
+            -Porg.gradle.java.installations.fromEnv=JAVA_HOME_21_X64 \
+            --no-daemon --stacktrace
+
+      - name: Drive tests + debug APK (play) + F-Droid guard
+        working-directory: android
+        run: |
+          ./gradlew :app:testPlayDebugUnitTest --tests 'coffee.crema.drive.*' :app:assemblePlayDebug \
             :app:checkFossHasNoGoogle \
             -Porg.gradle.java.installations.fromEnv=JAVA_HOME_21_X64 \
             --no-daemon --stacktrace
