@@ -4,6 +4,14 @@
 //! [`COMMAND_UUID`]. The commands are fixed byte sequences (the legacy app
 //! hard-codes them, checksum included).
 //!
+//! BOOKOO publishes the protocol for both scales this driver covers, the Mini
+//! and the Ultra (BooKooCode/OpenSource `bookoo_mini_scale/protocols.md` and
+//! `bookoo_ultra_scale/protocols.md`, both "Last Update November 17, 2026").
+//! The two share the frame format; several commands differ by model and
+//! firmware. [`BookooFirmware`] tells them apart by the firmware version the
+//! scale reports in its `03 0c` serial reply (Mini V1.x, Ultra V3 / V4), and
+//! [`BookooScale`] keys every version-dependent command off it.
+//!
 //! # Weight notification packet
 //!
 //! The scale sends fixed 20-byte notifications on the weight characteristic.
@@ -15,7 +23,8 @@
 //! ```text
 //! [0-1]   03 0b      header (constant in the whole capture)
 //! [2-4]   timer, 24-bit big-endian milliseconds (see TIMER below)
-//! [5]     constant 0x01
+//! [5]     unit of weight — 01 grams (Ultra: 02 ounces; the weight value
+//!         is always grams, per the doc)
 //! [6]     "weight indicator" byte — 0x2b ('+') or 0x2d ('-'); see INDICATOR
 //! [7-9]   weight, 24-bit big-endian, in units of 0.01 g
 //! [10]    "flow indicator" byte — 0x2b ('+') or 0x2d ('-'); see INDICATOR
@@ -34,7 +43,7 @@
 //! official BOOKOO app stepping volume, then standby, then two on/off toggles:
 //!
 //! ```text
-//! [13]    battery %        — assumed; constant 0x64 (100) in every capture
+//! [13]    battery %        — documented ("percentage of remaining power")
 //! [14-15] standby timeout  — u16 big-endian, in units of 0.1 min
 //!                            (standby_minutes = value / 10): e.g. 0x0096 = 150
 //!                            -> 15 min, 0x012C = 300 -> 30 min
@@ -44,18 +53,19 @@
 //!                            flow smoothing was turned on and 1->0 when it was
 //!                            turned off, in lockstep with set_flow_smoothing
 //!                            (0x08). Exposed as `flow_smoothing: bool`.
-//! [18]    auto-stop mode (0/1) — CONFIRMED. 0 = Flow-Stop, 1 = Cup-Removal.
-//!                            This byte matches the `p1` of every set_auto_stop
-//!                            (0x0B) write in the official-app HCI snoop (5/5,
-//!                            both directions), so the scale echoes its live
-//!                            auto-stop mode here. Exposed raw as `auto_stop`.
+//! [18]    auto-stop mode (0/1) on the Mini. 0 = Flow-Stop, 1 = Cup-Removal.
+//!                            The doc calls this byte "Reserved" (Mini) and
+//!                            `00` (Ultra). On a Mini it matches the `p1` of
+//!                            every set_auto_stop (0x0B) write in the
+//!                            official-app HCI snoop (5/5, both directions),
+//!                            an undocumented echo. Exposed raw as
+//!                            `auto_stop`; [`BookooScale::reports_auto_stop`]
+//!                            says whether it means anything (Mini only).
 //! ```
 //!
 //! [`BookooPacket`] surfaces `[13]` as `battery_percent`, `[14-15]` as
 //! `standby_minutes`, `[16]` as `volume`, `[17]` as the confirmed
-//! `flow_smoothing` bool, and `[18]` as the confirmed `auto_stop` mode byte.
-//! Byte `[5]` (constant `0x01` in every capture) is now the only unidentified
-//! weight byte.
+//! `flow_smoothing` bool, and `[18]` as the raw `auto_stop` byte.
 //!
 //! ## INDICATOR bytes `[6]` and `[10]`
 //!
@@ -69,11 +79,10 @@
 //! change when motion stops). Its exact meaning could not be pinned down from
 //! this capture.
 //!
-//! `[10]` changes far more often (26 transitions vs 6 for `[6]`) and `'-'`
-//! appears *only* on packets whose flow rate is non-zero (156/156), never on a
-//! zero-flow packet — so `[10]` is plausibly the sign of the flow rate, but the
-//! capture (a hand jiggling an object, not a real pour) is too noisy to confirm
-//! the polarity.
+//! `[10]` is the flow rate's sign: the published protocol names it "flow rate
+//! symbol data points (+/-)", and in the capture `'-'` appears *only* on
+//! packets whose flow rate is non-zero (156/156). `flow_g_per_s` applies it,
+//! so a falling weight reads as a negative device flow.
 //!
 //! To stay faithful to the legacy app for the one field it decodes, the weight
 //! still honours `[6]` as a sign. The raw indicator bytes are also exposed on
@@ -84,8 +93,8 @@
 //! The flow rate is a 16-bit big-endian value at bytes `[11-12]`; its unit is
 //! **0.01 g/s** — confirmed against a real pour capture, where a ~590 g pour
 //! read a median ~4.2 g/s, matching the scale's own display. [`BookooPacket`]
-//! exposes both the raw `flow_raw` and a `flow_g_per_s` computed as
-//! `flow_raw / 100.0`.
+//! exposes both the raw `flow_raw` and a signed `flow_g_per_s` computed as
+//! `flow_raw / 100.0`, negated when the `[10]` sign byte is `'-'`.
 //!
 //! ## TIMER
 //!
@@ -127,17 +136,26 @@
 //! 0x04 TIMER_START            start the timer
 //! 0x05 TIMER_STOP             stop the timer
 //! 0x06 TIMER_RESET            reset the timer
+//! 0x07 TARE_AND_START         tare and start (sent instead of 0x01 in Auto)
 //! 0x08 set_flow_smoothing    flow smoothing on/off, p1 = 0|1
 //! 0x0A QUERY_SERIAL           query serial number (scale replies 03 0c …)
-//! 0x0B set_auto_stop_mode     auto-stop mode, p1 = 0|1 (see AutoStopMode)
+//! 0x0B set_auto_stop_mode     auto-stop, Mini / Ultra <= V3.1.2 format
+//! 0x0B set_auto_stop_v4       auto-stop, Ultra >= V4.0.0 format
 //! 0x0E set_mode_enabled       enable/disable a display mode, p1 = mode index
 //! 0x0F QUERY_SETTINGS         query settings (scale replies 03 0e …)
 //! 0x10 set_anti_mistouch      anti-mistouch on/off, p1 = 0|1
+//! 0x11 SHUTDOWN_V1_4_2        shutdown, Mini V1.4.2 only
+//! 0x12 KEEP_AWAKE_V1_4_2      reset the auto-off countdown, Mini V1.4.2 only
+//! 0x15 SHUTDOWN               shutdown, Mini >= V1.4.3, Ultra >= V4.0.0
+//! 0x25 KEEP_AWAKE             reset the auto-off countdown, Mini >= V1.4.3,
+//!                             Ultra >= V4.0.1
 //! ```
 //!
-//! Commands `0x08`, `0x0B` and `0x10` are single-byte settings whose feature
-//! mapping was confirmed against a Bluetooth-HCI capture of the official BOOKOO
-//! app with a known action order — see each builder's doc comment.
+//! `0x01`–`0x08`, `0x11`/`0x12`, `0x15` and `0x25` are in the published
+//! protocol, as is `0x0B` on the Ultra. `0x0A`, `0x0E`, `0x0F`, `0x10` and the
+//! Mini's `0x0B` are not ("other data is not open"): they were
+//! reverse-engineered from a Bluetooth-HCI capture of the official BOOKOO app
+//! with a known action order — see each builder's doc comment.
 
 // The 24-bit raw weight fields are decoded into `f32` grams; representing a
 // wire reading as the codec's `f32` weight is inherent to the format, not a
@@ -185,6 +203,51 @@ pub const TIMER_START: [u8; 6] = command(0x04, 0x00, 0x00);
 pub const TIMER_STOP: [u8; 6] = command(0x05, 0x00, 0x00);
 /// Command: reset the timer.
 pub const TIMER_RESET: [u8; 6] = command(0x06, 0x00, 0x00);
+/// Command `0x07`: tare and start (the doc's "recommend" tare).
+///
+/// [`BookooScale::tare_command`] sends it instead of [`TARE`] while the scale
+/// reports its Auto mode, where `0x01` is ignored once an extraction has run
+/// (Mini all versions, Ultra all versions: "ignored during automatic running,
+/// automatic done"). What `0x07` does in Auto, per the doc:
+///
+/// - **Mini V1.0.0–V1.0.1:** nothing in Auto (ready or done).
+/// - **Mini V1.0.2–V1.4.1:** in Auto *ready*, starts the extraction at once;
+///   ignored in Auto *done*.
+/// - **Mini ≥ V1.4.2:** in Auto *ready*, starts the extraction at once; in Auto
+///   *done*, tares, clears the last result and returns to ready without
+///   starting.
+/// - **Ultra ≤ V3.1.2:** in Auto *ready*, starts the extraction (Auto *done* is
+///   not mentioned).
+/// - **Ultra ≥ V4.0.0:** in Auto *ready*, starts the extraction; in Auto
+///   *done*, returns to idle and tares without starting; ignored in Auto
+///   *idle* or *running*.
+///
+/// All versions ignore it during an automatic run. Where it does not tare, the
+/// weight does not zero, and the core's open-weight guard refuses the weight
+/// stop as it does for any tare that did not land.
+pub const TARE_AND_START: [u8; 6] = command(0x07, 0x00, 0x00);
+
+/// Command `0x25`: reset the automatic-shutdown countdown (keep awake).
+///
+/// Mini ≥ V1.4.3 (not beta V1.5.0.0806), Ultra ≥ V4.0.1. The doc says to send
+/// it early and periodically rather than just before the scale would sleep. It
+/// does not change the configured auto-off duration.
+pub const KEEP_AWAKE: [u8; 6] = command(0x25, 0x00, 0x00);
+/// Command `0x12`: the Mini V1.4.2 form of [`KEEP_AWAKE`]. Sent to exactly
+/// that version and nothing else.
+pub const KEEP_AWAKE_V1_4_2: [u8; 6] = command(0x12, 0x00, 0x00);
+/// Command `0x15`: shut the scale down (the BLE link drops as it sleeps).
+///
+/// Mini ≥ V1.4.3 (not beta V1.5.0.0806), Ultra ≥ V4.0.0 (not while charging).
+pub const SHUTDOWN: [u8; 6] = command(0x15, 0x00, 0x00);
+/// Command `0x11`: the Mini V1.4.2 form of [`SHUTDOWN`]. Sent to exactly that
+/// version and nothing else.
+pub const SHUTDOWN_V1_4_2: [u8; 6] = command(0x11, 0x00, 0x00);
+
+/// How often to send [`KEEP_AWAKE`] while connected, in milliseconds. The
+/// shortest auto-off the scale allows is 5 minutes; a write every minute
+/// resets the countdown well before it runs out.
+pub const KEEP_AWAKE_INTERVAL_MS: u32 = 60_000;
 
 /// Command: query the scale's serial number.
 ///
@@ -282,35 +345,256 @@ pub const fn set_flow_smoothing(enabled: bool) -> [u8; 6] {
     command(0x08, enabled as u8, 0x00)
 }
 
-/// The scale's auto-stop mode, set with [`set_auto_stop_mode`] (command `0x0B`).
+/// The scale's auto-stop condition: what ends an automatic-mode extraction.
 ///
-/// A two-state setting; the wire form is `0x0B <p1>` with `p1` from the
-/// discriminant below. Both values are confirmed against a capture of the
-/// official BOOKOO app, cross-checked with the scale's reported current state:
-/// `0x0B 00` = Flow-Stop, `0x0B 01` = Cup-Removal.
+/// Crema's id for each is the discriminant (`0` / `1`), which is also the
+/// `p1` byte of the Mini / Ultra-V3 format. The Ultra-V4 format numbers the
+/// conditions differently — see [`AutoStopMode::v4_condition`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoStopMode {
-    /// Flow-Stop auto-stop (`p1 = 0`): stop timing when the flow rate hits 0.
+    /// Stop when the liquid flow stops (`p1 = 0`).
     FlowStop = 0,
-    /// Cup-removal auto-stop (`p1 = 1`): stop timing when the cup is removed.
+    /// Stop when the cup is removed (`p1 = 1`; on Ultra V4, "server being
+    /// removed").
     CupRemoval = 1,
 }
 
 impl AutoStopMode {
-    /// The `p1` byte the scale uses for this mode in command `0x0B`.
+    /// The `p1` byte the scale uses for this mode in the Mini / Ultra-V3
+    /// command `0x0B`.
     #[must_use]
     pub const fn p1(self) -> u8 {
         self as u8
     }
+
+    /// The Ultra-V4 stop-condition byte (`0x0B`'s BYTE5): `00` liquid flow
+    /// stopping, `02` server being removed. V4's third condition, `01` filter
+    /// being removed (a pour-over dripper lifted off), has no Crema setting.
+    #[must_use]
+    pub const fn v4_condition(self) -> u8 {
+        match self {
+            AutoStopMode::FlowStop => 0x00,
+            AutoStopMode::CupRemoval => 0x02,
+        }
+    }
+
+    /// The mode for Crema's id (`0` / `1`), or `None` for any other id.
+    #[must_use]
+    pub const fn from_id(id: u8) -> Option<AutoStopMode> {
+        match id {
+            0 => Some(AutoStopMode::FlowStop),
+            1 => Some(AutoStopMode::CupRemoval),
+            _ => None,
+        }
+    }
 }
 
-/// Command `0x0B` — select the scale's auto-stop mode.
+/// Command `0x0B` in the Mini / Ultra ≤ V3.1.2 format: `0B <stop> 00`.
 ///
-/// Confirmed against a Bluetooth-HCI capture of the official BOOKOO app with a
-/// known action order. See [`AutoStopMode`] for the two states.
+/// The Ultra doc gives this format for release firmware V3.1.2 and earlier and
+/// says not to use it on V4.0.0 and later. The Mini doc does not list `0x0B`;
+/// the official BOOKOO app sends this same format to a Mini (V1.4.1 HCI
+/// capture, cross-checked with the scale's echo in weight byte `[18]`). Send it
+/// only through [`BookooScale::auto_stop_writes`], which checks the firmware.
 #[must_use]
 pub const fn set_auto_stop_mode(mode: AutoStopMode) -> [u8; 6] {
     command(0x0B, mode.p1(), 0x00)
+}
+
+/// The Ultra-V4 automatic submode a `0x0B` stop condition applies to
+/// (`0x0B`'s BYTE4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoStopTarget {
+    /// Timing mode (`01`).
+    Timing = 1,
+    /// Ratio mode (`02`).
+    Ratio = 2,
+}
+
+/// Command `0x0B` in the Ultra ≥ V4.0.0 format: `0B <target> <stop>`.
+///
+/// The two formats are not interchangeable: on V4, the V3 frame for
+/// Cup-Removal (`0B 01 00`) would set *timing mode = flow stops*.
+#[must_use]
+pub const fn set_auto_stop_v4(target: AutoStopTarget, mode: AutoStopMode) -> [u8; 6] {
+    command(0x0B, target as u8, mode.v4_condition())
+}
+
+/// The model a firmware version belongs to — see [`BookooFirmware::model`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BookooModel {
+    /// The Mini (Themis Mini): firmware V1.x.
+    Mini,
+    /// The Ultra (Themis Ultra): firmware V3.x and V4.x (and later).
+    Ultra,
+}
+
+/// A Bookoo firmware version as the `03 0c` serial reply encodes it:
+/// `major × 100 + minor × 10 + patch` (V1.4.3 is `143`, V4.0.1 is `401`).
+///
+/// The published protocols gate several commands by model and version, and
+/// the two models share one advertised name, so the version is how Crema
+/// tells them apart: the Mini ships V1.x, the Ultra V3.x / V4.x.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BookooFirmware(pub u16);
+
+/// Mini V1.4.2: the one release that used `0x11` / `0x12`.
+const MINI_V1_4_2: u16 = 142;
+/// Mini V1.4.3: the first release with `0x15` / `0x25`.
+const MINI_V1_4_3: u16 = 143;
+/// Mini beta V1.5.0.0806, which the doc says lacks `0x15` / `0x25`. Its
+/// build suffix is not in the encoding, so every reported `150` is treated
+/// as that beta.
+const MINI_BETA_V1_5_0: u16 = 150;
+/// Ultra V3.1.2: the last release with the V3 `0x0B` format.
+const ULTRA_V3_1_2: u16 = 312;
+/// Ultra V4.0.0: the V4 `0x0B` format and `0x15`.
+const ULTRA_V4_0_0: u16 = 400;
+/// Ultra V4.0.1: the first release with `0x25`.
+const ULTRA_V4_0_1: u16 = 401;
+
+impl BookooFirmware {
+    /// The model this version belongs to: major 1 is a Mini, majors 3–9 an
+    /// Ultra. `None` for anything else (a major 0 or 2, or a debug build's
+    /// four-digit value), and every version-gated command stays unsent.
+    #[must_use]
+    pub const fn model(self) -> Option<BookooModel> {
+        match self.0 / 100 {
+            1 => Some(BookooModel::Mini),
+            3..=9 => Some(BookooModel::Ultra),
+            _ => None,
+        }
+    }
+
+    /// The keep-awake command this firmware takes, if any.
+    #[must_use]
+    pub const fn keep_awake_command(self) -> Option<&'static [u8; 6]> {
+        match self.model() {
+            Some(BookooModel::Mini) if self.0 == MINI_V1_4_2 => Some(&KEEP_AWAKE_V1_4_2),
+            Some(BookooModel::Mini) if self.0 >= MINI_V1_4_3 && self.0 != MINI_BETA_V1_5_0 => {
+                Some(&KEEP_AWAKE)
+            }
+            Some(BookooModel::Ultra) if self.0 >= ULTRA_V4_0_1 => Some(&KEEP_AWAKE),
+            _ => None,
+        }
+    }
+
+    /// The shutdown command this firmware takes, if any.
+    #[must_use]
+    pub const fn shutdown_command(self) -> Option<&'static [u8; 6]> {
+        match self.model() {
+            Some(BookooModel::Mini) if self.0 == MINI_V1_4_2 => Some(&SHUTDOWN_V1_4_2),
+            Some(BookooModel::Mini) if self.0 >= MINI_V1_4_3 && self.0 != MINI_BETA_V1_5_0 => {
+                Some(&SHUTDOWN)
+            }
+            Some(BookooModel::Ultra) if self.0 >= ULTRA_V4_0_0 => Some(&SHUTDOWN),
+            _ => None,
+        }
+    }
+
+    /// The `0x0B` writes that set `mode` on this firmware; empty when Crema
+    /// can't set it correctly.
+    ///
+    /// - Mini: the captured `0B <stop> 00`.
+    /// - Ultra ≤ V3.1.2: the documented V3 `0B <stop> 00`.
+    /// - Ultra ≥ V4.0.0: `0B <target> <stop>` for both automatic submodes
+    ///   (timing, then ratio), so Crema's one setting means the same in each.
+    /// - Ultra V3.1.3–V3.9.9 (betas such as V3.2.4, neither format documented)
+    ///   and an unknown model: nothing.
+    #[must_use]
+    pub fn auto_stop_writes(self, mode: AutoStopMode) -> Vec<[u8; 6]> {
+        match self.model() {
+            Some(BookooModel::Mini) => vec![set_auto_stop_mode(mode)],
+            Some(BookooModel::Ultra) if self.0 <= ULTRA_V3_1_2 => vec![set_auto_stop_mode(mode)],
+            Some(BookooModel::Ultra) if self.0 >= ULTRA_V4_0_0 => vec![
+                set_auto_stop_v4(AutoStopTarget::Timing, mode),
+                set_auto_stop_v4(AutoStopTarget::Ratio, mode),
+            ],
+            _ => Vec::new(),
+        }
+    }
+
+    /// Whether weight byte `[18]` echoes the auto-stop setting: on a Mini
+    /// (captured, undocumented). The Ultra doc fixes it at `00`.
+    #[must_use]
+    pub const fn echoes_auto_stop(self) -> bool {
+        matches!(self.model(), Some(BookooModel::Mini))
+    }
+}
+
+/// What Crema has learnt about a connected Bookoo from its `ff12` replies: the
+/// firmware (from `03 0c`) and the active mode (from `03 0e`). A new
+/// connection starts empty; until the firmware arrives, no version-gated
+/// command is sent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BookooScale {
+    firmware: Option<BookooFirmware>,
+    active_mode: Option<u8>,
+}
+
+impl BookooScale {
+    /// Fold a decoded `ff12` reply into what the scale has told us.
+    pub fn absorb(&mut self, response: &CommandResponse) {
+        match response {
+            CommandResponse::Serial {
+                firmware_version, ..
+            } => self.firmware = Some(BookooFirmware(*firmware_version)),
+            CommandResponse::Settings { active_mode, .. } => self.active_mode = Some(*active_mode),
+        }
+    }
+
+    /// The reported firmware, once the serial reply has arrived.
+    #[must_use]
+    pub const fn firmware(&self) -> Option<BookooFirmware> {
+        self.firmware
+    }
+
+    /// Whether the scale last reported its Auto mode as active.
+    #[must_use]
+    pub fn in_auto_mode(&self) -> bool {
+        self.active_mode == Some(BookooMode::Auto.index())
+    }
+
+    /// The tare frame to send: [`TARE_AND_START`] while the scale reports Auto
+    /// (owner decision 2026-11-24 — `0x01` is ignored in Auto running / done;
+    /// see [`TARE_AND_START`] for what `0x07` does per model and version),
+    /// [`TARE`] in every other mode and before the mode is known.
+    #[must_use]
+    pub fn tare_command(&self) -> &'static [u8; 6] {
+        if self.in_auto_mode() {
+            &TARE_AND_START
+        } else {
+            &TARE
+        }
+    }
+
+    /// The keep-awake command, once the firmware is known to take one.
+    #[must_use]
+    pub fn keep_awake_command(&self) -> Option<&'static [u8; 6]> {
+        self.firmware.and_then(BookooFirmware::keep_awake_command)
+    }
+
+    /// The shutdown command, once the firmware is known to take one.
+    #[must_use]
+    pub fn shutdown_command(&self) -> Option<&'static [u8; 6]> {
+        self.firmware.and_then(BookooFirmware::shutdown_command)
+    }
+
+    /// The `0x0B` writes for `mode`; empty until the firmware is known, and on
+    /// firmware whose format Crema can't set (see
+    /// [`BookooFirmware::auto_stop_writes`]).
+    #[must_use]
+    pub fn auto_stop_writes(&self, mode: AutoStopMode) -> Vec<[u8; 6]> {
+        self.firmware
+            .map_or_else(Vec::new, |fw| fw.auto_stop_writes(mode))
+    }
+
+    /// Whether weight byte `[18]` is the live auto-stop setting (a Mini, once
+    /// its firmware is known).
+    #[must_use]
+    pub fn reports_auto_stop(&self) -> bool {
+        self.firmware.is_some_and(BookooFirmware::echoes_auto_stop)
+    }
 }
 
 /// Command `0x10` — enable or disable *anti-mistouch*.
@@ -340,19 +624,16 @@ pub struct BookooPacket {
     pub weight_indicator: u8,
     /// Raw 16-bit big-endian flow value, bytes `[11-12]`.
     pub flow_raw: u16,
-    /// Flow rate in g/s: `flow_raw / 100.0`. The 0.01 g/s unit is confirmed
-    /// against a real pour capture — see the module docs.
+    /// Flow rate in g/s: `flow_raw / 100.0`, negative when the `[10]` sign
+    /// byte is `'-'`. The 0.01 g/s unit is confirmed against a real pour
+    /// capture — see the module docs.
     pub flow_g_per_s: f32,
-    /// Raw `[10]` "flow indicator" byte — `0x2b` (`'+'`) or `0x2d` (`'-'`),
-    /// plausibly the flow sign. Exposed unmassaged.
+    /// Raw `[10]` flow sign byte — `0x2b` (`'+'`) or `0x2d` (`'-'`).
     pub flow_indicator: u8,
     /// Scale-timer reading in milliseconds, bytes `[2-4]` (24-bit big-endian).
     pub timer_ms: u32,
-    /// Battery charge percentage, byte `[13]`.
-    ///
-    /// **Assumed mapping.** Byte `[13]` is `0x64` (100) in every capture
-    /// available, so the battery interpretation has never been observed
-    /// changing — see the module docs.
+    /// Battery charge percentage, byte `[13]` — documented in both published
+    /// protocols ("percentage of remaining power").
     pub battery_percent: u8,
     /// Auto-standby timeout in minutes, decoded from bytes `[14-15]`.
     ///
@@ -368,13 +649,14 @@ pub struct BookooPacket {
     /// was turned off, in lockstep with [`set_flow_smoothing`]. See the module
     /// docs.
     pub flow_smoothing: bool,
-    /// The scale's live auto-stop mode, raw byte `[18]` (`0` / `1`).
+    /// Raw byte `[18]`: on a Mini, the live auto-stop mode (`0` = Flow-Stop,
+    /// `1` = Cup-Removal).
     ///
-    /// **Confirmed.** `0` = Flow-Stop, `1` = Cup-Removal. This byte matches the
-    /// `p1` of every [`set_auto_stop_mode`] (`0x0B`) write in the official-app
-    /// HCI snoop (5/5, both directions), so the scale echoes its live auto-stop
-    /// mode here. Exposed as the raw mode id to match [`AutoStopMode`]. See the
-    /// module docs.
+    /// The doc calls it "Reserved" (Mini) and `00` (Ultra). On a Mini it
+    /// matches the `p1` of every [`set_auto_stop_mode`] (`0x0B`) write in the
+    /// official-app HCI snoop (5/5, both directions), an undocumented echo; on
+    /// an Ultra it says nothing. Use it only where
+    /// [`BookooScale::reports_auto_stop`] holds.
     pub auto_stop: u8,
 }
 
@@ -444,6 +726,12 @@ pub fn parse_packet(data: &[u8]) -> Option<BookooPacket> {
     };
 
     let flow_raw = (u16::from(data[11]) << 8) | u16::from(data[12]);
+    let flow_magnitude = f32::from(flow_raw) / 100.0;
+    let flow_g_per_s = if data[10] == b'-' {
+        -flow_magnitude
+    } else {
+        flow_magnitude
+    };
 
     // Bytes [14-15] are a 16-bit big-endian standby timeout in units of
     // 0.1 min; the scale only ever sets whole minutes in the documented
@@ -456,7 +744,7 @@ pub fn parse_packet(data: &[u8]) -> Option<BookooPacket> {
         weight_g,
         weight_indicator: data[6],
         flow_raw,
-        flow_g_per_s: f32::from(flow_raw) / 100.0,
+        flow_g_per_s,
         flow_indicator: data[10],
         timer_ms,
         battery_percent: data[13],
@@ -884,6 +1172,236 @@ mod tests {
             set_auto_stop_mode(AutoStopMode::CupRemoval),
             hex6("030a0b010003")
         );
+    }
+
+    #[test]
+    fn documented_command_frames_are_byte_exact() {
+        // 03 0a cmd 00 00 xor, per both published protocols.
+        assert_eq!(TARE_AND_START, hex6("030a0700000e"));
+        assert_eq!(KEEP_AWAKE, hex6("030a2500002c"));
+        assert_eq!(SHUTDOWN, hex6("030a1500001c"));
+        assert_eq!(KEEP_AWAKE_V1_4_2, hex6("030a1200001b"));
+        assert_eq!(SHUTDOWN_V1_4_2, hex6("030a11000018"));
+    }
+
+    #[test]
+    fn set_auto_stop_v4_puts_the_target_in_byte4_and_the_condition_in_byte5() {
+        // Timing mode, flow stops: 03 0a 0b 01 00.
+        assert_eq!(
+            set_auto_stop_v4(AutoStopTarget::Timing, AutoStopMode::FlowStop),
+            hex6("030a0b010003")
+        );
+        // Timing mode, server removed: 03 0a 0b 01 02.
+        assert_eq!(
+            set_auto_stop_v4(AutoStopTarget::Timing, AutoStopMode::CupRemoval),
+            hex6("030a0b010201")
+        );
+        // Ratio mode, flow stops / server removed.
+        assert_eq!(
+            set_auto_stop_v4(AutoStopTarget::Ratio, AutoStopMode::FlowStop),
+            hex6("030a0b020000")
+        );
+        assert_eq!(
+            set_auto_stop_v4(AutoStopTarget::Ratio, AutoStopMode::CupRemoval),
+            hex6("030a0b020202")
+        );
+    }
+
+    #[test]
+    fn firmware_tells_the_mini_from_the_ultra() {
+        assert_eq!(BookooFirmware(100).model(), Some(BookooModel::Mini));
+        assert_eq!(BookooFirmware(143).model(), Some(BookooModel::Mini));
+        assert_eq!(BookooFirmware(312).model(), Some(BookooModel::Ultra));
+        assert_eq!(BookooFirmware(403).model(), Some(BookooModel::Ultra));
+        // Majors 0 and 2, and a debug build's four-digit value: unknown.
+        assert_eq!(BookooFirmware(0).model(), None);
+        assert_eq!(BookooFirmware(202).model(), None);
+        assert_eq!(BookooFirmware(1234).model(), None);
+    }
+
+    #[test]
+    fn auto_stop_writes_follow_the_firmware_format() {
+        let flow = AutoStopMode::FlowStop;
+        let cup = AutoStopMode::CupRemoval;
+        // Mini (captured format) and Ultra <= V3.1.2 (documented V3 format).
+        for fw in [141, 143, 300, 312] {
+            assert_eq!(
+                BookooFirmware(fw).auto_stop_writes(flow),
+                vec![hex6("030a0b000002")],
+                "fw {fw}"
+            );
+            assert_eq!(
+                BookooFirmware(fw).auto_stop_writes(cup),
+                vec![hex6("030a0b010003")],
+                "fw {fw}"
+            );
+        }
+        // Ultra >= V4.0.0: never the V3 frame; both automatic submodes.
+        for fw in [400, 401, 403, 500] {
+            assert_eq!(
+                BookooFirmware(fw).auto_stop_writes(flow),
+                vec![hex6("030a0b010003"), hex6("030a0b020000")],
+                "fw {fw}"
+            );
+            assert_eq!(
+                BookooFirmware(fw).auto_stop_writes(cup),
+                vec![hex6("030a0b010201"), hex6("030a0b020202")],
+                "fw {fw}"
+            );
+        }
+        // Ultra betas between the two (V3.2.4) and unknown models: nothing.
+        for fw in [313, 324, 399, 0, 202, 1234] {
+            assert!(
+                BookooFirmware(fw).auto_stop_writes(flow).is_empty(),
+                "fw {fw}"
+            );
+            assert!(
+                BookooFirmware(fw).auto_stop_writes(cup).is_empty(),
+                "fw {fw}"
+            );
+        }
+    }
+
+    #[test]
+    fn keep_awake_and_shutdown_are_version_gated() {
+        let keep = |fw| BookooFirmware(fw).keep_awake_command().copied();
+        let off = |fw| BookooFirmware(fw).shutdown_command().copied();
+        // Mini <= V1.4.1: neither.
+        for fw in [100, 102, 141] {
+            assert_eq!(keep(fw), None, "fw {fw}");
+            assert_eq!(off(fw), None, "fw {fw}");
+        }
+        // Mini V1.4.2 exactly: 12 / 11.
+        assert_eq!(keep(142), Some(hex6("030a1200001b")));
+        assert_eq!(off(142), Some(hex6("030a11000018")));
+        // Mini >= V1.4.3: 25 / 15.
+        for fw in [143, 144, 160] {
+            assert_eq!(keep(fw), Some(hex6("030a2500002c")), "fw {fw}");
+            assert_eq!(off(fw), Some(hex6("030a1500001c")), "fw {fw}");
+        }
+        // Mini beta V1.5.0: neither.
+        assert_eq!(keep(150), None);
+        assert_eq!(off(150), None);
+        // Ultra V3: neither; V4.0.0: shutdown only; >= V4.0.1: both.
+        for fw in [300, 312, 324] {
+            assert_eq!(keep(fw), None, "fw {fw}");
+            assert_eq!(off(fw), None, "fw {fw}");
+        }
+        assert_eq!(keep(400), None);
+        assert_eq!(off(400), Some(hex6("030a1500001c")));
+        for fw in [401, 403] {
+            assert_eq!(keep(fw), Some(hex6("030a2500002c")), "fw {fw}");
+            assert_eq!(off(fw), Some(hex6("030a1500001c")), "fw {fw}");
+        }
+        // 11 / 12 never go to an Ultra or another Mini.
+        for fw in [141, 143, 312, 400, 401, 1234] {
+            assert_ne!(keep(fw), Some(KEEP_AWAKE_V1_4_2), "fw {fw}");
+            assert_ne!(off(fw), Some(SHUTDOWN_V1_4_2), "fw {fw}");
+        }
+    }
+
+    /// A Bookoo that has answered `03 0c` with `fw` and, if given, `03 0e`
+    /// with `active_mode`.
+    fn bookoo_with(fw: Option<u16>, active_mode: Option<u8>) -> BookooScale {
+        let mut scale = BookooScale::default();
+        if let Some(firmware_version) = fw {
+            scale.absorb(&CommandResponse::Serial {
+                firmware_version,
+                serial: String::new(),
+                anti_mistouch: false,
+            });
+        }
+        if let Some(active_mode) = active_mode {
+            scale.absorb(&CommandResponse::Settings {
+                active_mode,
+                enabled_modes: 0b111,
+            });
+        }
+        scale
+    }
+
+    #[test]
+    fn nothing_version_gated_is_sent_before_the_firmware_is_known() {
+        let scale = BookooScale::default();
+        assert_eq!(scale.firmware(), None);
+        assert!(scale.auto_stop_writes(AutoStopMode::FlowStop).is_empty());
+        assert!(scale.auto_stop_writes(AutoStopMode::CupRemoval).is_empty());
+        assert_eq!(scale.keep_awake_command(), None);
+        assert_eq!(scale.shutdown_command(), None);
+        assert!(!scale.reports_auto_stop());
+    }
+
+    #[test]
+    fn a_serial_reply_records_the_firmware() {
+        // The real 03 0c frame from a Mini on V1.4.1.
+        let frame = hex20("030c008d534e32343030643636613839653701ce");
+        let mut scale = BookooScale::default();
+        scale.absorb(&parse_command_response(&frame).expect("a 03 0c response"));
+        assert_eq!(scale.firmware(), Some(BookooFirmware(141)));
+        assert!(scale.reports_auto_stop());
+        assert_eq!(
+            scale.auto_stop_writes(AutoStopMode::CupRemoval),
+            vec![hex6("030a0b010003")]
+        );
+    }
+
+    #[test]
+    fn tare_sends_tare_and_start_only_in_auto_mode() {
+        // Mode unknown, Flow-Rate, Timer: 01.
+        for mode in [None, Some(0), Some(1)] {
+            assert_eq!(
+                *bookoo_with(Some(143), mode).tare_command(),
+                hex6("030a01000008"),
+                "mode {mode:?}"
+            );
+        }
+        // Auto (index 2): 07, on either model and with the firmware unknown.
+        for fw in [None, Some(141), Some(143), Some(312), Some(403)] {
+            assert_eq!(
+                *bookoo_with(fw, Some(2)).tare_command(),
+                hex6("030a0700000e"),
+                "fw {fw:?}"
+            );
+        }
+        // Leaving Auto goes back to 01.
+        let mut scale = bookoo_with(Some(143), Some(2));
+        scale.absorb(&CommandResponse::Settings {
+            active_mode: 1,
+            enabled_modes: 0b010,
+        });
+        assert_eq!(*scale.tare_command(), hex6("030a01000008"));
+    }
+
+    #[test]
+    fn only_a_mini_reports_byte_18_as_the_auto_stop_setting() {
+        assert!(bookoo_with(Some(141), None).reports_auto_stop());
+        assert!(bookoo_with(Some(143), None).reports_auto_stop());
+        assert!(!bookoo_with(Some(312), None).reports_auto_stop());
+        assert!(!bookoo_with(Some(403), None).reports_auto_stop());
+        assert!(!bookoo_with(Some(1234), None).reports_auto_stop());
+    }
+
+    #[test]
+    fn the_flow_sign_byte_negates_the_flow() {
+        // Bytes 11-12 = 0x01A4 = 420 -> 4.20 g/s; [10] = '-'.
+        let mut frame = hex20("030b000000012b0000002b01a464009601000000");
+        frame[19] = frame[..19].iter().fold(0, |a, &b| a ^ b);
+        let p = parse_packet(&frame).expect("a weight frame");
+        assert!(
+            (p.flow_g_per_s - 4.20).abs() < 0.001,
+            "flow {}",
+            p.flow_g_per_s
+        );
+        frame[10] = b'-';
+        frame[19] = frame[..19].iter().fold(0, |a, &b| a ^ b);
+        let p = parse_packet(&frame).expect("a weight frame");
+        assert_eq!(p.flow_indicator, b'-');
+        assert!(
+            (p.flow_g_per_s + 4.20).abs() < 0.001,
+            "flow {}",
+            p.flow_g_per_s
+        );
+        assert_eq!(p.flow_raw, 0x01A4);
     }
 
     #[test]

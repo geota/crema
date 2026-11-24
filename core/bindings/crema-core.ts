@@ -5841,7 +5841,9 @@ export interface ScaleCapabilities {
 	anti_mistouch: boolean;
 	/**
 	 * The scale accepts a command to select its auto-stop mode (the Bookoo's
-	 * flow-stop / cup-removal setting).
+	 * flow-stop / cup-removal setting). On a Bookoo this turns on only once
+	 * the firmware has been reported, so the shell re-reads the capabilities
+	 * when a `ScaleConfig` event carries the firmware.
 	 */
 	auto_stop: boolean;
 	/**

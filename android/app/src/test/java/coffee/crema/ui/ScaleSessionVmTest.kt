@@ -74,6 +74,36 @@ class ScaleSessionVmTest {
     }
 
     @Test
+    fun `a firmware report re-reads the capabilities it gates`() {
+        val vm = build()
+        val bridge = VmHarness.bridge(vm)
+        bridge.connectScale("BOOKOO_SC", emptyList())
+        VmHarness.scaleController(vm).refreshScaleCapabilities("BOOKOO_SC")
+        VmHarness.drainCoreLane(vm)
+        VmHarness.idle()
+        // Before the serial reply: no auto-stop, no keep-awake clock.
+        var caps = vm.ui.value.scaleCapabilities
+        assertEquals(false, caps?.auto_stop)
+        assertNull(caps?.heartbeat_interval_ms)
+
+        // A Bookoo Mini's `03 0c` reply reporting firmware 1.4.3 (0x008f).
+        val serial = intArrayOf(
+            0x03, 0x0c, 0x00, 0x8f, 0x53, 0x4e, 0x32, 0x34, 0x30, 0x30, 0x64, 0x36, 0x36, 0x61,
+            0x38, 0x39, 0x65, 0x37, 0x01, 0x00,
+        ).map { it.toByte() }.toByteArray()
+        serial[19] = serial.take(19).fold(0) { a, b -> a xor b.toInt() }.toByte()
+        val out = bridge.onNotification(coffee.crema.core.NotificationSource.SCALE_COMMAND, serial, 1_000uL)
+        VmHarness.deliverCoreOutput(vm, out)
+        VmHarness.drainCoreLane(vm)
+        VmHarness.idle()
+        caps = vm.ui.value.scaleCapabilities
+        assertEquals(true, caps?.auto_stop)
+        assertEquals(60_000u, caps?.heartbeat_interval_ms)
+        assertEquals(true, caps?.can_power_off)
+        assertEquals("1.4.3", vm.ui.value.scaleFirmware)
+    }
+
+    @Test
     fun `a stale scale drops the weight, and a disconnect clears the session`() {
         val vm = build()
         deliver(vm, reading(""","device_volume":5,"device_battery":70"""))

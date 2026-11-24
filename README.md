@@ -69,7 +69,7 @@ Web, Android tablet and Android phone unless marked. *(nightly)*: on `main` and 
 | Device | Status | What Crema does | Android | Web |
 |---|---|---|---|---|
 | **Decent DE1** | Supported | Connect, upload profiles, run and stop shots, steam, hot water, flush, maintenance cycles, firmware updates. | Yes | Yes |
-| **Bookoo Themis** | Supported | Weight, tare, timer, native flow; beeper, auto-standby and flow smoothing settings; auto-stop setting (not yet on Ultra firmware 4+). | Yes | Yes |
+| **Bookoo Themis** | Supported | Weight, tare, timer, native flow; beeper, auto-standby and flow smoothing settings; auto-stop setting (Mini, and Ultra firmware 3.1.2 or earlier or 4+); keeps the scale awake while connected (Mini 1.4.2+, Ultra 4.0.1+) and can power it off (Mini 1.4.2+, Ultra 4.0+). | Yes | Yes |
 | **Decent Scale, Half Decent Scale** | Supported | Weight, tare, timer, display and power-off; a Half Decent Scale on firmware 3+ soft-sleeps with the DE1 instead of disconnecting. | Yes | Yes |
 | **Acaia** (Lunar, Pyxis, Pearl, older models) | Supported | Weight and tare. | Yes | Yes |
 | **Skale II, Felicita Arc, Eureka Precisa, Solo Barista, Varia Aku** | Supported | Weight and tare; the scale's timer, except on the Aku. | Yes | Yes |

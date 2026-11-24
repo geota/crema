@@ -87,13 +87,15 @@ function fakeScale() {
 	};
 }
 
-async function connectedApp() {
+async function connectedApp(
+	scaleCapabilities: () => Promise<unknown> = async () => ({ heartbeat_interval_ms: 2_000 })
+) {
 	const { CremaApp } = await import('#lib/state/app.svelte.js');
 	const counts = { query: 0, heartbeat: 0 };
 	const coreImpl: Record<string, (...args: unknown[]) => Promise<unknown>> = {
 		connectScale: async () => 'Bookoo',
 		scaleUuids: async () => UUIDS,
-		scaleCapabilities: async () => ({ heartbeat_interval_ms: 2_000 }),
+		scaleCapabilities,
 		queryScaleSettings: async () => {
 			counts.query += 1;
 			return writes(QUERY_A, QUERY_B);
@@ -260,5 +262,51 @@ describe('scale writes around a reconnect', () => {
 		expect(t.counts.query).toBe(1);
 		await settle(30_000);
 		expect(t.counts.query).toBe(1);
+	});
+});
+
+describe('capabilities that depend on the scale firmware', () => {
+	/** A `ScaleConfig` event as the core sends a `03 0c` serial reply. */
+	const serialReply = (firmware: string): CoreOutput =>
+		({
+			events: [
+				{
+					type: 'ScaleConfig',
+					content: {
+						anti_mistouch: false,
+						active_mode: null,
+						enabled_modes: null,
+						serial: 'SN1',
+						firmware
+					}
+				}
+			],
+			commands: []
+		}) as never;
+
+	it('re-reads them when the firmware arrives and arms the keep-awake clock once', async () => {
+		// A Bookoo before its serial reply: no keep-awake, no auto-stop.
+		let caps: Record<string, unknown> = { heartbeat_interval_ms: null, auto_stop: false };
+		const t = await connectedApp(async () => caps);
+		const apply = (out: CoreOutput) =>
+			(t.app as unknown as { applyCoreOutput(o: CoreOutput): void }).applyCoreOutput(out);
+		const current = () =>
+			(t.app as unknown as { state: { current: { scaleCapabilities: unknown } } }).state.current
+				.scaleCapabilities;
+		await settle(120_000);
+		expect(t.counts.heartbeat).toBe(0);
+
+		// The serial reply reports firmware that takes a keep-awake.
+		caps = { heartbeat_interval_ms: 60_000, auto_stop: true };
+		apply(serialReply('1.4.3'));
+		await settle();
+		expect(current()).toEqual(caps);
+		await settle(30_000);
+		// A repeated reply half-way does not restart the clock.
+		apply(serialReply('1.4.3'));
+		await settle(30_000);
+		expect(t.counts.heartbeat).toBe(1);
+		await settle(60_000);
+		expect(t.counts.heartbeat).toBe(2);
 	});
 });

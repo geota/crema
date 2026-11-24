@@ -2909,6 +2909,11 @@ impl CremaCore {
     ///
     /// An Acaia's heartbeat also carries the ident + config handshake until
     /// its first weight frame (scales appendix F-04), hence `&mut self`.
+    ///
+    /// A heartbeat that only keeps the scale from auto-sleeping (the Bookoo's
+    /// keep-awake, [`Scale::heartbeat_only_keeps_awake`]) is withheld while the
+    /// machine sleeps, so the scale's own auto-off still runs then rather than
+    /// the link holding it awake all night.
     pub fn scale_heartbeat(&mut self) -> Result<CoreOutput, AppError> {
         let scale = Self::scale_for("scale_heartbeat", self.scale.as_ref())?;
         if self
@@ -2916,6 +2921,9 @@ impl CremaCore {
             .as_ref()
             .is_some_and(HdsNegotiation::is_soft_sleeping)
         {
+            return Ok(CoreOutput::default());
+        }
+        if scale.heartbeat_only_keeps_awake() && self.machine_asleep() {
             return Ok(CoreOutput::default());
         }
         if scale.heartbeat_command().is_none() {
@@ -3135,11 +3143,7 @@ impl CremaCore {
             // auto-reconnected stayed black until the next sleep/wake
             // cycle (issue #29). Skipped while the DE1 is asleep so the
             // display keeps following the machine's sleep state.
-            let machine_asleep = matches!(
-                self.last_state.map(|s| s.state),
-                Some(MachineState::Sleep | MachineState::GoingToSleep)
-            );
-            if !machine_asleep {
+            if !self.machine_asleep() {
                 let grams = matches!(self.weight_unit_pref, WeightUnit::Grams);
                 if let Some(writes) = scale.lcd_enable_command(grams) {
                     Self::push_scale_writes(&mut out, writes);
@@ -3153,6 +3157,15 @@ impl CremaCore {
             }
         }
         out
+    }
+
+    /// Whether the DE1 last reported Sleep or GoingToSleep. `false` with no
+    /// DE1 state yet.
+    fn machine_asleep(&self) -> bool {
+        matches!(
+            self.last_state.map(|s| s.state),
+            Some(MachineState::Sleep | MachineState::GoingToSleep)
+        )
     }
 
     /// Build a [`Command`] that sets the connected scale's beeper volume,
@@ -3233,16 +3246,20 @@ impl CremaCore {
         out
     }
 
-    /// Build a [`Command`] that selects the connected scale's auto-stop
+    /// Build the [`Command`]s that select the connected scale's auto-stop
     /// mode (`0` = flow-stop, `1` = cup-removal). Routed through
-    /// [`Scale::set_auto_stop_command`]; empty [`CoreOutput`] when the
-    /// capability is absent or `mode_id` is out of range.
+    /// [`Scale::set_auto_stop_command`], which picks the frame format the
+    /// scale's firmware takes (one write per automatic submode on a Bookoo
+    /// Ultra V4); empty [`CoreOutput`] when the capability is absent — on a
+    /// Bookoo, until its firmware is known — or `mode_id` is out of range.
     pub fn set_scale_auto_stop(&self, mode_id: u8) -> CoreOutput {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale
-            && let Some(bytes) = scale.set_auto_stop_command(mode_id)
+            && let Some(writes) = scale.set_auto_stop_command(mode_id)
         {
-            Self::push_scale_write(&mut out, bytes);
+            for bytes in writes {
+                Self::push_scale_write(&mut out, bytes);
+            }
             Self::push_query_settings_command(scale, &mut out);
         }
         out
@@ -4714,12 +4731,25 @@ impl CremaCore {
     /// channel — is silently dropped (it is not a decode failure, just traffic
     /// the core does not model).
     fn handle_scale_command(&mut self, data: &[u8], out: &mut CoreOutput) {
+        let machine_asleep = self.machine_asleep();
         let Some(scale) = &mut self.scale else {
             return;
         };
+        let had_heartbeat = scale.heartbeat_command().is_some();
         // State-only frames (the Eclair's battery) ride the next weight
-        // reading; they produce no event of their own.
+        // reading; they produce no event of their own. The Bookoo's serial
+        // reply records the firmware its version-gated commands key off.
         scale.absorb_command_notification(data);
+        // A keep-awake the firmware has just shown the scale takes goes out
+        // at once — the Bookoo doc says to send it early, not a whole
+        // interval later — unless the machine sleeps (see `scale_heartbeat`).
+        if !had_heartbeat
+            && scale.heartbeat_only_keeps_awake()
+            && !machine_asleep
+            && let Some(writes) = scale.heartbeat_command()
+        {
+            Self::push_scale_writes(out, writes);
+        }
         let Some(response) = scale.parse_command_response(data) else {
             return;
         };
@@ -7511,6 +7541,117 @@ mod tests {
     }
 
     #[test]
+    fn a_bookoo_serial_reply_sends_the_first_keep_awake_at_once() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        // Mini V1.4.3 takes 0x25: it goes out with the reply that shows it.
+        let out = core.on_notification(Source::ScaleCommand, &bookoo_serial(143), 1_000);
+        assert_eq!(scale_writes(&out), vec![bookoo::KEEP_AWAKE.as_slice()]);
+        // A later serial reply (every anti-mistouch write echoes one) does
+        // not repeat it; the shell's clock owns the cadence from here.
+        let out = core.on_notification(Source::ScaleCommand, &bookoo_serial(143), 2_000);
+        assert!(scale_writes(&out).is_empty());
+    }
+
+    #[test]
+    fn a_bookoo_serial_reply_sends_no_keep_awake_where_the_firmware_takes_none() {
+        for fw in [141, 312, 400] {
+            let mut core = CremaCore::new();
+            core.connect_scale("BOOKOO_SC", &[]);
+            let out = core.on_notification(Source::ScaleCommand, &bookoo_serial(fw), 1_000);
+            assert!(scale_writes(&out).is_empty(), "fw {fw}");
+        }
+        // Mini V1.4.2 alone gets the 0x12 form.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        let out = core.on_notification(Source::ScaleCommand, &bookoo_serial(142), 1_000);
+        assert_eq!(
+            scale_writes(&out),
+            vec![bookoo::KEEP_AWAKE_V1_4_2.as_slice()]
+        );
+    }
+
+    #[test]
+    fn the_bookoo_keep_awake_is_withheld_while_the_machine_sleeps() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 500);
+        let out = core.on_notification(Source::ScaleCommand, &bookoo_serial(401), 1_000);
+        assert!(scale_writes(&out).is_empty());
+        let out = core
+            .scale_heartbeat()
+            .expect("an Ultra V4.0.1 has a keep-awake");
+        assert!(scale_writes(&out).is_empty());
+        // Awake again: the clock's next tick sends it.
+        core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 2_000);
+        let out = core
+            .scale_heartbeat()
+            .expect("an Ultra V4.0.1 has a keep-awake");
+        assert_eq!(scale_writes(&out), vec![bookoo::KEEP_AWAKE.as_slice()]);
+    }
+
+    #[test]
+    fn the_bookoo_heartbeat_is_unsupported_until_the_firmware_takes_one() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        assert!(core.scale_heartbeat().is_err());
+        assert!(core.power_off_scale().is_err());
+        let mut core = bookoo_core_on(143);
+        let out = core
+            .scale_heartbeat()
+            .expect("a Mini V1.4.3 has a keep-awake");
+        assert_eq!(scale_writes(&out), vec![bookoo::KEEP_AWAKE.as_slice()]);
+        let out = core
+            .power_off_scale()
+            .expect("a Mini V1.4.3 has a shutdown");
+        assert_eq!(scale_writes(&out), vec![bookoo::SHUTDOWN.as_slice()]);
+    }
+
+    #[test]
+    fn entering_sleep_powers_off_a_bookoo_that_takes_the_shutdown_command() {
+        let mut core = bookoo_core_on(400);
+        core.set_auto_off_scale_on_sleep(true);
+        core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
+        let out = core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 2_000);
+        assert!(scale_writes(&out).contains(&bookoo::SHUTDOWN.as_slice()));
+        // Firmware without one (Ultra V3) gets nothing.
+        let mut core = bookoo_core_on(312);
+        core.set_auto_off_scale_on_sleep(true);
+        core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
+        let out = core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 2_000);
+        let writes = scale_writes(&out);
+        assert!(!writes.contains(&bookoo::SHUTDOWN.as_slice()));
+        assert!(!writes.contains(&bookoo::SHUTDOWN_V1_4_2.as_slice()));
+    }
+
+    #[test]
+    fn a_bookoo_in_auto_mode_is_tared_with_tare_and_start() {
+        let mut core = bookoo_core_on(143);
+        assert_eq!(
+            scale_writes(&core.tare_scale()),
+            vec![bookoo::TARE.as_slice()]
+        );
+        core.on_notification(Source::ScaleCommand, &bookoo_settings(2), 1_000);
+        assert_eq!(
+            scale_writes(&core.tare_scale()),
+            vec![bookoo::TARE_AND_START.as_slice()]
+        );
+        // The shot-start tare too: once settled at shot start, 0x07 goes out.
+        core.on_notification(Source::De1State, &[2, 0], 1_100);
+        let out = core.on_notification(Source::De1State, &[4, 5], 1_200);
+        assert!(out.events.contains(&Event::ShotStarted));
+        let mut writes: Vec<Vec<u8>> = scale_writes(&out).iter().map(|w| w.to_vec()).collect();
+        let mut t = 1_300;
+        for _ in 0..6 {
+            let out = core.on_notification(Source::ScaleWeight, &bookoo_grams(250.0), t);
+            writes.extend(scale_writes(&out).iter().map(|w| w.to_vec()));
+            t += 100;
+        }
+        assert!(writes.contains(&bookoo::TARE_AND_START.to_vec()));
+        assert!(!writes.contains(&bookoo::TARE.to_vec()));
+    }
+
+    #[test]
     fn a_scale_command_notification_with_no_scale_connected_is_ignored() {
         let mut core = CremaCore::new();
         let frame = hex("030c008d534e32343030643636613839653701ce");
@@ -9383,10 +9524,60 @@ mod tests {
         assert!(core.set_scale_mode(0).commands.is_empty());
     }
 
-    #[test]
-    fn set_scale_auto_stop_emits_a_write_for_a_capable_scale() {
+    /// A Bookoo `03 0c` serial reply reporting firmware `fw`.
+    fn bookoo_serial(fw: u16) -> Vec<u8> {
+        let mut frame = hex("030c008d534e32343030643636613839653701ce");
+        frame[2..4].copy_from_slice(&fw.to_be_bytes());
+        frame[19] = frame[..19].iter().fold(0, |a, &b| a ^ b);
+        frame
+    }
+
+    /// A Bookoo `03 0e` settings reply reporting `active_mode` as active.
+    fn bookoo_settings(active_mode: u8) -> Vec<u8> {
+        let mut frame = vec![0u8; 20];
+        frame[..2].copy_from_slice(&[0x03, 0x0E]);
+        frame[2] = active_mode;
+        frame[3] = 1 << active_mode;
+        frame[19] = frame[..19].iter().fold(0, |a, &b| a ^ b);
+        frame
+    }
+
+    /// A core with a Bookoo that has reported firmware `fw`.
+    fn bookoo_core_on(fw: u16) -> CremaCore {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::ScaleCommand, &bookoo_serial(fw), 500);
+        core
+    }
+
+    #[test]
+    fn set_scale_auto_stop_sends_nothing_until_the_bookoo_firmware_is_known() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        assert!(core.set_scale_auto_stop(0).commands.is_empty());
+        assert!(core.set_scale_auto_stop(1).commands.is_empty());
+    }
+
+    #[test]
+    fn set_scale_auto_stop_uses_the_v4_format_on_an_ultra_v4() {
+        let core = bookoo_core_on(403);
+        let out = core.set_scale_auto_stop(1);
+        assert_eq!(
+            scale_writes(&out),
+            vec![
+                hex("030a0b010201").as_slice(), // timing mode: server removed
+                hex("030a0b020202").as_slice(), // ratio mode: server removed
+                bookoo::QUERY_SETTINGS.as_slice(),
+            ]
+        );
+        // Never the V3 frame on V4.
+        let out = core.set_scale_auto_stop(0);
+        assert!(!scale_writes(&out).contains(&hex("030a0b000002").as_slice()));
+    }
+
+    #[test]
+    fn set_scale_auto_stop_emits_a_write_for_a_capable_scale() {
+        let core = bookoo_core_on(141);
         assert!(matches!(
             core.set_scale_auto_stop(1).commands.first(),
             Some(Command::WriteScale { .. })
@@ -9395,8 +9586,7 @@ mod tests {
 
     #[test]
     fn set_scale_auto_stop_maps_each_mode_id_to_its_command() {
-        let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC", &[]);
+        let core = bookoo_core_on(141);
         let Some(Command::WriteScale { data: flow_stop }) =
             core.set_scale_auto_stop(0).commands.into_iter().next()
         else {
@@ -9485,8 +9675,7 @@ mod tests {
 
     #[test]
     fn set_scale_auto_stop_appends_a_settings_query() {
-        let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC", &[]);
+        let core = bookoo_core_on(141);
         let out = core.set_scale_auto_stop(1);
         // Config write, then the 0x0f settings query.
         assert_eq!(out.commands.len(), 2);

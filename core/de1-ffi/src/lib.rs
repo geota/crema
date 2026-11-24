@@ -5561,6 +5561,14 @@ mod tests {
     fn set_scale_auto_stop_produces_a_write_scale_command_for_a_capable_scale() {
         let bridge = CremaBridge::new();
         bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
+        // Nothing until the scale's serial reply says which 0x0B format it
+        // takes; then the write goes out (a Mini on V1.4.1 here).
+        assert!(!bridge.set_scale_auto_stop(1).contains("WriteScale"));
+        let serial = vec![
+            0x03, 0x0c, 0x00, 0x8d, 0x53, 0x4e, 0x32, 0x34, 0x30, 0x30, 0x64, 0x36, 0x36, 0x61,
+            0x38, 0x39, 0x65, 0x37, 0x01, 0xce,
+        ];
+        bridge.on_notification(NotificationSource::ScaleCommand, serial, 1_000);
         let json = bridge.set_scale_auto_stop(1);
         assert!(json.contains("WriteScale"));
     }

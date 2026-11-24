@@ -128,6 +128,12 @@ internal class ScaleController(
                 scaleFirmware = c.firmware ?: it.scaleFirmware,
                 scaleSerial = c.serial ?: it.scaleSerial,
             ) }
+            // Some capabilities (a Bookoo's auto-stop, power-off and
+            // keep-awake) depend on the firmware just reported: read them
+            // again. The heartbeat loop picks up a new cadence on its own.
+            if (c.firmware != null && uiState().scaleCapabilities != null) {
+                readScaleCapabilities()?.let { caps -> updateUi { it.copy(scaleCapabilities = caps) } }
+            }
             when {
                 c.anti_mistouch != null ->
                     appendLog(
@@ -213,13 +219,19 @@ internal class ScaleController(
         // Bridge read + heartbeat-guard mutation → core lane (review #28).
         lane.post { refreshScaleCapabilitiesOnCoreLane(advertisedName) }
 
-    private fun refreshScaleCapabilitiesOnCoreLane(advertisedName: String) {
+    /** The connected scale's capabilities from the core; null when none or
+     *  unreadable. Call on the core lane. */
+    private fun readScaleCapabilities(): ScaleCapabilities? {
         val capsJson = runCatching { bridge.scaleCapabilities() }.getOrNull()
-        val caps = capsJson?.let {
+        return capsJson?.let {
             runCatching {
                 json.decodeFromString(ScaleCapabilities.serializer(), it)
             }.getOrNull()
         }
+    }
+
+    private fun refreshScaleCapabilitiesOnCoreLane(advertisedName: String) {
+        val caps = readScaleCapabilities()
         updateUi { it.copy(
             scaleCapabilities = caps,
             scaleName = advertisedName,

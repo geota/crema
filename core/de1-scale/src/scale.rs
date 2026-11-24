@@ -235,17 +235,20 @@ pub struct ScaleReading {
     /// that do not echo their settings. Only the Bookoo reports this.
     pub standby_minutes: Option<u8>,
     /// The scale's live battery charge percentage — `None` for scales that do
-    /// not report it. Only the Bookoo reports this (an *assumed* decode of one
-    /// byte; see [`bookoo::BookooPacket::battery_percent`]).
+    /// not report it. The Bookoo reports it in every weight notification (a
+    /// documented byte; see [`bookoo::BookooPacket::battery_percent`]); a few
+    /// others on a separate frame, carried forward.
     pub battery_percent: Option<u8>,
     /// Whether the scale's flow smoothing is on — `None` for scales that do
     /// not echo their settings. Only the Bookoo reports this; it lets a
     /// settings toggle reflect the real on/off state.
     pub flow_smoothing: Option<bool>,
     /// The scale's live auto-stop mode id — `None` for scales that do not echo
-    /// their settings. Only the Bookoo reports this (`0` = Flow-Stop, `1` =
-    /// Cup-Removal); it lets a settings selector reflect the real current mode.
-    /// Kept as a raw mode id (not a bool) to match `set_scale_auto_stop`.
+    /// their settings. Only a Bookoo Mini reports this (`0` = Flow-Stop, `1` =
+    /// Cup-Removal), once its firmware is known; an Ultra's byte is fixed at
+    /// `00`, so it reports `None`. It lets a settings selector reflect the real
+    /// current mode. Kept as a raw mode id (not a bool) to match
+    /// `set_scale_auto_stop`.
     pub auto_stop: Option<u8>,
 }
 
@@ -321,7 +324,9 @@ pub struct ScaleCapabilities {
     /// The scale accepts a command to toggle anti-mistouch.
     pub anti_mistouch: bool,
     /// The scale accepts a command to select its auto-stop mode (the Bookoo's
-    /// flow-stop / cup-removal setting).
+    /// flow-stop / cup-removal setting). On a Bookoo this turns on only once
+    /// the firmware has been reported, so the shell re-reads the capabilities
+    /// when a `ScaleConfig` event carries the firmware.
     pub auto_stop: bool,
     /// The selectable display/behaviour modes the scale exposes — empty when
     /// the scale has no switchable modes. Each entry carries the mode's wire
@@ -469,7 +474,10 @@ enum Inner {
     Decent(DecentScale),
     Skale,
     Felicita,
-    Bookoo,
+    /// The Bookoo (Mini and Ultra) carries what its `ff12` replies have told
+    /// Crema — the firmware, which gates several commands by model and
+    /// version, and the active mode, which picks the tare frame.
+    Bookoo(bookoo::BookooScale),
     AcaiaGen1(AcaiaDecoder),
     AcaiaPyxis(AcaiaDecoder),
     AtomheartEclair,
@@ -616,7 +624,7 @@ impl Scale {
             "Decent Scale" => Inner::Decent(DecentScale::new()),
             "Skale II" => Inner::Skale,
             "Felicita Arc" => Inner::Felicita,
-            "Bookoo" => Inner::Bookoo,
+            "Bookoo" => Inner::Bookoo(bookoo::BookooScale::default()),
             "Acaia" => Inner::AcaiaGen1(AcaiaDecoder::new()),
             "Acaia Pyxis" => Inner::AcaiaPyxis(AcaiaDecoder::new()),
             "Atomheart Eclair" => Inner::AtomheartEclair,
@@ -643,7 +651,7 @@ impl Scale {
             Inner::Decent(_) => "Decent Scale",
             Inner::Skale => "Skale II",
             Inner::Felicita => "Felicita Arc",
-            Inner::Bookoo => "Bookoo",
+            Inner::Bookoo(_) => "Bookoo",
             Inner::AcaiaGen1(_) => "Acaia",
             Inner::AcaiaPyxis(_) => "Acaia Pyxis",
             Inner::AtomheartEclair => "Atomheart Eclair",
@@ -666,7 +674,7 @@ impl Scale {
         // write-only (or the same characteristic as `weight_notify`), and its
         // command-channel notifications — even if the hardware sends any — are
         // never decoded, so the shell must not subscribe to it.
-        let command_notifies = matches!(&self.inner, Inner::Bookoo | Inner::AtomheartEclair);
+        let command_notifies = matches!(&self.inner, Inner::Bookoo(_) | Inner::AtomheartEclair);
         let command_notify_optional = matches!(&self.inner, Inner::AtomheartEclair);
         let (service, weight_notify, command_write) = match &self.inner {
             Inner::Decent(_) => (
@@ -684,7 +692,7 @@ impl Scale {
                 felicita::NOTIFY_COMMAND_UUID,
                 felicita::NOTIFY_COMMAND_UUID,
             ),
-            Inner::Bookoo => (
+            Inner::Bookoo(_) => (
                 bookoo::SERVICE_UUID,
                 bookoo::NOTIFY_UUID,
                 bookoo::COMMAND_UUID,
@@ -824,15 +832,20 @@ impl Scale {
             Inner::Timemore => {
                 Some(u32::try_from(timemore::HEARTBEAT_INTERVAL_MS).unwrap_or(u32::MAX))
             }
+            // Only once the firmware is known to take a keep-awake.
+            Inner::Bookoo(state) => state
+                .keep_awake_command()
+                .map(|_| bookoo::KEEP_AWAKE_INTERVAL_MS),
             _ => None,
         };
         match &self.inner {
             // The Bookoo carries native flow and a built-in timer in its
             // weight notification, and exposes a settable beeper volume
             // (0 = silent), a configurable auto-standby timeout, flow
-            // smoothing / anti-mistouch toggles, an auto-stop-mode setting,
-            // and three switchable display modes.
-            Inner::Bookoo => ScaleCapabilities {
+            // smoothing / anti-mistouch toggles, an auto-stop-mode setting
+            // (once the firmware says which format it takes), and three
+            // switchable display modes.
+            Inner::Bookoo(state) => ScaleCapabilities {
                 reports_flow: true,
                 reports_timer: true,
                 // The hardware accepts volume 0..=5, but levels 4-5 are not
@@ -842,7 +855,9 @@ impl Scale {
                 standby: Some(RangeCapability { min: 5, max: 30 }),
                 flow_smoothing: true,
                 anti_mistouch: true,
-                auto_stop: true,
+                auto_stop: !state
+                    .auto_stop_writes(bookoo::AutoStopMode::FlowStop)
+                    .is_empty(),
                 modes: vec![
                     ModeInfo {
                         id: bookoo::BookooMode::FlowRate.index(),
@@ -993,6 +1008,9 @@ impl Scale {
         match &self.inner {
             Inner::Decent(_) => Some(vec![&decent_scale::POWER_OFF]),
             Inner::EurekaPrecisa | Inner::SoloBarista => Some(vec![&eureka_precisa::TURN_OFF]),
+            // Version-gated: `0x15` on Mini >= V1.4.3 and Ultra >= V4.0.0,
+            // `0x11` on Mini V1.4.2 only; nothing before the firmware is known.
+            Inner::Bookoo(state) => state.shutdown_command().map(|cmd| vec![&cmd[..]]),
             _ => None,
         }
     }
@@ -1049,8 +1067,22 @@ impl Scale {
             // The Dot goes quiet without the ~10 s poll pair (Decenza
             // timemorescale.cpp:193-199 sendKeepAlive) — two separate writes.
             Inner::Timemore => Some(vec![&timemore::POLL_1, &timemore::POLL_2]),
+            // The Bookoo's keep-awake resets its auto-off countdown, which a
+            // connected session otherwise lets run out. Version-gated: `0x25`
+            // on Mini >= V1.4.3 and Ultra >= V4.0.1, `0x12` on Mini V1.4.2
+            // only; nothing before the firmware is known.
+            Inner::Bookoo(state) => state.keep_awake_command().map(|cmd| vec![&cmd[..]]),
             _ => None,
         }
+    }
+
+    /// Whether the heartbeat only keeps the scale from auto-sleeping (the
+    /// Bookoo's keep-awake), rather than keeping its stream or display alive.
+    /// The core withholds such a heartbeat while the machine sleeps, so the
+    /// scale's own auto-off still applies then.
+    #[must_use]
+    pub fn heartbeat_only_keeps_awake(&self) -> bool {
+        matches!(self.inner, Inner::Bookoo(_))
     }
 
     /// The writes for one heartbeat tick: [`heartbeat_command`](Self::heartbeat_command),
@@ -1135,7 +1167,7 @@ impl Scale {
             Inner::HiroiaJimmy => 250,
             // Timemore Dot: de1app `device_scale.tcl:221` lists 0.50 s
             // (cohort review 2026-10-25, scales appendix F-13).
-            Inner::Felicita | Inner::Bookoo | Inner::AtomheartEclair | Inner::Timemore => 500,
+            Inner::Felicita | Inner::Bookoo(_) | Inner::AtomheartEclair | Inner::Timemore => 500,
             // The legacy switch has no `acaiapyxis` arm (a Pyxis would hit the
             // 0.38 default); the Pyxis is physically an Acaia, so it shares the
             // Acaia sensor lag here — a deliberate correction of that gap.
@@ -1169,7 +1201,7 @@ impl Scale {
             Inner::Decent(state) => state.parse_weight_frame(data).map(|f| f.weight_g),
             Inner::Skale => skale::parse_weight(data),
             Inner::Felicita => felicita::parse_weight(data),
-            Inner::Bookoo => bookoo::parse_weight(data),
+            Inner::Bookoo(_) => bookoo::parse_weight(data),
             Inner::AcaiaGen1(decoder) | Inner::AcaiaPyxis(decoder) => decoder.push(data),
             Inner::AtomheartEclair => atomheart_eclair::parse_weight(data),
             Inner::EurekaPrecisa | Inner::SoloBarista => eureka_precisa::parse_weight(data),
@@ -1196,7 +1228,7 @@ impl Scale {
     /// `timer_ms` are `None`. Returns `None` if the bytes are not (yet) a
     /// complete reading.
     pub fn parse_reading(&mut self, data: &[u8]) -> Option<ScaleReading> {
-        if let Inner::Bookoo = &self.inner {
+        if let Inner::Bookoo(state) = &self.inner {
             // The Bookoo's 20-byte notification carries weight, native flow,
             // the built-in timer and its live settings in one packet.
             if let Some(packet) = bookoo::parse_packet(data) {
@@ -1211,7 +1243,9 @@ impl Scale {
                     standby_minutes: Some(packet.standby_minutes),
                     battery_percent: Some(packet.battery_percent),
                     flow_smoothing: Some(packet.flow_smoothing),
-                    auto_stop: Some(packet.auto_stop),
+                    // Byte [18] is the live auto-stop setting only on a Mini;
+                    // the Ultra doc fixes it at 00 whatever the setting.
+                    auto_stop: state.reports_auto_stop().then_some(packet.auto_stop),
                 });
             }
             // Not a valid weight frame; the weight-only path below rejects
@@ -1277,7 +1311,7 @@ impl Scale {
     /// orchestrator doesn't import the per-device type.
     pub fn parse_command_response(&self, data: &[u8]) -> Option<ScaleConfigUpdate> {
         match &self.inner {
-            Inner::Bookoo => bookoo::parse_command_response(data).map(ScaleConfigUpdate::from),
+            Inner::Bookoo(_) => bookoo::parse_command_response(data).map(ScaleConfigUpdate::from),
             // No other supported scale models a command-channel response.
             Inner::Decent(_)
             | Inner::Skale
@@ -1296,18 +1330,26 @@ impl Scale {
     }
 
     /// Absorb a notification from the scale's *command* characteristic into
-    /// the scale's own state — today the Atomheart Eclair's battery frame
+    /// the scale's own state — the Atomheart Eclair's battery frame
     /// ([`atomheart_eclair::parse_battery`]), carried forward onto every later
     /// weight reading like the Varia AKU's (decaid re-attaches its
-    /// `_batteryLevel` to every snapshot the same way). A no-op for every
-    /// other scale and for any frame that isn't recognised. Called on every
-    /// command-channel notification, alongside
+    /// `_batteryLevel` to every snapshot the same way), and the Bookoo's
+    /// firmware and active mode ([`bookoo::BookooScale::absorb`]). A no-op for
+    /// every other scale and for any frame that isn't recognised. Called on
+    /// every command-channel notification, alongside
     /// [`parse_command_response`](Self::parse_command_response).
     pub fn absorb_command_notification(&mut self, data: &[u8]) {
         if matches!(self.inner, Inner::AtomheartEclair)
             && let Some(percent) = atomheart_eclair::parse_battery(data)
         {
             self.last_battery_percent = Some(percent);
+        }
+        // The Bookoo's serial reply carries the firmware that gates its
+        // version-dependent commands; its settings reply, the active mode.
+        if let Inner::Bookoo(state) = &mut self.inner
+            && let Some(response) = bookoo::parse_command_response(data)
+        {
+            state.absorb(&response);
         }
     }
 
@@ -1367,7 +1409,7 @@ impl Scale {
     #[must_use]
     pub fn query_settings_command(&self) -> Option<Vec<u8>> {
         match &self.inner {
-            Inner::Bookoo => Some(bookoo::QUERY_SETTINGS.to_vec()),
+            Inner::Bookoo(_) => Some(bookoo::QUERY_SETTINGS.to_vec()),
             _ => None,
         }
     }
@@ -1379,7 +1421,7 @@ impl Scale {
     #[must_use]
     pub fn query_serial_command(&self) -> Option<Vec<u8>> {
         match &self.inner {
-            Inner::Bookoo => Some(bookoo::QUERY_SERIAL.to_vec()),
+            Inner::Bookoo(_) => Some(bookoo::QUERY_SERIAL.to_vec()),
             _ => None,
         }
     }
@@ -1393,7 +1435,7 @@ impl Scale {
         let range = self.capabilities().volume?;
         let level = level.clamp(range.min, range.max);
         match &self.inner {
-            Inner::Bookoo => Some(bookoo::set_volume(level).to_vec()),
+            Inner::Bookoo(_) => Some(bookoo::set_volume(level).to_vec()),
             _ => None,
         }
     }
@@ -1407,7 +1449,7 @@ impl Scale {
         let range = self.capabilities().standby?;
         let minutes = minutes.clamp(range.min, range.max);
         match &self.inner {
-            Inner::Bookoo => Some(bookoo::set_standby_minutes(minutes).to_vec()),
+            Inner::Bookoo(_) => Some(bookoo::set_standby_minutes(minutes).to_vec()),
             _ => None,
         }
     }
@@ -1421,7 +1463,7 @@ impl Scale {
             return None;
         }
         match &self.inner {
-            Inner::Bookoo => Some(bookoo::set_flow_smoothing(enabled).to_vec()),
+            Inner::Bookoo(_) => Some(bookoo::set_flow_smoothing(enabled).to_vec()),
             _ => None,
         }
     }
@@ -1435,7 +1477,7 @@ impl Scale {
             return None;
         }
         match &self.inner {
-            Inner::Bookoo => Some(bookoo::set_anti_mistouch(enabled).to_vec()),
+            Inner::Bookoo(_) => Some(bookoo::set_anti_mistouch(enabled).to_vec()),
             _ => None,
         }
     }
@@ -1456,7 +1498,7 @@ impl Scale {
             return None;
         }
         match &self.inner {
-            Inner::Bookoo => {
+            Inner::Bookoo(_) => {
                 let mode = match mode_id {
                     x if x == bookoo::BookooMode::FlowRate.index() => bookoo::BookooMode::FlowRate,
                     x if x == bookoo::BookooMode::Timer.index() => bookoo::BookooMode::Timer,
@@ -1474,24 +1516,21 @@ impl Scale {
         }
     }
 
-    /// Build the command bytes that set the connected scale's
-    /// auto-stop mode (`0` = flow-stop, `1` = cup-removal). `None`
-    /// when the scale exposes no auto-stop mode setting
-    /// ([`ScaleCapabilities::auto_stop`] is `false`) or `mode_id`
-    /// maps to no known mode.
+    /// Build the ordered writes that set the connected scale's auto-stop
+    /// mode (`0` = flow-stop, `1` = cup-removal). `None` when the scale
+    /// exposes no auto-stop mode setting ([`ScaleCapabilities::auto_stop`]
+    /// is `false` — on a Bookoo, until its firmware says which `0x0B`
+    /// format it takes) or `mode_id` maps to no known mode.
+    ///
+    /// A Bookoo Ultra on V4 takes one write per automatic submode (timing,
+    /// then ratio); a Mini or an Ultra on V3, one.
     #[must_use]
-    pub fn set_auto_stop_command(&self, mode_id: u8) -> Option<Vec<u8>> {
-        if !self.capabilities().auto_stop {
-            return None;
-        }
+    pub fn set_auto_stop_command(&self, mode_id: u8) -> Option<Vec<Vec<u8>>> {
         match &self.inner {
-            Inner::Bookoo => {
-                let mode = match mode_id {
-                    0 => bookoo::AutoStopMode::FlowStop,
-                    1 => bookoo::AutoStopMode::CupRemoval,
-                    _ => return None,
-                };
-                Some(bookoo::set_auto_stop_mode(mode).to_vec())
+            Inner::Bookoo(state) => {
+                let mode = bookoo::AutoStopMode::from_id(mode_id)?;
+                let writes = state.auto_stop_writes(mode);
+                (!writes.is_empty()).then(|| writes.iter().map(|cmd| cmd.to_vec()).collect())
             }
             _ => None,
         }
@@ -1573,7 +1612,9 @@ impl Scale {
             Inner::Decent(state) => state.next_tare().to_vec(),
             Inner::Skale => vec![skale::CMD_TARE],
             Inner::Felicita => vec![felicita::TARE],
-            Inner::Bookoo => bookoo::TARE.to_vec(),
+            // `0x07` while the scale reports Auto, `0x01` otherwise — see
+            // `bookoo::BookooScale::tare_command`.
+            Inner::Bookoo(state) => state.tare_command().to_vec(),
             Inner::AcaiaGen1(_) | Inner::AcaiaPyxis(_) => acaia::TARE.to_vec(),
             Inner::AtomheartEclair => atomheart_eclair::TARE.to_vec(),
             Inner::EurekaPrecisa | Inner::SoloBarista => eureka_precisa::TARE.to_vec(),
@@ -1613,7 +1654,7 @@ impl Scale {
                 Stop => felicita::TIMER_STOP,
                 Reset => felicita::TIMER_RESET,
             }],
-            Inner::Bookoo => match command {
+            Inner::Bookoo(_) => match command {
                 Start => bookoo::TIMER_START.to_vec(),
                 Stop => bookoo::TIMER_STOP.to_vec(),
                 Reset => bookoo::TIMER_RESET.to_vec(),
@@ -1971,8 +2012,190 @@ mod tests {
         assert_eq!(reading.battery_percent, Some(100));
         // [17] = 0x00 -> flow smoothing off.
         assert_eq!(reading.flow_smoothing, Some(false));
+        // [18] means nothing until the firmware says this is a Mini.
+        assert_eq!(reading.auto_stop, None);
+        bookoo.absorb_command_notification(&bookoo_serial_frame(141));
+        let reading = bookoo.parse_reading(&packet).expect("20-byte packet");
         // [18] = 0x00 -> auto-stop mode 0 (Flow-Stop).
         assert_eq!(reading.auto_stop, Some(0));
+    }
+
+    /// A Bookoo `03 0c` serial reply reporting firmware `fw`.
+    fn bookoo_serial_frame(fw: u16) -> Vec<u8> {
+        let mut frame = vec![0u8; 20];
+        frame[0] = 0x03;
+        frame[1] = 0x0C;
+        frame[2..4].copy_from_slice(&fw.to_be_bytes());
+        frame[4..18].copy_from_slice(b"SN2400d66a89e7");
+        frame[19] = frame[..19].iter().fold(0, |a, &b| a ^ b);
+        frame
+    }
+
+    /// A Bookoo `03 0e` settings reply reporting `active_mode`.
+    fn bookoo_settings_frame(active_mode: u8) -> Vec<u8> {
+        let mut frame = vec![0u8; 20];
+        frame[0] = 0x03;
+        frame[1] = 0x0E;
+        frame[2] = active_mode;
+        frame[3] = 1 << active_mode;
+        frame[19] = frame[..19].iter().fold(0, |a, &b| a ^ b);
+        frame
+    }
+
+    /// A Bookoo that has reported firmware `fw`.
+    fn bookoo_on(fw: u16) -> Scale {
+        let mut bookoo = Scale::from_label("Bookoo").unwrap();
+        bookoo.absorb_command_notification(&bookoo_serial_frame(fw));
+        bookoo
+    }
+
+    #[test]
+    fn bookoo_auto_stop_writes_follow_the_firmware() {
+        // Unknown firmware: no 0x0B at all, and no capability.
+        let unknown = Scale::from_label("Bookoo").unwrap();
+        assert!(!unknown.capabilities().auto_stop);
+        assert_eq!(unknown.set_auto_stop_command(0), None);
+        assert_eq!(unknown.set_auto_stop_command(1), None);
+        // Mini V1.4.1 / Ultra V3.1.2: 0B <stop> 00.
+        for fw in [141, 312] {
+            let scale = bookoo_on(fw);
+            assert!(scale.capabilities().auto_stop, "fw {fw}");
+            assert_eq!(
+                scale.set_auto_stop_command(0),
+                Some(vec![vec![0x03, 0x0A, 0x0B, 0x00, 0x00, 0x02]]),
+                "fw {fw}"
+            );
+            assert_eq!(
+                scale.set_auto_stop_command(1),
+                Some(vec![vec![0x03, 0x0A, 0x0B, 0x01, 0x00, 0x03]]),
+                "fw {fw}"
+            );
+            assert_eq!(scale.set_auto_stop_command(2), None, "fw {fw}");
+        }
+        // Ultra V4.0.3: 0B <target> <stop>, timing then ratio.
+        let v4 = bookoo_on(403);
+        assert!(v4.capabilities().auto_stop);
+        assert_eq!(
+            v4.set_auto_stop_command(0),
+            Some(vec![
+                vec![0x03, 0x0A, 0x0B, 0x01, 0x00, 0x03],
+                vec![0x03, 0x0A, 0x0B, 0x02, 0x00, 0x00],
+            ])
+        );
+        assert_eq!(
+            v4.set_auto_stop_command(1),
+            Some(vec![
+                vec![0x03, 0x0A, 0x0B, 0x01, 0x02, 0x01],
+                vec![0x03, 0x0A, 0x0B, 0x02, 0x02, 0x02],
+            ])
+        );
+        // Ultra beta V3.2.4: neither format is documented.
+        let beta = bookoo_on(324);
+        assert!(!beta.capabilities().auto_stop);
+        assert_eq!(beta.set_auto_stop_command(0), None);
+    }
+
+    #[test]
+    fn bookoo_ultra_does_not_report_byte_18_as_the_auto_stop_setting() {
+        // [18] = 0x01 in this frame; an Ultra's byte is fixed at 00 in the
+        // doc, so it is never shown as the live setting.
+        let hex = "030b000000012b0000002b000264012c03000140";
+        let packet: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        for fw in [312, 403] {
+            let reading = bookoo_on(fw).parse_reading(&packet).expect("a reading");
+            assert_eq!(reading.auto_stop, None, "fw {fw}");
+        }
+    }
+
+    #[test]
+    fn bookoo_reading_carries_the_flow_sign() {
+        // Flow 0x01A4 = 4.20 g/s with a '-' sign byte at [10].
+        let mut packet: Vec<u8> = vec![
+            0x03, 0x0B, 0, 0, 0, 0x01, b'+', 0x00, 0x07, 0xD0, b'-', 0x01, 0xA4, 0x64, 0x00, 0x96,
+            0x01, 0x00, 0x00, 0x00,
+        ];
+        packet[19] = packet[..19].iter().fold(0, |a, &b| a ^ b);
+        let reading = Scale::from_label("Bookoo")
+            .unwrap()
+            .parse_reading(&packet)
+            .expect("a reading");
+        assert_eq!(reading.flow_g_per_s, Some(-4.2));
+    }
+
+    #[test]
+    fn bookoo_tare_is_tare_and_start_while_the_scale_reports_auto() {
+        let mut bookoo = bookoo_on(143);
+        assert_eq!(
+            bookoo.tare(),
+            Some(vec![0x03, 0x0A, 0x01, 0x00, 0x00, 0x08])
+        );
+        bookoo.absorb_command_notification(&bookoo_settings_frame(2));
+        assert_eq!(
+            bookoo.tare(),
+            Some(vec![0x03, 0x0A, 0x07, 0x00, 0x00, 0x0E])
+        );
+        assert_eq!(
+            bookoo.tare_writes(),
+            vec![vec![0x03, 0x0A, 0x07, 0x00, 0x00, 0x0E]]
+        );
+        bookoo.absorb_command_notification(&bookoo_settings_frame(1));
+        assert_eq!(
+            bookoo.tare(),
+            Some(vec![0x03, 0x0A, 0x01, 0x00, 0x00, 0x08])
+        );
+    }
+
+    #[test]
+    fn bookoo_keep_awake_and_power_off_follow_the_firmware() {
+        let keep = [0x03, 0x0A, 0x25, 0x00, 0x00, 0x2C];
+        let off = [0x03, 0x0A, 0x15, 0x00, 0x00, 0x1C];
+        // Unknown firmware: neither, and no heartbeat clock.
+        let unknown = Scale::from_label("Bookoo").unwrap();
+        assert_eq!(unknown.heartbeat_command(), None);
+        assert_eq!(unknown.power_off_command(), None);
+        assert_eq!(unknown.capabilities().heartbeat_interval_ms, None);
+        assert!(!unknown.capabilities().can_power_off);
+        // Mini V1.4.1: neither.
+        let old = bookoo_on(141);
+        assert_eq!(old.heartbeat_command(), None);
+        assert_eq!(old.power_off_command(), None);
+        // Mini V1.4.2: 12 / 11 only.
+        let v142 = bookoo_on(142);
+        assert_eq!(
+            v142.heartbeat_command(),
+            Some(vec![&[0x03, 0x0A, 0x12, 0x00, 0x00, 0x1B][..]])
+        );
+        assert_eq!(
+            v142.power_off_command(),
+            Some(vec![&[0x03, 0x0A, 0x11, 0x00, 0x00, 0x18][..]])
+        );
+        // Mini V1.4.3 and Ultra V4.0.1: 25 / 15, on a one-minute clock.
+        for fw in [143, 401] {
+            let scale = bookoo_on(fw);
+            assert_eq!(scale.heartbeat_command(), Some(vec![&keep[..]]), "fw {fw}");
+            assert_eq!(scale.power_off_command(), Some(vec![&off[..]]), "fw {fw}");
+            let caps = scale.capabilities();
+            assert_eq!(caps.heartbeat_interval_ms, Some(60_000), "fw {fw}");
+            assert!(caps.can_power_off, "fw {fw}");
+        }
+        // Ultra V4.0.0: shutdown, no keep-awake.
+        let v400 = bookoo_on(400);
+        assert_eq!(v400.heartbeat_command(), None);
+        assert_eq!(v400.capabilities().heartbeat_interval_ms, None);
+        assert_eq!(v400.power_off_command(), Some(vec![&off[..]]));
+        // Ultra V3.1.2: neither.
+        let v3 = bookoo_on(312);
+        assert_eq!(v3.heartbeat_command(), None);
+        assert_eq!(v3.power_off_command(), None);
+        assert!(v3.heartbeat_only_keeps_awake());
+        assert!(
+            !Scale::from_label("Decent Scale")
+                .unwrap()
+                .heartbeat_only_keeps_awake()
+        );
     }
 
     #[test]
@@ -1989,6 +2212,10 @@ mod tests {
         assert_eq!(reading.standby_minutes, Some(30));
         assert_eq!(reading.battery_percent, Some(100));
         assert_eq!(reading.flow_smoothing, Some(false));
+        // [18] is shown only once the firmware says this is a Mini.
+        assert_eq!(reading.auto_stop, None);
+        bookoo.absorb_command_notification(&bookoo_serial_frame(141));
+        let reading = bookoo.parse_reading(&packet).expect("20-byte packet");
         // [18] = 0x01 -> auto-stop mode 1 (Cup-Removal).
         assert_eq!(reading.auto_stop, Some(1));
     }
@@ -2207,7 +2434,9 @@ mod tests {
         assert_eq!(caps.standby, Some(RangeCapability { min: 5, max: 30 }));
         assert!(caps.flow_smoothing);
         assert!(caps.anti_mistouch);
-        assert!(caps.auto_stop);
+        // Auto-stop waits for the firmware, which says which format it takes.
+        assert!(!caps.auto_stop);
+        assert!(bookoo_on(141).capabilities().auto_stop);
         assert_eq!(
             caps.modes,
             vec![

@@ -918,6 +918,12 @@ export class CremaApp {
 				this.#linkConnectedGrinder(event.content.info.model);
 			}
 			if (event.type === 'GrinderLinkDead') this.grinder.presumeDead(event.content.reason);
+			if (event.type === 'ScaleConfig' && event.content.firmware != null) {
+				// Some capabilities (a Bookoo's auto-stop, power-off and
+				// keep-awake) depend on the firmware the scale has just
+				// reported: read them again.
+				void this.#reloadScaleCapabilities();
+			}
 			if (event.type === 'GrinderFollowChanged') {
 				getGrinderFollow().update(event.content.follow, this.core.followedGrinderId());
 			}
@@ -1846,6 +1852,21 @@ export class CremaApp {
 		const caps = await this.core.scaleCapabilities();
 		this.state.patch({ scaleCapabilities: caps ?? null, scaleName: advertisedName });
 		this.armScaleHeartbeat(caps?.heartbeat_interval_ms ?? null);
+	}
+
+	/**
+	 * Re-read the capabilities after the scale reports its firmware, which
+	 * some of them depend on. The heartbeat clock is re-armed only when its
+	 * cadence changed, so a repeated serial reply doesn't reset it.
+	 */
+	async #reloadScaleCapabilities(): Promise<void> {
+		if (this.state.current.scaleCapabilities == null) return;
+		const caps = await this.core.scaleCapabilities();
+		if (caps == null) return;
+		const before = this.state.current.scaleCapabilities?.heartbeat_interval_ms ?? null;
+		this.state.patch({ scaleCapabilities: caps });
+		const after = caps.heartbeat_interval_ms ?? null;
+		if (after !== before) this.armScaleHeartbeat(after);
 	}
 
 	/**
