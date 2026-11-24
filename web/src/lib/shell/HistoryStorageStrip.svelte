@@ -17,6 +17,9 @@
 	 *   with Back up and Free up space (#310 P6w).
 	 * - **getting full** (80%): one notice with the same, until dismissed;
 	 *   it comes back only after use drops below 80% and climbs again.
+	 * - **back up** (#487): the last backup is two weeks old and there are
+	 *   newer shots, or there was never one; Dismiss puts it off for as long
+	 *   again (`#lib/backup/reminder.svelte.js`).
 	 *
 	 * While anything is unsaved, closing the tab asks first.
 	 */
@@ -30,6 +33,8 @@
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import { getStorageWatch } from '#lib/history/storage-watch.svelte.js';
+	import { getHistoryReads, shotSpan } from '#lib/history/reads.svelte.js';
+	import { getBackupReminder } from '#lib/backup/reminder.svelte.js';
 
 	const history = getHistoryStore();
 	const watch = getStorageWatch();
@@ -44,6 +49,10 @@
 		watch.usage != null && watch.quota ? Math.min(100, Math.round((watch.usage / watch.quota) * 100)) : null
 	);
 	const toStorage = () => void goto('/settings#sharing');
+	const reminder = getBackupReminder();
+	onMount(() => reminder.start());
+	const span = getHistoryReads().watch(() => (history.health === 'ok' ? shotSpan() : null), null, history);
+	const backupDue = $derived(reminder.dueFor(span.value));
 	let busy = $state(false);
 	let snapshots = $state<{ name: string; at: number; rows: number }[]>([]);
 
@@ -228,6 +237,15 @@
 			<button type="button" class="hs-btn" onclick={toStorage}>Back up</button>
 			<button type="button" class="hs-btn" onclick={toStorage}>Free up space</button>
 			<button type="button" class="hs-btn" onclick={() => watch.dismissGettingFull()}>Dismiss</button>
+		</div>
+	</div>
+{:else if backupDue}
+	<div class="hs-strip" role="status" data-testid="backup-reminder">
+		<Icon cls="ph ph-info" aria-hidden="true" />
+		<span class="hs-label">{reminder.message}</span>
+		<div class="hs-actions">
+			<button type="button" class="hs-btn" onclick={toStorage}>Back up</button>
+			<button type="button" class="hs-btn" onclick={() => reminder.dismiss()}>Dismiss</button>
 		</div>
 	</div>
 {/if}

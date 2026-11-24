@@ -198,6 +198,29 @@ export function newestRow(): Query<ShotRow | null> {
 	};
 }
 
+/** The newest and oldest live rows' times, or null with none: the backup reminder. */
+export function shotSpan(): Query<{ newest: number; oldest: number } | null> {
+	const end = async (read: IndexRead, dir: 'asc' | 'desc') => {
+		const page = await read<PageOut>('page', { query: listQuery({ sort: { key: 'date', dir } }), anchor: 'start', limit: 1 });
+		const r = page.rows[0];
+		return r ? decodeRow(r.rowJson).completedAt : null;
+	};
+	return {
+		key: 'shotSpan',
+		p3: (rows) => {
+			const live = rows.live;
+			return live.length > 0 ? { newest: live[0].completedAt, oldest: live[live.length - 1].completedAt } : null;
+		},
+		async index(read) {
+			const newest = await end(read, 'desc');
+			const oldest = await end(read, 'asc');
+			return newest === null || oldest === null ? null : { newest, oldest };
+		},
+		differ: (a, b) =>
+			a?.newest === b?.newest && a?.oldest === b?.oldest ? null : `${JSON.stringify(a)} vs ${JSON.stringify(b)}`
+	};
+}
+
 /** How many live rows, or how many pinned: the counts in Settings. */
 export function liveCount(opts: { pinnedOnly?: boolean } = {}): Query<number> {
 	const pinnedOnly = opts.pinnedOnly === true;
