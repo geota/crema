@@ -1058,6 +1058,11 @@ private fun SharingSection(
     }
     val ds = ui.drive
     SettingsGroup("Google Drive") {
+        if (ds.playAgain) {
+            CremaSettingsRow("Use Google Play services again", coffee.crema.drive.DRIVE_PLAY_AGAIN_HINT) {
+                CremaButton(onClick = { vm.drive.usePlayServicesAgain() }, variant = CremaButtonVariant.Outlined, enabled = !ds.busy, label = "Use again")
+            }
+        }
         if (!ds.connected && ds.needsReconnect) {
             CremaSettingsRow("Reconnect Google Drive", coffee.crema.drive.DRIVE_RECONNECT_LINE, last = !ds.browserInstead, stacked = true) {
                 androidx.compose.foundation.layout.Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {

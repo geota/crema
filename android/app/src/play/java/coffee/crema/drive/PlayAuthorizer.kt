@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import coffee.crema.core.SyncFailure
+import coffee.crema.core.SyncFailureUnavailableInner
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.AuthorizationResult
 import com.google.android.gms.auth.api.identity.ClearTokenRequest
@@ -130,7 +131,12 @@ class PlayAuthorizer internal constructor(
         } catch (c: CancellationException) {
             throw c
         } catch (e: ApiException) {
-            if (e.statusCode in TRANSIENT) FreshToken.Waiting(SyncFailure.Offline) else FreshToken.NeedsReconnect
+            when (e.statusCode) {
+                in TRANSIENT -> FreshToken.Waiting(SyncFailure.Offline)
+                // Play services updating or restarting: the grant stands, the next run asks again.
+                in BUSY -> FreshToken.Waiting(SyncFailure.Unavailable(SyncFailureUnavailableInner(0u)))
+                else -> FreshToken.NeedsReconnect
+            }
         } catch (e: IOException) {
             FreshToken.Waiting(SyncFailure.Offline)
         }
@@ -174,10 +180,24 @@ class PlayAuthorizer internal constructor(
 
     /**
      * Withdraw the grant, then drop the cached token; Google's revoke endpoint
-     * on the access token too, as it takes those. Each step best-effort.
+     * on the access token too, as it takes those. Without the account (the
+     * result didn't name it), a live token from a silent authorize goes to the
+     * endpoint instead: the stored one may be over an hour old, and revoking a
+     * dead token leaves the grant. Each step best-effort.
      */
     override suspend fun revoke(stored: DriveTokenSet) {
-        stored.account?.let { account -> bestEffort { api.revokeAccess(account) } }
+        val account = stored.account
+        if (account != null) {
+            bestEffort { api.revokeAccess(account) }
+        } else {
+            bestEffort {
+                val live = api.authorize(null).takeIf { !it.hasResolution }?.accessToken
+                if (live != null && live != stored.accessToken) {
+                    revokeToken(stored.copy(accessToken = live))
+                    api.clearToken(live)
+                }
+            }
+        }
         bestEffort { api.clearToken(stored.accessToken) }
         bestEffort { revokeToken(stored) }
     }
@@ -202,6 +222,9 @@ class PlayAuthorizer internal constructor(
         /** Statuses time can fix: no network, a timeout, an interrupted call. */
         val TRANSIENT = setOf(CommonStatusCodes.NETWORK_ERROR, CommonStatusCodes.TIMEOUT, CommonStatusCodes.INTERRUPTED)
 
+        /** Play services itself busy (updating, restarting): `INTERNAL_ERROR`, `API_NOT_CONNECTED`. Never a reason to give up on it. */
+        val BUSY = setOf(CommonStatusCodes.INTERNAL_ERROR, CommonStatusCodes.API_NOT_CONNECTED)
+
         /** The user backing out: `CANCELED`, and the older sign-in API's 12501. */
         val CANCELLED = setOf(CommonStatusCodes.CANCELED, 12501)
 
@@ -210,6 +233,8 @@ class PlayAuthorizer internal constructor(
             e is ApiException && e.statusCode in CANCELLED -> SignInFailure(SignInFailure.Kind.CANCELLED, "cancelled", e)
             e is ApiException && e.statusCode in TRANSIENT -> SignInFailure(SignInFailure.Kind.OFFLINE, "no network", e)
             e is IOException -> SignInFailure(SignInFailure.Kind.OFFLINE, "no network", e)
+            e is ApiException && e.statusCode in BUSY ->
+                SignInFailure(SignInFailure.Kind.FAILED, "Google Play services is busy (updating?). Try again in a moment.", e)
             else -> SignInFailure(SignInFailure.Kind.UNSUPPORTED, "Google Play services: ${(e as? ApiException)?.statusCode ?: e.javaClass.simpleName}", e)
         }
     }

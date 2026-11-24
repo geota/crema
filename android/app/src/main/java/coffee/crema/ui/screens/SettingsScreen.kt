@@ -930,6 +930,11 @@ fun SettingsScreen(
                         }
                         val ds = ui.drive
                         SetGroup("Google Drive") {
+                            if (ds.playAgain) {
+                                CremaSettingsRow("Use Google Play services again", coffee.crema.drive.DRIVE_PLAY_AGAIN_HINT) {
+                                    CremaButton(onClick = { vm.drive.usePlayServicesAgain() }, variant = CremaButtonVariant.Outlined, enabled = !ds.busy, label = "Use again")
+                                }
+                            }
                             if (!ds.connected) {
                                 if (ds.needsReconnect) {
                                     CremaSettingsRow("Reconnect Google Drive", DRIVE_RECONNECT_LINE, last = !ds.browserInstead) {

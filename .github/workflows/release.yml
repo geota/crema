@@ -305,6 +305,15 @@ jobs:
             echo "::error::Couldn't read the debug key: check DEBUG_KEYSTORE_BASE64, DEBUG_KEYSTORE_PASSWORD and DEBUG_KEY_ALIAS."
             exit 1
           fi
+          # The public SHA-1s of the release key and Play's app-signing key
+          # (.scratch/drive-auth/SPEC.md §6): checked even with no release keystore here.
+          for shipped in CB:87:64:BA:12:BC:77:46:7E:67:BE:AE:70:9C:F8:45:52:93:B5:D4 \
+                         56:7F:98:95:A6:25:47:8B:88:20:E7:27:97:16:F9:C4:B1:F0:67:68; do
+            if [ "$debug_sha1" = "$shipped" ]; then
+              echo "::error::The debug keystore holds a key that signs shipped builds. Never sign a debug build with it."
+              exit 1
+            fi
+          done
           if [ -n "${KEYSTORE_FILE:-}" ]; then
             release_sha1=$(sha1 "$KEYSTORE_FILE" "$KEYSTORE_PASSWORD" "$KEY_ALIAS")
             if [ -z "$release_sha1" ] || [ "$debug_sha1" = "$release_sha1" ]; then

@@ -223,6 +223,9 @@ class DriveSync(
         /** Settings offers "Sign in with the browser instead": this build has
          *  another way, working here, that sign-in would take. */
         val browserInstead: Boolean = false,
+        /** Settings offers "Use Google Play services again": this phone keeps
+         *  to the browser ([DriveState.browserOnly]), and another way works here. */
+        val playAgain: Boolean = false,
     )
 
     private val _state = MutableStateFlow(UiState(configured = clientId.isNotBlank()))
@@ -291,6 +294,7 @@ class DriveSync(
             needsReconnect = persisted.needsReconnect,
             healthLine = driveHealthLine(persisted.health),
             browserInstead = !persisted.browserOnly && otherWays.isNotEmpty(),
+            playAgain = persisted.browserOnly && otherWays.isNotEmpty(),
         ) }
     }
 
@@ -343,6 +347,18 @@ class DriveSync(
             if (!ownState.await()) return@launch
             persist { it.copy(browserOnly = true) }
             start(browser, hostWith(openUrl))
+        }
+    }
+
+    /**
+     * Settings' "Use Google Play services again": undo [DriveState.browserOnly],
+     * so the next sign-in tries them first. A grant made in the browser stays.
+     */
+    fun usePlayServicesAgain() {
+        scope.launch {
+            if (!ownState.await()) return@launch
+            persist { it.copy(browserOnly = false) }
+            notify("The next Google Drive sign-in uses Google Play services")
         }
     }
 

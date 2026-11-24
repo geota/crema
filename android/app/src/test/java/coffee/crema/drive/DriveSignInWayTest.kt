@@ -89,7 +89,9 @@ class DriveSignInWayTest {
             calls += "play complete"
             return completes()
         }
-        override suspend fun revoke(stored: DriveTokenSet) {}
+        override suspend fun revoke(stored: DriveTokenSet) {
+            calls += "play revoke ${stored.accessToken}"
+        }
     }
 
     private fun failing(kind: SignInFailure.Kind): () -> Nothing = { throw SignInFailure(kind, "because") }
@@ -315,6 +317,41 @@ class DriveSignInWayTest {
         assertFalse(stored().browserOnly)
         assertEquals("still signed in", AuthMethod.PLAY, stored().tokens!!.method)
         assertTrue("$notices", notices.single().startsWith("Google Drive backup failed"))
+    }
+
+    @Test
+    fun `the way back to Play services undoes browserOnly, and the next sign-in takes them`() {
+        val s = sync(FakePlay(), DriveState(browserOnly = true))
+        assertTrue(s.state.value.playAgain)
+        assertFalse(s.state.value.browserInstead)
+        s.usePlayServicesAgain()
+        settle()
+
+        assertFalse(stored().browserOnly)
+        assertFalse(s.state.value.playAgain)
+        assertTrue(s.state.value.browserInstead)
+        s.signIn()
+        assertEquals(listOf("play begin"), calls)
+    }
+
+    @Test
+    fun `no way back is offered where Play services don't work`() {
+        assertFalse(sync(FakePlay(isAvailable = false), DriveState(browserOnly = true)).state.value.playAgain)
+    }
+
+    @Test
+    fun `a disconnect or Erase all data revokes a Play grant through the Play way`() {
+        val s = sync(FakePlay(), DriveState(tokens = play("play-live")))
+        s.disconnect(quiet = true)
+        settle()
+        assertEquals(listOf("play revoke play-live"), calls)
+
+        calls.clear()
+        val erased = sync(FakePlay(), DriveState(tokens = play("play-erased")))
+        runBlocking { erased.eraseAll() }
+        settle()
+        assertEquals(listOf("play revoke play-erased"), calls)
+        assertNull(stored().tokens)
     }
 
     @Test

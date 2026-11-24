@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import coffee.crema.core.SyncFailure
+import coffee.crema.core.SyncFailureUnavailableInner
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.gms.common.api.Status
@@ -120,7 +121,14 @@ class PlayAuthorizerTest {
         for (code in listOf(CommonStatusCodes.NETWORK_ERROR, CommonStatusCodes.TIMEOUT, CommonStatusCodes.INTERRUPTED)) {
             assertEquals("$code", FreshToken.Waiting(SyncFailure.Offline), way(FakeApi(authorizes = thrown(code))).fresh(stored(), false))
         }
-        for (code in listOf(CommonStatusCodes.SIGN_IN_REQUIRED, CommonStatusCodes.DEVELOPER_ERROR, CommonStatusCodes.API_NOT_CONNECTED)) {
+        for (code in listOf(CommonStatusCodes.INTERNAL_ERROR, CommonStatusCodes.API_NOT_CONNECTED)) {
+            assertEquals(
+                "$code: Play services busy",
+                FreshToken.Waiting(SyncFailure.Unavailable(SyncFailureUnavailableInner(0u))),
+                way(FakeApi(authorizes = thrown(code))).fresh(stored(), false),
+            )
+        }
+        for (code in listOf(CommonStatusCodes.SIGN_IN_REQUIRED, CommonStatusCodes.DEVELOPER_ERROR)) {
             assertEquals("$code", FreshToken.NeedsReconnect, way(FakeApi(authorizes = thrown(code))).fresh(stored(), false))
         }
     }
@@ -149,6 +157,9 @@ class PlayAuthorizerTest {
         assertEquals(SignInFailure.Kind.CANCELLED, failureOf { way(FakeApi(authorizes = thrown(12501))).begin(host) })
         assertEquals(SignInFailure.Kind.OFFLINE, failureOf { way(FakeApi(authorizes = thrown(CommonStatusCodes.NETWORK_ERROR))).begin(host) })
         assertEquals(SignInFailure.Kind.UNSUPPORTED, failureOf { way(FakeApi(authorizes = thrown(CommonStatusCodes.DEVELOPER_ERROR))).begin(host) })
+        // Play services updating: said, never a switch to the browser.
+        assertEquals(SignInFailure.Kind.FAILED, failureOf { way(FakeApi(authorizes = thrown(CommonStatusCodes.INTERNAL_ERROR))).begin(host) })
+        assertEquals(SignInFailure.Kind.FAILED, failureOf { way(FakeApi(authorizes = thrown(CommonStatusCodes.API_NOT_CONNECTED))).begin(host) })
         assertEquals(SignInFailure.Kind.UNSUPPORTED, failureOf { way(FakeApi(authorizes = { throw SecurityException("unknown caller") })).begin(host) })
 
         host.canLaunch = false
@@ -177,5 +188,20 @@ class PlayAuthorizerTest {
     fun `revoke withdraws the grant, clears the token and revokes it at Google, each best-effort`() = runBlocking {
         way().revoke(stored())
         assertEquals(listOf("revokeAccess a@example.com", "clearToken old", "revoke endpoint old"), calls)
+    }
+
+    @Test
+    fun `revoke without the account revokes a live token at Google`() = runBlocking {
+        way(FakeApi(authorizes = { PlayAuthorization("live", null, hasResolution = false) })).revoke(stored().copy(account = null))
+        assertEquals(
+            listOf("authorize null", "revoke endpoint live", "clearToken live", "clearToken old", "revoke endpoint old"),
+            calls,
+        )
+    }
+
+    @Test
+    fun `revoke without the account and no live token still clears and revokes the stored one`() = runBlocking {
+        way(FakeApi(authorizes = { PlayAuthorization(null, null, hasResolution = true, consent = consent) })).revoke(stored().copy(account = null))
+        assertEquals(listOf("authorize null", "clearToken old", "revoke endpoint old"), calls)
     }
 }
