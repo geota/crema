@@ -52,7 +52,8 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   `crema-<version>-foss.apk`, with no Google code, for F-Droid and
   IzzyOnDroid, and `crema-<version>-play.apk`. Both are the same app with the
   same signature, so either installs over the other and keeps your data. The
-  release APK was `crema-<version>-release.apk` (#336).
+  release APK was `crema-<version>-release.apk`: an Obtainium APK filter
+  that matches it needs to become `-(foss|play)\.apk$` (#336).
 
 ### Fixed
 
