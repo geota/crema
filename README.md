@@ -105,7 +105,7 @@ Everything below ships in the web app and the Android app (tablet and phone) unl
   <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/geota/crema"><img alt="Get it on Obtainium" height="56" src="https://github.com/ImranR98/Obtainium/blob/main/assets/graphics/badge_obtainium.png?raw=true"></a>
   <a href="https://github.com/geota/crema/releases/latest"><img alt="Get it on GitHub" height="56" src="https://raw.githubusercontent.com/andOTP/andOTP/master/assets/badges/get-it-on-github.png"></a>
   <!--
-    Not listed yet (both package pages return 404 as of 2026-10-02). To re-enable, move these
+    Not listed yet (both package pages return 404 as of 2026-11-24). To re-enable, move these
     badges above this comment once dev.maceiras.crema is live there, and restore the
     IzzyOnDroid bullet under "Stable":
   <a href="https://f-droid.org/packages/dev.maceiras.crema/"><img alt="Get it on F-Droid" height="56" src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png"></a>
@@ -119,9 +119,9 @@ Everything below ships in the web app and the Android app (tablet and phone) unl
 
 **Stable**: tagged releases.
 
-- Download an APK from the [latest release](https://github.com/geota/crema/releases/latest); the **[changelog](CHANGELOG.md)** says what each release includes. Each release has two:
+- Download the APK from the [latest release](https://github.com/geota/crema/releases/latest). See the **[changelog](CHANGELOG.md)** for what each release includes. Each release has two:
   - **`crema-<version>-play.apk`**: for phones with Google Play services (or microG). Google Drive sign-in goes through them, and opens the browser where they don't work. Settings → Google Drive can also sign in through the browser instead.
-  - **`crema-<version>-foss.apk`**: no Google code at all, the build for F-Droid and IzzyOnDroid. Google Drive sign-in opens the browser.
+  - **`crema-<version>-foss.apk`**: no Google code at all, the build F-Droid and IzzyOnDroid ship. Google Drive sign-in opens the browser.
 
   Both are the same app with the same signature, so either installs over the other and keeps your data. Obtainium asks which one to follow.
 
@@ -138,9 +138,9 @@ Everything below ships in the web app and the Android app (tablet and phone) unl
   2. Tap **Add App** and paste the source URL `https://github.com/geota/crema`.
   3. Turn on **Include prereleases**: the nightly build is published as a GitHub *prerelease*.
   4. Tap **Add**, then **Install**. Obtainium updates it in place whenever a new nightly ships.
-- Or download the APK from the [`nightly`](https://github.com/geota/crema/releases/tag/nightly) prerelease and sideload it. Nightlies are the `play` build.
+- Or download the APK straight from the [`nightly`](https://github.com/geota/crema/releases/tag/nightly) prerelease and sideload it. Nightlies are the `play` build.
 
-Stable and nightly are the **same app** (`dev.maceiras.crema`), signed with the same key, on one strictly increasing version scheme: a nightly's version code sits just above the release it builds on and below the next one. So **every tagged release upgrades in place over the nightlies before it**, with no reinstall; **Include prereleases** just picks the lane. Minimum Android 12 (API 31).
+Stable and nightly are the **same app** (`dev.maceiras.crema`), signed with the same key and sharing one strictly increasing version scheme: a nightly's version code sits just above the release it builds on and below the next one, so **every tagged release is an in-place upgrade over the nightlies that preceded it**, with no manual reinstall. The **Include prereleases** switch just picks which lane you follow. Minimum Android 12 (API 31).
 
 ## Tech stack
 
