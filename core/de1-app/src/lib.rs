@@ -3161,10 +3161,11 @@ impl CremaCore {
         out
     }
 
-    /// Whether a DE1 is connected (it has reported a state since the last
+    /// Whether a DE1 is connected (it has reported a state on the current
+    /// link — cleared by an unplanned drop, `de1_link_lost`, as well as by a
     /// reset) and not asleep.
     fn machine_awake(&self) -> bool {
-        self.last_state.is_some() && !self.machine_asleep()
+        self.link.state_seen && !self.machine_asleep()
     }
 
     /// Whether the DE1 last reported Sleep or GoingToSleep. `false` with no
@@ -7601,10 +7602,28 @@ mod tests {
             .scale_heartbeat()
             .expect("an Ultra V4.0.1 has a keep-awake");
         assert_eq!(scale_writes(&out), vec![bookoo::KEEP_AWAKE.as_slice()]);
-        // The DE1 drops (the shells reset the core; the scale link stays).
+        // An unplanned DE1 drop (the rear switch with the machine in Idle):
+        // the shells call `de1_link_lost` and keep the core while they
+        // reconnect; the scale link stays up.
+        let _ = core.de1_link_lost();
+        let out = core.scale_heartbeat().expect("the scale is still a V4.0.1");
+        assert!(
+            scale_writes(&out).is_empty(),
+            "DE1 link lost: no keep-awake"
+        );
+        // The DE1 is back: its first state on the new link resumes it.
+        core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 4_000);
+        let out = core
+            .scale_heartbeat()
+            .expect("an Ultra V4.0.1 has a keep-awake");
+        assert_eq!(scale_writes(&out), vec![bookoo::KEEP_AWAKE.as_slice()]);
+        // A user disconnect resets the core; the scale link stays up.
         let _ = core.reset();
         let out = core.scale_heartbeat().expect("the scale is still a V4.0.1");
-        assert!(scale_writes(&out).is_empty(), "DE1 gone: no keep-awake");
+        assert!(
+            scale_writes(&out).is_empty(),
+            "DE1 disconnected: no keep-awake"
+        );
         // Mini V1.4.2 alone gets the 0x12 form.
         let mut core = bookoo_core_on(142);
         core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
