@@ -4,301 +4,142 @@
 
 # Crema
 
-**A modern, open-source companion app for the [Decent Espresso DE1](https://decentespresso.com/).**
+**An open-source companion app for the [Decent Espresso DE1](https://decentespresso.com/): a web app and a native Android app on one Rust core.**
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPL_v3-blue.svg)](LICENSE)
 [![Built with Rust](https://img.shields.io/badge/core-Rust-orange.svg)](https://www.rust-lang.org/)
 [![Built with SvelteKit](https://img.shields.io/badge/web-SvelteKit-ff3e00.svg)](https://kit.svelte.dev/)
 [![Android: Jetpack Compose](https://img.shields.io/badge/android-Jetpack_Compose-3ddc84.svg)](android/)
 
+**[Open the web app](https://crema.maceiras.dev)** · **[Android APK](https://github.com/geota/crema/releases/latest)** · **[Obtainium](https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/geota/crema)** · [Changelog](CHANGELOG.md)
+
 </div>
 
----
+> **Unofficial. Not affiliated with Decent Espresso.** Crema talks to the DE1 over its public Bluetooth protocol. The official app is [`de1app`](https://github.com/decentespresso/de1app).
 
-> **Unofficial. Not affiliated with Decent Espresso.** Crema talks to the DE1 over its public Bluetooth GATT protocol. The official client is [`de1app`](https://github.com/decentespresso/de1app).
-
-Crema is an independent, open-source DE1 companion: a **fast, type-safe, browser-based PWA** and a **native Android app** (tablet and phone), both built on one sans-IO Rust core that owns the protocol and domain logic. The shells own the UI and the Bluetooth transport.
-
-Crema is not a clean-room implementation. It draws liberally on existing open-source DE1 software as references for protocol behaviour and features: [`de1app`](https://github.com/decentespresso/de1app) (the official Tcl app), [`decaid`](https://github.com/decentespresso/decaid) (Decent's Dart app, formerly reaprime), [Decenza](https://github.com/Kulitorum/Decenza), [Beanconqueror](https://github.com/graphefruit/Beanconqueror) and [Visualizer](https://visualizer.coffee/). GPL-licensed code from these projects is referenced and adapted under Crema's own GPL license (see [License](#license)), and the source comments cite the upstream file behind each port.
-
-> **▶ Try the live web app: [crema.maceiras.dev](https://crema.maceiras.dev)**. It runs entirely in your browser, nothing to install. Pairing a DE1 or scale needs a **Chromium** browser (Chrome, Edge, Brave) for Web Bluetooth; add it to your home screen to install it as an offline PWA. Prefer a native app? See **[Install on Android](#install-on-android)** below.
+- **Your data stays with you.** Shots, beans and profiles live on your device (Android) or in your browser (web). Backups go to a file, or to your own Google Drive if you connect it.
+- **No account.** Crema has no server and no sign-up. Visualizer and Decent uploads are opt-in.
+- **You start the machine.** Crema starts a shot, steam, hot water or a flush only when you tap. The optional pre-shot flush and post-steam purge (both off by default) run only as part of something you started. Without a tap, Crema only re-applies your saved machine settings on connect and puts an idle machine to sleep after your timeout.
 
 ## Screenshots
 
 <div align="center">
-<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/01-brew-dashboard.png" width="200" alt="Live brew dashboard" />
-<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/02-profiles.png" width="200" alt="Profile library" />
-<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/03-history.png" width="200" alt="Shot history" />
-<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/04-beans.png" width="200" alt="Bean library" />
-<br/>
-<sub><b>Android phone</b> — live brew dashboard · profile library · shot history · bean library</sub>
+<img src=".github/screenshots/web-brew-espresso.webp" width="720" alt="Brew in Espresso mode during a shot: live pressure and flow against the profile's goals" />
+<br/><sub>Brew, Espresso mode: live pressure and flow against the profile's goals, with the phase list and stop conditions.</sub>
 <br/><br/>
-<sub><b>10&Prime; tablet:</b>
-<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/01-brew-dashboard.png">Brew</a> ·
-<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/02-profiles.png">Profiles</a> ·
-<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/03-history.png">History</a> ·
-<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/04-beans.png">Beans</a> ·
-<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/05-settings.png">Settings</a>
-</sub>
+<img src=".github/screenshots/phone-brew-espresso.webp" width="200" alt="Brew on a phone in Espresso mode" />
+<img src=".github/screenshots/phone-profile-picker.webp" width="200" alt="The profile picker with Espresso profiles and Manual recipes" />
+<img src=".github/screenshots/phone-brew-manual.webp" width="200" alt="Brew on a phone in Manual mode with a V60 recipe" />
+<img src=".github/screenshots/phone-history.webp" width="200" alt="Shot history on a phone" />
+<br/><sub>Phone: Brew (Espresso) · the picker's two sections, Espresso profiles and Manual recipes · Brew (Manual) with a V60 recipe · History.</sub>
+<br/><br/>
+<img src=".github/screenshots/web-history.webp" width="360" alt="Shot history with a shot's chart" />
+<img src=".github/screenshots/web-beans.webp" width="360" alt="The bean library" />
+<br/><sub>History with a shot's chart · the bean library.</sub>
+<br/><br/>
+<img src=".github/screenshots/web-brew-manual.webp" width="360" alt="Brew in Manual mode on a wide screen" />
+<img src=".github/screenshots/web-devices-grinder.webp" width="360" alt="Devices, Grinder tab: grind scale and saved grinds per bag" />
+<br/><sub>Brew (Manual) · Devices → Grinder: the grind scale and each bag's saved grind.</sub>
 </div>
+
+<sub>Web app with sample data. Android: [phone](android/distribution/play-listing/en-US/images/phoneScreenshots/) and [tablet](android/distribution/play-listing/en-US/images/tenInchScreenshots/) store images.</sub>
 
 ## Features
 
-Everything below ships in the web app and the Android app (tablet and phone) unless marked otherwise.
+Web, Android tablet and Android phone unless marked. *(nightly)*: on `main` and the Android nightly; the web app and the stable APK get it with the next release.
 
-**Espresso**
-
-- **Live brew dashboard**: real-time pressure, flow, temperature, weight and puck resistance against the profile's goal curves, a step-by-step phase list, stop conditions and shot-completion metrics.
-- **Stop-at-weight that learns**: predictive stop-at-weight plus stop-at-volume; Crema learns how much drips in after the stop for each profile and scale pair (a port of Decenza's model) and stops early by that amount.
-- **Profile library**: the 89 built-in de1app profiles (including Adaptive v3), pinning, a multi-step editor with a live curve preview, `.json` / `.tcl` import and community v2 JSON export.
-- **Shot quality**: each shot in History gets a verdict with channeling, grind-direction and early-stop hints (ported from Decenza's shot analysis).
-- **Quick Controls**: steam, hot water and flush with configurable targets.
-
-**Brew Log (filter and more)**
-
-- **Log any brew**: V60, Chemex, Kalita Wave, AeroPress, French press, Clever, siphon, moka, cold brew, drip, manual espresso, or your own **custom methods**. Each brew deducts its dose from the bag and sits in History next to your shots.
-- **Guided brews**: the Scale page's Brew mode runs a recipe step by step (bloom, pours, waits, drawdown) with a big clock, live weight against each target when a scale is connected, and cues.
-- **Credited built-in recipes**: 13 published recipes, each linked to its source: James Hoffmann, Tetsu Kasuya's 4:6, the official AeroPress recipe, Tuomas Merikanto, Stumptown and Hario. Duplicate one to make it your own.
-- **Planned vs poured**: a guided brew's chart draws the recipe's planned staircase under the weight you actually poured, live and in History.
-
-**Beans and history**
-
-- **Shot history**: full telemetry for every shot, filters by profile, method and bean, multi-shot overlay comparison, and community v2 `.shot.json` import/export.
-- **Bean and roaster library**: bags, roast and open dates, freshness, grams remaining, photos, and a roaster's shelf of bags. Retroactively rebind a shot to a bag (the shot keeps a snapshot).
-- **Roaster duplicate merge**: Crema spots roasters with the same name and offers to merge them. The bags move to one roaster, and the duplicate is tagged rather than deleted, so you can un-merge it later.
-- **Beanconqueror import and export**: import beans, roasters and brews from a Beanconqueror export; export the bean library as a Beanconqueror ZIP.
-- **Visualizer catalogue search** in the bean form: pick a coffee and Crema fills the empty fields.
-
-**Machine and scales**
-
-- **DE1 over Bluetooth**: connect, control and stream telemetry. Every machine setting Crema owns (fan, refill point, steam, hot water, flush, heater tweaks) is re-applied on connect.
-- **Bluetooth scales**: Bookoo Themis, Decent Scale and Half Decent Scale, Acaia (Lunar, Pyxis, Pearl and older models), Skale II, Felicita Arc, Eureka Precisa, Solo Barista, Timemore Dot, Hiroia Jimmy, DiFluid Microbalance (and Ti), Atomheart Eclair, Varia Aku and Smartchef. A Half Decent Scale on firmware 3+ soft-sleeps with the DE1 instead of disconnecting.
-- **Maintenance**: water filter, descale and clean reminders, tank level with a low-water warning, and buttons that run the DE1's descale, clean and air-purge cycles, including on a cold machine with firmware older than build 1356.
-- **Tablet charging control** for a tablet powered from the DE1's USB port: Always on (default), Smart (55 to 65 %) or High (90 to 95 %).
-- **Stolen-machine notice**: if the connected DE1's serial is on Decent's stolen or lost list, Settings shows a one-line notice.
-
-**Sync and backup** (all opt-in; Crema is local-first and has no account of its own)
-
-- **Visualizer**: OAuth 2.0 + PKCE sign-in. Shots upload, pull and sync edits, and beans and roasters sync both ways with last-write-wins conflict resolution, on both shells. Coffee-bag and roaster writes need a Visualizer Premium account, and on free accounts Crema skips Premium-only shot fields.
-- **Decent account**: upload every shot to your decentespresso.com shot history in the same format the tablet app and decaid use, get a share link, and have edits re-uploaded.
-- **Backups**: a `.crema.zip` with profiles, beans (with photos), shots and settings that restores on either shell, plus optional Google Drive backup.
-- **Webhooks** (web): outgoing POSTs when a shot finishes, the DE1 or a scale connects, a profile is uploaded, or the machine reports an error.
-- **Capture and replay**: record BLE sessions and replay them through the core, in the web app (Settings → Advanced) or in tests.
-
-## Install on Android
-
-<p align="center">
-  <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/geota/crema"><img alt="Get it on Obtainium" height="56" src="https://github.com/ImranR98/Obtainium/blob/main/assets/graphics/badge_obtainium.png?raw=true"></a>
-  <a href="https://github.com/geota/crema/releases/latest"><img alt="Get it on GitHub" height="56" src="https://raw.githubusercontent.com/andOTP/andOTP/master/assets/badges/get-it-on-github.png"></a>
-  <!--
-    Not listed yet (both package pages return 404 as of 2026-10-02). To re-enable, move these
-    badges above this comment once dev.maceiras.crema is live there, and restore the
-    IzzyOnDroid bullet under "Stable":
-  <a href="https://f-droid.org/packages/dev.maceiras.crema/"><img alt="Get it on F-Droid" height="56" src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png"></a>
-  <a href="https://apt.izzysoft.de/fdroid/index/apk/dev.maceiras.crema"><img alt="Get it on IzzyOnDroid" height="56" src="https://gitlab.com/IzzyOnDroid/repo/-/raw/master/assets/IzzyOnDroid.png"></a>
-  -->
-</p>
-
-<sub>F-Droid, IzzyOnDroid and Google Play: planned, not listed yet.</sub>
-
-> The Android app is in active development. Builds ship on two **trains**; pick whichever you want to follow.
-
-**Stable**: tagged releases.
-
-- Download the APK from the [latest release](https://github.com/geota/crema/releases/latest). See the **[changelog](CHANGELOG.md)** for what each release includes. Each release has two:
-  - **`crema-<version>-play.apk`**: for phones with Google Play services (or microG). Google Drive sign-in goes through them, and opens the browser where they don't work. Settings → Google Drive can also sign in through the browser instead.
-  - **`crema-<version>-foss.apk`**: no Google code at all, the build F-Droid and IzzyOnDroid ship. Google Drive sign-in opens the browser.
-
-  Both are the same app with the same signature, so either installs over the other and keeps your data. Obtainium asks which one to follow.
-
-- Or add `https://github.com/geota/crema` to **Obtainium** (steps below) with **Include prereleases** off.
-
-<!--
-- **[IzzyOnDroid](https://apt.izzysoft.de/)** (an F-Droid-compatible repo): add `https://apt.izzysoft.de/fdroid/repo` to your F-Droid client, then search for **Crema**.
--->
-
-**Nightly**: the latest commit on `main`, rebuilt on every push.
-
-- **[Obtainium](https://github.com/ImranR98/Obtainium)** (recommended; installs *and* auto-updates straight from GitHub):
-  1. Install Obtainium itself, from its [GitHub releases](https://github.com/ImranR98/Obtainium/releases).
-  2. Tap **Add App** and paste the source URL `https://github.com/geota/crema`.
-  3. Turn on **Include prereleases**: the nightly build is published as a GitHub *prerelease*.
-  4. Tap **Add**, then **Install**. Obtainium updates it in place whenever a new nightly ships.
-- Or download the APK straight from the [`nightly`](https://github.com/geota/crema/releases/tag/nightly) prerelease and sideload it. Nightlies are the `play` build.
-
-Stable and nightly are the **same app** (`dev.maceiras.crema`), signed with the same key and sharing one strictly increasing version scheme: a nightly's version code sits just above the release it builds on and below the next one, so **every tagged release is an in-place upgrade over the nightlies that preceded it**, with no manual reinstall. The **Include prereleases** switch just picks which lane you follow. Minimum Android 12 (API 31).
-
-## Tech stack
-
-| Layer | Technology |
+| Area | What you get |
 |---|---|
-| **Core** | Rust (sans-IO, edition 2024), compiled to WebAssembly via `wasm-bindgen` and to Android via UniFFI. Protocol codecs, scale codecs, the shot state machine, stop-at-weight, profiles, beans, history, backups and Visualizer / Decent wire formats. No I/O, no UI; fully testable without hardware. |
-| **Web shell** | SvelteKit 2 + Svelte 5 (runes), TypeScript, adapter-static, Effect for services, uPlot charts. Web Bluetooth for the DE1 and scales. PWA with offline install, hosted on Cloudflare Pages. |
-| **Android shell** | Kotlin + Jetpack Compose (Material 3), separate tablet and phone layouts, Nordic BLE, Ktor. |
-| **Bindings** | `typeshare` generates the shared Rust types for both shells (TypeScript **and** Kotlin); `UniFFI` bridges the core to Android; `openapi-typescript` types the Visualizer API. |
-| **Web storage** | `localStorage` for settings, profiles, beans and shot summaries; IndexedDB for shot telemetry, bean photos and BLE captures. Stored credentials are encrypted at rest. |
+| **Brew modes** *(nightly)* | One Brew screen, two modes picked from the profile picker's two sections: **Espresso** (a DE1 profile) or **Manual** (a guided recipe for V60, AeroPress, Chemex, French press and more, step by step, with live weight against each target when a scale is connected). |
+| **Live espresso** | Pressure, flow, temperature, weight and puck resistance against the profile's goal curves; phase list; stop at weight (it learns each profile and scale's drip-through) or at volume; Quick Controls for steam, hot water and flush. |
+| **Profiles** | The 89 built-in de1app profiles (including Adaptive v3), a multi-step editor with live curve preview, `.json` / `.tcl` import, v2 JSON export. |
+| **Recipes** | 13 credited built-in recipes (James Hoffmann, Tetsu Kasuya's 4:6, AeroPress, Stumptown, Hario and others), your own recipes and brew methods. |
+| **Grinders and bag grinds** *(nightly)* | Your grinders with their grind scales, from a built-in catalogue of popular models. Each bag remembers its grind per grinder, and picking a bag sets it on Brew. |
+| **Shot history** | No limit, in its own database. Filters, overlay comparison, shot-quality hints, pinning, v2 `.shot.json` import/export, de1app `.shot` import. |
+| **Beans** | Bags and roasters, freshness, grams left, photos, roaster merge, Beanconqueror import and export, Visualizer catalogue search. |
+| **Backups** | One `.crema.zip` (profiles, beans with photos, shots, settings) that restores on either app. Google Drive: automatic on Android, on demand on the web. The web app reminds you when the last backup is two weeks old. |
+| **Sharing** | Visualizer (shots, beans and roasters, synced both ways) and Decent account shot upload. Both opt-in. |
+| **Machine care** | Filter, descale and clean reminders, tank level, guided descale / clean / air purge, DE1 firmware updates, tablet charging control. |
+| **Hub and remotes** (Android) | One device holds the Bluetooth link; other phones and tablets connect through it over the LAN, encrypted, each paired once with a 6-digit code. |
+| **Android only** | Background connection while charging (opt-in), update check, `-foss` and `-play` APKs ([below](#install)). |
+| **Web only** | Webhooks; Settings → Advanced → Replay a capture plays a recorded session through the app. |
 
-## Quick start
+## Device support
 
-### Prerequisites
+| Device | Status | What Crema does | Android | Web |
+|---|---|---|---|---|
+| **Decent DE1** | Supported | Connect, upload profiles, run and stop shots, steam, hot water, flush, maintenance cycles, firmware updates. | Yes | Yes |
+| **Bookoo Themis** | Supported | Weight, tare, timer, native flow; beeper, auto-standby and flow smoothing settings; auto-stop setting (not yet on Ultra firmware 4+). | Yes | Yes |
+| **Decent Scale, Half Decent Scale** | Supported | Weight, tare, timer, display and power-off; a Half Decent Scale on firmware 3+ soft-sleeps with the DE1 instead of disconnecting. | Yes | Yes |
+| **Acaia** (Lunar, Pyxis, Pearl, older models) | Supported | Weight and tare. | Yes | Yes |
+| **Skale II, Felicita Arc, Eureka Precisa, Solo Barista, Varia Aku** | Supported | Weight and tare; the scale's timer, except on the Aku. | Yes | Yes |
+| **Smartchef** | Supported | Weight; tare in the app (the scale has no Bluetooth commands). | Yes | Yes |
+| **Timemore Dot, Atomheart Eclair, DiFluid Microbalance (and Ti), Hiroia Jimmy** | Experimental | Weight and tare, following the reference apps; not yet checked against the hardware. | Yes | Yes |
+| **BOOKOO Motto 80** grinder | Beta, off by default *(nightly)* | Turned on in Settings. Shows burr gap, speed, state and grinds; Brew's grind follows the collar and each shot records it with the speed. Writes no settings to the grinder. | Yes | Yes |
 
-- **Rust** 1.95+ (`rust-version` in `core/Cargo.toml`; CI pins 1.95.0) with the `wasm32-unknown-unknown` target and `wasm-pack` (`cargo install wasm-pack`)
-- **Node.js** 24 (what CI uses)
-- **[pnpm](https://pnpm.io/)** 11: the repo pins `pnpm@11.5.0` via `packageManager`; run `corepack enable` and the matching version is used automatically
-- A browser with [Web Bluetooth](https://caniuse.com/web-bluetooth) support: Chrome / Edge / Opera. Brave works after enabling the flag (see below).
+Web Bluetooth needs a Chromium browser (Chrome, Edge, or Brave with its Web Bluetooth flag on) or, on iPhone and iPad, the Beacio Safari extension. Add the web app to your home screen to use it offline.
 
-<details>
-<summary><strong>Enabling Web Bluetooth in Brave</strong></summary>
+## Install
 
-Brave ships Web Bluetooth disabled by default. To turn it on:
+**Web:** open [crema.maceiras.dev](https://crema.maceiras.dev). Nothing to install.
 
-1. Open `brave://flags/#brave-web-bluetooth-api` (paste the URL into the address bar).
-2. Set the **Web Bluetooth API** flag to **Enabled**.
-3. Click **Relaunch** at the bottom of the page.
+**Android** (12+): each [release](https://github.com/geota/crema/releases/latest) has two APKs with the same signature, so either installs over the other and keeps your data.
 
-After the restart, Brave will prompt for device-picker permissions like Chrome does. No other browser config is required.
+| APK | For |
+|---|---|
+| `crema-<version>-play.apk` | Phones with Google Play services or microG. Drive sign-in goes through them, falling back to the browser where they don't work. |
+| `crema-<version>-foss.apk` | No Google code (the F-Droid / IzzyOnDroid build). Drive sign-in opens the browser. |
 
-</details>
+- **Stable**: tagged releases ([changelog](CHANGELOG.md)).
+- **Nightly**: every push to `main`, as the [`nightly`](https://github.com/geota/crema/releases/tag/nightly) prerelease (the `play` build).
+- **[Obtainium](https://github.com/ImranR98/Obtainium)** installs and updates either one: add `https://github.com/geota/crema`, with **Include prereleases** on for nightly. A release always upgrades over the nightlies before it.
 
-### Run the dev server
+F-Droid, IzzyOnDroid and Google Play: planned, not listed yet.
 
-```bash
-git clone https://github.com/geota/crema.git
-cd crema/web
-pnpm install
-pnpm wasm     # wasm build of the Rust core (re-run after core changes)
-pnpm dev
-```
+## Code layout
 
-Open `http://localhost:5173`. The web shell starts in a connected-to-nothing state; click "Connect" to pair your DE1 over Web Bluetooth. No machine handy? Settings → Advanced → **Replay a capture** plays a recorded session (e.g. `core/de1-app/tests/fixtures/*.jsonl`) through the dashboard.
+One sans-IO Rust core owns the protocol and the domain logic; each shell owns its UI and its Bluetooth radio.
 
-> **Pairing tip: the DE1 may advertise as `nRF5x` in the browser's Web Bluetooth picker.**
-
-### Visualizer and Google Drive (optional)
-
-To enable Visualizer OAuth sync, register a public Doorkeeper application at <https://visualizer.coffee/oauth/applications>, then put the Client UID into a local env file. Google Drive backup takes an OAuth client ID the same way.
-
-```bash
-cp web/.env.example web/.env.local
-# Edit web/.env.local: VITE_VISUALIZER_CLIENT_ID, VITE_GOOGLE_DRIVE_CLIENT_ID
-```
-
-### Build for production
-
-```bash
-pnpm build         # wasm + static site → web/build/
-```
-
-### Android
-
-Build instructions, the architecture notes and the UniFFI / `cargo-ndk` toolchain live in [`android/README.md`](android/README.md).
-
-### Run the test suite
-
-```bash
-# Rust core
-cd core
-cargo test --workspace
-
-# Web shell type-check + unit tests
-cd web
-pnpm check       # svelte-check (type-check)
-pnpm test        # vitest unit tests
-```
-
-### Git hooks
-
-A pre-push hook in `.githooks/` mirrors the CI `rust` and `web` jobs: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, the built-in profile id check, then `pnpm install --frozen-lockfile`, `pnpm wasm`, `pnpm check` and `pnpm build`. `pnpm install` wires it up automatically (via the `prepare` script), so usually there's nothing to do. To (re)install it by hand:
-
-```bash
-scripts/install-hooks.sh   # or: git config core.hooksPath .githooks
-```
-
-Bypass for a one-off push with `SKIP_CI_CHECKS=1 git push` (or skip one half with `SKIP_RUST=1` / `SKIP_WEB=1`); CI still runs on the remote.
-
-### CI
-
-- **`ci.yml`** (push / PR to `main`): Rust fmt, clippy, tests, built-in id and typeshare-bindings freshness; web `pnpm check` + build; an advisory `cargo audit` / `pnpm audit` (prod and all deps, high+), which also runs weekly on its own.
-- **`security-lockfile.yml`** (daily): patches advisories in transitive web dependencies, which Dependabot's security updates can't do with pnpm 11. `scripts/fix-transitive-advisories.mjs` moves only the vulnerable packages in `web/pnpm-lock.yaml` (a commented override in `web/pnpm-workspace.yaml` only when a parent pins one), skips patched versions younger than pnpm's release-age policy, and keeps one rolling PR from `security/transitive-fixes`. It pushes and opens the PR with a short-lived token minted for the repo's security bot GitHub App (variable `SECURITY_APP_CLIENT_ID`, secret `SECURITY_APP_PRIVATE_KEY`), so CI runs on it. Rulesets keep the app off `main` and `v*` tags. Run it locally with `cd web && node ../scripts/fix-transitive-advisories.mjs`.
-- **`nightly.yml`** (push to `main`): builds the APK and republishes the rolling `nightly` prerelease.
-- **`release.yml`** (`v*.*.*` tag): builds the APK and the PWA bundle, publishes the GitHub Release and deploys the web app to Cloudflare Pages. Releases go through a PR: `scripts/cut-release.sh X.Y.Z -m "…"` opens the release-notes PR, and after it merges `scripts/cut-release.sh --tag X.Y.Z` tags `main`, which starts this workflow.
-- **`pr-title.yml`**: checks the PR title prefix.
-
-## Project layout
-
-```
-crema/
-├── core/                     # Rust workspace (sans-IO, edition 2024)
-│   ├── de1-protocol/         #   DE1 BLE wire codec (state, shot samples, MMR, profiles, firmware)
-│   ├── de1-scale/            #   Per-scale BLE codecs (13 scale families)
-│   ├── de1-device/           #   What BLE devices share: kinds, scan registry, link health, firmware
-│   ├── de1-grinder/          #   Connected-grinder drivers (BOOKOO Motto 80) + grind detection
-│   ├── de1-domain/           #   Shots, profiles, beans, brew recipes, stop-at-weight, sync, import/export
-│   ├── de1-app/              #   Orchestrator: the `CremaCore` facade + event stream, capture/replay
-│   ├── de1-wasm/             #   wasm-bindgen bridge for the web shell
-│   ├── de1-ffi/              #   UniFFI bridge for the Android shell
-│   └── bindings/             #   Generated shared types (typeshare → .ts + .kt)
-├── web/                      # SvelteKit PWA
-│   ├── src/lib/              #   Core wrapper, stores, components, BLE transports, Effect services
-│   ├── src/routes/           #   / (brew), /profiles, /beans, /history, /scale (weigh + guided brew),
-│   │                         #   /settings, /auth (Visualizer callback), /privacy, /terms
-│   └── static/               #   Icons, manifest, PWA assets
-├── android/                  # Native Jetpack Compose app (tablet + phone)
-│   ├── app/src/main/java/coffee/crema/
-│   │                         #   ble/ (+ proxy/ LAN relay) · core/ (UniFFI) · ui/ (screens, phone/, brewlog/)
-│   │                         #   beans · brew · history · profiles · maintenance · settings
-│   │                         #   visualizer · decent · drive · security · update · diag
-│   └── distribution/         #   Play listing images + release notes
-├── fastlane/metadata/        # F-Droid / IzzyOnDroid store metadata
-├── brand/                    # Logo sources
-├── scripts/                  # cut-release.sh, install-hooks.sh
-├── .githooks/                # Pre-push hook mirroring CI
-└── .github/                  # workflows/ (ci · nightly · release · pr-title), screenshots/ (README)
-```
-
-## Native Android app
-
-The Android app is a full native client of the same core, not a remote. It uses Jetpack Compose with separate tablet and phone layouts (the phone has its own navigation and screens for Brew, Profiles, Beans, History, Scale and Settings) and calls the Rust core through [UniFFI](https://github.com/mozilla/uniffi-rs). The protocol codecs, shot state machine, stop logic, profile model, bean and history stores, backups, and the Visualizer and Decent wire formats are **one source of truth across web and Android**: a protocol fix lands once in Rust and both shells inherit it.
-
-Most features ship to web, tablet and phone together; the [changelog](CHANGELOG.md) says which shells each change reaches. Where they differ today:
-
-- **Android only**: a background connection that keeps the DE1 link and reconnect loop alive with the screen off (opt-in, and only while the device is charging); multi-device use, where a hub (a device with Hub mode on) holds the Bluetooth link and remotes connect through it on the LAN, over an encrypted connection each device pairs once with a 6-digit code; and an on-demand update check against GitHub releases.
-- **Web only**: webhooks.
+| Path | What it is |
+|---|---|
+| `core/de1-protocol` | DE1 Bluetooth wire codecs: state, shot samples, MMR, profiles, firmware. |
+| `core/de1-scale` | Codecs for every supported scale, and how a scan recognises them. |
+| `core/de1-device` | What non-DE1 devices share: kinds, scan registry, link health, firmware versions. |
+| `core/de1-grinder` | Connected-grinder drivers (BOOKOO Motto 80) and grind detection. |
+| `core/de1-domain` | Shots, profiles, beans, grinders, recipes, stop-at-weight, sync, import/export, backups. |
+| `core/de1-app` | The `CremaCore` facade both shells drive: event stream, shot start, capture and replay. |
+| `core/de1-relay` | LAN relay secure channel: SPAKE2 pairing, Noise sessions. |
+| `core/de1-relay-app` | LAN relay app layer: relayed commands, their wire form and refusal rules. |
+| `core/de1-history` | Shot history database rules: derived columns, typed queries, SQL. |
+| `core/de1-history-wasm` | The web's history store: SQLite on OPFS in a Worker. |
+| `core/de1-ffi`, `core/de1-wasm` | UniFFI bridge for Android; wasm-bindgen bridge for the web. |
+| `core/de1-model`, `core/*-model` | A DE1 and scale simulator, and property tests (outside the workspace). |
+| `core/bindings` | Generated shared types (typeshare: TypeScript and Kotlin). |
+| `web/` | SvelteKit 2 + Svelte 5 PWA: `src/routes` (Brew, Profiles, Beans, History, Devices, Settings), `src/lib` (core wrapper, state, BLE, services). |
+| `android/` | Kotlin + Jetpack Compose app for tablet and phone ([`android/README.md`](android/README.md)). |
+| `scripts/`, `.githooks/`, `.github/` | Release and hook scripts, the pre-push hook, CI workflows. |
 
 ## Contributing
 
-Issues and pull requests welcome. The codebase aims for:
-
-- **Type-driven design**: make illegal states unrepresentable.
-- **Sans-IO core**: protocol and domain logic tested without hardware.
-- **Behavioral fidelity**: bytes, timing and state transitions match the DE1's firmware and the reference apps; structure is free to evolve.
-- **Tight, idiomatic code**: no speculative abstractions; YAGNI is a best practice.
-
-Before opening a PR:
-
-```bash
-cd core && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
-cd ../web && pnpm check && pnpm test && pnpm build
-```
+Issues and pull requests are welcome. **[CONTRIBUTING.md](CONTRIBUTING.md)** has the setup, the dev server, tests, hooks and CI; [`DEPLOY.md`](DEPLOY.md) covers the web deploy.
 
 ## Acknowledgements
 
-- **[Decent Espresso](https://decentespresso.com/)** for the DE1 hardware and the open Bluetooth protocol.
-- **[`de1app`](https://github.com/decentespresso/de1app)**, the official Tcl app and canonical reference for protocol behaviour, the built-in profiles and maintenance flows.
-- **[`decaid`](https://github.com/decentespresso/decaid)** (formerly [reaprime](https://github.com/tadelv/reaprime)), Decent's Dart app: protocol cross-checks, the Decent shot-upload format and scale handling such as the Half Decent Scale's soft sleep.
-- **[Decenza](https://github.com/Kulitorum/Decenza)**: the stop-at-weight learning model, shot-quality analysis, cold-machine maintenance and smart tablet charging are ported from it.
-- **[Beanconqueror](https://github.com/graphefruit/Beanconqueror)** for its export format, which Crema imports and writes.
-- **[Visualizer](https://visualizer.coffee/)** ([source](https://github.com/miharekar/visualizer)) for the shot-sharing service, its public API and the coffee catalogue.
-- **[openscale](https://github.com/decentespresso/openscale)**, the Decent Scale firmware, for the scale's wire details.
-- The recipe authors credited in the app (James Hoffmann, Tetsu Kasuya, AeroPress, Tuomas Merikanto, Stumptown, Hario).
-- **The Decent community** (Diaspora forum, Discord and r/decentespresso) for collective wisdom on shot dynamics, profile design and the protocol's many undocumented quirks.
+Crema is not a clean-room implementation. It follows these projects and, where licensed, adapts their code; source comments cite the upstream file behind each port.
+
+- **[Decent Espresso](https://decentespresso.com/)** for the DE1 and its open Bluetooth protocol; **[`de1app`](https://github.com/decentespresso/de1app)**, the reference for protocol behaviour, built-in profiles and maintenance.
+- **[`decaid`](https://github.com/decentespresso/decaid)** (formerly [reaprime](https://github.com/tadelv/reaprime)): protocol cross-checks, the Decent shot upload, scale handling.
+- **[Decenza](https://github.com/Kulitorum/Decenza)**: stop-at-weight learning, shot-quality analysis, cold-machine maintenance, smart charging.
+- **[BOOKOO](https://github.com/BooKooCode/OpenSource)** for publishing the Motto 80 and scale protocols, and Sabotage1's [decaid Motto 80 plugin](https://github.com/Sabotage1/decaid-bookoo-motto80).
+- **[Beanconqueror](https://github.com/graphefruit/Beanconqueror)** (its export format), **[Visualizer](https://visualizer.coffee/)** ([source](https://github.com/miharekar/visualizer)) (shot sharing, API, coffee catalogue), **[openscale](https://github.com/decentespresso/openscale)** (Decent Scale firmware).
+- The recipe authors credited in the app, and the Decent community for years of shared knowledge.
 
 ## Built with AI assistance
 
-Crema was built with heavy use of **large-language-model (LLM)-assisted development**, including Anthropic's [Claude](https://www.anthropic.com/claude) (via [Claude Code](https://www.claude.com/claude-code)) for a substantial portion of its code, design and documentation. The project is reviewed and tested, but AI-assisted software can carry subtle or non-obvious defects. Please mind the [no-warranty, use-at-your-own-risk Terms](https://crema.maceiras.dev/terms) (especially around machine control), and report anything that looks off via a [GitHub issue](https://github.com/geota/crema/issues).
+Much of Crema's code, design and documentation was written with large-language-model help, mainly Anthropic's [Claude](https://www.anthropic.com/claude) via [Claude Code](https://www.claude.com/claude-code). It is reviewed and tested but may still have subtle defects: see the [no-warranty Terms](https://crema.maceiras.dev/terms) (especially on machine control) and report anything odd in an [issue](https://github.com/geota/crema/issues).
 
 ## License
 
-Crema is licensed under the **GNU General Public License v3.0 or later**; see [`LICENSE`](LICENSE). This matches the DE1 ecosystem (`de1app`, `decaid`, Decenza and Beanconqueror are GPL-3.0), so GPL-licensed code from those projects is referenced and adapted here. Bundled third-party assets are listed in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+[GPL-3.0-or-later](LICENSE), like `de1app`, `decaid`, Decenza and Beanconqueror, whose GPL code is referenced and adapted here. Bundled third-party assets: [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
 
 Copyright © 2026 Adrian Maceiras.
