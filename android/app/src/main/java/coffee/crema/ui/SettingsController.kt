@@ -123,7 +123,6 @@ internal class SettingsController(
             rememberedGrinderName = p.grinderName,
             grinderLinkedAddress = p.grinderLinkedAddress,
             grinderLinkedId = p.grinderLinkedId,
-            connectedGrinders = p.connectedGrinders,
         ) }
     }
 
@@ -260,7 +259,6 @@ internal class SettingsController(
         grinderName = uiState().rememberedGrinderName,
         grinderLinkedAddress = uiState().grinderLinkedAddress,
         grinderLinkedId = uiState().grinderLinkedId,
-        connectedGrinders = uiState().connectedGrinders,
         de1CompanionId = companionIdFor(connectionState().rememberedDe1Address),
         scaleCompanionId = companionIdFor(connectionState().rememberedScaleAddress),
         companionDeclined = uiState().companionDeclined,

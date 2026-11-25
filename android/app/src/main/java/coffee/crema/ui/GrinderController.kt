@@ -28,9 +28,9 @@ import kotlinx.serialization.json.Json
  * firmware-flash pause — and what the core says about it, folded into
  * [MainUiState.connectedGrinder] and [LiveTelemetry.grinderReading].
  *
- * Behind Settings → Connected grinders (beta), off by default: with it off,
- * nothing connects and nothing is remembered. A remote never connects a
- * grinder (the hub owns the link, §6.2).
+ * Connecting is the user's: Crema connects only a grinder the user picked
+ * (Devices → Grinder → Connect) or one it remembers from that. A remote never
+ * connects a grinder (the hub owns the link, §6.2).
  *
  * Logging: one short line per event, never the event itself (they carry the
  * serial) and never a reading (5 Hz).
@@ -86,8 +86,8 @@ class GrinderController internal constructor(
 
     private val flashPause = ScaleFlashPause(object : ScaleFlashPause.Port {
         override fun scaleWanted(): Boolean {
-            // With the beta off (or on a remote) the grinder is never wanted,
-            // whatever is remembered: a flash must not bring it back.
+            // On a remote the grinder is never wanted, whatever is
+            // remembered: a flash must not bring it back.
             if (!allowed() || manager.isUserDisconnected) return false
             val s = manager.state.value
             return uiState().rememberedGrinderAddress != null ||
@@ -132,8 +132,8 @@ class GrinderController internal constructor(
 
     /**
      * The grinder record the core follows and stamps shots for: the link,
-     * while it belongs to the connected or remembered grinder and the beta
-     * is on (a remote never has one). Handed over only when it changes.
+     * while it belongs to the connected or remembered grinder (a remote
+     * never has one). Handed over only when it changes.
      */
     internal fun syncCoreLink() {
         val st = uiState()
@@ -377,7 +377,7 @@ class GrinderController internal constructor(
 
     private fun allowed(): Boolean {
         val st = uiState()
-        return st.connectedGrinders && st.proxyRole != "secondary"
+        return st.proxyRole != "secondary"
     }
 
     /** Scan for and connect to a grinder (Devices → Grinder → Connect). */
@@ -432,13 +432,7 @@ class GrinderController internal constructor(
         syncCoreLink()
     }
 
-    /** The beta switch changed: off disconnects (the remembered grinder stays). */
-    fun onBetaChanged(on: Boolean) {
-        syncCoreLink()
-        if (!on) disconnect() else hydrate()
-    }
-
-    /** At launch (prefs loaded): connect the remembered grinder, when the beta is on. */
+    /** At launch (prefs loaded): connect the remembered grinder, if there is one. */
     fun hydrate() {
         syncCoreLink()
         val st = uiState()

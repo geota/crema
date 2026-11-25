@@ -1,7 +1,8 @@
 <script lang="ts">
 	/**
 	 * `ConnectedGrinderCard` — Devices → Grinder's "Connected grinder" card
-	 * (beta; spec `.scratch/grinder-ble/SPEC.md` §2.8, §6.1, §7).
+	 * (spec `.scratch/grinder-ble/SPEC.md` §2.8, §6.1, §7). Marked Beta: no
+	 * one has run it against a real Motto 80 yet.
 	 *
 	 * Connect (the browser's chooser), the link's status, the live readout
 	 * (grind, speed, feed, state, humidity, lifetime grinds, firmware), which
@@ -86,6 +87,10 @@
 		<span class="cgc-grow"></span>
 		<span class={['cgc-status', { live: view.state === 'ready' }]} role="status">{status}</span>
 	</div>
+	<p class="cgc-muted">
+		Not tested on a real grinder yet. Have a Motto 80? Please send a debug capture: pull a shot with
+		it connected, then History → Download → Replayable capture.
+	</p>
 
 	{#if view.name}
 		<p class="cgc-name">{entry?.name ?? view.name}<span class="cgc-muted"> · {view.name}</span></p>

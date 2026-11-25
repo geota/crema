@@ -24,7 +24,8 @@ import kotlin.test.assertTrue
 
 /**
  * The connected-grinder controller over a scripted Motto 80 and the real
- * core: the beta gate, the remembered grinder's direct reconnect, the card's
+ * core: a paired grinder connects with no setting (none unasked), the
+ * remembered grinder's direct reconnect, the card's
  * status, the §6.1 link, the "can't see it" timeout, old firmware, and that
  * no log line carries the serial.
  */
@@ -117,15 +118,19 @@ class GrinderControllerTest {
     private fun motto() = Grinder(id = "grinder:motto", name = "My Motto", scale = GrindScale(0f, 999f, 1f, "μm"), presetId = "bookoo-motto-80", updatedAt = 1L)
 
     @Test
-    fun withTheBetaOffNothingConnects() {
+    fun aPairedGrinderConnectsWithNoSettingAndNoneConnectsUnasked() {
         val fake = FakeGrinder()
         val (c, m) = controller(fake)
-        ui.update { it.copy(rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
+        // Nothing paired: launch connects nothing (connecting is the user's).
         c.hydrate()
-        c.connect()
         Thread.sleep(200)
         assertEquals(0, fake.connects)
         assertEquals(GrinderBleManager.State.IDLE, m.state.value)
+        // The grinder the user paired: launch connects it, no setting to turn on.
+        ui.update { it.copy(rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
+        c.hydrate()
+        until("the handshake") { fake.writes.size == 4 }
+        assertEquals(1, fake.connects)
     }
 
     @Test
@@ -134,7 +139,6 @@ class GrinderControllerTest {
         val (c, _) = controller(fake)
         ui.update {
             it.copy(
-                connectedGrinders = true,
                 rememberedGrinderAddress = FakeGrinder.Handle.address,
                 rememberedGrinderName = FakeGrinder.NAME,
                 grinders = rowViewOf(listOf(motto())),
@@ -165,7 +169,7 @@ class GrinderControllerTest {
     fun noRecordOffersToAddOneAndAddingLinksIt() {
         val fake = FakeGrinder()
         val (c, _) = controller(fake)
-        ui.update { it.copy(connectedGrinders = true, rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
+        ui.update { it.copy(rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
         c.hydrate()
         until("the handshake") { fake.writes.size == 4 }
         fake.send(FakeGrinder.period("IDLE", 3), seq = 2)
@@ -179,7 +183,6 @@ class GrinderControllerTest {
     fun aScanThatFindsNothingSaysCloseTheBookooApp() {
         val fake = FakeGrinder().apply { resolvesByAddress = false }
         val (c, m) = controller(fake, scanTimeoutMs = 100)
-        ui.update { it.copy(connectedGrinders = true) }
         c.connect()
         until("not found") { ui.value.connectedGrinder.status == GrinderLinkStatus.NOT_FOUND }
         assertEquals(GrinderMessages.notFound("Motto 80"), ui.value.connectedGrinder.message)
@@ -190,7 +193,7 @@ class GrinderControllerTest {
     fun oldFirmwareShowsUpdateAndStops() {
         val fake = FakeGrinder()
         val (c, m) = controller(fake)
-        ui.update { it.copy(connectedGrinders = true, rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
+        ui.update { it.copy(rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
         c.hydrate()
         until("the handshake") { fake.writes.size == 4 }
         fake.send(FakeGrinder.base(release = 102_040_416))
@@ -202,19 +205,18 @@ class GrinderControllerTest {
     fun aRemoteNeverConnects() {
         val fake = FakeGrinder()
         val (c, _) = controller(fake)
-        ui.update { it.copy(connectedGrinders = true, proxyRole = "secondary", rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
+        ui.update { it.copy(proxyRole = "secondary", rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
         c.hydrate()
         c.connect()
         Thread.sleep(200)
         assertEquals(0, fake.connects)
     }
 
-    /** Review #552 M1: beta on, connect, beta off, restart, then a DE1 flash must not bring the grinder back. */
+    /** Review #552 M1: a DE1 flash never connects a grinder the user hasn't paired. */
     @Test
-    fun aFirmwareFlashDoesNotBringBackAGrinderWithTheBetaOff() {
+    fun aFirmwareFlashConnectsNoGrinderUnpairedAndBringsBackAPairedOne() {
         val fake = FakeGrinder()
         val (c, m) = controller(fake)
-        ui.update { it.copy(connectedGrinders = false, rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
         c.hydrate()
         c.onFirmwareFlash(true)
         c.onFirmwareFlash(false)
@@ -223,8 +225,8 @@ class GrinderControllerTest {
         assertEquals(0, fake.writes.size)
         assertEquals(GrinderBleManager.State.IDLE, m.state.value)
         assertTrue(log.none { it.startsWith("Grinder:") }, "no pause lines for an unwanted grinder: $log")
-        // With the beta on, the same flash pauses and brings it back.
-        ui.update { it.copy(connectedGrinders = true) }
+        // A paired grinder: the same flash pauses it and brings it back.
+        ui.update { it.copy(rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
         c.hydrate()
         until("connected") { fake.writes.size == 4 }
         c.onFirmwareFlash(true)
@@ -238,7 +240,7 @@ class GrinderControllerTest {
     fun aGrinderThatStopsSendingDataStopsReconnectingAfterThree() {
         val fake = FakeGrinder()
         val (c, m) = controller(fake)
-        ui.update { it.copy(connectedGrinders = true, rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
+        ui.update { it.copy(rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
         c.hydrate()
         until("the handshake") { fake.writes.size == 4 }
         fake.send(FakeGrinder.period("IDLE", 3), seq = 2)
@@ -268,7 +270,7 @@ class GrinderControllerTest {
     fun aFirstConnectThatNeverAnswersStops() {
         val fake = FakeGrinder()
         val (c, m) = controller(fake)
-        ui.update { it.copy(connectedGrinders = true, rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
+        ui.update { it.copy(rememberedGrinderAddress = FakeGrinder.Handle.address, rememberedGrinderName = FakeGrinder.NAME) }
         c.hydrate()
         until("the handshake") { fake.writes.size == 4 }
         fake.clock.addAndGet(6_000)
@@ -286,7 +288,6 @@ class GrinderControllerTest {
         val (c, _) = controller(fake)
         ui.update {
             it.copy(
-                connectedGrinders = true,
                 rememberedGrinderAddress = FakeGrinder.Handle.address,
                 rememberedGrinderName = FakeGrinder.NAME,
                 grinderLinkedAddress = FakeGrinder.Handle.address,
@@ -328,10 +329,6 @@ class GrinderControllerTest {
         ui.update { it.copy(proxyRole = "normal") }
         c.syncCoreLink()
         assertEquals("grinder:motto", links.last())
-        // Beta off: the core loses the link.
-        ui.update { it.copy(connectedGrinders = false) }
-        c.onBetaChanged(false)
-        assertEquals(null, links.last())
     }
 
     /** G3: a connected grinder whose record isn't active is a suggestion only. */
@@ -342,7 +339,6 @@ class GrinderControllerTest {
         val niche = Grinder(id = "grinder:niche", name = "Niche", scale = GrindScale(0f, 50f, 1f, ""), updatedAt = 1L)
         ui.update {
             it.copy(
-                connectedGrinders = true,
                 rememberedGrinderAddress = FakeGrinder.Handle.address,
                 rememberedGrinderName = FakeGrinder.NAME,
                 grinderLinkedAddress = FakeGrinder.Handle.address,

@@ -1,6 +1,6 @@
 /**
- * Devices → Grinder's "Connected grinder" card (beta): hidden until the beta
- * is on; Connect, the live readout in the capabilities' units, the §2.7
+ * Devices → Grinder's "Connected grinder" card: always on Devices → Grinder
+ * (no setting), with its Beta note; Connect, the live readout in the capabilities' units, the §2.7
  * messages, and the §6.1 link choices (Linked to, Which grinder is this?,
  * Add … to your grinders).
  */
@@ -93,14 +93,13 @@ afterEach(() => {
 });
 
 describe('the Connected grinder card', () => {
-	it('shows on Devices → Grinder only with the beta on', () => {
+	it('shows on Devices → Grinder with no setting, marked Beta and asking for a capture', () => {
 		const target = document.body.appendChild(document.createElement('div'));
 		component = mount(GrinderTab, { target, props: {} });
 		flushSync();
-		expect(target.textContent).not.toContain('Connected grinder');
-		getSettingsStore().set('connectedGrinderBeta', true);
-		flushSync();
 		expect(target.textContent).toContain('Connected grinder');
+		expect(target.textContent).toContain('Beta');
+		expect(target.textContent).toContain('Not tested on a real grinder yet');
 	});
 
 	it('offers Connect when nothing is connected', () => {

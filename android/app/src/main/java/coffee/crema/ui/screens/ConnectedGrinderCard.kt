@@ -34,9 +34,9 @@ import coffee.crema.ui.linkedGrinder
  * Devices → Grinder → "Connected grinder" (SPEC grinder-ble §7): Connect /
  * Disconnect / Forget, the link status, the live readout (gap, speeds, state,
  * humidity, lifetime grinds), firmware, and which owned grinder it is
- * ("Linked to …", or a choice, or "Add … to your grinders"). Shown only with
- * Settings → Connected grinders (beta) on. Read-only: nothing here writes to
- * the grinder.
+ * ("Linked to …", or a choice, or "Add … to your grinders"). Marked Beta: no
+ * one has run it against a real Motto 80 yet. Read-only: nothing here writes
+ * to the grinder.
  */
 
 /** The card's one-line status. */
@@ -105,6 +105,11 @@ fun ConnectedGrinderCard(vm: MainViewModel, ui: MainUiState, modifier: Modifier 
                 )
                 return@Column
             }
+            Text(
+                "Not tested on a real grinder yet. Have a Motto 80? Please open an issue on GitHub; a debug capture from it would help.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Text(
                 grinderStatusText(g.status, modelName) +
                     (g.firmware?.let { " · firmware $it" } ?: "") +

@@ -25,8 +25,8 @@ internal class ScaleFlashPause(
     private val port: Port,
     /** Which device the log lines name (the grinder shares this pause). */
     private val label: String = "Scale",
-    /** Say nothing about a device that isn't wanted (the grinder with its
-     *  beta off); the scale keeps its line either way. */
+    /** Say nothing about a device that isn't wanted (no grinder linked or
+     *  remembered); the scale keeps its line either way. */
     private val quietWhenUnwanted: Boolean = false,
 ) {
     interface Port {

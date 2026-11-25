@@ -378,14 +378,6 @@ export interface Settings {
 	smoothPressure: boolean;
 	/** Show a debug / event-log panel (BLE diagnostics). */
 	showDebugPanel: boolean;
-
-	// ── Beta ─────────────────────────────────────────────────────────────
-	/**
-	 * Connected grinders (beta, #488 phase 2): Devices → Grinder can connect
-	 * a BOOKOO Motto 80 over Web Bluetooth and show its readings. Off by
-	 * default; a per-device choice (not in `CommonSettings`).
-	 */
-	connectedGrinderBeta: boolean;
 }
 
 /** The web-only settings' defaults — every field that isn't in the core's
@@ -404,8 +396,7 @@ const PLATFORM_DEFAULTS = {
 		scaleConnected: false,
 		de1Connected: false
 	},
-	smoothPressure: true,
-	connectedGrinderBeta: false
+	smoothPressure: true
 } as const satisfies Pick<Settings, (typeof PLATFORM_KEYS)[number]>;
 
 /** The web `Settings` fields that come from the core's `CommonSettings`. */
@@ -518,8 +509,7 @@ const PLATFORM_KEYS = [
 	'webhookEnabled',
 	'webhookUrl',
 	'webhookEvents',
-	'smoothPressure',
-	'connectedGrinderBeta'
+	'smoothPressure'
 ] as const satisfies ReadonlyArray<keyof Settings>;
 
 /** The web-only settings (the non-`CommonSettings` extras) as a plain record —

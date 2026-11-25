@@ -95,8 +95,6 @@
 	);
 	const bags = $derived(selected ? savedOnBags(lib.beans, selected.id) : []);
 	const autoSave = $derived(settings.current.grindAutoSave === true);
-	/** Connected grinders (beta, Settings → Advanced): the card above the list. */
-	const connectedBeta = $derived(settings.current.connectedGrinderBeta === true);
 	const appCtx = getCremaAppContext();
 	const app = $derived(appCtx?.().app ?? null);
 
@@ -268,11 +266,9 @@
 
 	{@render tabs?.()}
 
-	{#if connectedBeta}
-		<div class="gdv-card gdv-connected">
-			<ConnectedGrinderCard {app} />
-		</div>
-	{/if}
+	<div class="gdv-card gdv-connected">
+		<ConnectedGrinderCard {app} />
+	</div>
 
 	<div class="gdv-body">
 		<section class="gdv-card gdv-list" aria-labelledby="{uid}-list">

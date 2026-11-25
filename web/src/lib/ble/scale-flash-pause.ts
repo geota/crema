@@ -21,8 +21,8 @@
  * it ends. Nothing is persisted: a reload outside a running flash starts
  * unpaused.
  *
- * The connected grinder (beta) stands down the same way, through its own
- * instance labelled `Grinder`.
+ * The connected grinder stands down the same way, through its own instance
+ * labelled `Grinder`, quiet when there is no grinder to pause.
  */
 
 export interface ScaleFlashPausePort {
@@ -43,7 +43,10 @@ export class ScaleFlashPause {
 	constructor(
 		private readonly port: ScaleFlashPausePort,
 		/** The device in the log lines: `Scale`, `Grinder`. */
-		private readonly label = 'Scale'
+		private readonly label = 'Scale',
+		/** Say nothing about a device that isn't wanted (no grinder linked or
+		 *  remembered); the scale keeps its line either way. */
+		private readonly quietWhenUnwanted = false
 	) {}
 
 	/** A flash is running: scale connects are held. */
@@ -58,7 +61,9 @@ export class ScaleFlashPause {
 		if (active) {
 			this.#bringBack = this.port.scaleWanted();
 			this.port.standDown();
-			this.port.log(`${this.label}: Bluetooth paused for the firmware update`);
+			if (this.#bringBack || !this.quietWhenUnwanted) {
+				this.port.log(`${this.label}: Bluetooth paused for the firmware update`);
+			}
 			return;
 		}
 		const restore = this.#bringBack;

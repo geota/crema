@@ -929,7 +929,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * The connected grinder (grinder-ble G2b): its BLE manager and the
      * controller that owns its lifecycle and folds its core events into the
-     * UI. Behind Settings → Connected grinders (beta). Not recorded by
+     * UI. Not recorded by
      * [bleRecorder] (its `baseInfo` holds the serial and Wi-Fi name; the
      * core's own capture keeps it redacted).
      */
@@ -3448,13 +3448,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun disconnectScale() = connection.disconnectScale()
 
     // ── Connected grinder — see [GrinderController] ─────────────────────────
-
-    /** Settings → Connected grinders (beta). Off disconnects the grinder. Persisted. */
-    fun setConnectedGrinders(on: Boolean) {
-        _ui.update { it.copy(connectedGrinders = on) }
-        persistPrefs()
-        grinderController.onBetaChanged(on)
-    }
 
     /** Devices → Grinder → Connect: scan for a grinder. */
     fun connectGrinder() = grinderController.connect()

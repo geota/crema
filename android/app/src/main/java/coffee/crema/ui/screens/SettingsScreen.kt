@@ -102,7 +102,6 @@ import coffee.crema.ui.resetPreferencesTitle
 import coffee.crema.ui.components.SCREENSAVER_HINT
 import coffee.crema.ui.components.WAKE_WITH_SAVER_HINT
 import coffee.crema.ui.components.CremaSwitch
-import coffee.crema.ui.components.CremaSettingsPill
 import coffee.crema.ui.components.CremaValueUnit
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.CremaSettingsRow
@@ -343,19 +342,7 @@ fun SettingsScreen(
                             }
                             RememberedDeviceRow("scale", ui.rememberedScaleAddress != null, vm::forgetScale)
                             // Grinders are Devices → Grinder's now (#488): their scales,
-                            // the active one, and what's stamped on shots.
-                            CremaSettingsRow(
-                                "Connected grinders",
-                                "Connect a BOOKOO Motto 80 over Bluetooth and see it live on Devices → Grinder.",
-                            ) {
-                                androidx.compose.foundation.layout.Row(
-                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
-                                ) {
-                                    CremaSettingsPill("Beta")
-                                    CremaSwitch(ui.connectedGrinders, vm::setConnectedGrinders)
-                                }
-                            }
+                            // the active one, the connected one, and what's stamped on shots.
                             CremaSettingsRow("Grinders", "Your grinders and their grind scales are on Devices.", last = true) {
                                 CremaButton(onClick = { vm.openDevicesTab("grinder"); onNav("scale") }, variant = CremaButtonVariant.Outlined, label = "Devices → Grinder")
                             }

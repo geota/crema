@@ -1,8 +1,8 @@
 /**
  * Follow mode on web (spec `.scratch/grinder-ble/SPEC.md` §5, owner
  * decisions 2–4; G3): a scripted Motto 80 drives the real `CremaApp` and the
- * real wasm core. The app gives the core the grinder's record link while the
- * beta is on, Brew's grind follows a steady collar, "Pause following" gives
+ * real wasm core. The app gives the core the grinder's record link, Brew's
+ * grind follows a steady collar, "Pause following" gives
  * the grind back to the user, a bag pick onto the followed grinder names the
  * collar's target instead of moving Brew's grind, and its Undo puts back the
  * grind Brew had (review #554 S3).
@@ -110,9 +110,8 @@ async function settle() {
 	await vi.advanceTimersByTimeAsync(0);
 }
 
-/** The app with the beta on, a Motto record (Brew's grinder) and a Niche, and the Motto connected. */
-async function followingApp(opts: { beta?: boolean } = {}) {
-	getSettingsStore().set('connectedGrinderBeta', opts.beta ?? true);
+/** The app with a Motto record (Brew's grinder) and a Niche, and the Motto connected. */
+async function followingApp() {
 	const lib = getBeanStore();
 	const motto = lib.addGrinder('', MOTTO)!;
 	const niche = lib.addGrinder('', 'niche-zero')!;
@@ -161,15 +160,6 @@ describe('follow mode on Brew', () => {
 		expect(getBrewGrind().value).toBe('480');
 		await t.readings(470, 3);
 		expect(getBrewGrind().value).toBe('470');
-	});
-
-	it('with the beta off the core gets no link and nothing follows', async () => {
-		const t = await followingApp({ beta: false });
-		getBrewGrind().set('500');
-		await t.readings(480);
-		expect(core.followedGrinderId()).toBeNull();
-		expect(getGrinderFollow().view.status).toBe(FollowStatus.Off);
-		expect(getBrewGrind().value).toBe('500');
 	});
 
 	it('"Pause following" gives the grind back to the user; resuming takes the collar again', async () => {

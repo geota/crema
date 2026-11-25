@@ -193,6 +193,27 @@ describe('scale Bluetooth during a firmware flash (Decenza 270b89df)', () => {
 	});
 });
 
+describe('the grinder instance (quiet when unwanted)', () => {
+	it('says nothing about a grinder nobody has; a wanted one gets its lines', () => {
+		const run = (wanted: boolean) => {
+			const lines: string[] = [];
+			const pause = new ScaleFlashPause(
+				{ scaleWanted: () => wanted, standDown: () => undefined, bringBack: () => undefined, log: (l) => lines.push(l) },
+				'Grinder',
+				true
+			);
+			pause.onFlashActive(true);
+			pause.onFlashActive(false);
+			return lines;
+		};
+		expect(run(false)).toEqual([]);
+		expect(run(true)).toEqual([
+			'Grinder: Bluetooth paused for the firmware update',
+			'Grinder: firmware update over — reconnecting'
+		]);
+	});
+});
+
 describe('ScaleManager held for a firmware flash', () => {
 	it('refuses both connect paths and ignores kicks until released', async () => {
 		const onState = vi.fn();

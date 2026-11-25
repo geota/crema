@@ -493,19 +493,7 @@ private fun PeripheralsSection(
         }
     }
     SettingsGroup("Grinder") {
-        // Grinders are Devices → Grinder's now (#488).
-        CremaSettingsRow(
-            "Connected grinders",
-            "Connect a BOOKOO Motto 80 over Bluetooth and see it live on Devices → Grinder.",
-        ) {
-            androidx.compose.foundation.layout.Row(
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
-            ) {
-                CremaSettingsPill("Beta")
-                CremaSwitch(ui?.connectedGrinders == true, vm::setConnectedGrinders)
-            }
-        }
+        // Grinders, and the connected one, are Devices → Grinder's now (#488).
         CremaSettingsRow("Grinders", coffee.crema.ui.grindersSettingsLine(activeGrinder), last = true) {
             CremaButton(onClick = { vm.openDevicesTab("grinder"); onOpenScale() }, variant = CremaButtonVariant.Outlined, label = "Devices")
         }

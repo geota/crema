@@ -54,11 +54,12 @@ class SettingsRegistryTest {
         // active grinder (B) and the grind auto-save switch (C). Round 2 retired
         // the Settings grinder's mirroring: it is this device's own (C, N8).
         // 102: connected grinders (G2b) added the remembered grinder, its
-        // record link and the beta switch, all personal (C).
-        assertEquals(102, Setting.entries.size)
+        // record link and the beta switch, all personal (C). 101: the beta
+        // switch went (owner 2026-11-25: connected grinders need no setting).
+        assertEquals(101, Setting.entries.size)
         assertEquals(25, Setting.entries.count { it.group == SettingGroup.A_MACHINE })
         assertEquals(13, Setting.entries.count { it.group == SettingGroup.B_SESSION })
-        assertEquals(64, Setting.entries.count { it.group == SettingGroup.C_PERSONAL })
+        assertEquals(63, Setting.entries.count { it.group == SettingGroup.C_PERSONAL })
         for (s in Setting.entries) {
             if (s.group == SettingGroup.C_PERSONAL) {
                 assertEquals(OnRemote.LOCAL, s.onRemote, "$s")

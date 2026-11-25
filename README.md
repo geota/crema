@@ -68,7 +68,7 @@ Everything below ships in the web app and the Android app (tablet and phone) unl
 
 - **Your grinders**: add them from a built-in catalogue of popular models with their grind scales, or set your own range, step and unit (numbers, clicks, microns). A grind is stored as typed, so "2.1.3" or "480 μm" both work.
 - **Bag grinds**: each bag remembers its grind per grinder, and picking a bag sets it on Brew. Each shot records the grinder in use.
-- **BOOKOO Motto 80 over Bluetooth** (beta, off by default): turn it on in Settings. Devices → Grinder shows burr gap, speed, state and grinds; Brew's grind follows the collar and each shot records it with the speed. Crema writes no settings to the grinder.
+- **BOOKOO Motto 80 over Bluetooth** (beta, untested on hardware): connect it from Devices → Grinder, which shows burr gap, speed, state and grinds; Brew's grind follows the collar and each shot records it with the speed. Crema writes no settings to the grinder.
 
 **Beans and history**
 
