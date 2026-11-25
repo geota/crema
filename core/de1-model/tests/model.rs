@@ -2057,3 +2057,74 @@ fn a_bump_on_the_return_bands_edge_is_the_unseen_load_limit() {
         );
     }
 }
+
+/// The 2026-11-25 scheduled run (seed 21b31f38): auto-tare off, the scale
+/// stalls as an espresso opens on its 0 g, and comes back 6 g heavier in
+/// preheat. The core's shot-start reset forgot the user's zero, so that
+/// reading started the step detector afresh and the 6 g read as coffee: a
+/// weight stop at a true 29 g of 36, which I13 caught. Not a regression: the
+/// same at v0.11.0. The detector now judges it from the zero, so the load
+/// settles into the zero and the shot stops on target. On a slow scale that
+/// never read before the open (the seed's other shrink) the first reading is
+/// the user's zero: 6 g refuses the weight stop.
+#[test]
+fn a_load_in_a_stall_across_an_auto_tare_off_open_is_judged() {
+    let case = Case {
+        params: De1Params {
+            preinfusion: false,
+            ending: Ending::None,
+            idle_ignored: 2,
+            two_tap_steam: false,
+            unknown_pour: false,
+            heating_ms: 1_000,
+        },
+        headspace_ml: 50.0,
+        lane_timeout_ms: 5_000,
+        read_only: false,
+        pre_flush: false,
+        pace: None,
+        untared_cup_g: None,
+        tare_latency_ms: 200,
+        ops: vec![
+            Op::Advance { ms: 100 },
+            Op::Advance { ms: 100 },
+            Op::Scale(ScaleMode::Stall),
+            Op::Advance { ms: 100 },
+            Op::GroupHead(MachineState::Espresso),
+            Op::SetAutoTare(false),
+            Op::Advance { ms: 100 },
+            Op::LinkDown { ms: 19_100 },
+            Op::Advance { ms: 100 },
+            Op::Scale(ScaleMode::StepUp { grams: 6.0 }),
+            Op::Advance { ms: 100 },
+        ],
+    };
+    let slow = Case {
+        pace: Some(Pace {
+            mode: ScaleMode::Sparse { every_ms: 1_300 },
+            stall_at_g: None,
+        }),
+        ops: [&case.ops[..3], &[Op::Advance { ms: 100 }], &case.ops[3..]].concat(),
+        ..case.clone()
+    };
+    for (name, case, stop) in [("10 Hz", &case, true), ("slow", &slow, false)] {
+        let world = run(case);
+        let broken: Vec<String> = world
+            .violations
+            .iter()
+            .filter(|v| v.invariant.status() == Status::Enforced)
+            .map(ToString::to_string)
+            .collect();
+        assert!(broken.is_empty(), "{name}: {broken:#?}");
+        let weight = world
+            .stops
+            .iter()
+            .find(|(reason, _)| *reason == StopReason::Weight);
+        if stop {
+            let (_, cup) = weight.expect("a weight stop");
+            assert!((33.0..39.0).contains(cup), "{name}: a true {cup} g");
+        } else {
+            assert!(weight.is_none(), "{name}: {:?}", world.stops);
+        }
+    }
+}

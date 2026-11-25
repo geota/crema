@@ -174,17 +174,20 @@ impl CremaCore {
     /// unless the scale reads over 5 g as it opens. Then whatever is on it,
     /// last shot's cup or a spoon, can't be told from coffee, and the weight
     /// stop is refused for the session; the volume and time limits stay live
-    /// (`DESIGN.md` §3.5).
+    /// (`DESIGN.md` §3.5). A scale that hasn't read yet has no zero to stand:
+    /// the session stays `Unknown`, and its first reading, if it comes before
+    /// flow, is checked the same way, or a load set down before it would read
+    /// as coffee.
     pub(crate) fn take_users_zero(&mut self) {
-        let loaded = self
-            .scale
-            .as_ref()
-            .and(self.last_reading_g)
-            .is_some_and(|g| g > UNTARED_AT_OPEN_G);
+        let reading = self.scale.as_ref().map(|_| self.last_reading_g);
         let Some(session) = self.session.as_mut() else {
             return;
         };
-        if loaded {
+        self.users_zero_pending = reading == Some(None);
+        if self.users_zero_pending {
+            return;
+        }
+        if reading.flatten().is_some_and(|g| g > UNTARED_AT_OPEN_G) {
             session.refuse(Blocked::ScaleNotTared);
         } else {
             session.tared();

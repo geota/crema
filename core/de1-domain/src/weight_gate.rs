@@ -173,6 +173,18 @@ impl WeightSpikeGate {
         self.last_accepted_at = None;
         self.rejected_run = 0;
     }
+
+    /// [`reset`](Self::reset), but keep a baseline: `weight_g`, as of the
+    /// last reading that passed. A shot that opens on the user's zero
+    /// (auto-tare off) has a known zero already, so its first reading is a
+    /// step from the last one before it opened (`DESIGN.md` §3.5, #389). With
+    /// no reading passed yet, it's a plain reset.
+    pub fn rebase(&mut self, weight_g: f32) {
+        let at = self.last_accepted_at;
+        self.reset();
+        self.last_accepted_g = at.map(|_| weight_g);
+        self.last_accepted_at = at;
+    }
 }
 
 #[cfg(test)]
@@ -181,6 +193,28 @@ mod tests {
 
     fn ms(ms: u64) -> Duration {
         Duration::from_millis(ms)
+    }
+
+    /// A rebased gate judges the next reading as a step from the baseline it
+    /// was given, at the time the last reading passed; one that never had a
+    /// reading starts afresh.
+    #[test]
+    fn a_rebased_gate_judges_the_next_reading_from_its_baseline() {
+        let mut gate = WeightSpikeGate::new();
+        assert_eq!(gate.check(1.0, ms(0), false, false), WeightVerdict::Accept);
+        gate.rebase(0.5);
+        assert_eq!(gate.last_accepted(), Some(0.5));
+        assert_eq!(
+            gate.check_at_rate(6.5, ms(400), true, Some(0.0)),
+            WeightVerdict::Disturbed
+        );
+        let mut fresh = WeightSpikeGate::new();
+        fresh.rebase(0.0);
+        assert_eq!(fresh.last_accepted(), None);
+        assert_eq!(
+            fresh.check_at_rate(6.0, ms(400), true, Some(0.0)),
+            WeightVerdict::Accept
+        );
     }
 
     /// The band at a scale's 10 Hz: 3 g + 12 g/s × 0.1 s = 4.2 g.

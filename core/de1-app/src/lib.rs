@@ -736,6 +736,10 @@ pub struct CremaCore {
     /// The scale's latest raw reading, grams, for the auto-tare-off check
     /// when a session opens.
     last_reading_g: Option<f32>,
+    /// Auto-tare is off and the session opened with the scale connected but
+    /// no reading heard yet: its first reading is the user's zero, and the
+    /// check runs on that (see `take_users_zero`).
+    users_zero_pending: bool,
     /// This shot's owed stop needed a retry.
     stop_retried_this_shot: bool,
     /// Set when a scale (re)connects while a shot is already running
@@ -1195,6 +1199,7 @@ impl CremaCore {
             last_sample_at: None,
             scale_returning: false,
             last_reading_g: None,
+            users_zero_pending: false,
             stop_retried_this_shot: false,
             untared_window_reopened: false,
             last_unit_recovery_write: None,
@@ -3922,6 +3927,10 @@ impl CremaCore {
         let first_on_link = self.link_state_seen(info, out);
         let (session, change) = Session::on_state(self.session, info, first_on_link);
         self.session = session;
+        // The user's zero waits on the session it was taken for.
+        if change != SessionChange::Kept {
+            self.users_zero_pending = false;
+        }
         // A closed or replaced session owes nothing: a stop still queued would
         // land on whatever the machine does next (§3.3).
         if matches!(change, SessionChange::Closed | SessionChange::Replaced) {
@@ -4304,6 +4313,18 @@ impl CremaCore {
             }
             return;
         };
+        // A session that opened before the scale's first reading takes the
+        // user's zero on it, with auto-tare off. Before flow nothing pours,
+        // so the reading is the zero. After it the cup has coffee in it, and
+        // the zero stands as at an open with nothing on the scale (§3.5's
+        // limit for a load that moved with no readings).
+        if std::mem::take(&mut self.users_zero_pending) {
+            if self.weighing_mode().is_none() && self.sample_flow_at.is_none() {
+                self.take_users_zero();
+            } else if let Some(session) = self.session.as_mut() {
+                session.tared();
+            }
+        }
         // The first reading after a gap is checked against the cup's last
         // trusted weight before anything else reads it (§3.5): the first one
         // the spike gate passes, so a corrupt frame can't stand in for it.
@@ -6126,8 +6147,20 @@ impl CremaCore {
                 self.limit_from_ml = 0.0;
                 self.flow.reset();
                 // Fresh shot → fresh spike-gate baseline (the gate only
-                // rejects while a shot is in progress).
-                self.weight_gate.reset();
+                // rejects while a shot is in progress). With auto-tare off
+                // the user's zero stands (below): it is the last reading
+                // before the open, and the step detector watches preheat
+                // from it (§3.5, #389). So the gate keeps that reading, and
+                // a load set down before the next one, in a dropout of the
+                // scale's, is a step and not the shot's first baseline,
+                // which would count it as coffee.
+                match self
+                    .last_reading_g
+                    .filter(|_| !self.auto_tare && self.scale.is_some())
+                {
+                    Some(zero) => self.weight_gate.rebase(zero),
+                    None => self.weight_gate.reset(),
+                }
                 // Fresh shot → fresh running volume. The integrator keeps
                 // its `last_sample_time` / `last_host_time` so the first
                 // sample of the new shot still has a valid `dt` reference.
@@ -6163,7 +6196,6 @@ impl CremaCore {
                 // no tare, here or at first flow (#317).
                 self.shot_began_unseen = self.began_unseen();
                 self.auto_tare_pending = self.auto_tare && !self.shot_began_unseen;
-                // With auto-tare off the user's own zero stands.
                 // With auto-tare off the user's own zero stands, unless the
                 // scale reads a load when the shot opens (§3.5).
                 if !self.auto_tare {
