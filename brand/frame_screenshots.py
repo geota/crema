@@ -34,12 +34,16 @@ Needs ImageMagick 7 (`magick`). Downloads Newsreader to brand/ on first run
 Capturing the raws (the 0.12 set): a `playNightly` build on fresh emulators
 (Pixel 10 Pro, 7" landscape, 10" landscape) in dark mode, with demo data only:
 invented roasters, bags and shots restored from a crema-backup file
-(Settings ▸ Sharing ▸ Restore). The live brew is a replay of
-core/de1-app/tests/fixtures/session-*-shot-pull.jsonl: Settings ▸ Advanced ▸
-Hub mode + "Replay capture as DE1", the capture copied into the app's
-Android/data/<pkg>/files/captures (made world-readable), restart, Connect;
-the pour starts about 70 s after connecting. Manual is the built-in 1 Cup V60
-recipe, mid step 2. Grab each screen with `adb exec-out screencap -p`.
+(Settings > Sharing > Restore). The DE1 is a capture replayed through Settings >
+Advanced > Hub mode + "Replay capture as DE1": the capture is copied into the
+app's Android/data/<pkg>/files/captures (made world-readable), then restart
+and Connect. The espresso shot is core/de1-model/tests/fixtures/
+20260524T105452.jsonl, which also holds a Bookoo's weight stream. For the scale,
+the screenshot build carried a local, uncommitted change to ReplayBleTransport
+that also offers the capture's SCALE_WEIGHT lines as a "BOOKOO_SC" scale (and,
+for a scale-only capture, stamps them on the live clock). The pour-over weight
+is a synthetic Bookoo stream that follows the built-in 1 Cup V60 recipe.
+Grab each screen with `adb exec-out screencap -p`.
 """
 
 import argparse
@@ -60,7 +64,14 @@ LISTING = os.path.join(
 
 COPPER = "#C7763B"  # copper-500, the brand field
 CREAM = "#F2E7D8"  # caption ink
-FRAME = "#110D0A"  # device frame, a shade under the app's own background
+FRAME = "#110D0A"
+STATUS_INK = "#ECE6DE"  # status-bar glyphs, close to Android's dark-theme icons
+# A neutral Android status bar (9:41, Wi-Fi, full battery) as an alpha mask,
+# 1280 px wide: the phone app draws edge to edge and leaves the system bar
+# area blank in a screenshot, so the phone shots get this on top.
+STATUS_BAR = os.path.join(
+    HERE, "statusbar-phone.png"
+)  # device frame, a shade under the app's own background
 
 # The listing, in order. Slug → file name; caption → the line above the screen.
 SHOTS = [
@@ -86,10 +97,24 @@ class Target:
     frame_w: int
     bezel: int
     radius: int
+    status_bar: bool = False  # draw STATUS_BAR into a blank top band
 
 
 TARGETS = [
-    Target("phone", "phoneScreenshots", 1440, 2880, 104, 213, 187, 394, 1066, 12, 64),
+    Target(
+        "phone",
+        "phoneScreenshots",
+        1440,
+        2880,
+        104,
+        213,
+        187,
+        394,
+        1066,
+        12,
+        64,
+        status_bar=True,
+    ),
     Target(
         "tablet7", "sevenInchScreenshots", 1920, 1313, 125, 81, 154, 230, 1612, 14, 40
     ),
@@ -175,7 +200,57 @@ def caption_layer(text: str, t: Target, path: str) -> None:
     )
 
 
+def with_status_bar(raw: str, tmp: str) -> str:
+    """The raw with the neutral status bar drawn in its blank top band.
+
+    Leaves the raw alone when that band isn't one flat colour (a system bar
+    is already there).
+    """
+    mw, mh = map(
+        int, magick(STATUS_BAR, "-format", "%w %h", "info:", capture=True).split()
+    )
+    sw = int(magick(raw, "-format", "%w", "info:", capture=True))
+    flat = magick(
+        raw,
+        "-crop",
+        f"{sw}x{round(mh * sw / mw)}+0+0",
+        "+repage",
+        "-colorspace",
+        "gray",
+        "-format",
+        "%[fx:standard_deviation]",
+        "info:",
+        capture=True,
+    )
+    if float(flat) > 0.002:
+        return raw
+    out = os.path.join(tmp, "with-bar.png")
+    magick(
+        raw,
+        "-alpha",
+        "off",
+        "(",
+        STATUS_BAR,
+        "-resize",
+        f"{sw}x",
+        "-fill",
+        STATUS_INK,
+        "-colorize",
+        "100",
+        ")",
+        "-geometry",
+        "+0+0",
+        "-compose",
+        "over",
+        "-composite",
+        out,
+    )
+    return out
+
+
 def frame_one(raw: str, caption: str, t: Target, out: str, tmp: str) -> None:
+    if t.status_bar:
+        raw = with_status_bar(raw, tmp)
     inner_w = t.frame_w - 2 * t.bezel
     screen = os.path.join(tmp, "screen.png")
     sw, sh = map(int, magick(raw, "-format", "%w %h", "info:", capture=True).split())
