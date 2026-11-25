@@ -303,9 +303,6 @@ data class AppPrefs(
      *  beside the address it belongs to; not library data. */
     val grinderLinkedAddress: String? = null,
     val grinderLinkedId: String? = null,
-    /** Settings → Connected grinders (beta): off by default until the
-     *  hardware gate passes (SPEC grinder-ble §8). */
-    val connectedGrinders: Boolean = false,
     // ── Multi-device LAN proxy: hub and remotes ──────────────────────────────
     /** Proxy role — `"normal" | "primary" | "secondary"` (users see normal,
      *  hub, remote). `normal` = today's single-device behaviour. Set live by the
@@ -548,7 +545,6 @@ private data class PersistedPrefs(
     val grinderName: String? = null,
     val grinderLinkedAddress: String? = null,
     val grinderLinkedId: String? = null,
-    val connectedGrinders: Boolean = false,
     val proxyRole: String = "normal",
     val proxyPrimaryHost: String = "",
     val proxyPrimaryPort: Int = 0,
@@ -584,7 +580,6 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     grinderName = grinderName,
     grinderLinkedAddress = grinderLinkedAddress,
     grinderLinkedId = grinderLinkedId,
-    connectedGrinders = connectedGrinders,
     proxyRole = proxyRole,
     proxyPrimaryHost = proxyPrimaryHost,
     proxyPrimaryPort = proxyPrimaryPort,
@@ -619,7 +614,6 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     grinderName = grinderName,
     grinderLinkedAddress = grinderLinkedAddress,
     grinderLinkedId = grinderLinkedId,
-    connectedGrinders = connectedGrinders,
     proxyRole = proxyRole,
     proxyPrimaryHost = proxyPrimaryHost,
     proxyPrimaryPort = proxyPrimaryPort,

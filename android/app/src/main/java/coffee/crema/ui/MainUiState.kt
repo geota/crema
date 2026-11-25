@@ -120,8 +120,6 @@ data class MainUiState(
     /** The owned grinder record linked to the grinder at [grinderLinkedAddress]. */
     val grinderLinkedAddress: String? = null,
     val grinderLinkedId: String? = null,
-    /** Settings → Connected grinders (beta), off by default. */
-    val connectedGrinders: Boolean = false,
     /** The connected grinder's Bluetooth address while linked, else null. */
     val connectedGrinderAddress: String? = null,
     /** The connected grinder's link and identity (Devices → Grinder card). */

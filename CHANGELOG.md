@@ -9,13 +9,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **Connected grinders (beta, Android)** — Settings → Connected grinders
-  connects a BOOKOO Motto 80 over Bluetooth. Devices → Grinder then shows it
-  live: burr gap, speed, feeder, state, humidity, lifetime grinds, firmware,
+- **Connected grinders (beta, Android)** — Devices → Grinder connects a
+  BOOKOO Motto 80 over Bluetooth and shows it live: burr gap, speed, feeder, state, humidity, lifetime grinds, firmware,
   and the last grind. It links to the grinder in your list, or offers to add
   it, reconnects on its own, and pauses during a DE1 firmware update. If it
-  can't be found or doesn't answer, it says to close the BOOKOO app first. Off
-  by default; nothing is written to the grinder (#488).
+  can't be found or doesn't answer, it says to close the BOOKOO app first.
+  Nothing is written to the grinder (#488).
 - **Brew follows the connected grinder (beta, Android)** — with a Motto 80
   linked to the grinder in use, Brew's grind follows its collar ("480 μm ·
   from grinder") and each shot records the grind before it, with its speed.
@@ -54,6 +53,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Connected grinders need no setting** — the Motto 80 is a normal feature
+  now: the Settings → Connected grinders switch (Settings → Advanced → Beta on
+  the web) is gone, and Devices → Grinder always offers Connect. Crema still
+  connects only a grinder you picked or paired. It stays marked Beta, as it
+  hasn't been tested on a real grinder yet; a debug capture from one helps.
+  Android and web.
 - **A shot records the grinder in use, not the bag's** — a new shot is
   stamped with the grinder you brew on (today the Settings grinder), even
   when its bag names another one. The bag's grinder and grind stay stored,

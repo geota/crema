@@ -1,5 +1,5 @@
 /**
- * The connected grinder over Web Bluetooth (beta, spec
+ * The connected grinder over Web Bluetooth (spec
  * `.scratch/grinder-ble/SPEC.md` §2.6–2.8, §6.1): a scripted fake grinder
  * (a notification stream of Motto frames) drives the real `CremaApp` →
  * `GrinderManager` → connect program → the real wasm core.
@@ -8,7 +8,8 @@
  * reading, a silent link dropped into the reconnect ladder once and
  * re-handshaken, "the grinder didn't answer" on a first connect, a firmware
  * refusal with no retry, a grind cut off by a drop, the serial kept out of
- * the event log, the beta gate, the flash hold and the §6.1 link rules.
+ * the event log, a paired grinder's launch reconnect (no setting), the
+ * flash hold and the §6.1 link rules.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Effect } from 'effect';
@@ -19,7 +20,7 @@ import type { BleDevice } from './transport';
 import type { ConnectedGrinderView } from '#lib/state/ui-state.svelte.js';
 import { getBeanStore } from '#lib/bean/index.js';
 import { getSettingsStore } from '#lib/settings/index.js';
-import { LAST_DEVICES_KEY, readLastDevices } from './launch-reconnect';
+import { LAST_DEVICES_KEY, readLastDevices, rememberDevice } from './launch-reconnect';
 import {
 	getGrinderLinkStore,
 	resolveGrinderLink,
@@ -394,13 +395,19 @@ describe('the connected grinder over Web Bluetooth', () => {
 		expect(readLastDevices().grinder?.auto).toBe(false);
 	});
 
-	it('is behind the beta: Connect does nothing while it is off', async () => {
+	it('a paired grinder reconnects at launch with no setting to turn on', async () => {
+		rememberDevice('grinder', { id: 'grinder-A', name: 'BOOKOO MT80 1' });
 		const { CremaApp } = await import('#lib/state/app.svelte.js');
 		const app = new CremaApp(core, null as never);
-		const connect = vi.spyOn(GrinderManager.prototype, 'connect');
-		await app.connectGrinder();
-		expect(connect).not.toHaveBeenCalled();
-		expect(getSettingsStore().current.connectedGrinderBeta).toBe(false);
+		const known = vi.spyOn(GrinderManager.prototype, 'connectKnown').mockResolvedValue();
+		try {
+			const paired = Object.assign(new EventTarget(), { id: 'grinder-A', name: 'BOOKOO MT80 1' });
+			const bluetooth = { getDevices: async () => [paired] } as unknown as Bluetooth;
+			await app.reconnectLastOnLaunch(bluetooth, 'grinder');
+			expect(known).toHaveBeenCalledWith(paired);
+		} finally {
+			known.mockRestore();
+		}
 	});
 
 	it('holds connects while a DE1 firmware flash runs', async () => {

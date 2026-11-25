@@ -180,7 +180,6 @@ enum class Setting(
     GRINDER_NAME(C, LOC, AP, "grinderName", NONE, null, false, emptyList(), uiField = "rememberedGrinderName"),
     GRINDER_LINKED_ADDRESS(C, LOC, AP, "grinderLinkedAddress", NONE, null, false, emptyList()),
     GRINDER_LINKED_ID(C, LOC, AP, "grinderLinkedId", NONE, null, false, listOf("$VM.linkConnectedGrinder(String?)")),
-    CONNECTED_GRINDERS(C, LOC, AP, "connectedGrinders", NONE, null, false, listOf("$VM.setConnectedGrinders(Boolean)")),
     DE1_COMPANION_ID(C, LOC, AP, "de1CompanionId", NONE, null, false, emptyList(), uiField = null),
     SCALE_COMPANION_ID(C, LOC, AP, "scaleCompanionId", NONE, null, false, emptyList(), uiField = null),
     COMPANION_DECLINED(C, LOC, AP, "companionDeclined", NONE, null, false, emptyList()),
