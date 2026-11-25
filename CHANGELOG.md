@@ -7,15 +7,48 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-11-25
+
+• Manual mode on Brew: pick a recipe in the profile picker and Brew guides the pour step by step.
+• Your grinders, each with its own grind scale, and a grind saved per bag and grinder.
+• BOOKOO Motto 80 grinder over Bluetooth (beta).
+• BOOKOO Ultra: the dose for ratio mode, and a Filter removed auto-stop.
+• Google Drive sign-in through Google Play.
+• Fixes to the weight stop, de1app imports, firmware updates and more.
+
 ### Added
 
-- **Connected grinders (beta, Android)** — Devices → Grinder connects a
+- **Manual mode on Brew** — Brew's profile picker has two sections, Espresso
+  profiles and Manual recipes. Pick a recipe and Brew becomes the guided brew:
+  the steps (bloom, pours, waits, drawdown) with a big clock, live weight
+  against each step's target when a scale is connected, and cues; Coffee
+  becomes Start brew. Pick a profile to go back to Espresso. Brew reopens in
+  the mode you left, and "All recipes →" opens the recipe library. Guided
+  brews used to start from the Scale tab. Android and web.
+- **Your grinders, each with its own grind scale** — Devices → Grinder lists
+  the grinders you own. Add one from a catalogue of popular espresso and
+  filter grinders (the maker's range where it publishes one, else a typical
+  range to check against your dial) or set your own lowest, highest, step and
+  unit. Brew's grind follows the grinder in use, each bag remembers a grind
+  per grinder, and picking a bag sets it. Your grinder setting and bag grinds
+  move over on their own (#488). Android and web.
+- **Scale and Grinder in the side rail** — where there's room, Devices splits
+  into Scale and Grinder. Android and web.
+- **Brew status card and temporary messages** — a machine error, a reason a
+  shot can't start or maintenance due shows as a card on Brew at rest; short
+  messages show as a slim strip with one action and a countdown line. Android
+  and web.
+- **A backup reminder on the web** — the web keeps shots only in this
+  browser, so when the last backup is two weeks old and there are newer shots,
+  History's storage strip suggests backing up. Dismiss puts it off for two
+  weeks (#487).
+- **Connected grinders (beta)** — Devices → Grinder connects a
   BOOKOO Motto 80 over Bluetooth and shows it live: burr gap, speed, feeder, state, humidity, lifetime grinds, firmware,
   and the last grind. It links to the grinder in your list, or offers to add
   it, reconnects on its own, and pauses during a DE1 firmware update. If it
   can't be found or doesn't answer, it says to close the BOOKOO app first.
-  Nothing is written to the grinder (#488).
-- **Brew follows the connected grinder (beta, Android)** — with a Motto 80
+  Nothing is written to the grinder (#488). Android and web.
+- **Brew follows the connected grinder (beta)** — with a Motto 80
   linked to the grinder in use, Brew's grind follows its collar ("480 μm ·
   from grinder") and each shot records the grind before it, with its speed.
   Pause following for the session from Brew's grinder menu; another grinder
@@ -23,7 +56,7 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   "set the collar to 480 μm" instead of changing the grind. History shows
   "From Motto 80 · 700 rpm …" and "Edited (grinder said 480)", and the shot
   editor has an RPM field for variable-speed grinders. Visualizer gets the
-  speed on the grind, "480 700rpm" (#488).
+  speed on the grind, "480 700rpm" (#488). Android and web.
 - **Remotes see the hub's grinder (beta, Android)** — a remote's Brew shows
   "480 μm · from Motto 80 on ‹hub›" while the hub follows its grinder, and its
   grind dial is locked: the hub refuses a remote's grind change then, saying
@@ -73,6 +106,18 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A weight stop with auto-tare off no longer ends early after a scale
+  dropout** — with auto-tare off, a load that landed while the scale's reading
+  dropped out as the shot began (a spoon, a hand on the cup) counted as coffee,
+  and the shot stopped that many grams early. It now moves the zero, as a load
+  before the shot does. A scale whose first reading comes in more than 5 g
+  heavy before flow refuses the weight stop ("scale not tared"). Web, tablet
+  and phone.
+- **A shot records what Brew had when it started** — the bag, profile,
+  grinder and grind are taken when the shot starts, so changing one mid-shot
+  or before the save no longer changes the shot. Only the device that records
+  the shot debits the bag; a remote no longer debits its copy (#488). Android
+  and web.
 - **BOOKOO scales follow BOOKOO's published protocol** — Crema now tells the
   Mini from the Ultra by the firmware the scale reports. The auto-stop setting
   uses the format the firmware takes, so on an Ultra with firmware 4 it no
@@ -1830,3 +1875,4 @@ shot state machine, and domain model.
 [0.0.9]: https://github.com/geota/crema/releases/tag/v0.0.9
 [0.10.0]: https://github.com/geota/crema/releases/tag/v0.10.0
 [0.11.0]: https://github.com/geota/crema/releases/tag/v0.11.0
+[0.12.0]: https://github.com/geota/crema/releases/tag/v0.12.0

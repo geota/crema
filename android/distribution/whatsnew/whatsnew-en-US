@@ -1,5 +1,6 @@
-• No more 300-shot limit: History keeps every shot, with storage notices and Free up space. It moves to a new database on first launch, with nothing to do.
-• Pin a shot to keep it, and choose how many raw captures and Drive copies to keep.
-• Restore any Drive backup, and see what a restore will change first.
-• Pick a logged brew's date and time, and change it later.
-• Many fixes to saves, backups, Visualizer sync and the weight stop.
+• Manual mode on Brew: pick a recipe in the profile picker and Brew guides the pour step by step.
+• Your grinders, each with its own grind scale, and a grind saved per bag and grinder.
+• BOOKOO Motto 80 grinder over Bluetooth (beta).
+• BOOKOO Ultra: the dose for ratio mode, and a Filter removed auto-stop.
+• Google Drive sign-in through Google Play.
+• Fixes to the weight stop, de1app imports, firmware updates and more.

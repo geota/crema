@@ -50,7 +50,7 @@ Everything below ships in the web app and the Android app (tablet and phone) unl
 
 **Brew**
 
-- **Two Brew modes, one screen** *(nightly)*: the profile picker has two sections. Pick a DE1 profile for **Espresso**, or a recipe for **Manual** (filter and more), and Brew switches to match.
+- **Two Brew modes, one screen**: the profile picker has two sections. Pick a DE1 profile for **Espresso**, or a recipe for **Manual** (filter and more), and Brew switches to match.
 - **Live espresso dashboard**: real-time pressure, flow, temperature, weight and puck resistance against the profile's goal curves, a step-by-step phase list, stop conditions and shot-completion metrics.
 - **Stop-at-weight that learns**: predictive stop-at-weight plus stop-at-volume. Crema learns how much drips in after the stop for each profile and scale pair (a port of Decenza's model) and stops early by that amount.
 - **Profile library**: the 89 built-in de1app profiles (including Adaptive v3), pinning, a multi-step editor with a live curve preview, `.json` / `.tcl` import and community v2 JSON export.
@@ -59,12 +59,12 @@ Everything below ships in the web app and the Android app (tablet and phone) unl
 
 **Manual brews (filter and more)**
 
-- **Guided brews** *(nightly)*: Manual mode on the Brew page runs a recipe step by step (bloom, pours, waits, drawdown) with a big clock, live weight against each target when a scale is connected, and cues.
+- **Guided brews**: Manual mode on the Brew page runs a recipe step by step (bloom, pours, waits, drawdown) with a big clock, live weight against each target when a scale is connected, and cues.
 - **Log any brew**: V60, Chemex, Kalita Wave, AeroPress, French press, Clever, siphon, moka, cold brew, drip, manual espresso, or your own **custom methods**. Each brew deducts its dose from the bag and sits in History next to your shots.
 - **Credited built-in recipes**: 13 published recipes, each linked to its source: James Hoffmann, Tetsu Kasuya's 4:6, the official AeroPress recipe, Tuomas Merikanto, Stumptown and Hario. Duplicate one to make it your own.
 - **Planned vs poured**: a guided brew's chart draws the recipe's planned staircase under the weight you actually poured, live and in History.
 
-**Grinders** *(nightly)*
+**Grinders**
 
 - **Your grinders**: add them from a built-in catalogue of popular models with their grind scales, or set your own range, step and unit (numbers, clicks, microns). A grind is stored as typed, so "2.1.3" or "480 μm" both work.
 - **Bag grinds**: each bag remembers its grind per grinder, and picking a bag sets it on Brew. Each shot records the grinder in use.
@@ -93,7 +93,7 @@ Everything below ships in the web app and the Android app (tablet and phone) unl
 
 - **Visualizer**: OAuth 2.0 + PKCE sign-in. Shots upload, pull and sync edits; beans and roasters sync both ways, last write wins. Coffee-bag and roaster writes need Visualizer Premium; on free accounts Crema skips Premium-only shot fields.
 - **Decent account**: upload every shot to your decentespresso.com shot history in the format the tablet app and decaid use, get a share link, and have edits re-uploaded.
-- **Backups**: a `.crema.zip` with profiles, beans (with photos), shots and settings that restores on either shell. Google Drive backup is automatic on Android and on demand on the web, and the web app reminds you when the last backup is two weeks old *(nightly)*.
+- **Backups**: a `.crema.zip` with profiles, beans (with photos), shots and settings that restores on either shell. Google Drive backup is automatic on Android and on demand on the web, and the web app reminds you when the last backup is two weeks old.
 - **Webhooks** (web): outgoing POSTs when a shot finishes, the DE1 or a scale connects, a profile is uploaded, or the machine reports an error.
 - **Capture and replay**: record BLE sessions and replay them through the core, in the web app (Settings → Advanced) or in tests.
 
