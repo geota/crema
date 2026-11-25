@@ -906,6 +906,63 @@ fn a_hand_lifted_in_preheat_leaves_the_zero_quietly() {
     near_target(stop, StopReason::Weight);
 }
 
+/// An auto-tare-off espresso that opens in preheat at 100 ms on the scale's
+/// readings so far (`before`), then reads `preheat(t)` every 100 ms from
+/// 400 ms, after a dropout across the open, and flows at 3 s. Runs it to its
+/// stop with `load` g on the cup.
+fn auto_tare_off_dropout_shot(
+    before: &[(u64, f32)],
+    preheat: impl Fn(u64) -> f32,
+    load: f32,
+) -> (CremaCore, Option<(StopReason, f32)>) {
+    let mut core = CremaCore::new();
+    core.connect_scale("BOOKOO_SC", &[]);
+    core.set_auto_tare(false);
+    core.set_test_profile_yield(Some(36.0));
+    core.set_max_shot_duration(Some(60.0));
+    core.on_notification(Source::De1State, &[2, 0], 10);
+    for &(t, g) in before {
+        core.on_notification(Source::ScaleWeight, &bookoo(g), t);
+    }
+    core.on_notification(Source::De1State, &[4, 1], 100);
+    for t in (400..3_000).step_by(100) {
+        core.on_notification(Source::ScaleWeight, &bookoo(preheat(t)), t);
+    }
+    core.on_notification(Source::De1State, &[4, 5], 3_000);
+    let mut pour = Pour::from(3_000, 30.0);
+    let stop = run(&mut core, &mut pour, 90_000, |_, cup| Step {
+        sample: true,
+        reading: Some(cup + load),
+    });
+    (core, stop)
+}
+
+/// The 2026-11-25 model case: auto-tare off, the scale reads 0 g, then drops
+/// out across the open, and a spoon lands on the cup before its next reading.
+/// The shot-start reset forgot the user's zero, so that reading was the
+/// step detector's first and the spoon read as coffee: the shot stopped at a
+/// true 29 g of 36. The detector judges it from the zero, so the spoon
+/// settles, the zero moves by it, and the shot stops near 36 g.
+#[test]
+fn a_spoon_set_down_in_a_dropout_across_an_auto_tare_off_open_moves_the_zero() {
+    let (_, stop) = auto_tare_off_dropout_shot(&[(0, 0.0), (50, 0.0)], |_| 6.0, 6.0);
+    near_target(stop, StopReason::Weight);
+}
+
+/// With auto-tare off, a shot that opens before the scale's first reading has
+/// no zero yet: that reading is the user's zero, judged as one at the open
+/// is. 6 g, over the 5 g allowance, can't be told from coffee and refuses the
+/// weight stop (it would stop the shot at a true 30 g); a tared cup still
+/// stops on target.
+#[test]
+fn an_auto_tare_off_open_before_the_first_reading_takes_the_zero_from_it() {
+    let (core, stop) = auto_tare_off_dropout_shot(&[], |_| 6.0, 6.0);
+    assert_ne!(stop.map(|s| s.0), Some(StopReason::Weight), "{stop:?}");
+    assert_eq!(core.weight_stop_blocked_by(), Some("scale-not-tared"));
+    let (_, stop) = auto_tare_off_dropout_shot(&[], |_| 0.0, 0.0);
+    near_target(stop, StopReason::Weight);
+}
+
 /// A weight stop the machine honours, its Idle, and the first drips: the
 /// shot is in its post-shot settle. Returns the clock and the cup's weight.
 pub(super) fn honoured_stop_into_settle(core: &mut CremaCore) -> (u64, f32) {
