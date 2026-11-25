@@ -26,19 +26,20 @@ Crema is not a clean-room implementation. It draws on existing open-source DE1 s
 ## Screenshots
 
 <div align="center">
-<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/01-brew-dashboard.png" width="200" alt="Live brew dashboard" />
-<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/02-profiles.png" width="200" alt="Profile library" />
-<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/03-history.png" width="200" alt="Shot history" />
-<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/04-beans.png" width="200" alt="Bean library" />
+<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/01-brew-live.png" width="200" alt="Live brew dashboard" />
+<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/02-brew-manual.png" width="200" alt="Guided pour-over" />
+<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/03-profiles.png" width="200" alt="Profile library" />
+<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/04-history.png" width="200" alt="Shot history" />
 <br/>
-<sub><b>Android phone</b> — live brew dashboard · profile library · shot history · bean library</sub>
+<sub><b>Android phone</b> — live brew dashboard · guided pour-over · profile library · shot history</sub>
 <br/><br/>
 <sub><b>10&Prime; tablet:</b>
-<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/01-brew-dashboard.png">Brew</a> ·
-<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/02-profiles.png">Profiles</a> ·
-<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/03-history.png">History</a> ·
-<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/04-beans.png">Beans</a> ·
-<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/05-settings.png">Settings</a>
+<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/01-brew-live.png">Brew</a> ·
+<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/02-brew-manual.png">Manual</a> ·
+<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/03-profiles.png">Profiles</a> ·
+<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/04-history.png">History</a> ·
+<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/05-beans.png">Beans</a> ·
+<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/06-grinder.png">Grinder</a>
 </sub>
 </div>
 
