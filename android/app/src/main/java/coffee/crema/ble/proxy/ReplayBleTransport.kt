@@ -144,12 +144,19 @@ class ReplayBleTransport(
         private const val DIR_IN = "in"
         private val json = Json { ignoreUnknownKeys = true }
 
-        /** Parse a `session-*.jsonl` capture body (one JSON object per line). */
+        /**
+         * Parse a `session-*.jsonl` capture body (one JSON object per line).
+         * Each line's hex is checked here too: a zero-filled block can land
+         * inside a `hex` string, which still decodes as JSON (#578 review), and
+         * the replay would otherwise throw on it later, where nothing catches
+         * it. Throws IllegalArgumentException for either.
+         */
         fun parse(jsonl: String): List<CaptureLine> =
             jsonl.lineSequence()
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
                 .map { json.decodeFromString(CaptureLine.serializer(), it) }
+                .onEach { Hex.decode(it.hex) }
                 .toList()
     }
 }

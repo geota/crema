@@ -75,6 +75,21 @@ class DamagedReplayCaptureVmTest {
     }
 
     @Test
+    fun aZeroFilledBlockInsideTheHexIsKeptAsideToo() {
+        // The block starts in one line's hex and ends in a later one's: both
+        // lines still decode as JSON (raw NULs inside a string), only the hex
+        // doesn't. It used to throw from the transport's constructor.
+        val holed = """{"t":1,"dir":"in","src":"DE1_STATE","hex":"02""" + "\u0000".repeat(40) + """00"}""" + "\n"
+        newest.writeText(holed)
+
+        val vm = startedVm()
+
+        assertTrue(VmHarness.log(vm).any { "PRIMARY (live BLE)" in it })
+        assertEquals(holed, keptAside(newest).single().readText())
+        assertEquals("Couldn't read your replay capture; the damaged file was kept aside.", vm.ui.value.keptAsideNotice)
+    }
+
+    @Test
     fun aCaptureCutOffMidLineIsKeptAsideAndTheHubUsesBluetooth() {
         val cut = goodCapture + """{"t":3,"dir":"in","sr"""
         newest.writeText(cut)
