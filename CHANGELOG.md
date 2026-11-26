@@ -7,6 +7,18 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A damaged storage file no longer stops the app starting** — a hub
+  replaying a recorded session as its DE1 crashed on every start when the
+  newest recording had been left zero-filled or cut short by a hard kill, and
+  only a reinstall (which wipes all data) got past it. The damaged recording
+  is now kept aside, never deleted, the next one plays (or the hub uses live
+  Bluetooth), and the app says so once. A damaged learned drip model is kept
+  aside too instead of being saved over. Every other file read at start was
+  checked and already starts with the damaged file set aside or restored from
+  its backup (#576). Android.
+
 ## [0.12.0] — 2026-11-25
 
 • Manual mode on Brew: pick a recipe in the profile picker and Brew guides the pour step by step.

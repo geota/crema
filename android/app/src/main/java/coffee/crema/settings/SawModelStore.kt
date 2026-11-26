@@ -5,6 +5,7 @@ import coffee.crema.core.SawModelLoad
 import coffee.crema.persist.SafeFile
 import coffee.crema.persist.SafeLoad
 import coffee.crema.persist.inSaveOrder
+import coffee.crema.persist.loadItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -31,9 +32,11 @@ class SawModelStore(private val dir: File) {
     private val quarantine get() = File(dir, QUARANTINE_FILE_NAME)
 
     suspend fun load(): String? = withContext(Dispatchers.IO) {
-        // Reads what a load would, as this can land between a save's two renames.
-        // Decoded as JSON, so a partial temp file falls through to the backup.
-        (SafeFile.peek(file) { Json.parseToJsonElement(it); it } as? SafeLoad.Loaded)?.value
+        // Decoded as JSON, so a partial temp file falls through to the backup,
+        // and a file that isn't JSON at all (zero-filled by a kill, #576) is
+        // moved aside as `.corrupt-<ms>` before a save of the fresh model could
+        // replace it. Logged only, like the core's own quarantine below.
+        (loadItem(file, what = null, open = true) { Json.parseToJsonElement(it); it } as? SafeLoad.Loaded)?.value
     }
 
     suspend fun save(json: String) {

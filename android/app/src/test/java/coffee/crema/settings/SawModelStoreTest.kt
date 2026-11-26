@@ -77,6 +77,23 @@ class SawModelStoreTest {
     }
 
     @Test
+    fun aZeroFilledBlobIsKeptAsideBeforeAFreshModelIsSaved() = runTest {
+        // #576: a kill left the file zero-filled. It isn't JSON, so the core
+        // never sees it, and the fresh model's first save must not replace it.
+        val zeros = ByteArray(4096)
+        stored().writeBytes(zeros)
+        val seen = mutableListOf<String?>()
+        store().seed({ seen += it; """{"type":"Absent"}""" }, {})
+        assertEquals(listOf<String?>(null), seen)
+        val kept = tmp.root.listFiles { f -> f.name.startsWith(SawModelStore.FILE_NAME + ".corrupt-") }!!.single()
+        assertTrue(zeros.contentEquals(kept.readBytes()))
+
+        store().save("""{"pairHistory":{}}""")
+        assertEquals("""{"pairHistory":{}}""", stored().readText())
+        assertTrue(zeros.contentEquals(kept.readBytes()))
+    }
+
+    @Test
     fun newestCaptureWins() = runTest {
         quarantined().writeText("older")
         val answer = """{"type":"Corrupt","content":{"raw":"{newer","error":"x"}}"""
