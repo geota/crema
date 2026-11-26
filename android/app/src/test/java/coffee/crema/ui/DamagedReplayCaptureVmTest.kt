@@ -45,6 +45,8 @@ class DamagedReplayCaptureVmTest {
     }
 
     @After fun tearDown() {
+        readCaptureForTest = null
+        renameCaptureForTest = null
         store.clear()
         VmHarness.idle()
         SafeFile.resetForTest()
@@ -99,5 +101,40 @@ class DamagedReplayCaptureVmTest {
         assertTrue(VmHarness.log(vm).any { "PRIMARY (live BLE)" in it }, "no capture left to play: live Bluetooth")
         assertEquals(cut, keptAside(newest).single().readText())
         assertEquals("primary", vm.ui.value.proxyRole)
+    }
+
+    @Test
+    fun aDamagedCaptureThatCantBeRenamedStaysAndTheHubUsesBluetooth() {
+        older.writeText(goodCapture)
+        older.setLastModified(1_000_000)
+        val zeros = ByteArray(4096)
+        newest.writeBytes(zeros)
+        newest.setLastModified(2_000_000)
+        renameCaptureForTest = { _, _ -> false }
+
+        val vm = startedVm()
+
+        val log = VmHarness.log(vm)
+        assertTrue(log.any { "${newest.name} is damaged and couldn't be set aside; using live Bluetooth" in it }, "$log")
+        assertTrue(log.any { "PRIMARY (live BLE)" in it }, "the older capture isn't tried: this start uses Bluetooth")
+        assertContentEquals(zeros, newest.readBytes(), "left where it is")
+        assertTrue(keptAside(newest).isEmpty())
+        assertEquals(null, vm.ui.value.keptAsideNotice, "nothing was kept aside, so nothing says so")
+        assertEquals("primary", vm.ui.value.proxyRole)
+    }
+
+    @Test
+    fun aCaptureThatCantBeReadStaysAndTheHubUsesBluetooth() {
+        newest.writeText(goodCapture)
+        readCaptureForTest = { throw java.io.IOException("EIO") }
+
+        val vm = startedVm()
+
+        val log = VmHarness.log(vm)
+        assertTrue(log.any { "couldn't read the replay capture ${newest.name} (IOException); using live Bluetooth" in it }, "$log")
+        assertTrue(log.any { "PRIMARY (live BLE)" in it })
+        assertEquals(goodCapture, newest.readText(), "an I/O error says nothing about the file: it stays")
+        assertTrue(keptAside(newest).isEmpty())
+        assertEquals(null, vm.ui.value.keptAsideNotice)
     }
 }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import coffee.crema.ble.proxy.Hex
 import coffee.crema.core.NotificationSource
+import coffee.crema.persist.SafeFile
 import java.io.BufferedWriter
 import java.io.File
 import java.io.FileWriter
@@ -121,6 +122,7 @@ class BleSessionRecorder(private val context: Context) {
     /** Delete the session files past [keep] now (the limit was lowered); the
      *  count deleted. None until [historySettled]: the next session prunes. */
     fun pruneTo(keep: Int = sessionsKeep): Int {
+        synchronized(lock) { pruneKeptAside() }
         if (!historySettled()) return 0
         val dir = capturesDir(context) ?: return 0
         return synchronized(lock) {
@@ -173,6 +175,7 @@ class BleSessionRecorder(private val context: Context) {
                     Log.w(TAG, "Could not create captures directory ${dir.absolutePath}")
                     return
                 }
+                pruneKeptAside()
                 // Room for the new file within the limit, pinned shots' sessions
                 // spared. Not until the history says which those are.
                 if (sessionsKeep != SESSIONS_ALL && historySettled()) {
@@ -261,6 +264,13 @@ class BleSessionRecorder(private val context: Context) {
         }
     }
 
+    /** Delete the damaged captures kept aside past the newest [SafeFile.MAX_KEPT], in both capture directories. Under [lock]. */
+    private fun pruneKeptAside() {
+        runCatching {
+            listOfNotNull(capturesDir(context), File(context.filesDir, CAPTURES_DIR)).forEach { dir -> keptAsideDoomed(dir).forEach { it.delete() } }
+        }.onFailure { Log.w(TAG, "Could not prune kept-aside captures", it) }
+    }
+
     /** Write one capture line; logs and swallows any IO failure. */
     private fun append(tMs: Long, dir: String, src: String, data: ByteArray) {
         synchronized(lock) {
@@ -345,6 +355,20 @@ class BleSessionRecorder(private val context: Context) {
                 .toSet()
             return files.filter { it.name in names }
         }
+
+        /**
+         * The replay captures a start kept aside as damaged in [dir]
+         * (`session-*.jsonl.corrupt-<ms>`, #576) past the newest
+         * [SafeFile.MAX_KEPT], newest by the `<ms>` in the name: the stores'
+         * own limit for kept-aside copies. They never count as sessions.
+         */
+        internal fun keptAsideDoomed(dir: File): List<File> =
+            (dir.listFiles { f -> f.isFile && f.name.startsWith("session-") && ".jsonl$KEPT_ASIDE" in f.name } ?: emptyArray())
+                .sortedByDescending { it.name.substringAfterLast(KEPT_ASIDE).toLongOrNull() ?: it.lastModified() }
+                .drop(SafeFile.MAX_KEPT)
+
+        /** What a damaged capture's name gets before its `<ms>` ([coffee.crema.ui.ProxyController]). */
+        private const val KEPT_ASIDE = ".corrupt-"
 
         /** Delete every file in [dir] and the directory itself; the count deleted. */
         internal fun eraseCapturesIn(dir: File): Int {

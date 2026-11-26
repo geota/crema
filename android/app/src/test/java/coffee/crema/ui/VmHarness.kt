@@ -67,7 +67,7 @@ internal object VmHarness {
      * lock, on IO, so blocking on them can't deadlock the main thread. A
      * ViewModel still alive (a second one in the same test) is left alone.
      */
-    private fun settleEnded() {
+    fun settleEnded() {
         val ended = built.filter { !it.viewModelScope.coroutineContext[kotlinx.coroutines.Job]!!.isActive }
         if (ended.isEmpty()) return
         settleRestores(ended, timeoutMs = 5_000)

@@ -3,6 +3,7 @@ package coffee.crema.ui
 import android.app.Application
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.persist.SafeFile
+import coffee.crema.persist.inSaveOrder
 import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.Stores
 import org.junit.After
@@ -38,6 +39,8 @@ class DamagedStartupFilesVmTest(private val file: String, private val damage: St
             "brew-recipes.json", "maintenance.json", "visualizer.json", "decent.json", "drive.json",
             "stolenSerials.json", "sawModel.json", "relay-v4.json", "restore-pending.json",
             "relayPort", "last-shot.txt",
+            // SQLite discards a -wal whose header doesn't check out: copied aside first (#578 follow-up).
+            "history-sqlite/history.db-wal",
             // Read and then deleted by design, so only "it starts" is checked:
             // relay v3 leftovers, erased once relay-v4.json records the
             // migration, and the stage-2 journal, emptied once replayed.
@@ -94,11 +97,40 @@ class DamagedStartupFilesVmTest(private val file: String, private val damage: St
         vm.setAutoDriveBackup(true)
         vm.ui.value.profiles.firstOrNull()?.let { vm.togglePinProfile(it.id) }
         VmHarness.idleUntil("the shot to land") { VmHarness.rows(vm).size == 1 }
+        // The shot in memory isn't the shot on disk: its save runs on IO, and on a
+        // slow runner a case could damage (or, for a -wal, roll the main file back
+        // past) a save still in flight. Wait for its commit, then take the store's
+        // lock: the save holds it through its commit and its checkpoint, so once
+        // the flush has the lock the shot is in the main file.
+        val shot = VmHarness.rows(vm).single().id
+        VmHarness.idleUntil("the shot's commit") { shot in VmHarness.truthIds(vm) }
+        assertTrue(VmHarness.onMain("the shot's checkpoint") { VmHarness.library(vm).historyStoreForTest.flush() }, "the shot saved")
         stores.removeAt(stores.lastIndex).clear()
         VmHarness.idle()
+        // A save the ViewModel asked for lands even once it's cleared: wait for
+        // every one, or it can land over the file a case is about to damage, or
+        // be refused by the next session and throw (prefs.json, hot-water.json,
+        // sawModel.json on CI).
+        VmHarness.settleEnded()
+        VmHarness.onMain("the last ViewModel's saves") { for (f in FILES) inSaveOrder(File(app.filesDir, f)) {} }
         SafeFile.resetForTest()
         Stores.resetForTest()
         SaveFloor.resetForTest()
+    }
+
+    /**
+     * A damaged `-wal` comes from a kill, and a kill takes the process's
+     * connection to [db] with it. In this JVM the last ViewModel's connection
+     * stays open (a new store takes it over), and closing it over a `-wal`
+     * the test replaced would checkpoint the replaced bytes into the main file
+     * from its in-memory WAL index, which no device can do. So the disk is
+     * left as a kill leaves it: the connection closed and the main file and
+     * `-shm` put back as they were before the close, without its checkpoint.
+     */
+    private fun killedMidSession(db: File) {
+        val asLeft = listOf(db, File(db.path + "-shm")).filter { it.exists() }.associateWith { it.readBytes() }
+        coffee.crema.history.HistoryAuthority.closeEveryHeld()
+        for ((f, bytes) in asLeft) f.writeBytes(bytes)
     }
 
     /** An odd length, so no file the app writes has these exact bytes by chance. */
@@ -110,6 +142,7 @@ class DamagedStartupFilesVmTest(private val file: String, private val damage: St
     @Test
     fun theAppStartsAndTheDamagedBytesStayOnDisk() {
         useTheApp()
+        if (file.endsWith("-wal")) killedMidSession(File(app.filesDir, file.removeSuffix("-wal")))
         val target = File(app.filesDir, file).apply { parentFile?.mkdirs() }
         val bytes = damaged()
         target.writeBytes(bytes)

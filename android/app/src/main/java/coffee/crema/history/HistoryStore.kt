@@ -466,6 +466,7 @@ class HistoryStore(
             toLegacy()
             return
         }
+        keepAsideDamagedWals()
         // Stage 2 first (#310 A5): once the marker says done, shots.db is the old copy, and P3a's
         // open would write it (its late rows, its journal). It is never opened through P3a's helper.
         if (stage2Enabled) {
@@ -497,6 +498,17 @@ class HistoryStore(
             MarkerRead.Damaged -> notDone(null, force, markerDamaged = true)
             MarkerRead.Absent -> notDone(null, force, markerDamaged = false)
         }
+    }
+
+    /**
+     * Before any history database opens, even to probe it: a `-wal` a kill
+     * left with a bad header, which SQLite would discard, is copied aside and
+     * reported ([DamagedWal]). `shots.db` and each `history*.db` generation,
+     * once each per process.
+     */
+    private fun keepAsideDamagedWals() {
+        val files = listOf(dbFile) + runCatching { stage2.generationsNamed().map(stage2::db) }.getOrDefault(emptyList())
+        for (f in files) DamagedWal.keepAsideIfDamaged(f, ::persistLine)
     }
 
     /**
@@ -2190,8 +2202,9 @@ class HistoryStore(
         if (fault(MigrationFault.DISK_FULL) != null) throw android.database.sqlite.SQLiteFullException("disk full (test)")
         if (mode == Mode.AUTH) {
             // history.db: the rows and their heavy parts in one transaction, under the source's lock (M10, #310 A5).
-            val dups = checkNotNull(auth) { "the shot history's database is closed" }
-                .write(writes.map { it.shot to it.summary }, profiles, pulled = writes.mapNotNullTo(HashSet()) { w -> w.row.id.takeIf { it in pulled } })
+            val a = checkNotNull(auth) { "the shot history's database is closed" }
+            val dups = a.write(writes.map { it.shot to it.summary }, profiles, pulled = writes.mapNotNullTo(HashSet()) { w -> w.row.id.takeIf { it in pulled } })
+            checkpointed { a.db.now { it.checkpoint() } }
             if (dups.isNotEmpty()) {
                 // Another row already holds its Visualizer id: not stored, so not in memory either (N8).
                 persistLine("${dups.size} pulled shots were already here under another id: kept once")
@@ -2205,13 +2218,29 @@ class HistoryStore(
                 return
             }
         } else {
-            tables.write(db().writableDatabase) {
+            val shotsDb = db().writableDatabase
+            tables.write(shotsDb) {
                 // A part a row doesn't carry stays as stored: a light row never clears a profile or a brew series.
                 for (w in writes) tables.upsert(this, w.shot, w.summary)
                 for ((id, profile) in profiles) tables.putProfile(this, id, profile)
             }
+            checkpointed { shotsDb.rawQuery("PRAGMA wal_checkpoint(PASSIVE)", null).use { it.moveToFirst() } }
         }
         writeRowsLanded(writes, curveless, profiles.keys)
+    }
+
+    /**
+     * After a save commits (on IO, under the lock): the WAL's frames into the
+     * main file, without waiting on a reader, so a shot saved is in the main
+     * file and a `-wal` a kill damages can't take it with it (#578 follow-up).
+     * The save has landed either way: a checkpoint that fails is only logged.
+     */
+    private inline fun checkpointed(block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Exception) {
+            persistLine("checkpoint after a save failed (${e.javaClass.simpleName}); the save landed")
+        }
     }
 
     /** [writes] landed: memory says so, after the store has them. */
@@ -2754,7 +2783,7 @@ class HistoryStore(
         // False also when there's none: what's left on disk tells.
         runCatching { context.deleteDatabase(NEXT_DB_NAME) }
         gone(NEXT_DB_NAME, !dbFile.exists())
-        dbFile.parentFile?.listFiles { f -> f.name.startsWith(NEXT_DB_NAME + QuarantineHandler.CORRUPT) }
+        dbFile.parentFile?.listFiles { f -> f.name.startsWith(NEXT_DB_NAME + QuarantineHandler.CORRUPT) || f.name.startsWith("$NEXT_DB_NAME-wal.corrupt-") }
             ?.forEach { gone(it.name, it.delete()) }
         NEXT_FILES.forEach { gone(it, eraseStore(File(context.filesDir, it))) }
         gone(SQLITE_DIR, eraseSqliteHistory())

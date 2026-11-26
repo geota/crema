@@ -235,8 +235,29 @@ class RelayKeyStoreTest {
         storeFile.mkdirs() // exists, can't be read as a file
         val result = store().load()
         assertTrue(result is RelayKeyLoad.Unavailable)
+        assertFalse("an I/O error may pass with a restart", (result as RelayKeyLoad.Unavailable).damaged)
         assertTrue(storeFile.isDirectory)
         assertFalse(lostDir.exists())
+    }
+
+    @Test
+    fun `a store that doesn't parse is damaged, left as it is, and only Reset moves it aside`() {
+        seeded()
+        for (bytes in listOf(ByteArray(4099), "{\"v\":1,\"self\":{\"id\":\"ab".toByteArray())) {
+            storeFile.writeBytes(bytes)
+            val s = store()
+            val result = s.load()
+            assertTrue("$result", result is RelayKeyLoad.Unavailable && result.damaged)
+            assertArrayEquals("left byte for byte", bytes, storeFile.readBytes())
+            assertFalse(lostDir.exists())
+            // A restart reads the same bytes: still damaged.
+            assertTrue((store().load() as RelayKeyLoad.Unavailable).damaged)
+            // Reset pairing key does as before: the file to relay-lost/, a new key.
+            assertTrue(s.resetKey(fromUnavailable = true) != null)
+            assertArrayEquals(bytes, lostDir.listFiles()!!.single().readBytes())
+            assertTrue(ready(store().load()).keys.deviceId().isNotEmpty())
+            lostDir.deleteRecursively()
+        }
     }
 
     // ---- the real key source over a fake keystore --------------------------------

@@ -228,11 +228,35 @@ class ProxyControllerModeTest {
     }
 
     @Test
+    fun `a damaged keys file keeps the relay off, says Reset rather than restart, and resetting is the way out`() {
+        val file = java.io.File(app.filesDir, RelayKeyStore.FILE_NAME)
+        file.writeBytes(ByteArray(4099))
+        val damaged = newController()
+        try {
+            assertTrue(damaged.state.value.relayKeysUnavailable)
+            assertTrue(damaged.state.value.relayKeysDamaged)
+            assertTrue(log.any { "pairing keys file is damaged" in it }, "$log")
+            damaged.pairWith("127.0.0.1", 9, "Kitchen tablet")
+            assertEquals(KEYS_DAMAGED_COPY, notices.last())
+            damaged.resetPairingKey()
+            advance(1_000)
+            assertFalse(damaged.state.value.relayKeysUnavailable)
+            assertFalse(damaged.state.value.relayKeysDamaged)
+            assertTrue(java.io.File(app.filesDir, RelayKeyStore.LOST_DIR).listFiles()!!.isNotEmpty(), "the damaged file kept aside")
+        } finally {
+            damaged.close()
+        }
+    }
+
+    @Test
     fun `a keystore that isn't ready keeps the relay off and resetting is the way out`() {
         keystore.notReady = true
         val unavailable = newController()
         try {
             assertTrue(unavailable.state.value.relayKeysUnavailable)
+            assertFalse(unavailable.state.value.relayKeysDamaged, "transient: a restart may help")
+            unavailable.pairWith("127.0.0.1", 9, "Kitchen tablet")
+            assertEquals(KEYS_UNAVAILABLE_COPY, notices.last())
             unavailable.setHubMode(true)
             advance(1_000)
             assertTrue(log.any { "LAN relay not started" in it }, "$log")

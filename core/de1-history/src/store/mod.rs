@@ -465,6 +465,20 @@ impl Store {
         }
     }
 
+    /// Moves what the WAL holds into the main file, without waiting on any
+    /// reader (`PRAGMA wal_checkpoint(PASSIVE)`): the shell calls it after a
+    /// shot's save, so the shot is in the main file and a damaged `-wal`
+    /// can't take it with it. A rollback-journal file has nothing to move.
+    ///
+    /// # Errors
+    /// A SQLite error class; the write it follows has committed either way.
+    pub fn checkpoint(&mut self) -> Result<()> {
+        self.usable()?;
+        self.conn
+            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()))
+            .map_err(|e| error_of(&e, Source::Session))
+    }
+
     /// The shell says a shot is running (SPEC §9): while `busy`, maintenance
     /// does nothing.
     pub fn set_busy(&mut self, busy: bool) {

@@ -51,8 +51,12 @@ internal fun RelayPairingRows(ui: MainUiState, actions: RelayPairingActions, sta
 
     if (ui.relayKeysUnavailable) {
         CremaSettingsRow(
-            "Pairing keys couldn't be read",
-            "Restart Crema to try again. If this keeps happening, reset this device's pairing key: every paired device has to pair with it again.",
+            if (ui.relayKeysDamaged) "Pairing keys are damaged" else "Pairing keys couldn't be read",
+            if (ui.relayKeysDamaged) {
+                "A restart won't fix this. Reset this device's pairing key: every paired device has to pair with it again."
+            } else {
+                "Restart Crema to try again. If this keeps happening, reset this device's pairing key: every paired device has to pair with it again."
+            },
             last = true,
             stacked = stacked,
         ) {

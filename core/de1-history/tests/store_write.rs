@@ -703,3 +703,34 @@ fn a_rows_profile_id_is_stored_and_read_back_as_written() {
     assert_eq!(by_id("s1"), Some(with_id));
     assert_eq!(by_id("s2"), Some(without));
 }
+
+/// The main file alone, as a damaged `-wal` would leave it: its `shot` ids.
+#[cfg(not(target_arch = "wasm32"))]
+fn main_file_ids(d: &common::TestDir, path: &std::path::Path, name: &str) -> Vec<String> {
+    let copy = file(d, name);
+    std::fs::copy(path, &copy).expect("copies the main file");
+    let conn =
+        rusqlite::Connection::open_with_flags(&copy, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .expect("opens the copy");
+    let mut stmt = conn
+        .prepare("SELECT id FROM shot ORDER BY id")
+        .expect("prepares");
+    stmt.query_map([], |r| r.get(0))
+        .expect("runs")
+        .collect::<rusqlite::Result<_>>()
+        .expect("reads")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_checkpoint_moves_a_committed_write_into_the_main_file() {
+    let d = dir();
+    let path = file(&d, "history.db");
+    let mut store = create(&path);
+    store
+        .upsert(&rows_in(&[row("a", 10, json!({}))]))
+        .expect("writes");
+    // Committed, but in the -wal: the main file alone hasn't even the schema yet.
+    store.checkpoint().expect("checkpoints");
+    assert_eq!(main_file_ids(&d, &path, "main-only.db"), ["a"]);
+}

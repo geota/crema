@@ -562,6 +562,8 @@ data class MainUiState(
     val relayPairing: coffee.crema.ble.proxy.PairingState = coffee.crema.ble.proxy.PairingState.Idle,
     /** The relay keys couldn't be read this start: the relay is off until a restart. */
     val relayKeysUnavailable: Boolean = false,
+    /** With [relayKeysUnavailable]: the keys file is damaged, and only Reset pairing key gets past it. */
+    val relayKeysDamaged: Boolean = false,
     /** The pairing key was reset (a definitive loss): the one-time notice. */
     val relayKeyResetNotice: Boolean = false,
     /** The v3 upgrade: this remote pairs again before it dials. */

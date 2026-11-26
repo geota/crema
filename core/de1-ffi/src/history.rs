@@ -1333,6 +1333,15 @@ impl HistoryDb {
         self.infallible(|s| s.health().into())
     }
 
+    /// Moves the WAL's committed writes into the main file, without waiting
+    /// on a reader (`wal_checkpoint(PASSIVE)`), after a shot's save.
+    ///
+    /// # Errors
+    /// `Closed`, `Panicked`, a SQLite error class.
+    pub fn checkpoint(&self) -> HResult<()> {
+        self.with(Store::checkpoint)
+    }
+
     /// A shot is running: maintenance does nothing while `busy`.
     ///
     /// # Errors
