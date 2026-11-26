@@ -1,0 +1,6 @@
+• Manual mode on Brew: pick a recipe in the profile picker and Brew guides the pour step by step.
+• Your grinders, each with its own grind scale, and a grind saved per bag and grinder.
+• BOOKOO Motto 80 grinder over Bluetooth (beta).
+• BOOKOO Ultra: the dose for ratio mode, and a Filter removed auto-stop.
+• Google Drive sign-in through Google Play.
+• Fixes: a damaged storage file no longer stops the app starting, plus the weight stop, de1app imports, firmware updates and more.

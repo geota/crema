@@ -7,6 +7,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.1] — 2026-11-26
+
+• A damaged storage file no longer stops the app starting.
+
 ### Fixed
 
 - **A damaged storage file no longer stops the app starting** — a hub
@@ -1888,3 +1892,4 @@ shot state machine, and domain model.
 [0.10.0]: https://github.com/geota/crema/releases/tag/v0.10.0
 [0.11.0]: https://github.com/geota/crema/releases/tag/v0.11.0
 [0.12.0]: https://github.com/geota/crema/releases/tag/v0.12.0
+[0.12.1]: https://github.com/geota/crema/releases/tag/v0.12.1
