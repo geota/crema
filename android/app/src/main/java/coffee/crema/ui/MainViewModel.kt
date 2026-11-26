@@ -1442,6 +1442,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         pairedHubs = ps.pairedHubs,
                         relayPairing = ps.pairing,
                         relayKeysUnavailable = ps.relayKeysUnavailable,
+                        relayKeysDamaged = ps.relayKeysDamaged,
                         relayKeyResetNotice = ps.keyResetNotice,
                         relayNeedsRepair = ps.needsRepair,
                         relayUpgradeNotice = ps.upgradeNotice,

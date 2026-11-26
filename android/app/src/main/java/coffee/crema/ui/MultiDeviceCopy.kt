@@ -48,7 +48,7 @@ internal fun MainUiState.remoteHubLabel(): String =
  *  upgrade, doesn't dial and says why (spec §6.3, §6.4). */
 internal fun MainUiState.remoteStatus(): String? = when {
     proxyRole != "secondary" -> null
-    relayKeysUnavailable -> KEYS_UNAVAILABLE_COPY
+    relayKeysUnavailable -> keysUnavailableCopy(relayKeysDamaged)
     relayNeedsRepair -> upgradeRemote(remoteHubLabel())
     else -> remoteStatusLine(remoteHubLabel(), mirrorReconnecting, remoteHubHasMachine, mirrorViewOnly, refindGaveUp, hubStoppedHosting, remoteConnecting)
 }
@@ -183,6 +183,13 @@ internal fun olderCrema(name: String): String = "$name runs an older Crema — u
 
 /** §6.3: the keys couldn't be read this start. */
 internal const val KEYS_UNAVAILABLE_COPY = "Pairing keys couldn't be read. Restart Crema to try again."
+
+/** §6.3: the keys file doesn't parse, which no restart fixes (#578 follow-up). */
+internal const val KEYS_DAMAGED_COPY =
+    "This device's pairing keys are damaged. Reset pairing key in Paired devices; every paired device then has to pair again."
+
+/** The keys couldn't be read: [damaged], the file doesn't parse; else it may pass with a restart. */
+internal fun keysUnavailableCopy(damaged: Boolean): String = if (damaged) KEYS_DAMAGED_COPY else KEYS_UNAVAILABLE_COPY
 
 /** §6.3: the key was lost for good and replaced (shown once). */
 internal const val KEY_RESET_COPY = "This device's pairing key was reset (for example after a restore). Pair it with your devices again."

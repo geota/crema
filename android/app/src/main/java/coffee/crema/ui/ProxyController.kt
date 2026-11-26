@@ -234,6 +234,9 @@ class ProxyController(
         /** The relay keys couldn't be read this start (transient): the relay is
          *  off (no listening, no dialing) until a restart (spec §6.3). */
         val relayKeysUnavailable: Boolean = false,
+        /** With [relayKeysUnavailable]: the key file doesn't parse, so a restart
+         *  won't help and Reset pairing key is the way out. */
+        val relayKeysDamaged: Boolean = false,
         /** A definitive key loss replaced the key: show the one-time notice. */
         val keyResetNotice: Boolean = false,
         /** The v3 upgrade: this remote must pair again before it dials (spec §6.4). */
@@ -339,7 +342,10 @@ class ProxyController(
 
     init {
         when (val load = keyLoad) {
-            is RelayKeyLoad.Unavailable -> appendLog("Relay: pairing keys couldn't be read this start (${load.reason}) — the relay stays off")
+            is RelayKeyLoad.Unavailable -> appendLog(
+                if (load.damaged) "Relay: the pairing keys file is damaged (${load.reason}) — the relay stays off until Reset pairing key"
+                else "Relay: pairing keys couldn't be read this start (${load.reason}) — the relay stays off",
+            )
             is RelayKeyLoad.Ready -> {
                 if (load.keyReset) appendLog("Relay: the pairing key was lost and replaced; every pairing was cleared")
                 if (!load.persistent) appendLog("Relay: pairing can't be saved on this device (the key lives in memory only)")
@@ -369,6 +375,7 @@ class ProxyController(
         State(
             role = proxyConfigCache.role,
             relayKeysUnavailable = keyLoad is RelayKeyLoad.Unavailable,
+            relayKeysDamaged = (keyLoad as? RelayKeyLoad.Unavailable)?.damaged == true,
             keyResetNotice = relay.keyResetNotice,
             needsRepair = relay.needsRepair,
             upgradeNotice = relay.upgradeNotice,
@@ -1070,7 +1077,7 @@ class ProxyController(
     fun pairWith(host: String, port: Int, label: String) {
         val keys = relayKeys
         if (keys == null) {
-            notify(KEYS_UNAVAILABLE_COPY)
+            notify(keysUnavailableCopy(_state.value.relayKeysDamaged))
             return
         }
         dialer?.cancel()
@@ -1140,7 +1147,7 @@ class ProxyController(
     fun connectToPinnedHub(hubId: String) {
         val pin = relay.hubs.firstOrNull { it.id == hubId } ?: return
         if (relayKeys == null) {
-            notify(KEYS_UNAVAILABLE_COPY)
+            notify(keysUnavailableCopy(_state.value.relayKeysDamaged))
             return
         }
         resetRefind()
@@ -1196,7 +1203,7 @@ class ProxyController(
         relayKeys = fresh
         for (pin in _state.value.pairedRemotes) runCatching { livePins.remove(RelayKeyStore.publicKeyOf(pin.public)) }
         relayHub?.let { hub -> hub.remotes().forEach { hub.revoke(it.clientId) } }
-        _state.update { it.copy(relayKeysUnavailable = false) }
+        _state.update { it.copy(relayKeysUnavailable = false, relayKeysDamaged = false) }
         refreshPins()
         appendLog("Reset this device's pairing key: every pairing was cleared")
         when (_state.value.role) {
@@ -1802,7 +1809,8 @@ class ProxyController(
     private fun newestReadableCapture(): Pair<File, List<ReplayBleTransport.CaptureLine>>? {
         while (true) {
             val capture = newestCapture() ?: return null
-            val parsed = runCatching { ReplayBleTransport.parse(capture.readText()) }
+            val read = readCaptureForTest
+            val parsed = runCatching { ReplayBleTransport.parse(read?.invoke(capture) ?: capture.readText()) }
             parsed.getOrNull()?.let { return capture to it }
             val error = parsed.exceptionOrNull()
             if (error !is IllegalArgumentException) {
@@ -1810,7 +1818,7 @@ class ProxyController(
                 return null
             }
             val kept = File(capture.path + ".corrupt-" + System.currentTimeMillis())
-            if (!runCatching { capture.renameTo(kept) }.getOrDefault(false)) {
+            if (!runCatching { (renameCaptureForTest ?: File::renameTo)(capture, kept) }.getOrDefault(false)) {
                 appendLog("Multi-device: the replay capture ${capture.name} is damaged and couldn't be set aside; using live Bluetooth")
                 return null
             }
@@ -1864,6 +1872,13 @@ internal const val PAIRING_WINDOW_S = 120
 
 /** A damaged replay capture's name in the kept-aside notice (#576). */
 internal const val REPLAY_CAPTURE = "replay capture"
+
+/** Test seams for [ProxyController]'s replay capture pick: a read that throws, a rename aside that fails. */
+@androidx.annotation.VisibleForTesting
+@Volatile internal var readCaptureForTest: ((File) -> String)? = null
+
+@androidx.annotation.VisibleForTesting
+@Volatile internal var renameCaptureForTest: ((File, File) -> Boolean)? = null
 
 private const val OUTDATED_NOTICE_COOLDOWN_MS = 60_000L
 

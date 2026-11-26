@@ -7,6 +7,21 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A damaged shot history log, damaged pairing keys and old damaged
+  recordings** — follow-ups to #576. When a hard kill damages the shot
+  history's write-ahead log, SQLite throws its contents away, and shots saved
+  only there used to go without a word. The damaged log is now copied aside
+  first, never moved or deleted, and the app says so once. Each saved shot is
+  also moved into the main history file right away, so a damaged log has
+  nothing left to lose. A pairing keys file that's damaged used to say
+  "Restart Crema to try again", which never helped; it now says the keys are
+  damaged and points to Reset pairing key, which means every paired device has
+  to pair again. A keys file that just couldn't be read still says restart.
+  Damaged replay recordings kept aside are now limited to the newest three,
+  like other kept-aside files (#578). Android.
+
 ## [0.12.1] — 2026-11-26
 
 • A damaged storage file no longer stops the app starting.

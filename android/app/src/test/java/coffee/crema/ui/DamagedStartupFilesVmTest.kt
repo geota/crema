@@ -38,6 +38,8 @@ class DamagedStartupFilesVmTest(private val file: String, private val damage: St
             "brew-recipes.json", "maintenance.json", "visualizer.json", "decent.json", "drive.json",
             "stolenSerials.json", "sawModel.json", "relay-v4.json", "restore-pending.json",
             "relayPort", "last-shot.txt",
+            // SQLite discards a -wal whose header doesn't check out: copied aside first (#578 follow-up).
+            "history-sqlite/history.db-wal",
             // Read and then deleted by design, so only "it starts" is checked:
             // relay v3 leftovers, erased once relay-v4.json records the
             // migration, and the stage-2 journal, emptied once replayed.

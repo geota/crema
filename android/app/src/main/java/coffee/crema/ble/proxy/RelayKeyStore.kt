@@ -82,11 +82,14 @@ sealed interface RelayKeyLoad {
     data class Ready(val keys: RelayKeys, val persistent: Boolean, val keyReset: Boolean) : RelayKeyLoad
 
     /**
-     * Transient: the key couldn't be read this start. Nothing was touched (the
-     * file and every pin are as they were); the relay stays off and the next
-     * start retries. [reason] names the cause, never key material.
+     * The key couldn't be read this start. Nothing was touched (the file and
+     * every pin are as they were); the relay stays off and the next start
+     * retries. [reason] names the cause, never key material. [damaged]: the
+     * file was read and doesn't parse, so a restart won't help and Reset
+     * pairing key is the way out; otherwise it's transient (an I/O error, the
+     * keystore not ready).
      */
-    data class Unavailable(val reason: String) : RelayKeyLoad
+    data class Unavailable(val reason: String, val damaged: Boolean = false) : RelayKeyLoad
 }
 
 /**
@@ -103,7 +106,9 @@ sealed interface RelayKeyLoad {
  *   to `relay-lost/`, generates a new key and starts with no pins; anything
  *   else is **transient** and [load] returns [RelayKeyLoad.Unavailable] with the
  *   file untouched. An unreadable file is treated as transient too: nothing
- *   proves the key is gone.
+ *   proves the key is gone. A file that reads but doesn't parse is left
+ *   untouched the same way, but marked [RelayKeyLoad.Unavailable.damaged]: no
+ *   restart fixes it, and only the user's Reset pairing key moves it aside.
  * - When a new key can't be sealed it is kept in memory only, and pins are not
  *   persisted either, so a later start never reads that state as a loss and
  *   clears pins made meanwhile.
@@ -133,7 +138,9 @@ class RelayKeyStore(
         val stored = try {
             json.decodeFromString(RelayFile.serializer(), text)
         } catch (e: Exception) {
-            return unavailable("store unparseable: ${e.javaClass.simpleName}")
+            // A decode failure (a SerializationException is one) says the bytes are bad:
+            // the same bytes come back at every start. Anything else may pass.
+            return unavailable("store unparseable: ${e.javaClass.simpleName}", damaged = e is IllegalArgumentException)
         }
         val self = stored.self ?: return noSelf(stored)
         when (val opened = box.openBytes(self.private)) {
@@ -164,10 +171,10 @@ class RelayKeyStore(
         }
     }
 
-    private fun unavailable(reason: String): RelayKeyLoad.Unavailable {
+    private fun unavailable(reason: String, damaged: Boolean = false): RelayKeyLoad.Unavailable {
         Log.w(TAG, "relay keys unavailable this start: $reason")
         keys = null
-        return RelayKeyLoad.Unavailable(reason)
+        return RelayKeyLoad.Unavailable(reason, damaged)
     }
 
     /**

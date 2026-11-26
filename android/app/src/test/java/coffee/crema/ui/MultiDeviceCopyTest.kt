@@ -312,6 +312,16 @@ class MultiDeviceCopyTest {
         assertFalse(MainUiState(proxyRole = "normal", relayNeedsRepair = true).canPairAgain())
     }
 
+    /** #578 follow-up: keys that couldn't be read say Restart; a damaged file, which no restart fixes, says Reset. */
+    @Test
+    fun `damaged pairing keys point to Reset pairing key, unreadable ones to a restart`() {
+        assertEquals("Pairing keys couldn't be read. Restart Crema to try again.", remote().copy(relayKeysUnavailable = true).remoteStatus())
+        assertEquals(
+            "This device's pairing keys are damaged. Reset pairing key in Paired devices; every paired device then has to pair again.",
+            remote().copy(relayKeysUnavailable = true, relayKeysDamaged = true).remoteStatus(),
+        )
+    }
+
     /** §4.8, §6.1: the picker says Paired for a pinned hub and Needs a Crema update for an old one. */
     @Test
     fun `the picker labels paired and outdated hubs`() {
