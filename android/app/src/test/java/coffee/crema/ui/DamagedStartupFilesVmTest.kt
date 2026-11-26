@@ -103,6 +103,21 @@ class DamagedStartupFilesVmTest(private val file: String, private val damage: St
         SaveFloor.resetForTest()
     }
 
+    /**
+     * A damaged `-wal` comes from a kill, and a kill takes the process's
+     * connection to [db] with it. In this JVM the last ViewModel's connection
+     * stays open (a new store takes it over), and closing it over a `-wal`
+     * the test replaced would checkpoint the replaced bytes into the main file
+     * from its in-memory WAL index, which no device can do. So the disk is
+     * left as a kill leaves it: the connection closed and the main file and
+     * `-shm` put back as they were before the close, without its checkpoint.
+     */
+    private fun killedMidSession(db: File) {
+        val asLeft = listOf(db, File(db.path + "-shm")).filter { it.exists() }.associateWith { it.readBytes() }
+        coffee.crema.history.HistoryAuthority.closeEveryHeld()
+        for ((f, bytes) in asLeft) f.writeBytes(bytes)
+    }
+
     /** An odd length, so no file the app writes has these exact bytes by chance. */
     private fun damaged(): ByteArray = when (damage) {
         "zero-filled" -> ByteArray(4099)
@@ -112,6 +127,7 @@ class DamagedStartupFilesVmTest(private val file: String, private val damage: St
     @Test
     fun theAppStartsAndTheDamagedBytesStayOnDisk() {
         useTheApp()
+        if (file.endsWith("-wal")) killedMidSession(File(app.filesDir, file.removeSuffix("-wal")))
         val target = File(app.filesDir, file).apply { parentFile?.mkdirs() }
         val bytes = damaged()
         target.writeBytes(bytes)
