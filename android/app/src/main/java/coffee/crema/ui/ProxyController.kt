@@ -48,6 +48,8 @@ import coffee.crema.machine.MachineCommandCodec
 import coffee.crema.machine.MachineCommands
 import coffee.crema.machine.RelayMachine
 import coffee.crema.machine.RelayedCommandDispatcher
+import coffee.crema.persist.KeptAside
+import coffee.crema.persist.KeptAsideNotices
 import coffee.crema.persist.SafeFile
 import coffee.crema.persist.SafeLoad
 import coffee.crema.settings.AppPrefs
@@ -1311,11 +1313,12 @@ class ProxyController(
         // primary's own session recordings in `captures/` would be auto-replayed on
         // the next launch, hijacking a real primary into a fake DE1 and starving the
         // real DE1/scale scan (the transport would be the replay).
-        val capture = if (readProxyConfigSync().replayPrimary) newestCapture() else null
-        val real: BleTransport = if (capture != null) {
+        val replay = if (readProxyConfigSync().replayPrimary) newestReadableCapture() else null
+        val real: BleTransport = if (replay != null) {
+            val (capture, lines) = replay
             appendLog("Multi-device: PRIMARY (replay ${capture.name})")
             ReplayBleTransport(
-                ReplayBleTransport.parse(capture.readText()),
+                lines,
                 scope, deviceName = "DE1", deviceAddress = "DE1:REPLAY", route = ::replayRoute,
             )
         } else {
@@ -1787,6 +1790,35 @@ class ProxyController(
         }
     }.getOrNull()
 
+    /**
+     * The newest capture that parses, with its lines (#576). A recording a kill
+     * cut short or left zero-filled doesn't, and threw out of the VM's
+     * construction on every start: it's renamed aside to `.corrupt-<ms>` (never
+     * deleted, and no longer a `.jsonl`, so no later start picks it), reported
+     * like a damaged store, and the next newest is tried. A capture that can't
+     * be read at all, or moved aside, stays where it is, and the hub runs on
+     * live Bluetooth this start.
+     */
+    private fun newestReadableCapture(): Pair<File, List<ReplayBleTransport.CaptureLine>>? {
+        while (true) {
+            val capture = newestCapture() ?: return null
+            val parsed = runCatching { ReplayBleTransport.parse(capture.readText()) }
+            parsed.getOrNull()?.let { return capture to it }
+            val error = parsed.exceptionOrNull()
+            if (error !is IllegalArgumentException) {
+                appendLog("Multi-device: couldn't read the replay capture ${capture.name} (${error?.javaClass?.simpleName}); using live Bluetooth")
+                return null
+            }
+            val kept = File(capture.path + ".corrupt-" + System.currentTimeMillis())
+            if (!runCatching { capture.renameTo(kept) }.getOrDefault(false)) {
+                appendLog("Multi-device: the replay capture ${capture.name} is damaged and couldn't be set aside; using live Bluetooth")
+                return null
+            }
+            appendLog("Multi-device: the replay capture ${capture.name} is damaged; kept aside as ${kept.name}")
+            KeptAsideNotices.report(KeptAside(REPLAY_CAPTURE, kept))
+        }
+    }
+
     /** Map a capture `src` label to its DE1 `(service, characteristic)` for replay. */
     private fun replayRoute(src: String): Pair<UUID, UUID>? = when (src) {
         "DE1_STATE" -> De1Uuids.SERVICE to De1Uuids.STATE_INFO
@@ -1829,6 +1861,9 @@ internal fun sameAddress(a: String, b: String): Boolean {
 
 /** How long the host's pairing window stays open. */
 internal const val PAIRING_WINDOW_S = 120
+
+/** A damaged replay capture's name in the kept-aside notice (#576). */
+internal const val REPLAY_CAPTURE = "replay capture"
 
 private const val OUTDATED_NOTICE_COOLDOWN_MS = 60_000L
 
