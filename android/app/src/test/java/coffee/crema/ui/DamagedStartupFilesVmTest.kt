@@ -3,6 +3,7 @@ package coffee.crema.ui
 import android.app.Application
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.persist.SafeFile
+import coffee.crema.persist.inSaveOrder
 import coffee.crema.persist.SaveFloor
 import coffee.crema.persist.Stores
 import org.junit.After
@@ -96,8 +97,22 @@ class DamagedStartupFilesVmTest(private val file: String, private val damage: St
         vm.setAutoDriveBackup(true)
         vm.ui.value.profiles.firstOrNull()?.let { vm.togglePinProfile(it.id) }
         VmHarness.idleUntil("the shot to land") { VmHarness.rows(vm).size == 1 }
+        // The shot in memory isn't the shot on disk: its save runs on IO, and on a
+        // slow runner a case could damage (or, for a -wal, roll the main file back
+        // past) a save still in flight. Wait for its commit, then take the store's
+        // lock: the save holds it through its commit and its checkpoint, so once
+        // the flush has the lock the shot is in the main file.
+        val shot = VmHarness.rows(vm).single().id
+        VmHarness.idleUntil("the shot's commit") { shot in VmHarness.truthIds(vm) }
+        assertTrue(VmHarness.onMain("the shot's checkpoint") { VmHarness.library(vm).historyStoreForTest.flush() }, "the shot saved")
         stores.removeAt(stores.lastIndex).clear()
         VmHarness.idle()
+        // A save the ViewModel asked for lands even once it's cleared: wait for
+        // every one, or it can land over the file a case is about to damage, or
+        // be refused by the next session and throw (prefs.json, hot-water.json,
+        // sawModel.json on CI).
+        VmHarness.settleEnded()
+        VmHarness.onMain("the last ViewModel's saves") { for (f in FILES) inSaveOrder(File(app.filesDir, f)) {} }
         SafeFile.resetForTest()
         Stores.resetForTest()
         SaveFloor.resetForTest()
