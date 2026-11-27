@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.grinderRailDot
 import coffee.crema.ui.LiveReadouts
 import coffee.crema.settings.Setting
 import coffee.crema.ui.gate
@@ -118,6 +119,7 @@ fun ScaleScreen(
             onConnect = onConnect,
             devicesTab = ui.devicesTab,
             onOpenDevicesTab = vm::openDevicesTab,
+            grinderDot = ui.grinderRailDot(),
         )
         Column(
             Modifier.fillMaxSize().padding(start = sp.edge, top = sp.s4, end = sp.edge, bottom = sp.s5),

@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.grinderRailDot
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -234,6 +235,7 @@ fun BeansScreen(
             onConnect = onConnect,
             devicesTab = ui.devicesTab,
             onOpenDevicesTab = vm::openDevicesTab,
+            grinderDot = ui.grinderRailDot(),
         )
         Column(Modifier.weight(1f).fillMaxHeight()) {
             Row(

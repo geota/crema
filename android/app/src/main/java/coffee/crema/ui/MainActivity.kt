@@ -83,6 +83,7 @@ import coffee.crema.ui.phone.PhoneRoasterEditScreen
 import coffee.crema.ui.phone.PhoneScaleScreen
 import coffee.crema.ui.phone.PhoneSettingsScreen
 import coffee.crema.ui.phone.TabletDevicesSheet
+import coffee.crema.ui.phone.grinderDeviceHooks
 import coffee.crema.ui.screens.BeanEditScreen
 import coffee.crema.ui.screens.BeansScreen
 import coffee.crema.ui.screens.BrewScreen
@@ -717,6 +718,7 @@ class MainActivity : ComponentActivity() {
                         onPairAgain = { viewModel.pairAgain(); showDevices = false },
                         onRetry = viewModel::retryReconnectNow,
                         onDismiss = { showDevices = false },
+                        grinder = remember(viewModel) { viewModel.grinderDeviceHooks() },
                     )
                 }
                 }

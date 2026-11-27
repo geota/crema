@@ -7,6 +7,18 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **The grinder in Devices and the rail** — an opt-in switch, "Show in
+  Devices and the rail", in Devices → Grinder beside the connected-grinder
+  card. It shows only when one of your grinders connects over Bluetooth, and
+  it's off by default. Turned on, the Devices sheet gets a Grinder row (Beta)
+  beside Machine and Scale: its name, a status dot, the grind while it's
+  connected ("Connected · Grind 2.4"), and Connect, Retry now or Disconnect.
+  The tablet rail gets a Grinder dot under Scale: green when connected, amber
+  while connecting or reconnecting, grey when off. A backup carries the
+  switch. Android.
+
 ### Fixed
 
 - **A damaged shot history log, damaged pairing keys and old damaged

@@ -32,6 +32,16 @@ import coffee.crema.ble.ScaleBleManager
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.ui.DoseGrindMode
 import coffee.crema.ui.MainUiState
+import coffee.crema.ui.GrinderDot
+import coffee.crema.ui.GrinderLinkAction
+import coffee.crema.ui.LiveTelemetry
+import coffee.crema.ui.grinderDeviceName
+import coffee.crema.ui.grinderDeviceStatus
+import coffee.crema.ui.grinderDot
+import coffee.crema.ui.grinderLinkAction
+import coffee.crema.ui.showGrinderDevice
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.StateFlow
 import coffee.crema.ui.PiFlushMode
 import coffee.crema.ui.QcBounds
 import coffee.crema.ui.QcSteam
@@ -682,6 +692,8 @@ fun PhoneDevicesSheet(
     onDismiss: () -> Unit,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
+    /** The grinder row's readings and actions; the row shows only with [MainUiState.showGrinderDevice]. */
+    grinder: GrinderDeviceHooks? = null,
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -699,6 +711,7 @@ fun PhoneDevicesSheet(
             onConnectDirectly = onConnectDirectly,
             onPairAgain = onPairAgain,
             onRetry = onRetry,
+            grinder = grinder,
             modifier = Modifier.fillMaxWidth().padding(horizontal = CremaEdge).padding(bottom = 20.dp),
         )
     }
@@ -722,6 +735,8 @@ fun DevicesPanel(
     modifier: Modifier = Modifier,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
+    /** The grinder row's readings and actions; the row shows only with [MainUiState.showGrinderDevice]. */
+    grinder: GrinderDeviceHooks? = null,
 ) {
     Column(
         modifier,
@@ -805,6 +820,10 @@ fun DevicesPanel(
                 remembered = ui.rememberedScaleAddress != null,
                 onForget = onForgetScale,
             )
+            if (grinder != null && ui.showGrinderDevice) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                GrinderDeviceRow(ui, grinder)
+            }
             Spacer(Modifier.height(14.dp))
             OutlinedButton(
                 onClick = {
@@ -847,6 +866,8 @@ fun TabletDevicesSheet(
     onDismiss: () -> Unit,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
+    /** The grinder tile's readings and actions; the tile shows only with [MainUiState.showGrinderDevice]. */
+    grinder: GrinderDeviceHooks? = null,
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -865,6 +886,7 @@ fun TabletDevicesSheet(
             onConnectDirectly = onConnectDirectly,
             onPairAgain = onPairAgain,
             onRetry = onRetry,
+            grinder = grinder,
             modifier = Modifier.fillMaxWidth().padding(horizontal = CremaEdge).padding(top = 2.dp, bottom = 10.dp),
         )
     }
@@ -888,6 +910,8 @@ fun DevicesPanelWide(
     modifier: Modifier = Modifier,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
+    /** The grinder tile's readings and actions; the tile shows only with [MainUiState.showGrinderDevice]. */
+    grinder: GrinderDeviceHooks? = null,
 ) {
     val machineStat = if (connected) {
         listOfNotNull("Connected", ui.de1Firmware).joinToString(" · ")
@@ -997,12 +1021,30 @@ fun DevicesPanelWide(
                 }
             }
         }
+        val grinderTile: (@Composable (Modifier) -> Unit)? = if (grinder != null && ui.showGrinderDevice) {
+            { m -> GrinderDeviceTile(ui, grinder, m) }
+        } else {
+            null
+        }
         if (!connected) HubHoldsMachineNotice(ui, onConnectThrough = onMirrorFrom)
         // Three across when there's room; on a narrow sheet (a 7" tablet in portrait,
         // ~600dp) Machine + Scale share a row and Other devices spans below — otherwise
         // the third column crushes the mirroring text to one character per line.
+        // A grinder tile (opt-in) joins Machine and Scale on the first row, and
+        // Other devices spans below, so no column gets too narrow.
         BoxWithConstraints {
-            if (maxWidth >= 720.dp) {
+            val roomy = maxWidth >= 720.dp
+            if (grinderTile != null) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
+                        machineTile(Modifier.weight(1f))
+                        scaleTile(Modifier.weight(1f))
+                        if (roomy) grinderTile(Modifier.weight(1f))
+                    }
+                    if (!roomy) grinderTile(Modifier.fillMaxWidth())
+                    otherCard(Modifier.fillMaxWidth())
+                }
+            } else if (roomy) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
                     machineTile(Modifier.weight(1f))
                     scaleTile(Modifier.weight(1f))
@@ -1051,6 +1093,12 @@ private fun WideDeviceTile(
     /** Show a "Retry now" pill (the device is reconnecting). */
     reconnecting: Boolean = false,
     onRetry: () -> Unit = {},
+    /** A Beta tag beside the name (the grinder). */
+    beta: Boolean = false,
+    /** The status dot's colour, when it isn't simply green or grey by [on]. */
+    dotColor: Color? = null,
+    /** The action pill is the quiet (Disconnect) one rather than the copper one. */
+    actionNeutral: Boolean = on,
 ) {
     val tel = CremaTheme.telemetry
     Surface(
@@ -1070,9 +1118,12 @@ private fun WideDeviceTile(
                     }
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Box(Modifier.size(6.dp).clip(CircleShape).background(if (on) tel.success else MaterialTheme.colorScheme.outline))
+                        Text(name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        if (beta) CremaSettingsPill("Beta")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Box(Modifier.size(6.dp).clip(CircleShape).background(dotColor ?: if (on) tel.success else MaterialTheme.colorScheme.outline))
                         Text(
                             stat,
                             style = MaterialTheme.typography.labelMedium.copy(fontFamily = JetBrainsMono, fontFeatureSettings = "tnum"),
@@ -1095,7 +1146,7 @@ private fun WideDeviceTile(
                     onClick = onAction,
                     enabled = actionEnabled,
                     shape = RoundedCornerShape(999.dp),
-                    color = if (on) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.primary,
+                    color = if (actionNeutral) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.primary,
                     modifier = Modifier.weight(1f),
                 ) {
                     Row(
@@ -1103,12 +1154,12 @@ private fun WideDeviceTile(
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        PhIcon(actionIcon, sizeDp = 15, tint = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onPrimary)
+                        PhIcon(actionIcon, sizeDp = 15, tint = if (actionNeutral) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onPrimary)
                         Spacer(Modifier.width(6.dp))
                         Text(
                             actionLabel,
                             style = MaterialTheme.typography.labelLarge,
-                            color = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onPrimary,
+                            color = if (actionNeutral) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onPrimary,
                             maxLines = 1,
                         )
                     }
@@ -1139,6 +1190,14 @@ private fun DeviceRow(
     /** Show a "Retry now" pill under the status (the device is reconnecting). */
     reconnecting: Boolean = false,
     onRetry: () -> Unit = {},
+    /** A Beta tag beside the kind label (the grinder). */
+    beta: Boolean = false,
+    /** The action pill's words. */
+    actionLabel: String = if (on) "Disconnect" else "Pair",
+    /** The action pill is the quiet (Disconnect) one rather than the copper one. */
+    actionNeutral: Boolean = on,
+    /** The status dot's colour, when it isn't simply green or grey by [on]. */
+    dotColor: Color? = null,
 ) {
     val tel = CremaTheme.telemetry
     Row(
@@ -1157,16 +1216,19 @@ private fun DeviceRow(
             }
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Text(
-                kind.uppercase(),
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.6.sp, fontWeight = FontWeight.SemiBold),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    kind.uppercase(),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.6.sp, fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (beta) CremaSettingsPill("Beta")
+            }
             Text(name, style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, fontWeight = FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Box(
                     Modifier.size(7.dp).clip(CircleShape)
-                        .background(if (on) tel.success else MaterialTheme.colorScheme.outline),
+                        .background(dotColor ?: if (on) tel.success else MaterialTheme.colorScheme.outline),
                 )
                 Text(
                     stat,
@@ -1188,24 +1250,127 @@ private fun DeviceRow(
             shape = RoundedCornerShape(999.dp),
             color = when {
                 !actionEnabled -> MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.4f)
-                on -> MaterialTheme.colorScheme.surfaceContainerHighest
+                actionNeutral -> MaterialTheme.colorScheme.surfaceContainerHighest
                 else -> MaterialTheme.colorScheme.primary
             },
             modifier = Modifier.height(36.dp),
         ) {
             Box(Modifier.padding(horizontal = 15.dp), contentAlignment = Alignment.Center) {
                 Text(
-                    if (on) "Disconnect" else "Pair",
+                    actionLabel,
                     style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold),
                     color = when {
                         !actionEnabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        on -> MaterialTheme.colorScheme.onSurfaceVariant
+                        actionNeutral -> MaterialTheme.colorScheme.onSurfaceVariant
                         else -> MaterialTheme.colorScheme.onPrimary
                     },
                 )
             }
         }
     }
+}
+
+/** What the Devices grinder row needs beyond the UI state: the live dial and
+ *  the grinder's link actions (the same ones its Devices → Grinder card uses). */
+class GrinderDeviceHooks(
+    val live: StateFlow<LiveTelemetry>,
+    val onConnect: () -> Unit,
+    val onReconnect: () -> Unit,
+    val onDisconnect: () -> Unit,
+    val onRetry: () -> Unit,
+    val onForget: () -> Unit,
+)
+
+/** [GrinderDeviceHooks] wired to this view model's grinder actions. */
+fun MainViewModel.grinderDeviceHooks(): GrinderDeviceHooks = GrinderDeviceHooks(
+    live = live,
+    onConnect = ::connectGrinder,
+    onReconnect = ::reconnectGrinder,
+    onDisconnect = ::disconnectGrinder,
+    onRetry = ::retryGrinder,
+    onForget = ::forgetGrinder,
+)
+
+/** What the grinder row and tile show and do, from the state and its live dial. */
+private class GrinderDeviceView(ui: MainUiState, liveDial: String?) {
+    val status = ui.connectedGrinder.status
+    val name = ui.grinderDeviceName()
+    val stat = grinderDeviceStatus(status, ui.grinderFollow.grind, liveDial)
+    val dot = grinderDot(status)
+    val action = grinderLinkAction(status, ui.connectedGrinderAddress)
+    val reconnecting = status == coffee.crema.ui.GrinderLinkStatus.RECONNECTING
+    val remembered = ui.rememberedGrinderAddress != null
+    val actionLabel = when (action) {
+        GrinderLinkAction.CONNECT -> "Connect"
+        GrinderLinkAction.RECONNECT -> "Reconnect"
+        GrinderLinkAction.DISCONNECT -> "Disconnect"
+    }
+
+    fun act(hooks: GrinderDeviceHooks) = when (action) {
+        GrinderLinkAction.CONNECT -> hooks.onConnect()
+        GrinderLinkAction.RECONNECT -> hooks.onReconnect()
+        GrinderLinkAction.DISCONNECT -> hooks.onDisconnect()
+    }
+}
+
+/** The grinder's dial from the live readings, recomposing only when it changes (not at 5 Hz). */
+@Composable
+private fun liveDial(live: StateFlow<LiveTelemetry>): String? {
+    val telemetry = live.collectAsStateWithLifecycle()
+    // Read only inside derivedStateOf, so this scope recomposes when the dial moves.
+    val dial by remember(telemetry) { derivedStateOf { telemetry.value.grinderReading?.setting?.value } }
+    return dial
+}
+
+@Composable
+private fun grinderDotColor(dot: GrinderDot): Color = when (dot) {
+    GrinderDot.CONNECTED -> CremaTheme.telemetry.success
+    GrinderDot.CONNECTING -> warningColor()
+    GrinderDot.OFF -> MaterialTheme.colorScheme.outline
+}
+
+/** The phone sheet's Grinder row (opt-in, Beta): the row Machine and Scale have. */
+@Composable
+private fun GrinderDeviceRow(ui: MainUiState, hooks: GrinderDeviceHooks) {
+    val v = GrinderDeviceView(ui, liveDial(hooks.live))
+    DeviceRow(
+        kind = "Grinder",
+        beta = true,
+        name = v.name,
+        icon = "funnel",
+        stat = v.stat,
+        on = v.dot == GrinderDot.CONNECTED,
+        dotColor = grinderDotColor(v.dot),
+        actionLabel = v.actionLabel,
+        actionNeutral = v.action == GrinderLinkAction.DISCONNECT,
+        onAction = { v.act(hooks) },
+        actionEnabled = ui.bluetoothOn,
+        remembered = v.remembered,
+        onForget = hooks.onForget,
+        reconnecting = v.reconnecting,
+        onRetry = hooks.onRetry,
+    )
+}
+
+/** The tablet sheet's Grinder tile (opt-in, Beta). */
+@Composable
+private fun GrinderDeviceTile(ui: MainUiState, hooks: GrinderDeviceHooks, modifier: Modifier) {
+    val v = GrinderDeviceView(ui, liveDial(hooks.live))
+    WideDeviceTile(
+        name = v.name, icon = "funnel",
+        stat = v.stat, on = v.dot == GrinderDot.CONNECTED,
+        actionLabel = v.actionLabel,
+        actionIcon = if (v.action == GrinderLinkAction.DISCONNECT) "sign-out" else "bluetooth",
+        onAction = { v.act(hooks) }, actionEnabled = ui.bluetoothOn,
+        remembered = v.remembered,
+        onForget = hooks.onForget,
+        reconnecting = v.reconnecting,
+        onRetry = hooks.onRetry,
+        beta = true,
+        dotColor = grinderDotColor(v.dot),
+        actionNeutral = v.action == GrinderLinkAction.DISCONNECT,
+        modifier = modifier,
+    )
 }
 
 private fun Color.compositeOver(base: Color): Color = Color(

@@ -3156,6 +3156,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Devices → Grinder "Save each shot's grind to its bag" (#488). */
     fun setGrindAutoSave(enabled: Boolean) = settings.setGrindAutoSave(enabled)
 
+    /** Devices → Grinder "Show in Devices and the rail" (off by default). */
+    fun setGrinderInDevices(enabled: Boolean) = settings.setGrinderInDevices(enabled)
+
     /** Settings → Brew defaults: the dose / ratio / temp / pre-infusion a NEW
      *  profile seeds from ([startNewProfile] → brewDefaultsJson). Persisted. */
     fun setBrewDefaults(doseG: Float, ratio: Float, brewTempC: Float, preinfuseS: Float) =

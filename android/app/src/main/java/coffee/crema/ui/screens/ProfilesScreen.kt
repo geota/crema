@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.grinderRailDot
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -175,6 +176,7 @@ fun ProfilesScreen(
             onConnect = onConnect,
             devicesTab = ui.devicesTab,
             onOpenDevicesTab = vm::openDevicesTab,
+            grinderDot = ui.grinderRailDot(),
         )
         Column(Modifier.weight(1f).fillMaxHeight()) {
             // Command bar: title · search · actions in one row. On a narrow 7"/

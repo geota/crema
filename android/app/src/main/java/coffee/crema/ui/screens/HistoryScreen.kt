@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.grinderRailDot
 import kotlinx.coroutines.launch
 import coffee.crema.ui.fmt
 import android.text.format.DateUtils
@@ -274,6 +275,7 @@ fun HistoryScreen(
             onConnect = onConnect,
             devicesTab = ui.devicesTab,
             onOpenDevicesTab = vm::openDevicesTab,
+            grinderDot = ui.grinderRailDot(),
         )
         Column(Modifier.weight(1f).fillMaxHeight()) {
             // Short-window compaction (issue #35): on a landscape 8" tablet the

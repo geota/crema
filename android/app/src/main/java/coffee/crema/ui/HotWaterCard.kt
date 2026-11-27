@@ -19,8 +19,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -40,6 +38,7 @@ import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.components.RowGate
 import coffee.crema.ui.components.SplitOption
 import coffee.crema.ui.components.StepperExtraChip
+import coffee.crema.ui.components.warningColor
 import kotlin.math.roundToInt
 
 /*
@@ -201,11 +200,6 @@ fun HotWaterHeader(
 /** The readout for [target] ("" with none yet): see [hotWaterReadout]. */
 fun hotWaterReadoutFor(target: HotWaterTarget?, weightUnit: String, volumeUnit: String, ratio: Float): String =
     target?.let { hotWaterReadout(it, weightUnit, volumeUnit, ratio) }.orEmpty()
-
-/** The caveat amber: web's `--warning` (#DBA764 on dark, #8C5A12 on light). */
-@Composable
-private fun warningColor(): Color =
-    if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color(0xFFDBA764) else Color(0xFF8C5A12)
 
 /**
  * The stepper's secondary line for [target], or null when there is nothing to

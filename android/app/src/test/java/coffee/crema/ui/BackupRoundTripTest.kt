@@ -58,6 +58,23 @@ class BackupRoundTripTest {
     }
 
     @Test
+    fun `the grinder's Devices switch rides an Android backup's settings, never a web one's`() {
+        fun settings(shell: String, on: Boolean?) = listOf(
+            line("crema-backup/v1"),
+            line("settings", buildJsonObject {
+                put("common", buildJsonObject { })
+                put("_shell", shell)
+                on?.let { put("grinderInDevices", it) }
+            }),
+        ).joinToString("\n")
+        assertEquals(true, parseBackupBytes(settings("android", true).toByteArray(), json, 0L).grinderInDevices)
+        assertEquals(false, parseBackupBytes(settings("android", false).toByteArray(), json, 0L).grinderInDevices)
+        // A backup from before the switch says nothing: this device keeps its own.
+        assertEquals(null, parseBackupBytes(settings("android", null).toByteArray(), json, 0L).grinderInDevices)
+        assertEquals(null, parseBackupBytes(settings("web", true).toByteArray(), json, 0L).grinderInDevices)
+    }
+
+    @Test
     fun `skips a malformed JSONL line without dropping the rest`() {
         val bundle = listOf(
             line("crema-backup/v1"),
