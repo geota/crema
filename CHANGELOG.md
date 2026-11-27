@@ -14,10 +14,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   card. It shows only when one of your grinders connects over Bluetooth, and
   it's off by default. Turned on, the Devices sheet gets a Grinder row (Beta)
   beside Machine and Scale: its name, a status dot, the grind while it's
-  connected ("Connected · Grind 2.4"), and Connect, Retry now or Disconnect.
-  The tablet rail gets a Grinder dot under Scale: green when connected, amber
-  while connecting or reconnecting, grey when off. A backup carries the
-  switch. Android.
+  connected ("Connected · Grind 2.4"), and Connect (Pair on web), Retry now or
+  Disconnect. The rail on tablet and web gets a Grinder dot under Scale: green
+  when connected, amber while connecting or reconnecting, grey when off, with
+  the same Disconnect menu as the DE1 and scale. A backup carries the switch.
+  Android and web.
 
 ### Fixed
 

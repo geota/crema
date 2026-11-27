@@ -1,8 +1,15 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import type { BleConnectionState } from '#lib/ble/connection-state.js';
+import { initTestWasm } from '#lib/testing/test-init.js';
+import { getBeanStore } from '#lib/bean/index.js';
+import { getSettingsStore } from '#lib/settings/index.js';
+import { getGrinderLinkStore } from '#lib/grinder/connected-link.svelte.js';
+import { NO_GRINDER, type ConnectedGrinderView } from '#lib/state/ui-state.svelte.js';
+import type { CremaApp } from '#lib/state/index.js';
 import RailDeviceButton from './RailDeviceButton.svelte';
-import { railAction, railDotClass, railLabel, railStatus } from './rail-status';
+import RailDevices from './RailDevices.svelte';
+import { railAction, railDotClass, railLabel, railStatus, type RailDevice } from './rail-status';
 
 describe('rail status policy', () => {
 	const cases: [BleConnectionState, string, string, string][] = [
@@ -27,6 +34,9 @@ describe('rail status policy', () => {
 		expect(railLabel('de1', 'connected')).toBe('DE1 connected — click for options');
 		expect(railLabel('scale', 'disconnected')).toBe('Click to connect scale');
 		expect(railLabel('scale', 'connecting')).toBe('Scale connecting…');
+		expect(railLabel('grinder', 'disconnected')).toBe('Click to connect grinder');
+		expect(railLabel('grinder', 'reconnecting')).toBe('Grinder reconnecting — click to retry now');
+		expect(railLabel('grinder', 'connected')).toBe('Grinder connected — click for options');
 	});
 });
 
@@ -39,7 +49,7 @@ describe('RailDeviceButton', () => {
 		document.body.innerHTML = '';
 	});
 
-	function render(linkState: BleConnectionState) {
+	function render(linkState: BleConnectionState, device: RailDevice = 'de1', deviceName = 'DE1-ABC') {
 		const onConnect = vi.fn();
 		const onRetry = vi.fn();
 		const onDisconnect = vi.fn();
@@ -47,7 +57,7 @@ describe('RailDeviceButton', () => {
 		document.body.appendChild(target);
 		component = mount(RailDeviceButton, {
 			target,
-			props: { device: 'de1', linkState, deviceName: 'DE1-ABC', onConnect, onRetry, onDisconnect }
+			props: { device, linkState, deviceName, onConnect, onRetry, onDisconnect }
 		});
 		flushSync();
 		const button = target.querySelector<HTMLButtonElement>('button.cside-status')!;
@@ -130,5 +140,95 @@ describe('RailDeviceButton', () => {
 		r.click(document.body);
 		expect(r.target.querySelector('[role="menu"]')).toBeNull();
 		expect(r.onDisconnect).not.toHaveBeenCalled();
+	});
+
+	it('a grinder button reads Grinder and has the same menu', () => {
+		const r = render('ready', 'grinder', 'BOOKOO Motto 80');
+		expect(r.button.textContent).toContain('Grinder');
+		expect(r.dot.classList.contains('off')).toBe(false);
+		r.click(r.button);
+		const menu = r.target.querySelector<HTMLElement>('[role="menu"]')!;
+		expect(menu.getAttribute('aria-label')).toBe('Grinder options');
+		expect(menu.textContent).toContain('BOOKOO Motto 80');
+		r.click(menu.querySelector<HTMLButtonElement>('[role="menuitem"]')!);
+		expect(r.onDisconnect).toHaveBeenCalledOnce();
+	});
+});
+
+describe('RailDevices', () => {
+	const MOTTO = 'bookoo-motto-80';
+	const lib = getBeanStore();
+	const links = getGrinderLinkStore();
+	const settings = getSettingsStore();
+	let component: ReturnType<typeof mount> | null = null;
+
+	beforeAll(async () => {
+		await initTestWasm();
+	});
+
+	beforeEach(() => {
+		localStorage.clear();
+		lib.clearAll();
+		links.reload();
+		settings.reset();
+	});
+
+	afterEach(() => {
+		if (component) unmount(component);
+		component = null;
+		document.body.innerHTML = '';
+	});
+
+	function render(grinder: ConnectedGrinderView = NO_GRINDER) {
+		const app = {
+			state: {
+				current: { de1State: 'idle', scaleState: 'idle', de1Diagnostics: {}, grinder }
+			},
+			connectGrinder: vi.fn(),
+			reconnectGrinder: vi.fn(),
+			disconnectGrinder: vi.fn(),
+			retryReconnect: vi.fn()
+		};
+		const target = document.body.appendChild(document.createElement('div'));
+		component = mount(RailDevices, { target, props: { app: app as unknown as CremaApp } });
+		flushSync();
+		const labels = [...target.querySelectorAll('.cside-status-label')].map((l) => l.textContent);
+		return { app, target, labels };
+	}
+
+	function linkMotto(): void {
+		const motto = lib.addGrinder('', MOTTO)!;
+		links.link('dev-1', motto.id);
+	}
+
+	it('toggle off: the DE1 and scale only, as before', () => {
+		linkMotto();
+		expect(render().labels).toEqual(['DE1', 'Scale']);
+	});
+
+	it('toggle on without a Bluetooth grinder: the DE1 and scale only', () => {
+		lib.addGrinder('Niche Zero');
+		settings.set('grinderInDevices', true);
+		expect(render().labels).toEqual(['DE1', 'Scale']);
+	});
+
+	it('toggle on with one: a grinder button under the scale, wired to the grinder link', () => {
+		linkMotto();
+		settings.set('grinderInDevices', true);
+		const { app, target, labels } = render();
+		expect(labels).toEqual(['DE1', 'Scale', 'Grinder']);
+		const grinder = target.querySelector<HTMLButtonElement>('[aria-label="Click to connect grinder"]')!;
+		grinder.click();
+		expect(app.connectGrinder).toHaveBeenCalledOnce();
+	});
+
+	it('a reconnecting grinder is amber and retries the grinder', () => {
+		linkMotto();
+		settings.set('grinderInDevices', true);
+		const { app, target } = render({ ...NO_GRINDER, state: 'reconnecting' });
+		const button = target.querySelector<HTMLButtonElement>('[data-status="reconnecting"]')!;
+		expect(button.querySelector('.cside-status-dot')!.classList.contains('is-busy')).toBe(true);
+		button.click();
+		expect(app.retryReconnect).toHaveBeenCalledWith('grinder');
 	});
 });

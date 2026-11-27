@@ -1,6 +1,7 @@
 <script lang="ts">
 	/**
-	 * `RailDeviceButton` — one of the rail's bottom DE1 / scale status buttons.
+	 * `RailDeviceButton` — one of the rail's bottom DE1 / scale / grinder status
+	 * buttons.
 	 *
 	 * The look and the tap follow the link state (see `rail-status.ts`):
 	 * disconnected → connect; connecting → nothing; reconnecting → Retry now;
@@ -16,6 +17,7 @@
 		railCtaIcon,
 		railDotClass,
 		railLabel,
+		railShortName,
 		railStatus,
 		type RailDevice
 	} from './rail-status';
@@ -44,7 +46,7 @@
 	const status = $derived(railStatus(linkState));
 	const dot = $derived(railDotClass(status));
 	const label = $derived(railLabel(device, status));
-	const short = $derived(device === 'de1' ? 'DE1' : 'Scale');
+	const short = $derived(railShortName(device));
 	const menuId = $derived(`cside-menu-${device}`);
 
 	let open = $state(false);

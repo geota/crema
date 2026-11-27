@@ -9,12 +9,20 @@
 	 * owned grinder it is ("Linked to", or "Which grinder is this?", or "Add
 	 * … to your grinders"), Disconnect and Forget. Readings only: nothing here
 	 * writes to the grinder.
+	 *
+	 * Once one of the user's grinders connects over Bluetooth (a device links
+	 * to a live record), the card's foot offers "Show in Devices and the rail"
+	 * (off by default): a grinder row in the phone's Devices sheet and a
+	 * grinder button on the rail (`#lib/grinder/devices-entry`).
 	 */
 	import type { CremaApp } from '#lib/state/index.js';
 	import { NO_GRINDER } from '#lib/state/ui-state.svelte.js';
 	import { getBeanStore } from '#lib/bean/store.svelte.js';
 	import { getGrinderLinkStore, resolveGrinderLink } from '#lib/grinder/connected-link.svelte.js';
 	import { hasRememberedDevice } from '#lib/ble/launch-reconnect.js';
+	import { getSettingsStore } from '#lib/settings/index.js';
+	import { hasBluetoothGrinder } from '#lib/grinder/devices-entry.svelte.js';
+	import BetaChip from '#lib/components/shared/BetaChip.svelte';
 	import {
 		catalogueFor,
 		grinderProblemText,
@@ -29,6 +37,10 @@
 	const uid = $props.id();
 	const lib = getBeanStore();
 	const links = getGrinderLinkStore();
+	const settings = getSettingsStore();
+	/** The Devices / rail toggle shows only for a grinder that connects over Bluetooth. */
+	const offerInDevices = $derived(hasBluetoothGrinder());
+	const inDevices = $derived(settings.current.grinderInDevices === true);
 
 	const view = $derived(app?.state.current.grinder ?? NO_GRINDER);
 	const entry = $derived(catalogueFor(view.model));
@@ -83,7 +95,7 @@
 <section class="cgc" aria-labelledby="{uid}-title">
 	<div class="cgc-head">
 		<h2 class="cgc-title" id="{uid}-title">Connected grinder</h2>
-		<span class="cgc-beta">Beta</span>
+		<BetaChip />
 		<span class="cgc-grow"></span>
 		<span class={['cgc-status', { live: view.state === 'ready' }]} role="status">{status}</span>
 	</div>
@@ -176,6 +188,29 @@
 			</button>
 		{/if}
 	</div>
+
+	{#if offerInDevices}
+		<div class="cgc-toggle">
+			<span class="cgc-toggle-text">
+				<span class="cgc-toggle-title" id="{uid}-in-devices">Show in Devices and the rail</span>
+				<span class="cgc-muted" id="{uid}-in-devices-help">
+					Adds a grinder row to the Devices sheet and a grinder dot on tablet and web. Off by
+					default; the grinder still connects and fills in the grind either way.
+				</span>
+			</span>
+			<button
+				type="button"
+				role="switch"
+				class="cgc-switch"
+				aria-checked={inDevices}
+				aria-labelledby="{uid}-in-devices"
+				aria-describedby="{uid}-in-devices-help"
+				onclick={() => settings.set('grinderInDevices', !inDevices)}
+			>
+				<span class={['qmini-tog', { on: inDevices }]} aria-hidden="true"></span>
+			</button>
+		</div>
+	{/if}
 </section>
 
 <style>
@@ -196,16 +231,6 @@
 		font-weight: 400;
 		font-size: 18px;
 		color: var(--fg-1);
-	}
-	.cgc-beta {
-		font-size: 11px;
-		font-weight: 600;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: var(--fg-accent);
-		border: 1px solid currentColor;
-		border-radius: var(--radius-pill);
-		padding: 2px 8px;
 	}
 	.cgc-grow {
 		flex: 1;
@@ -311,6 +336,41 @@
 	.cgc-field select:focus {
 		outline: none;
 		border-color: var(--copper-400);
+	}
+	.cgc-toggle {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding-top: 14px;
+		border-top: 1px solid var(--hairline);
+	}
+	.cgc-toggle-text {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+	.cgc-toggle-title {
+		font-size: 14px;
+		font-weight: 500;
+		color: var(--fg-1);
+	}
+	.cgc-switch {
+		flex: none;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 44px;
+		min-height: 44px;
+		padding: 0;
+		border: 0;
+		background: transparent;
+		cursor: pointer;
+	}
+	.cgc-switch:focus-visible {
+		outline: none;
+		box-shadow: var(--shadow-focus);
 	}
 	.cgc-btn {
 		min-height: 44px;

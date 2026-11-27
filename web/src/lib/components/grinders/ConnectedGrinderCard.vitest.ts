@@ -161,6 +161,33 @@ describe('the Connected grinder card', () => {
 	});
 });
 
+describe('Show in Devices and the rail', () => {
+	const toggle = (target: HTMLElement) =>
+		[...target.querySelectorAll<HTMLButtonElement>('[role="switch"]')].find((b) =>
+			b.getAttribute('aria-labelledby')?.endsWith('-in-devices')
+		) ?? null;
+
+	it('is not offered until one of the grinders connects over Bluetooth', () => {
+		lib.addGrinder('Niche Zero');
+		const { target } = render(NO_GRINDER);
+		expect(target.textContent).not.toContain('Show in Devices and the rail');
+		expect(toggle(target)).toBeNull();
+	});
+
+	it('is offered, off by default, once a device links to a grinder, and turns on', () => {
+		const motto = lib.addGrinder('', MOTTO)!;
+		links.link('dev-1', motto.id);
+		const { target } = render(live());
+		const sw = toggle(target)!;
+		expect(target.textContent).toContain('Show in Devices and the rail');
+		expect(sw.getAttribute('aria-checked')).toBe('false');
+		sw.click();
+		flushSync();
+		expect(getSettingsStore().current.grinderInDevices).toBe(true);
+		expect(sw.getAttribute('aria-checked')).toBe('true');
+	});
+});
+
 describe('the card’s words', () => {
 	const entry = { id: MOTTO, name: 'BOOKOO Motto 80', maker: 'BOOKOO', model: 'Motto 80' } as never;
 

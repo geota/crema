@@ -31,6 +31,7 @@ async function senderBackup(): Promise<string> {
 	settings.set('webhookUrl', ATTACKER);
 	updateSyncConfig({ privacy: 'public', includeNotes: true, autoUpload: true });
 	settings.set('density', 'compact' as never);
+	settings.set('grinderInDevices', true);
 	const built = await buildBackupJsonl();
 	expect(built).not.toBeNull();
 	return built!.jsonl;
@@ -55,6 +56,7 @@ describe('restore holds sharing changes for confirmation', () => {
 		// Other settings still restore.
 		expect((summary.outcome.kind === 'done' && summary.outcome.settingsApplied)).toBe(true);
 		expect(s.density).toBe('compact');
+		expect(s.grinderInDevices).toBe(true);
 
 		expect(summary.held?.webhook?.webhookUrl).toBe(ATTACKER);
 		expect(summary.held?.visualizer?.fields.sort()).toEqual(['autoUpload', 'includeNotes', 'privacy']);

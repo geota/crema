@@ -1,5 +1,5 @@
 /**
- * The rail's DE1 / scale status buttons — state → look → tap action.
+ * The rail's DE1 / scale / grinder status buttons — state → look → tap action.
  *
  * Pure so the policy is unit-testable without mounting the rail:
  * - **disconnected** (idle / disconnected / failed): dot off, tap connects;
@@ -11,7 +11,12 @@
 
 import type { BleConnectionState } from '#lib/ble/connection-state.js';
 
-export type RailDevice = 'de1' | 'scale';
+export type RailDevice = 'de1' | 'scale' | 'grinder';
+
+/** The device's short name: the button's label and a sentence's start. */
+export function railShortName(device: RailDevice): string {
+	return device === 'de1' ? 'DE1' : device === 'scale' ? 'Scale' : 'Grinder';
+}
 
 export type RailStatus = 'disconnected' | 'connecting' | 'reconnecting' | 'connected';
 
@@ -71,8 +76,8 @@ export function railCtaIcon(status: RailStatus): string {
 
 /** Tooltip + accessible name for the status button. */
 export function railLabel(device: RailDevice, status: RailStatus): string {
-	const Name = device === 'de1' ? 'DE1' : 'Scale';
-	const name = device === 'de1' ? 'DE1' : 'scale';
+	const Name = railShortName(device);
+	const name = device === 'de1' ? Name : Name.toLowerCase();
 	switch (status) {
 		case 'disconnected':
 			return `Click to connect ${name}`;
