@@ -7,6 +7,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-11-27
+
+• The grinder in Devices and the rail, opt-in (beta).
+• A damaged shot history log is kept aside, and damaged pairing keys point to Reset pairing key.
+
 ### Added
 
 - **The grinder in Devices and the rail** — an opt-in switch, "Show in
@@ -1921,3 +1926,4 @@ shot state machine, and domain model.
 [0.11.0]: https://github.com/geota/crema/releases/tag/v0.11.0
 [0.12.0]: https://github.com/geota/crema/releases/tag/v0.12.0
 [0.12.1]: https://github.com/geota/crema/releases/tag/v0.12.1
+[0.13.0]: https://github.com/geota/crema/releases/tag/v0.13.0
