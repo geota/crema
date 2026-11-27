@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.grinderRailDot
 import kotlinx.coroutines.launch
 import coffee.crema.visualizer.pullWaitingLine
 import coffee.crema.ui.LiveReadouts
@@ -191,6 +192,7 @@ fun SettingsScreen(
             onConnect = onConnect,
             devicesTab = ui.devicesTab,
             onOpenDevicesTab = vm::openDevicesTab,
+            grinderDot = ui.grinderRailDot(),
         )
         Row(Modifier.weight(1f).fillMaxHeight()) {
             // ── Section nav (248dp) ──────────────────────────────────────────

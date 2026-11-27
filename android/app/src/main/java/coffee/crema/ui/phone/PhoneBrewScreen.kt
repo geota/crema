@@ -343,6 +343,7 @@ fun PhoneBrewScreen(
             onPairAgain = { vm.pairAgain(); devicesOpen = false },
             onRetry = vm::retryReconnectNow,
             onDismiss = { devicesOpen = false },
+            grinder = remember(vm) { vm.grinderDeviceHooks() },
         )
     }
     if (menuOpen) {

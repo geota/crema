@@ -1,6 +1,7 @@
 package coffee.crema.ui.components
 
 import coffee.crema.ui.fmt
+import coffee.crema.ui.GrinderDot
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -2351,6 +2352,8 @@ fun CremaNavigationRail(
     onConnect: (String) -> Unit = {},
     devicesTab: String = "scale",
     onOpenDevicesTab: (String) -> Unit = {},
+    /** The grinder's dot under Scale (`MainUiState.grinderRailDot`); null = none. */
+    grinderDot: GrinderDot? = null,
 ) {
     // Size by the rail's own measured height (not screenHeightDp) so split-screen,
     // freeform windows and a landscape phone all get the layout that fits.
@@ -2365,8 +2368,8 @@ fun CremaNavigationRail(
             onNav(item.id)
         }
         when (density) {
-            RailDensity.Regular -> RegularRail(items, nav, machineConnected, scaleConnected, onConnect, layout.itemHeightDp)
-            RailDensity.Compact -> CompactRail(items, nav, machineConnected, scaleConnected, onConnect)
+            RailDensity.Regular -> RegularRail(items, nav, machineConnected, scaleConnected, onConnect, layout.itemHeightDp, grinderDot)
+            RailDensity.Compact -> CompactRail(items, nav, machineConnected, scaleConnected, onConnect, grinderDot)
         }
     }
 }
@@ -2385,6 +2388,7 @@ private fun RegularRail(
     onConnect: (String) -> Unit,
     /** A shorter labelled item, so a split rail fits ([railLayout]); null = M3's height. */
     itemHeightDp: Float? = null,
+    grinderDot: GrinderDot? = null,
 ) {
     val containerColor = NavigationRailDefaults.ContainerColor
     NavigationRail(
@@ -2429,6 +2433,7 @@ private fun RegularRail(
         // Connection pips — pinned at the bottom, always visible.
         ConnectionPip("DE1", machineConnected) { onConnect("machine") }
         ConnectionPip("Scale", scaleConnected) { onConnect("scale") }
+        grinderDot?.let { GrinderPip(it, compact = false) { onConnect("grinder") } }
         Spacer(Modifier.height(12.dp))
     }
 }
@@ -2447,6 +2452,7 @@ private fun CompactRail(
     machineConnected: Boolean,
     scaleConnected: Boolean,
     onConnect: (String) -> Unit,
+    grinderDot: GrinderDot? = null,
 ) {
     val containerColor = NavigationRailDefaults.ContainerColor
     // No fixed width: the rail wraps its content (the 96dp pip row) plus any start
@@ -2467,6 +2473,8 @@ private fun CompactRail(
                 ConnectionPip("DE1", machineConnected, compact = true) { onConnect("machine") }
                 ConnectionPip("Scale", scaleConnected, compact = true) { onConnect("scale") }
             }
+            // The grinder's dot goes on a row of its own, so the rail keeps its width.
+            grinderDot?.let { GrinderPip(it, compact = true) { onConnect("grinder") } }
         }
     }
 }
@@ -2520,6 +2528,11 @@ private fun Modifier.railBottomFade(scroll: ScrollState, color: Color): Modifier
     }
 }
 
+/** The grinder's rail dot: green connected, amber connecting or reconnecting, grey off. */
+@Composable
+private fun GrinderPip(dot: GrinderDot, compact: Boolean, onClick: () -> Unit) =
+    ConnectionPip("Grinder", dot == GrinderDot.CONNECTED, compact = compact, connecting = dot == GrinderDot.CONNECTING, onClick = onClick)
+
 // Rail connection status (proto .m3-rail-status): a 56dp-wide VERTICAL column —
 // status dot ABOVE a 9sp uppercase label — that connects/disconnects on tap.
 // Connected = green success dot inside a soft glow ring (proto box-shadow
@@ -2528,7 +2541,14 @@ private fun Modifier.railBottomFade(scroll: ScrollState, color: Color): Modifier
 // .m3-rail-status-cta, shown via `:not(.is-connected)`); Android has no hover,
 // so show-when-disconnected is the faithful mapping of that rule.
 @Composable
-private fun ConnectionPip(label: String, connected: Boolean, compact: Boolean = false, onClick: () -> Unit) {
+private fun ConnectionPip(
+    label: String,
+    connected: Boolean,
+    compact: Boolean = false,
+    /** Coming up or coming back: an amber dot, no connect cue (the grinder only). */
+    connecting: Boolean = false,
+    onClick: () -> Unit,
+) {
     val tel = CremaTheme.telemetry
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -2561,10 +2581,17 @@ private fun ConnectionPip(label: String, connected: Boolean, compact: Boolean = 
                 }
                 Box(
                     Modifier.size(8.dp).clip(CircleShape)
-                        .background(if (connected) tel.success else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f)),
+                        .background(
+                            when {
+                                connected -> tel.success
+                                connecting -> warningColor()
+                                else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f)
+                            },
+                        ),
                 )
             }
             val cta = when {
+                connecting -> null
                 !connected -> "bluetooth" // tap-to-connect cue, always shown at rest
                 showCheck -> "check" // connected + hover/press → tap-to-disconnect
                 else -> null

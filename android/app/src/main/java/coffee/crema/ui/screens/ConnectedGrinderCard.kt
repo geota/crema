@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import coffee.crema.core.GrinderReading
 import coffee.crema.core.GrinderState
 import coffee.crema.core.PresetSlot
+import coffee.crema.ui.GrinderLinkAction
 import coffee.crema.ui.GrinderLinkStatus
 import coffee.crema.ui.LiveReadouts
 import coffee.crema.ui.MainUiState
@@ -27,6 +28,7 @@ import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaSettingsPill
 import coffee.crema.ui.components.Eyebrow
+import coffee.crema.ui.grinderLinkAction
 import coffee.crema.ui.grinderModelName
 import coffee.crema.ui.linkedGrinder
 
@@ -82,10 +84,7 @@ fun ConnectedGrinderCard(vm: MainViewModel, ui: MainUiState, modifier: Modifier 
     val g = ui.connectedGrinder
     val modelName = grinderModelName(g.model ?: coffee.crema.ui.GrinderController.GRINDER_MODEL_FALLBACK)
     val remote = ui.proxyRole == "secondary"
-    val linkedUp = g.status !in setOf(
-        GrinderLinkStatus.OFF, GrinderLinkStatus.NOT_FOUND, GrinderLinkStatus.UPDATE_FIRMWARE,
-        GrinderLinkStatus.MISMATCH, GrinderLinkStatus.NO_DATA,
-    ) && !(g.status == GrinderLinkStatus.NO_ANSWER && ui.connectedGrinderAddress == null)
+    val action = grinderLinkAction(g.status, ui.connectedGrinderAddress)
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -163,15 +162,17 @@ fun ConnectedGrinderCard(vm: MainViewModel, ui: MainUiState, modifier: Modifier 
                 }
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (linkedUp) {
-                    CremaButton(onClick = vm::disconnectGrinder, variant = CremaButtonVariant.Text, danger = true, label = "Disconnect")
-                    if (g.status == GrinderLinkStatus.RECONNECTING) {
-                        CremaButton(onClick = vm::retryGrinder, variant = CremaButtonVariant.Text, label = "Retry now")
+                when (action) {
+                    GrinderLinkAction.DISCONNECT -> {
+                        CremaButton(onClick = vm::disconnectGrinder, variant = CremaButtonVariant.Text, danger = true, label = "Disconnect")
+                        if (g.status == GrinderLinkStatus.RECONNECTING) {
+                            CremaButton(onClick = vm::retryGrinder, variant = CremaButtonVariant.Text, label = "Retry now")
+                        }
                     }
-                } else if (g.status == GrinderLinkStatus.NO_DATA) {
-                    CremaButton(onClick = vm::reconnectGrinder, variant = CremaButtonVariant.Tonal, icon = "bluetooth", label = "Reconnect")
-                } else {
-                    CremaButton(onClick = vm::connectGrinder, variant = CremaButtonVariant.Tonal, icon = "bluetooth", label = "Connect")
+                    GrinderLinkAction.RECONNECT ->
+                        CremaButton(onClick = vm::reconnectGrinder, variant = CremaButtonVariant.Tonal, icon = "bluetooth", label = "Reconnect")
+                    GrinderLinkAction.CONNECT ->
+                        CremaButton(onClick = vm::connectGrinder, variant = CremaButtonVariant.Tonal, icon = "bluetooth", label = "Connect")
                 }
                 if (ui.rememberedGrinderAddress != null) {
                     CremaButton(onClick = vm::forgetGrinder, variant = CremaButtonVariant.Text, label = "Forget")

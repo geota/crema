@@ -123,6 +123,7 @@ internal class SettingsController(
             rememberedGrinderName = p.grinderName,
             grinderLinkedAddress = p.grinderLinkedAddress,
             grinderLinkedId = p.grinderLinkedId,
+            grinderInDevices = p.grinderInDevices,
         ) }
     }
 
@@ -159,6 +160,7 @@ internal class SettingsController(
             brewCueSound = p.brewCueSound,
             brewCueHaptics = p.brewCueHaptics,
             grindAutoSave = p.grindAutoSave,
+            grinderInDevices = p.grinderInDevices,
             grinderModel = p.grinderModel,
             baristaName = p.baristaName,
             showDebugPanel = p.showDebugPanel,
@@ -259,6 +261,7 @@ internal class SettingsController(
         grinderName = uiState().rememberedGrinderName,
         grinderLinkedAddress = uiState().grinderLinkedAddress,
         grinderLinkedId = uiState().grinderLinkedId,
+        grinderInDevices = uiState().grinderInDevices,
         de1CompanionId = companionIdFor(connectionState().rememberedDe1Address),
         scaleCompanionId = companionIdFor(connectionState().rememberedScaleAddress),
         companionDeclined = uiState().companionDeclined,
@@ -355,6 +358,12 @@ internal class SettingsController(
     /** Devices → Grinder "Save each shot's grind to its bag" (#488). Personal, per device. */
     fun setGrindAutoSave(enabled: Boolean) {
         updateUi { it.copy(grindAutoSave = enabled) }
+        persistPrefs()
+    }
+
+    /** Devices → Grinder "Show in Devices and the rail". Personal, per device. */
+    fun setGrinderInDevices(enabled: Boolean) {
+        updateUi { it.copy(grinderInDevices = enabled) }
         persistPrefs()
     }
 

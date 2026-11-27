@@ -58,6 +58,7 @@ import coffee.crema.ui.components.GrinderAddBox
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.liveGrinders
 import coffee.crema.ui.linkedGrinder
+import coffee.crema.ui.hasBluetoothGrinder
 import coffee.crema.beans.newestShotGrind
 import coffee.crema.ui.presetLabel
 import coffee.crema.ui.remoteAutoSaveNote
@@ -95,6 +96,21 @@ fun DevicesGrinderContent(vm: MainViewModel, ui: MainUiState, wide: Boolean, mod
     val list: @Composable (Modifier) -> Unit = { m ->
         Column(m, verticalArrangement = Arrangement.spacedBy(10.dp)) {
             ConnectedGrinderCard(vm, ui)
+            // "Show in Devices and the rail": only for someone whose grinder
+            // connects over Bluetooth; off, the Devices sheet and rail stay as they were.
+            if (ui.hasBluetoothGrinder) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Show in Devices and the rail", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Adds a grinder row to the Devices sheet and a grinder dot on the tablet rail. The grinder still connects and fills in the grind either way.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    CremaSwitch(ui.grinderInDevices, vm::setGrinderInDevices)
+                }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Your grinders", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                 CremaButton(onClick = { adding = !adding }, variant = CremaButtonVariant.Tonal, icon = "plus", label = "Add grinder")

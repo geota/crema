@@ -160,3 +160,80 @@ fun MainUiState.linkedGrinder(): Grinder? {
     if (!address.equals(grinderLinkedAddress, ignoreCase = true)) return null
     return grinders.firstOrNull { it.id == id && it.isLive }
 }
+
+/** Catalogue models Crema connects to over Bluetooth (grinder-ble): today the Motto 80. */
+val BLUETOOTH_GRINDER_MODELS: Set<String> = setOf(GrinderController.GRINDER_MODEL_FALLBACK)
+
+/**
+ * One of the user's grinders connects over Bluetooth: a live record of a
+ * Bluetooth model, or the record a connected grinder is linked to. Never on a
+ * remote, where the hub holds the grinder. Gates the "Show in Devices and the
+ * rail" switch: someone with only a Niche Zero never sees it.
+ */
+val MainUiState.hasBluetoothGrinder: Boolean
+    get() = proxyRole != "secondary" &&
+        grinders.any { it.isLive && (it.presetId in BLUETOOTH_GRINDER_MODELS || it.id == grinderLinkedId) }
+
+/** The Devices sheet's grinder row and the rail's grinder dot show: the switch
+ *  is on and a Bluetooth grinder is the user's. Otherwise both stay away. */
+val MainUiState.showGrinderDevice: Boolean
+    get() = grinderInDevices && hasBluetoothGrinder
+
+/** The link's main action, as the grinder card and the Devices row offer it. */
+enum class GrinderLinkAction { CONNECT, RECONNECT, DISCONNECT }
+
+/** [GrinderLinkAction] for [status]; [address] is the connected grinder's
+ *  ([MainUiState.connectedGrinderAddress]). A link that is up, or coming up,
+ *  disconnects; one that stopped sending data reconnects; the rest connect. */
+fun grinderLinkAction(status: GrinderLinkStatus, address: String?): GrinderLinkAction = when {
+    status == GrinderLinkStatus.NO_DATA -> GrinderLinkAction.RECONNECT
+    status in setOf(
+        GrinderLinkStatus.OFF, GrinderLinkStatus.NOT_FOUND, GrinderLinkStatus.UPDATE_FIRMWARE, GrinderLinkStatus.MISMATCH,
+    ) -> GrinderLinkAction.CONNECT
+    status == GrinderLinkStatus.NO_ANSWER && address == null -> GrinderLinkAction.CONNECT
+    else -> GrinderLinkAction.DISCONNECT
+}
+
+/** The grinder's status dot: green, amber or grey. */
+enum class GrinderDot { CONNECTED, CONNECTING, OFF }
+
+/** [GrinderDot] for [status]: green once linked, amber while it's coming up or
+ *  coming back, grey otherwise. */
+fun grinderDot(status: GrinderLinkStatus): GrinderDot = when (status) {
+    GrinderLinkStatus.LIVE, GrinderLinkStatus.WAITING -> GrinderDot.CONNECTED
+    GrinderLinkStatus.SCANNING, GrinderLinkStatus.CONNECTING, GrinderLinkStatus.RECONNECTING -> GrinderDot.CONNECTING
+    else -> GrinderDot.OFF
+}
+
+/**
+ * The Devices row's status line. While connected it's the grind
+ * ("Connected · Grind 2.4": the followed value, else [liveDial], the reading's
+ * dial), never the battery; otherwise short words for the link.
+ */
+fun grinderDeviceStatus(status: GrinderLinkStatus, followGrind: String?, liveDial: String?): String =
+    when (status) {
+        GrinderLinkStatus.LIVE, GrinderLinkStatus.WAITING -> {
+            val grind = followGrind ?: liveDial
+            if (grind != null) "Connected · Grind $grind" else "Connected"
+        }
+        GrinderLinkStatus.OFF -> "Not connected"
+        GrinderLinkStatus.SCANNING -> "Scanning…"
+        GrinderLinkStatus.CONNECTING -> "Connecting…"
+        GrinderLinkStatus.RECONNECTING -> "Reconnecting…"
+        GrinderLinkStatus.NOT_FOUND -> "Not found"
+        GrinderLinkStatus.NO_ANSWER -> "Not answering"
+        GrinderLinkStatus.NO_DATA -> "Not sending data"
+        GrinderLinkStatus.UPDATE_FIRMWARE -> "Update firmware"
+        GrinderLinkStatus.MISMATCH -> "Not a supported grinder"
+    }
+
+/** The name the Devices row shows: the linked record's, else the remembered
+ *  or connected model's ("Motto 80"). Never the serial. */
+fun MainUiState.grinderDeviceName(): String =
+    linkedGrinder()?.name
+        ?: grinderLinkedId?.let { id -> grinders.firstOrNull { it.id == id && it.isLive }?.name }
+        ?: grinders.firstOrNull { it.isLive && it.presetId in BLUETOOTH_GRINDER_MODELS }?.name
+        ?: grinderModelName(connectedGrinder.model ?: GrinderController.GRINDER_MODEL_FALLBACK)
+
+/** The rail's grinder dot, or null for none (the rail stays as it was). */
+fun MainUiState.grinderRailDot(): GrinderDot? = if (showGrinderDevice) grinderDot(connectedGrinder.status) else null

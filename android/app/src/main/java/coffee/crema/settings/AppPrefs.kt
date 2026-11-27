@@ -169,6 +169,11 @@ data class AppPrefs(
     val brewCueHaptics: Boolean? = null,
     /** "Save each shot's grind to its bag" (#488, Devices → Grinder). Null = never set → off. */
     val grindAutoSave: Boolean? = null,
+    /** "Show in Devices and the rail" (Devices → Grinder): a Bluetooth
+     *  grinder gets a row in the Devices sheet and a dot on the tablet rail.
+     *  Default OFF. Platform extra (web keeps its own); a backup carries it
+     *  beside `qcGrind`, re-applied only on Android. */
+    val grinderInDevices: Boolean = false,
     // ── Machine sleep ────────────────────────────────────────────────────────
     /** "Sleep after": idle minutes before Crema puts the DE1 to sleep — one
      *  of the core's `idleSleepChoices()`, 0 = Never (de1app
@@ -545,6 +550,7 @@ private data class PersistedPrefs(
     val grinderName: String? = null,
     val grinderLinkedAddress: String? = null,
     val grinderLinkedId: String? = null,
+    val grinderInDevices: Boolean = false,
     val proxyRole: String = "normal",
     val proxyPrimaryHost: String = "",
     val proxyPrimaryPort: Int = 0,
@@ -580,6 +586,7 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     grinderName = grinderName,
     grinderLinkedAddress = grinderLinkedAddress,
     grinderLinkedId = grinderLinkedId,
+    grinderInDevices = grinderInDevices,
     proxyRole = proxyRole,
     proxyPrimaryHost = proxyPrimaryHost,
     proxyPrimaryPort = proxyPrimaryPort,
@@ -614,6 +621,7 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     grinderName = grinderName,
     grinderLinkedAddress = grinderLinkedAddress,
     grinderLinkedId = grinderLinkedId,
+    grinderInDevices = grinderInDevices,
     proxyRole = proxyRole,
     proxyPrimaryHost = proxyPrimaryHost,
     proxyPrimaryPort = proxyPrimaryPort,
