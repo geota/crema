@@ -4,13 +4,28 @@
 	 * `PhoneDevicesSheet`): the DE1 and scale with their link state and the one
 	 * action that state allows. The states and the tap policy are the rail's
 	 * (`rail-status.ts`), and the actions call the same `CremaApp` methods.
+	 *
+	 * A Grinder row (Beta) follows the scale when "Show in Devices and the
+	 * rail" is on and one of the user's grinders connects over Bluetooth
+	 * (`#lib/grinder/devices-entry`). While connected its status names the
+	 * grind, never the battery.
 	 */
 	import BluetoothSlashIcon from 'phosphor-svelte/lib/BluetoothSlashIcon';
+	import FunnelIcon from 'phosphor-svelte/lib/FunnelIcon';
 	import ScalesIcon from 'phosphor-svelte/lib/ScalesIcon';
 	import SlidersHorizontalIcon from 'phosphor-svelte/lib/SlidersHorizontalIcon';
 	import { connectBlocker } from '#lib/ble/connect-blocker.js';
 	import type { CremaApp } from '#lib/state/index.js';
 	import { railAction, railStatus, type RailDevice, type RailStatus } from '#lib/components/rail-status.js';
+	import { NO_GRINDER } from '#lib/state/ui-state.svelte.js';
+	import { getGrinderLinkStore } from '#lib/grinder/connected-link.svelte.js';
+	import {
+		grinderDeviceDetail,
+		grinderDeviceName,
+		grinderInDevices,
+		linkedGrinderRecords
+	} from '#lib/grinder/devices-entry.svelte.js';
+	import BetaChip from '#lib/components/shared/BetaChip.svelte';
 	import PhoneSheet from './PhoneSheet.svelte';
 
 	let { app, open, onClose }: { app: CremaApp | null; open: boolean; onClose: () => void } =
@@ -29,6 +44,20 @@
 
 	const rows = $derived.by(() => {
 		const battery = ui?.scaleBattery;
+		const grinder = ui?.grinder ?? NO_GRINDER;
+		const grinderRow = grinderInDevices()
+			? [
+					{
+						device: 'grinder' as const,
+						kind: 'Grinder',
+						name: grinderDeviceName(grinder, getGrinderLinkStore().links, linkedGrinderRecords()),
+						icon: FunnelIcon,
+						status: railStatus(grinder.state),
+						detail: grinderDeviceDetail(grinder),
+						beta: true
+					}
+				]
+			: [];
 		return [
 			{
 				device: 'de1' as const,
@@ -36,7 +65,8 @@
 				name: ui?.de1Diagnostics.deviceName ?? 'Decent DE1',
 				icon: SlidersHorizontalIcon,
 				status: railStatus(ui?.de1State ?? 'idle'),
-				detail: null
+				detail: null,
+				beta: false
 			},
 			{
 				device: 'scale' as const,
@@ -44,18 +74,28 @@
 				name: ui?.scaleName ?? 'Scale',
 				icon: ScalesIcon,
 				status: railStatus(ui?.scaleState ?? 'idle'),
-				detail: battery != null ? `${Math.round(battery)}%` : null
-			}
+				detail: battery != null ? `${Math.round(battery)}%` : null,
+				beta: false
+			},
+			...grinderRow
 		];
 	});
 
-	/** Connect from the tap, so Web Bluetooth's user gesture holds. */
+	/**
+	 * Connect from the tap, so Web Bluetooth's user gesture holds. A grinder
+	 * that stopped sending data reconnects the same device, as its card does.
+	 */
 	function connect(device: RailDevice): void {
 		if (!app) return;
-		void (device === 'de1' ? app.connectDe1() : app.connectScale());
+		if (device === 'de1') void app.connectDe1();
+		else if (device === 'scale') void app.connectScale();
+		else if (ui?.grinder.problem?.kind === 'no-data') void app.reconnectGrinder();
+		else void app.connectGrinder();
 	}
 	function disconnect(device: RailDevice): void {
-		void (device === 'de1' ? app?.disconnectDe1() : app?.disconnectScale());
+		if (device === 'de1') void app?.disconnectDe1();
+		else if (device === 'scale') void app?.disconnectScale();
+		else void app?.disconnectGrinder();
 	}
 </script>
 
@@ -76,7 +116,7 @@
 		<div class="pdev-row">
 			<span class={['pdev-tile', { 'is-on': on }]}><RowIcon aria-hidden="true" /></span>
 			<div class="pdev-text">
-				<span class="pdev-kind">{row.kind}</span>
+				<span class="pdev-kind">{row.kind}{#if row.beta}<BetaChip small />{/if}</span>
 				<span class="pdev-name">{row.name}</span>
 				<span class="pdev-stat">
 					<span class={['pdev-dot', { 'is-on': on }]}></span>
@@ -163,6 +203,9 @@
 		min-width: 0;
 	}
 	.pdev-kind {
+		display: flex;
+		align-items: center;
+		gap: 6px;
 		font-family: var(--font-sans);
 		font-size: 9.5px;
 		font-weight: 600;
