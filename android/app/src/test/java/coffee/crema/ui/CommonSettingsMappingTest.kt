@@ -32,7 +32,7 @@ class CommonSettingsMappingTest {
         grinderModel = "Niche", baristaName = "Ana", suppressDe1Sleep = true, idleSleepMin = 60u,
         qcSteamTimeS = 30f, qcSteamFlowMlS = 1.6f, qcSteamTempC = 150f, qcHotWaterTempC = 85f, qcHotWaterVolumeMl = 200f,
         qcHotWaterMode = HotWaterMode.Time, qcHotWaterTimeS = 45f, qcHotWaterTimeNoLimit = true, qcHotWaterRatio = 2.5f,
-        qcFlushTimeS = 6f, qcFlushTempC = 93f, grindAutoSave = true,
+        qcFlushTimeS = 6f, qcFlushTempC = 93f, grindAutoSave = true, grinderInDevices = true,
     )
 
     @Test

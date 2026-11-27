@@ -194,6 +194,16 @@ class DamagedWalTest {
         assertEquals(3, keptAside(wal).size)
     }
 
+    @Test fun `the copy just made is kept even when older copies are named later (the clock went back)`() {
+        val db = File(app.cacheDir, "z.db")
+        val wal = File(db.path + "-wal")
+        val future = System.currentTimeMillis() + 86_400_000L
+        val old = (1L..3L).map { File(wal.path + ".corrupt-${future + it}").apply { writeText("old $it") } }
+        wal.writeBytes(ByteArray(64))
+        val kept = DamagedWal.keepAsideIfDamaged(db) {}!!
+        assertEquals(setOf(kept, old[2], old[1]), keptAside(wal).toSet())
+    }
+
     // ── The checkpoint after a save ─────────────────────────────────────────
 
     @Test fun `a saved shot is in history-db's main file, not only its -wal`() = runBlocking {

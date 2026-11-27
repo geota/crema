@@ -38,7 +38,9 @@ internal object DamagedWal {
             val dest = nextCopy(wal)
             copy = dest
             copyFile(wal, dest)
-            runCatching { prune(wal) }
+            // Made: a failure after this point leaves the copy in place.
+            copy = null
+            runCatching { prune(wal, keep = dest) }
             log("${wal.name} has a damaged header: SQLite will discard it, so it was copied to ${dest.name}")
             KeptAsideNotices.report(KeptAside(WHAT, dest))
             dest
@@ -89,7 +91,10 @@ internal object DamagedWal {
         (wal.parentFile?.listFiles { f -> f.name.startsWith(wal.name + CORRUPT) } ?: emptyArray())
             .sortedByDescending { it.name.substringAfterLast('-').toLongOrNull() ?: 0L }
 
-    private fun prune(wal: File) = copies(wal).drop(SafeFile.MAX_KEPT).forEach { it.delete() }
+    /** Keep [keep] (the copy just made, whatever its name sorts as) and the
+     *  newest others up to [SafeFile.MAX_KEPT] in all. */
+    private fun prune(wal: File, keep: File) =
+        copies(wal).filter { it != keep }.drop(SafeFile.MAX_KEPT - 1).forEach { it.delete() }
 
     private fun sameBytes(a: File, b: File): Boolean {
         if (a.length() != b.length()) return false

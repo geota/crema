@@ -380,8 +380,9 @@ export interface Settings {
 	 * Devices → Grinder's "Show in Devices and the rail" (beta): a grinder row
 	 * in the phone's Devices sheet and a grinder button on the rail, for a
 	 * grinder that connects over Bluetooth. Off by default; the grinder
-	 * connects and fills in the grind either way. Web only, so it rides with
-	 * the web extras (`_shell: 'web'` in a backup).
+	 * connects and fills in the grind either way. Shared with Android
+	 * (`CommonSettings.grinderInDevices`, unset when off), so a backup
+	 * restores it on either shell.
 	 */
 	grinderInDevices: boolean;
 	/** Show a debug / event-log panel (BLE diagnostics). */
@@ -404,8 +405,7 @@ const PLATFORM_DEFAULTS = {
 		scaleConnected: false,
 		de1Connected: false
 	},
-	smoothPressure: true,
-	grinderInDevices: false
+	smoothPressure: true
 } as const satisfies Pick<Settings, (typeof PLATFORM_KEYS)[number]>;
 
 /** The web `Settings` fields that come from the core's `CommonSettings`. */
@@ -439,6 +439,7 @@ const COMMON_KEYS = [
 	'keepScreenOnBrew',
 	'brewCueSound',
 	'grindAutoSave',
+	'grinderInDevices',
 	'brewCueHaptics',
 	'qcSteamTimeS',
 	'qcSteamFlowMlS',
@@ -518,8 +519,7 @@ const PLATFORM_KEYS = [
 	'webhookEnabled',
 	'webhookUrl',
 	'webhookEvents',
-	'smoothPressure',
-	'grinderInDevices'
+	'smoothPressure'
 ] as const satisfies ReadonlyArray<keyof Settings>;
 
 /** The web-only settings (the non-`CommonSettings` extras) as a plain record —
@@ -557,6 +557,7 @@ export function settingsToCommon(s: Settings): CommonSettings {
 		// Only an explicit choice travels — unset stays unset.
 		brewCueSound: s.brewCueSound ?? undefined,
 		grindAutoSave: s.grindAutoSave ?? undefined,
+		grinderInDevices: s.grinderInDevices ? true : undefined,
 		brewCueHaptics: s.brewCueHaptics ?? undefined,
 		showDebugPanel: s.showDebugPanel,
 		defaultDoseG: s.defaultDoseG,
@@ -651,6 +652,7 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		keepScreenOnBrew: c.keepScreenOnBrew,
 		brewCueSound: c.brewCueSound ?? null,
 		grindAutoSave: c.grindAutoSave ?? null,
+		grinderInDevices: c.grinderInDevices === true,
 		brewCueHaptics: c.brewCueHaptics ?? null,
 		showDebugPanel: c.showDebugPanel,
 		defaultDoseG: c.defaultDoseG,

@@ -2065,10 +2065,7 @@ class LibraryController(
                     if (!extras) {
                         withCommon
                     } else {
-                        withCommon.copy(
-                            qcGrind = p.qcGrind ?: withCommon.qcGrind,
-                            grinderInDevices = p.grinderInDevices ?: withCommon.grinderInDevices,
-                        )
+                        withCommon.copy(qcGrind = p.qcGrind ?: withCommon.qcGrind)
                     }
                 } ?: p.prefs?.takeIf { extras }
                 if (target != null) ok = deps.restoreSettings(target) && ok
