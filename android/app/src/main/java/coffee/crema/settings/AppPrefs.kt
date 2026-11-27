@@ -171,8 +171,8 @@ data class AppPrefs(
     val grindAutoSave: Boolean? = null,
     /** "Show in Devices and the rail" (Devices → Grinder): a Bluetooth
      *  grinder gets a row in the Devices sheet and a dot on the tablet rail.
-     *  Default OFF. Platform extra (web keeps its own); a backup carries it
-     *  beside `qcGrind`, re-applied only on Android. */
+     *  Default OFF. Shared ([CommonSettings.grinderInDevices]), so a backup
+     *  restores it on either shell, off as well as on. */
     val grinderInDevices: Boolean = false,
     // ── Machine sleep ────────────────────────────────────────────────────────
     /** "Sleep after": idle minutes before Crema puts the DE1 to sleep — one
@@ -390,6 +390,8 @@ fun AppPrefs.toCommonSettings(): CommonSettings = CommonSettings(
     brewCueSound = brewCueSound,
     brewCueHaptics = brewCueHaptics,
     grindAutoSave = grindAutoSave,
+    // Unset when off, like a setting never chosen.
+    grinderInDevices = grinderInDevices.takeIf { it },
     showDebugPanel = showDebugPanel,
     defaultDoseG = defaultDoseG,
     defaultRatio = defaultRatio,
@@ -443,6 +445,7 @@ fun AppPrefs.withCommonSettings(cIn: CommonSettings): AppPrefs = sanitizeCommonS
     brewCueSound = c.brewCueSound,
     brewCueHaptics = c.brewCueHaptics,
     grindAutoSave = c.grindAutoSave,
+    grinderInDevices = c.grinderInDevices == true,
     showDebugPanel = c.showDebugPanel,
     defaultDoseG = c.defaultDoseG,
     defaultRatio = c.defaultRatio,
@@ -550,7 +553,6 @@ private data class PersistedPrefs(
     val grinderName: String? = null,
     val grinderLinkedAddress: String? = null,
     val grinderLinkedId: String? = null,
-    val grinderInDevices: Boolean = false,
     val proxyRole: String = "normal",
     val proxyPrimaryHost: String = "",
     val proxyPrimaryPort: Int = 0,
@@ -586,7 +588,6 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     grinderName = grinderName,
     grinderLinkedAddress = grinderLinkedAddress,
     grinderLinkedId = grinderLinkedId,
-    grinderInDevices = grinderInDevices,
     proxyRole = proxyRole,
     proxyPrimaryHost = proxyPrimaryHost,
     proxyPrimaryPort = proxyPrimaryPort,
@@ -621,7 +622,6 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     grinderName = grinderName,
     grinderLinkedAddress = grinderLinkedAddress,
     grinderLinkedId = grinderLinkedId,
-    grinderInDevices = grinderInDevices,
     proxyRole = proxyRole,
     proxyPrimaryHost = proxyPrimaryHost,
     proxyPrimaryPort = proxyPrimaryPort,

@@ -3658,6 +3658,7 @@ internal fun MainUiState.commonSettings(): CommonSettings = AppPrefs(
     brewCueSound = brewCueSound,
     brewCueHaptics = brewCueHaptics,
     grindAutoSave = grindAutoSave,
+    grinderInDevices = grinderInDevices,
     idleSleepMin = idleSleepMin,
     grinderModel = grinderModel,
     baristaName = baristaName,

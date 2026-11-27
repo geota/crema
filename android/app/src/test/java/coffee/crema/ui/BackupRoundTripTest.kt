@@ -1,6 +1,9 @@
 package coffee.crema.ui
 
 import coffee.crema.history.StoredShot
+import coffee.crema.settings.AppPrefs
+import coffee.crema.settings.toCommonSettings
+import coffee.crema.settings.withCommonSettings
 import coffee.crema.visualizer.wireShotJson
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -58,20 +61,24 @@ class BackupRoundTripTest {
     }
 
     @Test
-    fun `the grinder's Devices switch rides an Android backup's settings, never a web one's`() {
+    fun `the grinder's Devices switch rides the shared settings from either shell, off as well as on`() {
         fun settings(shell: String, on: Boolean?) = listOf(
             line("crema-backup/v1"),
             line("settings", buildJsonObject {
-                put("common", buildJsonObject { })
+                put("common", buildJsonObject { on?.let { put("grinderInDevices", it) } })
                 put("_shell", shell)
-                on?.let { put("grinderInDevices", it) }
             }),
         ).joinToString("\n")
-        assertEquals(true, parseBackupBytes(settings("android", true).toByteArray(), json, 0L).grinderInDevices)
-        assertEquals(false, parseBackupBytes(settings("android", false).toByteArray(), json, 0L).grinderInDevices)
-        // A backup from before the switch says nothing: this device keeps its own.
-        assertEquals(null, parseBackupBytes(settings("android", null).toByteArray(), json, 0L).grinderInDevices)
-        assertEquals(null, parseBackupBytes(settings("web", true).toByteArray(), json, 0L).grinderInDevices)
+        fun restoredOver(shell: String, on: Boolean?) = AppPrefs(grinderInDevices = !(on ?: false))
+            .withCommonSettings(parseBackupBytes(settings(shell, on).toByteArray(), json, 0L).common!!).grinderInDevices
+        for (shell in listOf("android", "web")) {
+            assertEquals(true, restoredOver(shell, true), shell)
+            assertEquals(false, restoredOver(shell, false), shell)
+            // Unset (off when backed up, or a backup from before the switch) reads as off.
+            assertEquals(false, restoredOver(shell, null), shell)
+        }
+        assertEquals(null, AppPrefs().toCommonSettings().grinderInDevices)
+        assertEquals(true, AppPrefs(grinderInDevices = true).toCommonSettings().grinderInDevices)
     }
 
     @Test

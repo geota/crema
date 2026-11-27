@@ -23,7 +23,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.jsonObject
@@ -184,8 +183,7 @@ internal fun backupEnvelope(snap: BackupSnapshot, json: Json, withShots: Boolean
     val shots = if (withShots) rowStrings(snap.shots.map { readWhole(snap, it) }) { wireShotJson(it, forBackup = true).toString() } else null
     // Settings line: the shared cross-shell CommonSettings `common` block (both
     // shells emit it identically, so common prefs restore web<->Android) + this
-    // shell's `_shell` tag + Android-only `qcGrind` and `grinderInDevices`
-    // (re-applied only on Android).
+    // shell's `_shell` tag + Android-only `qcGrind` (re-applied only on Android).
     val common = json.parseToJsonElement(json.encodeToString(CommonSettings.serializer(), portable.toCommonSettings()))
     val settingsJson = json.encodeToString(
         JsonObject.serializer(),
@@ -193,9 +191,6 @@ internal fun backupEnvelope(snap: BackupSnapshot, json: Json, withShots: Boolean
             put("common", common)
             put("_shell", "android")
             portable.qcGrind?.let { put("qcGrind", it) }
-            // Only when on, so a backup with it off reads like one from before
-            // the switch (the restoring device keeps its own).
-            if (portable.grinderInDevices) put("grinderInDevices", true)
         },
     )
     // Profile organisation — pinned + hidden BUILT-IN ids (cross-shell; custom
@@ -264,8 +259,6 @@ data class ParsedBackup(
     val prefs: AppPrefs?,
     val common: CommonSettings?,
     val qcGrind: String?,
-    /** Android's "Show in Devices and the rail"; null when the backup doesn't say. */
-    val grinderInDevices: Boolean? = null,
     val profileMeta: JsonObject?,
     val maintenance: MaintenanceState?,
     val visualizerPrefs: VisualizerSyncPrefs?,
@@ -303,7 +296,6 @@ private fun parseImportPlan(plan: JsonObject, json: Json, nowMs: Long): ParsedBa
     var prefs: AppPrefs? = null
     var common: CommonSettings? = null
     var qcGrind: String? = null
-    var grinderInDevices: Boolean? = null
     obj("settings")?.let { settings ->
         val shell = (settings["_shell"] as? JsonPrimitive)?.content
         val commonObj = settings["common"] as? JsonObject
@@ -314,7 +306,6 @@ private fun parseImportPlan(plan: JsonObject, json: Json, nowMs: Long): ParsedBa
             common = coffee.crema.settings.sanitizeCommonSettings(commonObj)
             if (shell == null || shell == "android") {
                 qcGrind = coffee.crema.beans.grindTextOf(settings["qcGrind"] as? JsonPrimitive)
-                grinderInDevices = (settings["grinderInDevices"] as? JsonPrimitive)?.booleanOrNull
             }
         } else if (shell == null || shell == "android") {
             // Pre-unification Android backup — a flat AppPrefs settings line.
@@ -330,7 +321,6 @@ private fun parseImportPlan(plan: JsonObject, json: Json, nowMs: Long): ParsedBa
         prefs = prefs,
         common = common,
         qcGrind = qcGrind,
-        grinderInDevices = grinderInDevices,
         profileMeta = obj("profileMeta"),
         maintenance = obj("maintenance")?.let { decodeFilled(json, MaintenanceState.serializer(), defaultMaintenanceState(nowMs), it) },
         visualizerPrefs = obj("visualizerPrefs")?.let { decodeFilled(json, VisualizerSyncPrefs.serializer(), DEFAULT_VISUALIZER_SYNC_PREFS, it) },

@@ -149,6 +149,15 @@ describe('common-settings mapping', () => {
 			expect(brewCueSoundOn(back)).toBe(true);
 			expect(brewCueHapticsOn(back)).toBe(false);
 		});
+
+		it('the grinder Devices switch is shared: unset when off, and off restores off', () => {
+			expect(DEFAULT_SETTINGS.grinderInDevices).toBe(false);
+			expect(JSON.stringify(settingsToCommon(DEFAULT_SETTINGS))).not.toContain('grinderInDevices');
+			const on: Settings = { ...DEFAULT_SETTINGS, grinderInDevices: true };
+			expect(settingsToCommon(on).grinderInDevices).toBe(true);
+			expect(applyCommonToSettings(settingsToCommon(on), DEFAULT_SETTINGS).grinderInDevices).toBe(true);
+			expect(applyCommonToSettings(settingsToCommon(DEFAULT_SETTINGS), on).grinderInDevices).toBe(false);
+		});
 	});
 });
 

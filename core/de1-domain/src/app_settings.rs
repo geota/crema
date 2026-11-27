@@ -155,6 +155,12 @@ pub struct CommonSettings {
     /// ([`crate::bag_grind::auto_save_shot_grind`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grind_auto_save: Option<bool>,
+    /// "Show in Devices and the rail" (beta, Devices → Grinder): a grinder
+    /// that connects over Bluetooth gets a row in the phone's Devices sheet
+    /// and a dot on the tablet/web rail. `None` = never set, read as off.
+    /// Shared so a backup restores it on either shell, off as well as on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grinder_in_devices: Option<bool>,
     /// Default barista name, stamped on each new shot's
     /// [`ShotMetadata::barista`](crate::ShotMetadata::barista). `None` (or
     /// blank) = no default; `Option` so an older `prefs.json` / backup still
@@ -245,6 +251,7 @@ impl Default for CommonSettings {
             default_preinfuse_s: 8.0,
             grinder_model: String::new(),
             grind_auto_save: None,
+            grinder_in_devices: None,
             barista_name: None,
             suppress_de1_sleep: true,
             idle_sleep_min: None,
@@ -601,6 +608,26 @@ mod tests {
         let json = serde_json::to_string(&c).unwrap();
         assert!(!json.contains("brewCueSound"), "{json}");
         assert!(!json.contains("brewCueHaptics"), "{json}");
+    }
+
+    #[test]
+    fn grinder_in_devices_is_off_until_chosen_and_travels_both_ways() {
+        let c: CommonSettings = serde_json::from_str(r#"{"themeMode":"light"}"#).unwrap();
+        assert_eq!(c.grinder_in_devices, None);
+        assert!(
+            !serde_json::to_string(&c)
+                .unwrap()
+                .contains("grinderInDevices")
+        );
+        for on in [true, false] {
+            let c = CommonSettings {
+                grinder_in_devices: Some(on),
+                ..CommonSettings::default()
+            };
+            let back: CommonSettings =
+                serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+            assert_eq!(back.grinder_in_devices, Some(on));
+        }
     }
 
     /// AC-HW8: a blob from before the hot-water modes decodes, and the

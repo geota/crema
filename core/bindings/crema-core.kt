@@ -1710,6 +1710,11 @@ data class CommonSettings (
 	/// the device that records a shot auto-saves
 	/// ([`crate::bag_grind::auto_save_shot_grind`]).
 	val grindAutoSave: Boolean? = null,
+	/// "Show in Devices and the rail" (beta, Devices → Grinder): a grinder
+	/// that connects over Bluetooth gets a row in the phone's Devices sheet
+	/// and a dot on the tablet/web rail. `None` = never set, read as off.
+	/// Shared so a backup restores it on either shell, off as well as on.
+	val grinderInDevices: Boolean? = null,
 	/// Default barista name, stamped on each new shot's
 	/// [`ShotMetadata::barista`](crate::ShotMetadata::barista). `None` (or
 	/// blank) = no default; `Option` so an older `prefs.json` / backup still
