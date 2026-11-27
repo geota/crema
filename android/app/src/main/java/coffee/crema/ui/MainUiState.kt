@@ -124,6 +124,8 @@ data class MainUiState(
     val connectedGrinderAddress: String? = null,
     /** The connected grinder's link and identity (Devices → Grinder card). */
     val connectedGrinder: ConnectedGrinderUi = ConnectedGrinderUi(),
+    /** "Show in Devices and the rail" (persisted, default off): see [showGrinderDevice]. */
+    val grinderInDevices: Boolean = false,
     /** Follow mode as the core reports it (`GrinderFollowChanged`): Brew's
      *  grind follows the connected grinder's collar (grinder-ble §5). */
     val grinderFollow: coffee.crema.core.GrinderFollowView = coffee.crema.core.GrinderFollowView(status = coffee.crema.core.FollowStatus.Off),

@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.grinderRailDot
 import coffee.crema.ui.LiveReadouts
 import coffee.crema.ui.LiveTelemetry
 import coffee.crema.ui.BrewParams
@@ -217,6 +218,7 @@ fun BrewScreen(
             onConnect = onConnect,
             devicesTab = ui.devicesTab,
             onOpenDevicesTab = vm::openDevicesTab,
+            grinderDot = ui.grinderRailDot(),
         )
         Column(Modifier.weight(1f).fillMaxHeight()) {
             BrewHeader(

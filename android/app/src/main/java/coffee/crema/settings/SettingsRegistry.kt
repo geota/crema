@@ -151,6 +151,7 @@ enum class Setting(
     BREW_CUE_SOUND(C, LOC, AP, "brewCueSound", NONE, null, false, listOf("$VM.setBrewCueSound(Boolean)")),
     BREW_CUE_HAPTICS(C, LOC, AP, "brewCueHaptics", NONE, null, false, listOf("$VM.setBrewCueHaptics(Boolean)")),
     GRIND_AUTO_SAVE(C, LOC, AP, "grindAutoSave", NONE, null, false, listOf("$VM.setGrindAutoSave(Boolean)")),
+    GRINDER_IN_DEVICES(C, LOC, AP, "grinderInDevices", NONE, null, false, listOf("$VM.setGrinderInDevices(Boolean)")),
     SCREENSAVER_AFTER(C, LOC, AP, "screensaverAfterMin", NONE, null, false, listOf("$VM.setScreensaverAfterMin(Int)")),
     WAKE_MACHINE_WITH_SAVER(C, LOC, AP, "wakeMachineWithSaver", NONE, null, false, listOf("$VM.setWakeMachineWithSaver(Boolean)")),
     SLEEP_ON_QUIT(C, LOC, AP, "sleepOnQuit", NONE, null, false, listOf("$VM.setSleepOnQuit(Boolean)")),

@@ -14,6 +14,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -157,3 +159,9 @@ fun RememberedDeviceRow(
         }
     }
 }
+
+/** The caveat amber: web's `--warning` (#DBA764 on dark, #8C5A12 on light).
+ *  Also a link that is coming up or coming back (the grinder's status dot). */
+@Composable
+fun warningColor(): Color =
+    if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color(0xFFDBA764) else Color(0xFF8C5A12)

@@ -2062,7 +2062,14 @@ class LibraryController(
                 val extras = plan.settings.extras == coffee.crema.core.PlanAction.Apply
                 val target = p.common?.let { c ->
                     val withCommon = currentPrefs().withCommonSettings(c)
-                    if (extras && p.qcGrind != null) withCommon.copy(qcGrind = p.qcGrind) else withCommon
+                    if (!extras) {
+                        withCommon
+                    } else {
+                        withCommon.copy(
+                            qcGrind = p.qcGrind ?: withCommon.qcGrind,
+                            grinderInDevices = p.grinderInDevices ?: withCommon.grinderInDevices,
+                        )
+                    }
                 } ?: p.prefs?.takeIf { extras }
                 if (target != null) ok = deps.restoreSettings(target) && ok
             }
