@@ -46,16 +46,16 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   rust:
     name: rust (core)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.event_name != 'schedule'
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Pinned (not `stable`) to match core/Cargo.toml's rust-version — F-Droid's
       # reproducible-build recipe needs a fixed compiler, not a floating channel.
       - name: Install Rust toolchain (stable + wasm32 + rustfmt + clippy)
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1961bfc0c4a8bf07e0a0c98e1e2459c642ea70a0 # 1.95.0
         with:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
@@ -63,7 +63,7 @@ jobs:
       # Swatinem/rust-cache handles the cargo registry + git + target dirs
       # better than hand-rolled actions/cache for Rust. Keyed on Cargo.lock.
       - name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core -> target
           shared-key: rust-core
@@ -131,19 +131,20 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   deny:
     name: deny (supply chain)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.event_name != 'schedule'
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1961bfc0c4a8bf07e0a0c98e1e2459c642ea70a0 # 1.95.0
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
         with:
-          tool: cargo-deny
+          tool: cargo-deny@0.22.1
+          fallback: none # unknown version: fail, don't binstall
 
       - name: cargo deny check advisories bans
         working-directory: core
@@ -158,30 +159,31 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   release-symbols-check:
     name: release-symbols-check (relay)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.event_name != 'schedule'
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain (stable + wasm32)
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1961bfc0c4a8bf07e0a0c98e1e2459c642ea70a0 # 1.95.0
         with:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo + target (shared with rust job)
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core -> target
           shared-key: rust-core
 
       - name: Install wasm-pack
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
         with:
-          tool: wasm-pack
+          tool: wasm-pack@0.15.1
+          fallback: none # unknown version: fail, don't binstall
 
       - name: Install Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -195,21 +197,21 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   model:
     name: model (de1-model)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.event_name != 'schedule' || github.event.schedule == '30 3 * * *'
     env:
       PROPTEST_CASES: ${{ github.event_name == 'schedule' && '10000' || '256' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain (rustfmt + clippy)
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1961bfc0c4a8bf07e0a0c98e1e2459c642ea70a0 # 1.95.0
         with:
           components: rustfmt, clippy
 
       - name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core/de1-model -> target
 
@@ -233,21 +235,21 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   history-model:
     name: model (de1-history-model)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.event_name != 'schedule' || github.event.schedule == '30 3 * * *'
     env:
       PROPTEST_CASES: ${{ github.event_name == 'schedule' && '10000' || '256' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain (rustfmt + clippy)
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1961bfc0c4a8bf07e0a0c98e1e2459c642ea70a0 # 1.95.0
         with:
           components: rustfmt, clippy
 
       - name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core/de1-history-model -> target
 
@@ -271,21 +273,21 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   relay-app-model:
     name: model (de1-relay-app-model)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.event_name != 'schedule' || github.event.schedule == '30 3 * * *'
     env:
       PROPTEST_CASES: ${{ github.event_name == 'schedule' && '10000' || '256' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain (rustfmt + clippy)
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1961bfc0c4a8bf07e0a0c98e1e2459c642ea70a0 # 1.95.0
         with:
           components: rustfmt, clippy
 
       - name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core/de1-relay-app-model -> target
 
@@ -310,7 +312,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   fuzz:
     name: fuzz (de1-relay)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.event_name == 'schedule' && github.event.schedule == '30 3 * * *'
     strategy:
       fail-fast: false
@@ -332,29 +334,29 @@ jobs:
             crate: de1-grinder
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # cargo-fuzz needs nightly (sanitizer flags); the fuzz project has its own lockfile.
       - name: Install Rust toolchain (nightly)
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly branch head 2026-11-28
 
+      # Not in install-action's manifest, whose fallback (cargo-binstall) skips
+      # the checksum check, so build it from source with its lockfile.
       - name: Install cargo-fuzz
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-fuzz
+        run: cargo install --locked cargo-fuzz@0.13.2
 
       - name: cargo fuzz run ${{ matrix.target }} (60 s)
         working-directory: core/${{ matrix.crate }}/fuzz
         run: |
           mkdir -p "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/artifacts"
           # The target is explicit: cargo-fuzz defaults to the triple it was built
-          # for, and the prebuilt binary can be musl, which ASan can't link.
+          # for, and a musl build can't link ASan.
           cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} "$RUNNER_TEMP/corpus" corpus/${{ matrix.target }} -- \
             -max_total_time=60 -len_control=0 -max_len=4096 -artifact_prefix="$RUNNER_TEMP/artifacts/"
 
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-${{ matrix.target }}
           path: ${{ runner.temp }}/artifacts
@@ -368,17 +370,17 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   history-bench:
     name: bench (de1-history)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.event_name == 'schedule' && github.event.schedule == '30 3 * * *'
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1961bfc0c4a8bf07e0a0c98e1e2459c642ea70a0 # 1.95.0
 
       - name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core -> target
           shared-key: rust-history-bench
@@ -396,36 +398,37 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   web:
     name: web (svelte)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.event_name != 'schedule'
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain (stable + wasm32)
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1961bfc0c4a8bf07e0a0c98e1e2459c642ea70a0 # 1.95.0
         with:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo + target (shared with rust job)
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core -> target
           shared-key: rust-core
 
       # Prebuilt wasm-pack binary — saves ~3 min over `cargo install`.
       - name: Install wasm-pack
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
         with:
-          tool: wasm-pack
+          tool: wasm-pack@0.15.1
+          fallback: none # unknown version: fail, don't binstall
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           package_json_file: web/package.json
 
       - name: Install Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
@@ -506,20 +509,20 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   history-wasm:
     name: history wasm (de1-history-wasm)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.event_name != 'schedule'
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain (stable + wasm32 + clippy)
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1961bfc0c4a8bf07e0a0c98e1e2459c642ea70a0 # 1.95.0
         with:
           components: clippy
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core -> target
           shared-key: history-wasm
@@ -560,12 +563,13 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - name: Install wasm-bindgen-cli and wasm-pack
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
         with:
-          tool: wasm-bindgen@${{ steps.bindgen.outputs.version }},wasm-pack
+          tool: wasm-bindgen@${{ steps.bindgen.outputs.version }},wasm-pack@0.15.1
+          fallback: none # unknown version: fail, don't binstall
 
       - name: Install Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -593,7 +597,7 @@ jobs:
           cargo test -p de1-history-wasm --target wasm32-unknown-unknown
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           package_json_file: web/package.json
 
@@ -606,7 +610,7 @@ jobs:
 
       # The build the browser tests load (history-browser, below).
       - name: Upload the history wasm
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: history-wasm
           path: web/src/lib/history-db/wasm/
@@ -623,21 +627,21 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   history-browser:
     name: history browser (W0, Playwright)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: history-wasm
     if: github.event_name != 'schedule'
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           package_json_file: web/package.json
 
       - name: Install Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
@@ -648,7 +652,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Download the history wasm
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: history-wasm
           path: web/src/lib/history-db/wasm/
@@ -663,7 +667,7 @@ jobs:
 
       - name: Upload the browser test results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: history-browser-results
           path: web/test-results/
@@ -678,17 +682,17 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   android:
     name: android (app)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.event_name != 'schedule'
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Gradle runs on JDK 17 as in release.yml; the unit-test task asks for a
       # Java 21 toolchain (app/build.gradle.kts), which Gradle finds through
       # JAVA_HOME_21_X64 below instead of downloading one via Foojay.
       - name: Set up JDK 21 + 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: |
@@ -696,7 +700,7 @@ jobs:
             17
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
 
       - name: Install NDK + compileSdk platform (pinned to build.gradle.kts)
         run: sdkmanager "ndk;30.0.14904198" "platforms;android-37.1"
@@ -704,7 +708,7 @@ jobs:
       # Pinned (not `stable`) to match core/Cargo.toml's rust-version — F-Droid's
       # reproducible-build recipe needs a fixed compiler, not a floating channel.
       - name: Install Rust toolchain (android target)
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1961bfc0c4a8bf07e0a0c98e1e2459c642ea70a0 # 1.95.0
         with:
           targets: aarch64-linux-android
 
@@ -714,18 +718,18 @@ jobs:
       # Sharing either key would race those jobs to save and evict their
       # artifacts.
       - name: Cache cargo + target (android debug)
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core -> target
           shared-key: rust-android-debug
 
       - name: Set up Gradle (with cache)
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
       # Robolectric fetches its android-all jar (SDK 35, ~150 MB) from Maven
       # Central at test time into ~/.m2, which setup-gradle doesn't cache.
       - name: Cache Robolectric android-all jars
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2/repository/org/robolectric
           key: robolectric-${{ hashFiles('android/app/build.gradle.kts') }}
@@ -754,7 +758,7 @@ jobs:
 
       - name: Upload test + lint reports
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-reports
           path: |
@@ -770,20 +774,21 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   audit:
     name: audit (advisory)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.event_name == 'push' || github.event.schedule == '0 7 * * 1'
     continue-on-error: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1961bfc0c4a8bf07e0a0c98e1e2459c642ea70a0 # 1.95.0
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
         with:
-          tool: cargo-audit
+          tool: cargo-audit@0.23.0
+          fallback: none # unknown version: fail, don't binstall
 
       - name: cargo audit
         working-directory: core
@@ -791,12 +796,12 @@ jobs:
         continue-on-error: true
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           package_json_file: web/package.json
 
       - name: Install Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 

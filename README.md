@@ -160,7 +160,7 @@ Stable and nightly are the **same app** (`dev.maceiras.crema`), signed with the 
 - **Rust** 1.95+ (`rust-version` in `core/Cargo.toml`; CI pins 1.95.0) with the `wasm32-unknown-unknown` target and `wasm-pack` (`cargo install wasm-pack`)
 - A **clang with a wasm32 backend** and `llvm-ar` for the history store's wasm (Apple's clang has none; see [`core/de1-history-wasm/README.md`](core/de1-history-wasm/README.md))
 - **Node.js** 24 (see `.nvmrc`)
-- **[pnpm](https://pnpm.io/)** 11: the repo pins `pnpm@11.5.0` via `packageManager`; run `corepack enable` and the matching version is used automatically
+- **[pnpm](https://pnpm.io/)** 11: the repo pins `pnpm@11.29.0` via `packageManager`; run `corepack enable` and the matching version is used automatically
 - A browser with [Web Bluetooth](https://caniuse.com/web-bluetooth) support: Chrome / Edge / Opera. Brave works after enabling the flag (see below).
 
 <details>
@@ -244,6 +244,8 @@ Bypass for a one-off push with `SKIP_CI_CHECKS=1 git push` (or skip one half wit
 - **`nightly.yml`** (push to `main`): builds the `play` APK and republishes the rolling `nightly` prerelease, and uploads the same build's AAB to Google Play internal testing (repo variable `PLAY_NIGHTLY_UPLOAD`).
 - **`release.yml`** (`v*.*.*` tag): builds the `-foss` and `-play` APKs, the Play AAB and the PWA bundle, publishes the GitHub Release and deploys the web app to Cloudflare Pages. No debug APK: the nightly is the test build. Releases go through a PR: `scripts/cut-release.sh X.Y.Z -m "…"` opens the release-notes PR, and after it merges `scripts/cut-release.sh --tag X.Y.Z` tags `main`, which starts this workflow.
 - **`pr-title.yml`**: checks the PR title prefix.
+
+Every action is pinned to a full commit SHA with its version in a comment (Dependabot keeps them current; `dtolnay/rust-toolchain` moves by hand with the Rust version), and the tools that `taiki-e/install-action` installs are pinned too. Jobs run on `ubuntu-26.04`, not `ubuntu-latest`, so an image move can't change what ships. The signing keystore, the Play service account and the Cloudflare credentials live in the `release` environment, which only `main` and `v*` tags can use: the nightly `build` and `play` jobs and the release `web` and `android` jobs run in it. In release.yml only the steps that need a secret get it. In both workflows only the job that publishes the GitHub (pre)release can write to the repo, and it runs no build code; the checkouts keep no git credentials.
 
 ## Project layout
 
