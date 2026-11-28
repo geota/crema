@@ -35,7 +35,10 @@ permissions:
 jobs:
   nightly:
     name: nightly (apk)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    # Keystore and Play secrets live in the `release` environment, which only
+    # main and v* tags may use.
+    environment: release
     steps:
       # Nightlies update users in place, and `workflow_dispatch` can run this on
       # any ref: an untested branch must never publish.
@@ -46,10 +49,11 @@ jobs:
           exit 1
 
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # full history + tags: the versionCode is derived from the last release
           fetch-tags: true
+          persist-credentials: false # nothing pushes; gh gets GH_TOKEN
 
       - name: Compute nightly version
         id: v
@@ -80,13 +84,13 @@ jobs:
           echo "Nightly $NAME (versionCode $CODE) — base $LAST + $C commit(s)"
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
 
       - name: Install NDK + compileSdk platform (pinned to build.gradle.kts)
         run: sdkmanager "ndk;30.0.14904198" "platforms;android-37.1"
@@ -94,18 +98,18 @@ jobs:
       # Pinned (not `stable`) to match core/Cargo.toml's rust-version — F-Droid's
       # reproducible-build recipe needs a fixed compiler, not a floating channel.
       - name: Install Rust toolchain (android target)
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1961bfc0c4a8bf07e0a0c98e1e2459c642ea70a0 # 1.95.0
         with:
           targets: aarch64-linux-android
 
       - name: Cache cargo + target (android, shared with release.yml)
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: core -> target
           shared-key: rust-android
 
       - name: Set up Gradle (with cache)
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
       - name: Decode release keystore (if configured)
         env:
@@ -174,7 +178,7 @@ jobs:
         run: gh release delete nightly --yes --cleanup-tag || true
 
       - name: Publish rolling nightly prerelease
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: nightly
           target_commitish: ${{ github.sha }}

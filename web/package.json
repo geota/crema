@@ -4,7 +4,7 @@
   "license": "GPL-3.0-or-later",
   "version": "0.0.5",
   "type": "module",
-  "packageManager": "pnpm@11.5.0",
+  "packageManager": "pnpm@11.29.0",
   "scripts": {
     "wasm": "wasm-pack build ../core/de1-wasm --target web --out-dir ../../web/src/lib/wasm --out-name de1_wasm",
     "wasm:test": "wasm-pack build ../core/de1-wasm --target web --out-dir ../../web/.wasm-test --out-name de1_wasm -- --features test-seeds,dev-oracle",

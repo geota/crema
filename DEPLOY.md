@@ -26,7 +26,7 @@ The same tag also builds the signed Android APK/AAB and publishes the GitHub Rel
 
 ### GitHub secrets the web deploy needs
 
-Settings → Secrets and variables → Actions:
+Settings → Secrets and variables → Actions. `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` belong in the `release` environment (Settings → Environments), which only `main` and `v*` tags can use; `VITE_VISUALIZER_CLIENT_ID` is a repository secret.
 
 | Secret | Value | Why |
 |---|---|---|
