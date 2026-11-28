@@ -42,3 +42,9 @@ before tagging.
   rollout (for example 20%), send it for review, then widen it.
 - **One upload per versionCode.** Testers also get production releases, so
   there's no need to upload to several tracks.
+- **Nightlies go to internal testing** (`nightly.yml`, when the repo variable
+  `PLAY_NIGHTLY_UPLOAD` is `true`), with a generated "What's new" (the nightly
+  name and the commit subject), not this file. Play gives each tester the
+  highest versionCode among their tracks, so an internal tester also in alpha
+  gets every nightly. A release is built from its tag, never promoted from a
+  nightly.
