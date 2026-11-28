@@ -4,6 +4,12 @@
 # The STABLE train is release.yml (tagged `v*.*.*`), served via IzzyOnDroid +
 # Obtainium-without-prereleases.
 #
+# The same build also goes to Google Play's INTERNAL testing track (no Google
+# review, so testers get it within minutes), when the repo variable
+# PLAY_NIGHTLY_UPLOAD is 'true'. Tagged releases are built from the tag and go
+# to alpha (release.yml); a nightly is never promoted as is, since its name and
+# build type say nightly.
+#
 # SAME package as stable — dev.maceiras.crema (the `nightly` buildType inherits
 # `release`; NOT a separate ".nightly" app). It is RELEASE-signed with the same
 # KEYSTORE_BASE64 secret release.yml uses, so Obtainium updates in place between a
@@ -66,8 +72,11 @@ jobs:
           [ "$C" -gt 9999 ] && C=9999 # never overflow into the patch digit
           CODE=$(( MAJ * 100000000 + MIN * 1000000 + PAT * 10000 + C ))
           NAME="${LAST#v}-nightly.${C}+g${GITHUB_SHA::7}"
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          {
+            echo "name=$NAME"
+            echo "code=$CODE"
+            echo "commits=$C"
+          } >> "$GITHUB_OUTPUT"
           echo "Nightly $NAME (versionCode $CODE) — base $LAST + $C commit(s)"
 
       - name: Set up JDK 17
@@ -130,16 +139,18 @@ jobs:
           VERSION_NAME: ${{ steps.v.outputs.name }}
           VERSION_CODE: ${{ steps.v.outputs.code }}
         run: |
-          ./gradlew :app:assemblePlayNightly -PcargoProfile=release \
+          ./gradlew :app:assemblePlayNightly :app:bundlePlayNightly -PcargoProfile=release \
             -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE" \
             --no-daemon --stacktrace
 
-      # AC-54: the nightly APK's libde1_ffi.so and its Kotlin bindings carry no
-      # deterministic relay test constructors.
+      # AC-54: the nightly APK's and AAB's libde1_ffi.so and their Kotlin bindings
+      # carry no deterministic relay test constructors.
       - name: Relay release-symbols check
         run: |
-          scripts/relay-release-symbols-check.sh apk \
-            android/app/build/outputs/apk/play/nightly/app-play-nightly.apk android/app/build/generated/uniffi
+          for artifact in android/app/build/outputs/apk/play/nightly/app-play-nightly.apk \
+              android/app/build/outputs/bundle/playNightly/app-play-nightly.aab; do
+            scripts/relay-release-symbols-check.sh apk "$artifact" android/app/build/generated/uniffi
+          done
 
       - name: Collect APK
         env:
@@ -187,3 +198,29 @@ jobs:
             dist/*.idsig
             dist/*.sha256
           fail_on_unmatched_files: false
+
+      # Google Play internal testing. Release-signed builds only (Play rejects any
+      # other key), and never for a commit that is itself a release tag: its
+      # versionCode would equal the release's, which Play refuses. Runs after the
+      # GitHub prerelease, so a Play problem can't hold up Obtainium users.
+      - name: Write nightly "What's new"
+        if: env.KEYSTORE_FILE != '' && vars.PLAY_NIGHTLY_UPLOAD == 'true' && steps.v.outputs.commits != '0'
+        env:
+          VERSION_NAME: ${{ steps.v.outputs.name }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/whatsnew"
+          subject="$(git log -1 --format=%s | cut -c1-300)"
+          printf 'Nightly %s\n%s\n' "$VERSION_NAME" "$subject" | head -c 500 > "$RUNNER_TEMP/whatsnew/whatsnew-en-US"
+          cat "$RUNNER_TEMP/whatsnew/whatsnew-en-US"
+
+      - name: Publish AAB to Google Play internal testing
+        if: env.KEYSTORE_FILE != '' && vars.PLAY_NIGHTLY_UPLOAD == 'true' && steps.v.outputs.commits != '0'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: dev.maceiras.crema
+          releaseFiles: android/app/build/outputs/bundle/playNightly/app-play-nightly.aab
+          releaseName: ${{ steps.v.outputs.name }}
+          tracks: internal
+          status: completed
+          whatsNewDirectory: ${{ runner.temp }}/whatsnew

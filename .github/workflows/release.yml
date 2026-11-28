@@ -332,8 +332,10 @@ jobs:
           if-no-files-found: error
 
       # Optional: publish the AAB to Google Play. The track and release status come
-      # from the repo variables PLAY_TRACK (default 'internal'; 'alpha' is closed
-      # testing) and PLAY_STATUS (default 'draft'; 'completed' rolls out).
+      # from the repo variables PLAY_TRACK (default 'alpha', closed testing; the
+      # nightlies own 'internal', see nightly.yml) and PLAY_STATUS (default
+      # 'draft'; 'completed' rolls out). Production stays a promotion in the
+      # Play Console after the alpha test.
       # GATED so the first release stays manual — runs only when the repo variable
       # PLAY_AUTO_UPLOAD == 'true' (Settings → Secrets and variables → Actions →
       # Variables). Google Play rejects the FIRST upload via API, so leave this
@@ -351,7 +353,7 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: dev.maceiras.crema
           releaseFiles: android/app/build/outputs/bundle/playRelease/app-play-release.aab
-          track: ${{ vars.PLAY_TRACK || 'internal' }}
+          tracks: ${{ vars.PLAY_TRACK || 'alpha' }}
           status: ${{ vars.PLAY_STATUS || 'draft' }}
           whatsNewDirectory: android/distribution/whatsnew
 
