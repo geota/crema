@@ -1,5 +1,9 @@
 package coffee.crema.ui.components
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,11 +27,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.ble.proxy.Peer
+import coffee.crema.ui.LocalNetworkAccess
+import coffee.crema.ui.localNetworkRowAction
+import coffee.crema.ui.localNetworkRowCopy
+import coffee.crema.ui.localNetworkRowTitle
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.connectThroughLabel
 import coffee.crema.ui.turnOffHubCopy
@@ -58,6 +67,8 @@ fun MultiDeviceSection(
     onConnectDirectly: () -> Unit,
     /** A remote's Pair again (spec §6.3, §6.4): pairs with the saved target. */
     onPairAgain: () -> Unit,
+    /** Allow while local network access is missing (API 37+): asks for it. */
+    onAllowLocalNetwork: () -> Unit,
     // The phone embeds this at the bottom of its Devices sheet, so it draws its own
     // "Other devices" header; the tablet hosts it under a Settings group title that
     // already serves as the header, so it suppresses this one (issue 13).
@@ -85,6 +96,20 @@ fun MultiDeviceSection(
         )
     }
     Spacer(Modifier.height(8.dp))
+
+    // API 37+: without local network access none of this works (NSD finds
+    // no one, the hub accepts no remote, a remote reaches no hub). Denied for
+    // good, only the app's Settings page can turn it back on.
+    val access = ui.localNetwork
+    if (access != LocalNetworkAccess.GRANTED) {
+        val context = LocalContext.current
+        MirrorRow(
+            title = localNetworkRowTitle(access),
+            sub = localNetworkRowCopy(access),
+            action = localNetworkRowAction(access),
+            onClick = { if (access == LocalNetworkAccess.BLOCKED) openAppSettings(context) else onAllowLocalNetwork() },
+        )
+    }
 
     // Hub: we hold the DE1 → list the remotes connected through us, read-only.
     // Pairing and Forget live in Settings ▸ Advanced ▸ Paired devices.
@@ -146,11 +171,14 @@ fun MultiDeviceSection(
     val sources = ui.peers.filter { it.role == "primary" && it.holdsDe1 && it.port > 0 }
     val manualHost = ui.proxyPrimaryHost.takeIf { it.isNotBlank() }
     if (sources.isEmpty() && manualHost == null) {
-        Text(
-            "No other Crema devices found on the network.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        // Without local network access the row above already says why.
+        if (access == LocalNetworkAccess.GRANTED) {
+            Text(
+                "No other Crema devices found on the network.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         return
     }
     sources.forEach { peer ->
@@ -289,6 +317,16 @@ private fun RemoteRow(name: String, viewOnly: Boolean) {
             modifier = Modifier.weight(1f),
         )
         if (viewOnly) CremaSettingsPill("View only")
+    }
+}
+
+/** This app's system settings page, where a permission denied for good is turned back on. */
+private fun openAppSettings(context: Context) {
+    runCatching {
+        context.startActivity(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
     }
 }
 

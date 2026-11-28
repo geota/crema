@@ -793,6 +793,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog(reason)
             _ui.update { it.copy(shotStartError = reason, status = reason) }
         },
+        localNetworkGranted = { hasLocalNetworkAccess() },
+    )
+
+    /** Local network access is allowed (API 37+; always true below). */
+    private fun hasLocalNetworkAccess(): Boolean =
+        localNetworkPermissions(android.os.Build.VERSION.SDK_INT).all {
+            androidx.core.content.ContextCompat.checkSelfPermission(getApplication(), it) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+
+    /**
+     * Local network access (API 37+) for the hub and remotes: every LAN entry
+     * point below runs through it ([LocalNetworkGate]). MainActivity shows the
+     * system dialog while [localNetworkRequests] is true. Once allowed, NSD
+     * starts browsing and advertising (held back until then).
+     */
+    private val localNetwork = LocalNetworkGate(
+        isGranted = { hasLocalNetworkAccess() },
+        publish = { access -> _ui.update { it.copy(localNetwork = access) } },
+        notify = { notifyUser(it) },
+        onGranted = { proxy.onLocalNetworkGranted() },
     )
 
     /**
@@ -1106,6 +1127,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // transport is the role's before anything can drive it, and here, not
         // in the controller's construction: it reaches [bleRecorder]/[ble].
         proxy.start()
+        // Already a hub or remote (API 37+): it needs local network access
+        // now. No dialog when Nearby devices is already allowed.
+        if (proxy.state.value.role != "normal") localNetwork.ask()
         // Seed the recipe library from disk and keep the custom-method labels current.
         guided.load()
         // Temporary backup files a killed process left (#310 P2a).
@@ -2709,11 +2733,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun cancelPairing() = proxy.cancelPairing()
 
     /** Remote: pair with the hub at [host]:[port]. */
-    fun pairWith(host: String, port: Int, label: String) = proxy.pairWith(host, port, label)
+    fun pairWith(host: String, port: Int, label: String) = localNetwork.withAccess { proxy.pairWith(host, port, label) }
 
     /** Remote: Pair again with the saved target (after the upgrade, or once
      *  the hub couldn't be verified; spec §6.3, §6.4). */
-    fun pairAgain() = proxy.pairAgain()
+    fun pairAgain() = localNetwork.withAccess { proxy.pairAgain() }
 
     /** Remote: cancel the pairing in progress (the code sheet's Cancel). */
     fun cancelRemotePairing() = proxy.cancelRemotePairing()
@@ -2722,7 +2746,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun dismissPairing() = proxy.dismissPairing()
 
     /** Remote: the code sheet's Try again (three new attempts). */
-    fun retryRemotePairing() = proxy.retryRemotePairing()
+    fun retryRemotePairing() = localNetwork.withAccess { proxy.retryRemotePairing() }
 
     /** Reset this device's pairing key (every pairing is cleared). */
     fun resetPairingKey() = proxy.resetPairingKey()
@@ -2734,13 +2758,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun dismissUpgradeNotice() = proxy.dismissUpgradeNotice()
 
     /** Settings ▸ Advanced ▸ Paired devices ▸ Pair a device: accept new devices for a while. */
-    fun openPairingWindow() = proxy.openPairingWindow()
+    fun openPairingWindow() = localNetwork.withAccess { proxy.openPairingWindow() }
 
     /** Stop accepting new devices now. */
     fun closePairingWindow() = proxy.closePairingWindow()
 
     /** Remote: connect through the pinned hub [hubId] (a superseded pin's explicit pick). */
-    fun connectToPinnedHub(hubId: String) = proxy.connectToPinnedHub(hubId)
+    fun connectToPinnedHub(hubId: String) = localNetwork.withAccess { proxy.connectToPinnedHub(hubId) }
 
     /** Remote: forget the hub [hubId] (it has to pair again). */
     fun forgetHub(hubId: String) = proxy.forgetHub(hubId)
@@ -2861,7 +2885,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun switchToNormal() = remoteConfig.switchToNormal()
 
     /** Connect through the hub at [host]:[port]: the picker's "Connect through". */
-    fun switchToSecondary(host: String, port: Int) = remoteConfig.switchToSecondary(host, port)
+    fun switchToSecondary(host: String, port: Int) = localNetwork.withAccess { remoteConfig.switchToSecondary(host, port) }
 
     /** A remote whose hub is unreachable, or no longer holds the DE1, connects
      *  the machine itself. */
@@ -2869,7 +2893,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The Hub mode switch (Settings ▸ Multi-device); [anyway] is the user's
      *  "Turn on anyway" past a discovered hub's warning. */
-    fun setHubMode(on: Boolean, anyway: Boolean = false) = remoteConfig.setHubMode(on, anyway)
+    fun setHubMode(on: Boolean, anyway: Boolean = false) {
+        // Turning it off needs no network access.
+        if (on) localNetwork.withAccess { remoteConfig.setHubMode(true, anyway) } else remoteConfig.setHubMode(false, anyway)
+    }
+
+    /** True while MainActivity should show the local network dialog ([LocalNetworkGate]). */
+    val localNetworkRequests: kotlinx.coroutines.flow.StateFlow<Boolean> get() = localNetwork.requests
+
+    /** MainActivity showed the local network dialog. */
+    fun onLocalNetworkRequestShown() = localNetwork.onRequestShown()
+
+    /** The local network dialog's answer ([canAskAgain]: Android will show it again). */
+    fun onLocalNetworkResult(granted: Boolean, canAskAgain: Boolean) = localNetwork.onResult(granted, canAskAgain)
+
+    /** The picker's Allow: ask for local network access with nothing waiting on it. */
+    fun requestLocalNetwork() = localNetwork.ask()
+
+    /** Re-read the local network grant (the activity resumed; Settings may have changed it). */
+    fun refreshLocalNetwork() = localNetwork.refresh()
 
     /** The T6 confirmation's answer: "Use <hub>'s" ([useHub]) or "Keep mine". */
     fun resolveAdoption(useHub: Boolean) = remoteConfig.resolveAdoption(useHub)

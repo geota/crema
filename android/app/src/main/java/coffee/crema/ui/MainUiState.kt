@@ -634,6 +634,9 @@ data class MainUiState(
     val disconnectConfirm: Boolean = false,
     /** Crema instances discovered on the LAN (NSD) — the device picker's list. */
     val peers: List<Peer> = emptyList(),
+    /** Local network access (API 37+) for the hub and remotes; the picker
+     *  offers Allow while it is missing ([LocalNetworkGate]). */
+    val localNetwork: LocalNetworkAccess = LocalNetworkAccess.GRANTED,
     /**
      * What the connected scale can do beyond reporting a bare weight, or null
      * before a scale is connected / identified. The UI gates configuration

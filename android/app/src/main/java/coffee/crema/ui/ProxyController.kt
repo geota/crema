@@ -203,6 +203,10 @@ class ProxyController(
     private val prefsReady: suspend () -> Unit = {},
     /** This device's own shot start was refused (the Brew status card). */
     private val startRefused: ((String) -> Unit)? = null,
+    /** Local network access is allowed (API 37+; always true below). Without
+     *  it NSD isn't touched: on API 37 a browse without the permission makes
+     *  the system open its own service picker over the app. */
+    private val localNetworkGranted: () -> Boolean = { true },
 ) {
 
     /** The proxy slice of the UI snapshot — the VM mirrors this into MainUiState. */
@@ -479,7 +483,8 @@ class ProxyController(
         // A secondary (read-only mirror) doesn't record the primary's shot (issue 14).
         setRecorderEnabled(role != "secondary")
         collectPeers(peerDiscovery.peers)
-        peerDiscovery.startDiscovery()
+        // Without local network access NSD waits for [onLocalNetworkGranted].
+        if (localNetworkGranted()) peerDiscovery.startDiscovery()
         refreshAdvertisement()
     }
 
@@ -1740,12 +1745,23 @@ class ProxyController(
     /** (Re)advertise this device's current role / DE1-hold / relay-port over NSD, so
      *  other devices' pickers see it (and can "Mirror from" it when it's hosting). */
     fun refreshAdvertisement() {
+        if (!localNetworkGranted()) return
         val role = _state.value.role
         val holdsDe1 = role != "secondary" && de1Connected()
         val port = if (role == "primary" && relayServer != null) relayPort else 0
         // The short relay id only while hosting (spec §4.8): advisory, for resume-vs-pair.
         val kid = if (port > 0) relayKeys?.shortId() else null
         peerDiscovery.advertise(deviceLabel(), role, holdsDe1, port, kid)
+    }
+
+    /** Local network access was just allowed (API 37+): start the NSD browse
+     *  and advertisement held back without it. The relay server and a
+     *  remote's reconnect loop need nothing: their next accept or dial goes
+     *  through. */
+    fun onLocalNetworkGranted() {
+        peerDiscovery.stopDiscovery()
+        peerDiscovery.startDiscovery()
+        refreshAdvertisement()
     }
 
     /** Push the primary's device roster to attached mirrors — called when the

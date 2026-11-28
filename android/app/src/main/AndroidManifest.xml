@@ -32,6 +32,15 @@
     <!-- Network: Visualizer + Decent shot sync, the on-demand update check,
          Google Drive backup, and the multi-device LAN proxy. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 17 (API 37): the LAN hub and remotes (Ktor relay server, the
+         remotes' links, NSD browse/advertise) need local network access, a
+         runtime permission in the Nearby devices group. Asked when a hub or
+         remote feature is turned on (ui/LocalNetworkAccess.kt); a user who
+         allowed Bluetooth already gets no second dialog. Below 37, INTERNET
+         covers local traffic and this declaration is ignored. -->
+    <uses-permission
+        android:name="android.permission.ACCESS_LOCAL_NETWORK"
+        tools:targetApi="37" />
     <!-- The Visualizer retry queue drains when a network comes back (F17). -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Guided-brew cue vibration (issue #10): a normal permission, no prompt. -->

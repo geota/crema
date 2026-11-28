@@ -48,7 +48,9 @@ data class Peer(
 
 /**
  * LAN peer discovery for the multi-device picker (M2), over Android [NsdManager]
- * (`_crema._tcp`) — **zero new permissions** (`INTERNET` covers NSD). It both
+ * (`_crema._tcp`). Below API 37 `INTERNET` covers NSD; on 37+ it needs local
+ * network access (ui/LocalNetworkAccess.kt), so ProxyController starts it
+ * only once that is allowed. It both
  * **advertises** this instance (so other devices' pickers can find it) and
  * **browses** for peers, exposing them as a live [peers] list. The relay
  * [Peer.port] in a primary's advertisement is exactly what a secondary dials to

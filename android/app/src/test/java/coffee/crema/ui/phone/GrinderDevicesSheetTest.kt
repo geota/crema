@@ -80,12 +80,12 @@ class GrinderDevicesSheetTest {
             if (wide) {
                 DevicesPanelWide(
                     ui = ui, connected = false, scaleConnected = false, onConnect = {}, onForgetDe1 = {}, onForgetScale = {},
-                    onMirrorFrom = { _, _ -> }, onStopMirroring = {}, onConnectDirectly = {}, onPairAgain = {}, grinder = hooks,
+                    onMirrorFrom = { _, _ -> }, onStopMirroring = {}, onConnectDirectly = {}, onPairAgain = {}, onAllowLocalNetwork = {}, grinder = hooks,
                 )
             } else {
                 DevicesPanel(
                     ui = ui, connected = false, scaleConnected = false, onConnect = {}, onForgetDe1 = {}, onForgetScale = {},
-                    onMirrorFrom = { _, _ -> }, onStopMirroring = {}, onConnectDirectly = {}, onPairAgain = {}, grinder = hooks,
+                    onMirrorFrom = { _, _ -> }, onStopMirroring = {}, onConnectDirectly = {}, onPairAgain = {}, onAllowLocalNetwork = {}, grinder = hooks,
                 )
             }
         }

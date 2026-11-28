@@ -3,7 +3,7 @@
   Cleartext is permitted app-wide for ONE reason: the multi-device LAN proxy.
   A secondary dials the primary's relay at ws://<lan-ip>:<port> (built in
   ui/ProxyController.kt), and the OkHttp engine behind every Ktor client
-  enforces Android's NetworkSecurityPolicy (targetSdk 36: cleartext off by
+  enforces Android's NetworkSecurityPolicy (targetSdk 37: cleartext off by
   default).
 
   A <domain-config> can't express this: <domain> matches one exact host name

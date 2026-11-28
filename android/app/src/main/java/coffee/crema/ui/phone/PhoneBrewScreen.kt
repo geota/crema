@@ -341,6 +341,7 @@ fun PhoneBrewScreen(
             onStopMirroring = { vm.switchToNormal(); devicesOpen = false },
             onConnectDirectly = { vm.connectDirectly(); devicesOpen = false },
             onPairAgain = { vm.pairAgain(); devicesOpen = false },
+            onAllowLocalNetwork = vm::requestLocalNetwork,
             onRetry = vm::retryReconnectNow,
             onDismiss = { devicesOpen = false },
             grinder = remember(vm) { vm.grinderDeviceHooks() },

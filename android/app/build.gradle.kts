@@ -74,7 +74,7 @@ android {
         minSdk = 31
         // AGP 9 defaults targetSdk to compileSdk, but pin it explicitly so the
         // value is unambiguous and survives a compileSdk bump.
-        targetSdk = 36
+        targetSdk = 37
         // CI derives these from the release tag (-PversionName=0.2.0 -PversionCode=<run>);
         // local/dev builds fall back to the committed defaults.
         versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1

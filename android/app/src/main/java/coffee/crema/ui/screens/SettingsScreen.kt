@@ -1141,6 +1141,7 @@ fun SettingsScreen(
                                     onStopMirroring = vm::switchToNormal,
                                     onConnectDirectly = vm::connectDirectly,
                                     onPairAgain = vm::pairAgain,
+                                    onAllowLocalNetwork = vm::requestLocalNetwork,
                                     showHeader = false,
                                 )
                             }
