@@ -145,6 +145,7 @@ jobs:
         uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
         with:
           tool: wasm-pack@0.15.1
+          fallback: none # unknown version: fail, don't binstall
 
       - name: Install pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1

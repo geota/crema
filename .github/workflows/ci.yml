@@ -143,7 +143,8 @@ jobs:
       - name: Install cargo-deny
         uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
         with:
-          tool: cargo-deny@0.22.2
+          tool: cargo-deny@0.22.1
+          fallback: none # unknown version: fail, don't binstall
 
       - name: cargo deny check advisories bans
         working-directory: core
@@ -179,6 +180,7 @@ jobs:
         uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
         with:
           tool: wasm-pack@0.15.1
+          fallback: none # unknown version: fail, don't binstall
 
       - name: Install Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -338,17 +340,17 @@ jobs:
       - name: Install Rust toolchain (nightly)
         uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly branch head 2026-11-28
 
+      # Not in install-action's manifest, whose fallback (cargo-binstall) skips
+      # the checksum check, so build it from source with its lockfile.
       - name: Install cargo-fuzz
-        uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
-        with:
-          tool: cargo-fuzz@0.13.2
+        run: cargo install --locked cargo-fuzz@0.13.2
 
       - name: cargo fuzz run ${{ matrix.target }} (60 s)
         working-directory: core/${{ matrix.crate }}/fuzz
         run: |
           mkdir -p "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/artifacts"
           # The target is explicit: cargo-fuzz defaults to the triple it was built
-          # for, and the prebuilt binary can be musl, which ASan can't link.
+          # for, and a musl build can't link ASan.
           cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} "$RUNNER_TEMP/corpus" corpus/${{ matrix.target }} -- \
             -max_total_time=60 -len_control=0 -max_len=4096 -artifact_prefix="$RUNNER_TEMP/artifacts/"
 
@@ -418,6 +420,7 @@ jobs:
         uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
         with:
           tool: wasm-pack@0.15.1
+          fallback: none # unknown version: fail, don't binstall
 
       - name: Install pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -563,6 +566,7 @@ jobs:
         uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
         with:
           tool: wasm-bindgen@${{ steps.bindgen.outputs.version }},wasm-pack@0.15.1
+          fallback: none # unknown version: fail, don't binstall
 
       - name: Install Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -784,6 +788,7 @@ jobs:
         uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
         with:
           tool: cargo-audit@0.23.0
+          fallback: none # unknown version: fail, don't binstall
 
       - name: cargo audit
         working-directory: core
