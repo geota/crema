@@ -74,12 +74,15 @@ model types — the two are complementary and intentionally co-located.
 ## Target hardware
 
 - **Teclast P25T tablet, Android 12 (API 31)** — primary. `minSdk 31`,
-  `targetSdk 36`.
+  `targetSdk 37`.
 - **Pixel phone** — secondary (Compact size class).
 - A real **Decent Espresso DE1** machine, powered on and in BLE range.
 - Android 12+ uses the `BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT` runtime
   permissions (not the legacy `BLUETOOTH` / location permissions); the app
   requests them at runtime.
+- Android 17+ also asks for `ACCESS_LOCAL_NETWORK` (same Nearby devices
+  group, so no second dialog once Bluetooth is allowed) when the hub or a
+  remote is turned on.
 
 ---
 

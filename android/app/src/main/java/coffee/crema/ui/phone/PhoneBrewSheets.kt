@@ -689,6 +689,8 @@ fun PhoneDevicesSheet(
     onStopMirroring: () -> Unit,
     onConnectDirectly: () -> Unit,
     onPairAgain: () -> Unit,
+    /** The picker's Allow while local network access is missing (API 37+). */
+    onAllowLocalNetwork: () -> Unit,
     onDismiss: () -> Unit,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
@@ -710,6 +712,7 @@ fun PhoneDevicesSheet(
             onStopMirroring = onStopMirroring,
             onConnectDirectly = onConnectDirectly,
             onPairAgain = onPairAgain,
+            onAllowLocalNetwork = onAllowLocalNetwork,
             onRetry = onRetry,
             grinder = grinder,
             modifier = Modifier.fillMaxWidth().padding(horizontal = CremaEdge).padding(bottom = 20.dp),
@@ -732,6 +735,8 @@ fun DevicesPanel(
     onStopMirroring: () -> Unit,
     onConnectDirectly: () -> Unit,
     onPairAgain: () -> Unit,
+    /** The picker's Allow while local network access is missing (API 37+). */
+    onAllowLocalNetwork: () -> Unit,
     modifier: Modifier = Modifier,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
@@ -838,7 +843,7 @@ fun DevicesPanel(
                 Spacer(Modifier.width(9.dp))
                 Text("Scan for devices", style = MaterialTheme.typography.labelLarge.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold))
             }
-            MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onConnectDirectly, onPairAgain)
+            MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onConnectDirectly, onPairAgain, onAllowLocalNetwork)
             Text(
                 "Acaia, Bookoo, Decent, Felicita and more pair automatically.",
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
@@ -863,6 +868,8 @@ fun TabletDevicesSheet(
     onStopMirroring: () -> Unit,
     onConnectDirectly: () -> Unit,
     onPairAgain: () -> Unit,
+    /** The picker's Allow while local network access is missing (API 37+). */
+    onAllowLocalNetwork: () -> Unit,
     onDismiss: () -> Unit,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
@@ -885,6 +892,7 @@ fun TabletDevicesSheet(
             onStopMirroring = onStopMirroring,
             onConnectDirectly = onConnectDirectly,
             onPairAgain = onPairAgain,
+            onAllowLocalNetwork = onAllowLocalNetwork,
             onRetry = onRetry,
             grinder = grinder,
             modifier = Modifier.fillMaxWidth().padding(horizontal = CremaEdge).padding(top = 2.dp, bottom = 10.dp),
@@ -907,6 +915,8 @@ fun DevicesPanelWide(
     onStopMirroring: () -> Unit,
     onConnectDirectly: () -> Unit,
     onPairAgain: () -> Unit,
+    /** The picker's Allow while local network access is missing (API 37+). */
+    onAllowLocalNetwork: () -> Unit,
     modifier: Modifier = Modifier,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
@@ -1017,7 +1027,7 @@ fun DevicesPanelWide(
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onConnectDirectly, onPairAgain, showHeader = false)
+                    MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onConnectDirectly, onPairAgain, onAllowLocalNetwork, showHeader = false)
                 }
             }
         }

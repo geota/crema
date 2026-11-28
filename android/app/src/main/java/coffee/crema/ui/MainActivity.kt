@@ -120,6 +120,8 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         viewModel.setAppForeground(true)
+        // Local network access may have been changed in Settings meanwhile.
+        viewModel.refreshLocalNetwork()
         // Revive the quit watcher on every foreground entry: only a RUNNING
         // service receives onTaskRemoved (the swipe-away signal sleep-on-quit
         // rides), and the system stops idle background services — so each
@@ -200,6 +202,23 @@ class MainActivity : ComponentActivity() {
         pendingPermissionAction = null
     }
 
+    /**
+     * Local network access (API 37+) for the hub and remotes: the view model
+     * asks ([MainViewModel.localNetworkRequests]) and runs the waiting action
+     * on the answer. No dialog appears when Nearby devices (Bluetooth) is
+     * already allowed: it is the same permission group. An empty result (the
+     * request was interrupted) counts as a soft deny.
+     */
+    private val localNetworkLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        val granted = grants.isNotEmpty() && grants.values.all { it }
+        val canAskAgain = grants.isEmpty() || localNetworkPermissions(android.os.Build.VERSION.SDK_INT).any {
+            ActivityCompat.shouldShowRequestPermissionRationale(this, it)
+        }
+        viewModel.onLocalNetworkResult(granted, canAskAgain)
+    }
+
     /** Full-screen immersive — hide the status + navigation bars (and the Samsung
      *  One UI taskbar); they reappear transiently on an edge swipe. Re-applied on
      *  focus gain because the system restores them after dialogs / the OAuth tab. */
@@ -262,6 +281,13 @@ class MainActivity : ComponentActivity() {
                 SafeMode.bootStable(this@MainActivity)
             }
             val ui by viewModel.ui.collectAsStateWithLifecycle()
+            // A hub or remote feature needs local network access (API 37+).
+            val localNetworkAsk by viewModel.localNetworkRequests.collectAsStateWithLifecycle()
+            LaunchedEffect(localNetworkAsk) {
+                if (!localNetworkAsk) return@LaunchedEffect
+                viewModel.onLocalNetworkRequestShown()
+                localNetworkLauncher.launch(localNetworkPermissions(android.os.Build.VERSION.SDK_INT))
+            }
             // "Keep connected in the background" → the one-time "nearby" setup:
             // launch the system association dialog.
             LaunchedEffect(ui.companionRequest) {
@@ -716,6 +742,7 @@ class MainActivity : ComponentActivity() {
                         onStopMirroring = { viewModel.switchToNormal(); showDevices = false },
                         onConnectDirectly = { viewModel.connectDirectly(); showDevices = false },
                         onPairAgain = { viewModel.pairAgain(); showDevices = false },
+                        onAllowLocalNetwork = viewModel::requestLocalNetwork,
                         onRetry = viewModel::retryReconnectNow,
                         onDismiss = { showDevices = false },
                         grinder = remember(viewModel) { viewModel.grinderDeviceHooks() },
